@@ -9,7 +9,7 @@ metadata:
     plain language: the agent finds the relevant tables, writes the SQL, runs it inside the
     confidential cluster space and answers with figures and charts. Raw records never leave the
     space and never reach the model — only aggregates do.
-  version: "1.3.1"
+  version: "2.0.0"
   category: ai-agents
   license: Proprietary
   tags:
@@ -26,7 +26,6 @@ ui:
       description: Where the agent is reachable and who may sign in.
       fields:
         - parameterId: appHostname
-        - parameterId: workspaceName
         - parameterId: internalSecret
 
     - id: model
@@ -53,13 +52,6 @@ parameters:
     required: true
     validation:
       pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
-
-  - id: workspaceName
-    type: string
-    title: Workspace name
-    description: The tenant users belong to. Shown when they sign in.
-    required: true
-    default: Demo workspace
 
   - id: internalSecret
     type: string
@@ -213,7 +205,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-identity
-      version: "0.4.1"
+      version: "0.5.0"
     deployment:
       values:
         base:
@@ -222,6 +214,11 @@ components:
           tenant:
             name: ""
             alias: workspace
+          demoUser:
+            username: ""
+            email: ""
+            firstName: ""
+            lastName: ""
           keycloak:
             auth:
               adminPassword: ""
@@ -249,9 +246,27 @@ components:
           - op: replace
             path: appHostname
             value: "{{ params.appHostname }}"
+          # The workspace, its first administrator and their address are what the marketplace
+          # already knows about who is deploying. Reading them keeps the agent's idea of the
+          # organization the same as the marketplace's, rather than a second one typed by hand.
           - op: replace
             path: tenant.name
-            value: "{{ params.workspaceName }}"
+            value: "{{ consumer.organization.name }}"
+          - op: replace
+            path: tenant.alias
+            value: "{{ consumer.organization.slug }}"
+          - op: replace
+            path: demoUser.username
+            value: "{{ consumer.user.email }}"
+          - op: replace
+            path: demoUser.email
+            value: "{{ consumer.user.email }}"
+          - op: replace
+            path: demoUser.firstName
+            value: "{{ consumer.user.name }}"
+          - op: replace
+            path: demoUser.lastName
+            value: ""
           - op: replace
             path: keycloak.auth.adminPassword
             value: "{{ params.internalSecret }}"
@@ -519,4 +534,4 @@ outputs:
   - id: signIn
     title: Sign-in
     type: string
-    value: "Username \"demo\", password: the internal credential you set."
+    value: "Sign in as {{ consumer.user.email }} with the internal credential. That account administers the realm."

@@ -55,12 +55,21 @@ data:
       -s secret="$SECRET" \
       -s 'attributes."post.logout.redirect.uris"='"$APP"'/*' 2>&1 | tail -1
 
-    echo "== demo user =="
+    echo "== workspace administrator =="
     $KCADM create $CFG users -r master \
       -s username={{ .Values.demoUser.username | quote }} -s email={{ .Values.demoUser.email | quote }} \
       -s emailVerified=true -s enabled=true \
       -s firstName={{ .Values.demoUser.firstName | quote }} -s lastName={{ .Values.demoUser.lastName | quote }} 2>&1 | tail -1
     $KCADM set-password $CFG -r master --username {{ .Values.demoUser.username | quote }} --new-password "$SECRET" 2>&1 | tail -1
+
+    # Realm admin, because this is the operator's own account: they are the one who has to add
+    # colleagues, wire an external identity provider, and see what the agent is doing. A first
+    # user who cannot administer the realm they were just given is not an administrator.
+    echo "== realm-admin rights =="
+    $KCADM add-roles $CFG -r master --uusername {{ .Values.demoUser.username | quote }} \
+      --cclientid master-realm --rolename realm-admin 2>&1 | tail -1
+    $KCADM add-roles $CFG -r master --uusername {{ .Values.demoUser.username | quote }} \
+      --rolename admin 2>&1 | tail -1
 
     echo "== organization (tenant) + membership =="
     T=$(curl -s -X POST "$SRV/realms/master/protocol/openid-connect/token" \

@@ -4,17 +4,18 @@ internalSecret: ""
 # the /auth path, or the proxy in front of the agent rejects every token it mints.
 appHostname: ""
 
-# The tenant the demo user belongs to. The agent resolves a tenant from the user's Keycloak
-# organization; a user with none gets "Can't get tenant context" instead of a chat.
+# The tenant users belong to. The agent resolves a tenant from the user's Keycloak organization;
+# a user with none gets "Can't get tenant context" instead of a chat. Both this and the first
+# administrator below are supplied per deployment from who is doing the deploying.
 tenant:
-  name: Demo
-  alias: demo
+  name: ""
+  alias: ""
 
 demoUser:
-  username: demo
-  email: demo@example.invalid
-  firstName: Demo
-  lastName: User
+  username: ""
+  email: ""
+  firstName: ""
+  lastName: ""
 
 bootstrap:
   # Keycloak's own image carries kcadm.sh and curl, so the bootstrap needs no image of its own.
