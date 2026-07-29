@@ -1,0 +1,112 @@
+{{- /*
+Realm bootstrap: the two OIDC clients the agent needs, a demo login, and the organization that
+becomes the agent's tenant.
+
+It runs as a Job against a live Keycloak rather than as a realm import, because organizations
+are created through the admin API and not expressible in a realm JSON. Everything it does is
+idempotent — a re-run on an already-bootstrapped realm reports "already exists" and moves on,
+which is what makes reconfiguring the deployment safe.
+*/ -}}
+{{- if .Values.bootstrap.enabled }}
+{{- $secret := required "internalSecret must be set" .Values.internalSecret }}
+{{- $app := printf "https://%s" (required "appHostname must be set" .Values.appHostname) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: retail-ai-keycloak-bootstrap
+data:
+  bootstrap.sh: |
+    #!/bin/bash
+    set -u
+    KCADM=/opt/bitnami/keycloak/bin/kcadm.sh
+    CFG="--config /tmp/kcadm.config"
+    SRV=http://rai-keycloak-prod/auth
+    APP={{ $app | quote }}
+    SECRET={{ $secret | quote }}
+
+    echo "== waiting for keycloak =="
+    for i in $(seq 1 120); do
+      curl -sf "$SRV/realms/master" >/dev/null && break
+      sleep 5
+    done
+
+    $KCADM config credentials $CFG --server "$SRV" --realm master --user admin --password "$SECRET" || exit 1
+
+    echo "== identity client =="
+    $KCADM create $CFG clients -r master \
+      -s clientId=identity -s enabled=true -s protocol=openid-connect \
+      -s publicClient=false -s serviceAccountsEnabled=true \
+      -s standardFlowEnabled=true -s directAccessGrantsEnabled=true \
+      -s 'redirectUris=["/*"]' -s 'webOrigins=["/*"]' \
+      -s secret="$SECRET" 2>&1 | tail -1
+
+    echo "== identity service-account roles =="
+    for role in manage-realm manage-users view-users query-users query-groups manage-clients view-clients view-realm; do
+      $KCADM add-roles $CFG -r master --uusername service-account-identity --cclientid master-realm --rolename "$role" 2>&1 | tail -1
+    done
+
+    echo "== retail-ai client =="
+    $KCADM create $CFG clients -r master \
+      -s clientId=retail-ai -s enabled=true -s protocol=openid-connect \
+      -s publicClient=false -s serviceAccountsEnabled=false \
+      -s standardFlowEnabled=true -s directAccessGrantsEnabled=true \
+      -s "redirectUris=[\"$APP/*\"]" -s "webOrigins=[\"$APP\"]" \
+      -s "rootUrl=$APP" -s "baseUrl=$APP" \
+      -s secret="$SECRET" \
+      -s 'attributes."post.logout.redirect.uris"='"$APP"'/*' 2>&1 | tail -1
+
+    echo "== demo user =="
+    $KCADM create $CFG users -r master \
+      -s username={{ .Values.demoUser.username | quote }} -s email={{ .Values.demoUser.email | quote }} \
+      -s emailVerified=true -s enabled=true \
+      -s firstName={{ .Values.demoUser.firstName | quote }} -s lastName={{ .Values.demoUser.lastName | quote }} 2>&1 | tail -1
+    $KCADM set-password $CFG -r master --username {{ .Values.demoUser.username | quote }} --new-password "$SECRET" 2>&1 | tail -1
+
+    echo "== organization (tenant) + membership =="
+    T=$(curl -s -X POST "$SRV/realms/master/protocol/openid-connect/token" \
+      -d grant_type=client_credentials -d client_id=identity -d client_secret="$SECRET" \
+      | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+    curl -s -X PUT "$SRV/admin/realms/master" -H "Authorization: Bearer $T" -H "Content-Type: application/json" \
+      -d '{"organizationsEnabled":true}' -o /dev/null -w "  realm org-enable: %{http_code}\n"
+    curl -s -X POST "$SRV/admin/realms/master/organizations" -H "Authorization: Bearer $T" -H "Content-Type: application/json" \
+      -d '{"name":{{ .Values.tenant.name | quote }},"alias":{{ .Values.tenant.alias | quote }},"enabled":true}' \
+      -o /dev/null -w "  org create: %{http_code}\n"
+    ORGID=$(curl -s "$SRV/admin/realms/master/organizations?search={{ .Values.tenant.name }}" -H "Authorization: Bearer $T" \
+      | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
+    DUID=$(curl -s "$SRV/admin/realms/master/users?username={{ .Values.demoUser.username }}" -H "Authorization: Bearer $T" \
+      | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
+    curl -s -X POST "$SRV/admin/realms/master/organizations/$ORGID/members" -H "Authorization: Bearer $T" -H "Content-Type: application/json" \
+      -d "\"$DUID\"" -o /dev/null -w "  add demo to org: %{http_code}\n"
+
+    echo "ORG_ID (tenant) = $ORGID"
+    echo "== done =="
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: retail-ai-keycloak-bootstrap
+  annotations:
+    # The script's content changes whenever the hostname or the tenant does, and the Job would
+    # otherwise be immutable-rejected on reconfigure; this makes the name follow the content.
+    checksum/script: {{ printf "%s|%s|%s" $app .Values.tenant.name .Values.demoUser.username | sha256sum | trunc 8 }}
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.keycloak.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: bootstrap
+          image: "{{ .Values.keycloak.image.registry }}/{{ .Values.keycloak.image.repository }}:{{ .Values.keycloak.image.tag }}"
+          command: ["bash", "/scripts/bootstrap.sh"]
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: scripts
+          configMap:
+            name: retail-ai-keycloak-bootstrap
+{{- end }}

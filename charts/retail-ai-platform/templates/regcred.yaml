@@ -1,0 +1,19 @@
+{{- /*
+Pull credentials for the agent's private images. Created here, in the component that runs
+first, so the identity and agent components can reference it by name without each rendering
+its own copy of the same secret.
+*/ -}}
+{{- if .Values.imagePullSecret.username }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: regcred
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: {{ printf "{\"auths\":{%q:{\"username\":%q,\"password\":%q,\"auth\":%q}}}"
+      .Values.imagePullSecret.registry
+      .Values.imagePullSecret.username
+      .Values.imagePullSecret.password
+      (printf "%s:%s" .Values.imagePullSecret.username .Values.imagePullSecret.password | b64enc)
+    | b64enc }}
+{{- end }}

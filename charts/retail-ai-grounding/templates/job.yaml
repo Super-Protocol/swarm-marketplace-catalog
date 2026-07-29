@@ -1,0 +1,95 @@
+{{- /*
+The bindings carry dataset credentials, so they arrive as a Secret rather than a ConfigMap:
+the platform lifts every rendered Secret out of the blueprint and seals it, which keeps the
+passwords out of the deployment evidence the marketplace publishes.
+*/ -}}
+{{- $secret := required "internalSecret must be set" .Values.internalSecret }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: retail-ai-grounding-bindings
+type: Opaque
+stringData:
+  bindings.json: {{ .Values.bindings | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: retail-ai-grounding-scripts
+data:
+{{ (.Files.Glob "files/*").AsConfig | indent 2 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: retail-ai-grounding
+  annotations:
+    # A Job's pod template is immutable, so reconfiguring with a different set of datasets has
+    # to produce a different Job. Keying the name off the bindings is what makes rebinding data
+    # a normal operation rather than a redeploy.
+    checksum/bindings: {{ .Values.bindings | sha256sum | trunc 8 }}
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: ground
+          image: {{ .Values.image | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              pip install --quiet --no-cache-dir 'psycopg[binary]' neo4j openai
+              exec python /scripts/ground.py
+          env:
+            - name: BINDINGS
+              valueFrom:
+                secretKeyRef:
+                  name: retail-ai-grounding-bindings
+                  key: bindings.json
+            - name: NEO4J_URI
+              value: {{ .Values.neo4j.uri | quote }}
+            - name: NEO4J_USER
+              value: {{ .Values.neo4j.user | quote }}
+            - name: NEO4J_PASSWORD
+              value: {{ $secret | quote }}
+            - name: NEO4J_DB
+              value: {{ .Values.neo4j.database | quote }}
+            - name: PG_HOST
+              value: {{ .Values.postgres.host | quote }}
+            - name: PG_PORT
+              value: {{ .Values.postgres.port | quote }}
+            - name: PG_USER
+              value: {{ .Values.postgres.user | quote }}
+            - name: PG_PASSWORD
+              value: {{ $secret | quote }}
+            - name: PG_DATABASE
+              value: {{ .Values.postgres.database | quote }}
+            - name: KEYCLOAK_URL
+              value: {{ .Values.keycloak.url | quote }}
+            - name: KEYCLOAK_REALM
+              value: {{ .Values.keycloak.realm | quote }}
+            - name: KEYCLOAK_CLIENT_ID
+              value: {{ .Values.keycloak.clientId | quote }}
+            - name: KEYCLOAK_CLIENT_SECRET
+              value: {{ $secret | quote }}
+            - name: LLM_PROVIDER
+              value: {{ .Values.llm.provider | quote }}
+            - name: LLM_MODEL
+              value: {{ .Values.llm.model | quote }}
+            - name: LLM_API_KEY
+              value: {{ .Values.llm.apiKey | quote }}
+            - name: EMBED_MODEL
+              value: {{ .Values.embeddings.model | quote }}
+            - name: EMBED_DIM
+              value: {{ .Values.embeddings.dimensions | quote }}
+            - name: OPENAI_API_KEY
+              value: {{ .Values.embeddings.apiKey | quote }}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: scripts
+          configMap:
+            name: retail-ai-grounding-scripts

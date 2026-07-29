@@ -1,0 +1,39 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: DataInterface
+
+metadata:
+  name: clickhouse-native
+  version: v1
+  title: ClickHouse Native Protocol
+  description: Direct access to a ClickHouse database over the native TCP protocol.
+
+spec:
+  connection:
+    properties:
+      host:
+        type: string
+        description: ClickHouse server hostname.
+      port:
+        type: integer
+        default: 9440
+        description: Native protocol port (TLS).
+      database:
+        type: string
+        description: Database containing the dataset tables.
+      username:
+        type: string
+        description: Read-only user provisioned for this binding.
+      password:
+        type: string
+        secret: true
+        description: Password for the binding user. Sealed for the target TEE.
+      tls:
+        type: boolean
+        default: true
+        description: Whether to connect over TLS.
+    required:
+      - host
+      - port
+      - database
+      - username
+      - password

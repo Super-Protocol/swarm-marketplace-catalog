@@ -1,0 +1,270 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: AppDefinition
+
+metadata:
+  name: ollama-webui
+  title: Ollama + Open WebUI
+  description: Run large language models with a chat interface powered by Open WebUI.
+  version: "1.0.1"
+  category: ai-inference
+  sourceRepo: https://github.com/swarm-cloud/marketplace-apps
+  license: MIT
+  icon: icon.svg
+  tags:
+    - ai
+    - llm
+    - inference
+    - chat
+
+ui:
+  sections:
+    - id: model
+      title: Model Configuration
+      description: Select the model to deploy.
+      fields:
+        - parameterId: modelName
+          widget: select
+    - id: compute
+      title: Compute Resources
+      fields:
+        - parameterId: gpuEnabled
+          widget: switch
+        - parameterId: gpuCount
+          widget: number
+          visible: "params.gpuEnabled == true"
+    - id: storage
+      title: Storage
+      fields:
+        - parameterId: storageSize
+          widget: select
+    - id: network
+      title: Network Access
+      fields:
+        - parameterId: enableIngress
+          widget: switch
+        - parameterId: chatHostname
+          widget: text
+          visible: "params.enableIngress == true"
+        - parameterId: apiHostname
+          widget: text
+          visible: "params.enableIngress == true"
+
+parameters:
+  - id: modelName
+    type: string
+    title: Model
+    description: The LLM model to download and serve.
+    required: true
+    default: "llama3.1:8b"
+    options:
+      source:
+        type: static
+        values:
+          - value: "llama3.2:3b"
+            label: Llama 3.2 (3B)
+          - value: "llama3.1:8b"
+            label: Llama 3.1 (8B)
+          - value: "mistral:7b"
+            label: Mistral (7B)
+          - value: "gemma2:9b"
+            label: Gemma 2 (9B)
+          - value: "qwen2.5:7b"
+            label: Qwen 2.5 (7B)
+          - value: "deepseek-r1:14b"
+            label: DeepSeek R1 (14B)
+
+  - id: gpuEnabled
+    type: boolean
+    title: Enable GPU
+    description: Enable NVIDIA GPU acceleration for inference.
+    default: true
+
+  - id: gpuCount
+    type: integer
+    title: GPU Count
+    description: Number of GPUs to allocate.
+    default: 1
+    validation:
+      min: 1
+      max: 8
+
+  - id: storageSize
+    type: string
+    title: Storage Size
+    description: Persistent storage for downloaded models.
+    default: "30Gi"
+    options:
+      source:
+        type: static
+        values:
+          - value: "20Gi"
+            label: 20 GB
+          - value: "30Gi"
+            label: 30 GB
+          - value: "50Gi"
+            label: 50 GB
+          - value: "100Gi"
+            label: 100 GB
+
+  - id: enableIngress
+    type: boolean
+    title: Enable Public Access
+    description: Expose services via ingress endpoints.
+    default: false
+
+  - id: chatHostname
+    type: string
+    title: Chat UI Hostname
+    description: Public hostname for the Open WebUI chat interface.
+    validation:
+      pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$"
+
+  - id: apiHostname
+    type: string
+    title: API Hostname
+    description: Public hostname for the Ollama API (OpenAI-compatible).
+    validation:
+      pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$"
+
+resources:
+  min:
+    cpu: "4"
+    memory: "8Gi"
+    storage: "30Gi"
+  recommended:
+    cpu: "8"
+    memory: "16Gi"
+    storage: "50Gi"
+  gpu:
+    required: false
+    minCount: 1
+    minVram: "8Gi"
+    types:
+      - nvidia-a100
+      - nvidia-l40s
+      - nvidia-rtx-4090
+
+components:
+  - name: ollama
+    source:
+      type: helm
+      repoUrl: https://otwld.github.io/ollama-helm/
+      chart: ollama
+      version: "1.12.0"
+    images:
+      - name: ollama/ollama
+        digest: sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+    deployment:
+      values:
+        base:
+          service:
+            type: ClusterIP
+          ollama:
+            gpu:
+              enabled: false
+              type: nvidia
+              number: 0
+            models:
+              pull: []
+              run: []
+          runtimeClassName: ""
+          persistentVolume:
+            enabled: true
+            size: 30Gi
+          ingress:
+            enabled: false
+        patches:
+          - op: replace
+            path: ollama.models.pull
+            value:
+              - "{{ params.modelName }}"
+
+          - op: replace
+            path: ollama.gpu.enabled
+            value: true
+            when: "params.gpuEnabled == true"
+
+          - op: replace
+            path: ollama.gpu.number
+            value: "{{ params.gpuCount }}"
+            when: "params.gpuEnabled == true"
+
+          - op: replace
+            path: runtimeClassName
+            value: nvidia
+            when: "params.gpuEnabled == true"
+
+          - op: replace
+            path: persistentVolume.size
+            value: "{{ params.storageSize }}"
+
+          - op: replace
+            path: ingress.enabled
+            value: true
+            when: "params.enableIngress == true"
+
+          # The whole entry, not just the host: this chart's rule carries its paths, and a rule
+          # without them is an Ingress the API server refuses.
+          - op: add
+            path: ingress.hosts
+            value:
+              - host: "{{ params.apiHostname }}"
+                paths:
+                  - path: /
+                    pathType: Prefix
+            when: "params.enableIngress == true"
+
+  - name: open-webui
+    dependsOn:
+      - ollama
+    source:
+      type: helm
+      repoUrl: https://open-webui.github.io/helm-charts
+      chart: open-webui
+      version: "5.20.0"
+    images:
+      - name: ghcr.io/open-webui/open-webui
+        digest: sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae
+    deployment:
+      values:
+        base:
+          service:
+            type: ClusterIP
+          ollama:
+            enabled: false
+          extraEnvVars:
+            - name: OLLAMA_BASE_URL
+              value: "http://{{ components.ollama.release }}:11434"
+            - name: ENABLE_OLLAMA_API
+              value: "true"
+          ingress:
+            enabled: false
+        patches:
+          - op: replace
+            path: ingress.enabled
+            value: true
+            when: "params.enableIngress == true"
+
+          # This chart takes a single hostname, not a list — the shape differs from ollama's.
+          - op: add
+            path: ingress.host
+            value: "{{ params.chatHostname }}"
+            when: "params.enableIngress == true"
+
+outputs:
+  - id: chatUrl
+    title: Chat UI
+    type: url
+    value: "https://{{ params.chatHostname }}"
+    when: "params.enableIngress == true"
+
+  - id: apiUrl
+    title: API Endpoint (OpenAI-compatible)
+    type: url
+    value: "https://{{ params.apiHostname }}/v1"
+    when: "params.enableIngress == true"
+
+  - id: internalApi
+    title: Internal API
+    type: url
+    value: "http://{{ components.ollama.release }}.{{ namespace }}.svc.cluster.local:11434"

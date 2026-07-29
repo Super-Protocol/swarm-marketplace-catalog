@@ -1,0 +1,511 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: AppDefinition
+
+metadata:
+  name: retail-ai-agent
+  title: Retail AI Analyst
+  description: >-
+    A conversational analyst for your own data. Connect one or more datasets and ask questions in
+    plain language: the agent finds the relevant tables, writes the SQL, runs it inside the
+    confidential cluster space and answers with figures and charts. Raw records never leave the
+    space and never reach the model — only aggregates do.
+  version: "1.0.0"
+  category: ai-agents
+  license: Proprietary
+  tags:
+    - ai
+    - agent
+    - analytics
+    - text-to-sql
+    - confidential
+
+ui:
+  sections:
+    - id: access
+      title: Access
+      description: Where the agent is reachable and who may sign in.
+      fields:
+        - parameterId: appHostname
+        - parameterId: workspaceName
+        - parameterId: internalSecret
+
+    - id: model
+      title: Model
+      description: The language model that reads your questions and writes the SQL.
+      fields:
+        - parameterId: llmModel
+          widget: select
+        - parameterId: googleApiKey
+        - parameterId: openaiApiKey
+
+    - id: appearance
+      title: Appearance
+      fields:
+        - parameterId: brandTitle
+
+parameters:
+  - id: appHostname
+    type: string
+    title: Hostname
+    description: >-
+      The public hostname the agent is served on, e.g. analyst.example.com. Point it at this
+      cloud's gateway before publishing the deployment.
+    required: true
+    validation:
+      pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+
+  - id: workspaceName
+    type: string
+    title: Workspace name
+    description: The tenant users belong to. Shown when they sign in.
+    required: true
+    default: Demo workspace
+
+  - id: internalSecret
+    type: string
+    title: Internal credential
+    description: >-
+      Protects every service inside this deployment — the databases, the graph, the identity
+      provider and the demo login. Leave it blank and one is generated for you; nothing outside
+      the cluster space can reach these services either way.
+    required: true
+    sensitive: true
+    generated: true
+    validation:
+      minLength: 16
+
+  - id: llmModel
+    type: string
+    title: Model
+    description: Used both for understanding the question and for generating SQL.
+    required: true
+    default: gemini-3.1-pro-preview
+    options:
+      source:
+        type: static
+        values:
+          - value: gemini-3.1-pro-preview
+            label: Gemini 3.1 Pro (preview)
+          - value: gemini-3-flash-preview
+            label: Gemini 3 Flash (preview)
+          - value: gemini-2.5-pro
+            label: Gemini 2.5 Pro
+          - value: gemini-2.5-flash
+            label: Gemini 2.5 Flash
+
+  - id: googleApiKey
+    type: string
+    title: Google AI API key
+    description: Used to call the selected Gemini model.
+    required: true
+    sensitive: true
+
+  - id: openaiApiKey
+    type: string
+    title: OpenAI API key
+    description: >-
+      Used to embed your datasets' table and column descriptions, which is how the agent finds
+      the right tables for a question. Also used for voice input.
+    required: true
+    sensitive: true
+
+  - id: brandTitle
+    type: string
+    title: Product name
+    description: Shown in the browser tab and the header.
+    required: true
+    default: AI Analyst
+
+secrets:
+  - name: registryUsername
+    title: Container registry username
+    description: An account with read access to the agent's images.
+  - name: registryToken
+    title: Container registry token
+    description: A read-only token for that account.
+
+resources:
+  min:
+    cpu: "6"
+    memory: "16Gi"
+    storage: "60Gi"
+  recommended:
+    cpu: "12"
+    memory: "32Gi"
+    storage: "120Gi"
+
+data:
+  slots:
+    - name: datasets
+      title: Datasets
+      description: >-
+        The data the agent answers questions about. Each dataset's published table and column
+        descriptions become the agent's knowledge of it — there is nothing else to fill in.
+      required: true
+      multiple: true
+      accepts:
+        - interface: clickhouse-http/v1
+        - interface: clickhouse-native/v1
+
+components:
+  # ---------------------------------------------------------------------------
+  # Storage and messaging. Everything stateful, deployed first because the rest
+  # will not start without it.
+  # ---------------------------------------------------------------------------
+  - name: platform
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: retail-ai-platform
+      version: "0.1.0"
+    deployment:
+      values:
+        base:
+          internalSecret: ""
+          imagePullSecret:
+            registry: ghcr.io
+            username: ""
+            password: ""
+          postgresql:
+            auth:
+              postgresPassword: ""
+              username: retail_ai_user
+              password: ""
+              database: retail_ai
+          redis:
+            global:
+              redis:
+                password: ""
+          minio:
+            rootPassword: ""
+        patches:
+          - op: replace
+            path: internalSecret
+            value: "{{ params.internalSecret }}"
+          - op: replace
+            path: imagePullSecret.username
+            value: "{{ secrets.registryUsername }}"
+          - op: replace
+            path: imagePullSecret.password
+            value: "{{ secrets.registryToken }}"
+          - op: replace
+            path: postgresql.auth.postgresPassword
+            value: "{{ params.internalSecret }}"
+          - op: replace
+            path: postgresql.auth.password
+            value: "{{ params.internalSecret }}"
+          - op: replace
+            path: redis.global.redis.password
+            value: "{{ params.internalSecret }}"
+          - op: replace
+            path: minio.rootPassword
+            value: "{{ params.internalSecret }}"
+
+  # ---------------------------------------------------------------------------
+  # Who may sign in, and which tenant they land in.
+  # ---------------------------------------------------------------------------
+  - name: identity
+    dependsOn:
+      - platform
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: retail-ai-identity
+      version: "0.1.0"
+    deployment:
+      values:
+        base:
+          internalSecret: ""
+          appHostname: ""
+          tenant:
+            name: ""
+            alias: workspace
+          keycloak:
+            auth:
+              adminPassword: ""
+            externalDatabase:
+              password: ""
+            extraEnvVars:
+              - name: KC_HOSTNAME_STRICT
+                value: "false"
+              - name: KC_HTTP_ENABLED
+                value: "true"
+              # Organizations are how the agent resolves a tenant; without the feature flag a
+              # signed-in user has no tenant and gets an error instead of a chat.
+              - name: KEYCLOAK_EXTRA_ARGS
+                value: "--features organization"
+              - name: RAI_SERVICE_DISCOVERY_URL
+                value: http://retail-ai-system-prod-service-discovery
+        patches:
+          - op: replace
+            path: internalSecret
+            value: "{{ params.internalSecret }}"
+          - op: replace
+            path: appHostname
+            value: "{{ params.appHostname }}"
+          - op: replace
+            path: tenant.name
+            value: "{{ params.workspaceName }}"
+          - op: replace
+            path: keycloak.auth.adminPassword
+            value: "{{ params.internalSecret }}"
+          - op: replace
+            path: keycloak.externalDatabase.password
+            value: "{{ params.internalSecret }}"
+          # The issuer must match the public URL down to the /auth path, or the gateway rejects
+          # every token this realm mints.
+          - op: add
+            path: keycloak.extraEnvVars.0
+            value:
+              name: KC_HOSTNAME
+              value: "https://{{ params.appHostname }}/auth"
+
+  # ---------------------------------------------------------------------------
+  # The agent itself.
+  # ---------------------------------------------------------------------------
+  - name: agent
+    dependsOn:
+      - identity
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: retail-ai
+      version: "0.1.0"
+    deployment:
+      values:
+        base:
+          aivo:
+            config:
+              config:
+                services:
+                  identityService:
+                    clientSecret: ""
+                  api:
+                    db:
+                      config:
+                        password: ""
+                    redis:
+                      password: ""
+                    fileStorage:
+                      config:
+                        secretAccessKey: ""
+                    embeddings:
+                      apiKey: ""
+                    llmSmart:
+                      apiKey: ""
+                      model: ""
+                    llmFast:
+                      apiKey: ""
+                      model: ""
+                    checkpointer:
+                      uri: ""
+                    stt:
+                      apiKey: ""
+                  ui:
+                    logoutUrl: ""
+                  instance:
+                    endpoints:
+                      graphqlHttp: ""
+                      graphqlWs: ""
+                    brand:
+                      name: ""
+                      title: ""
+        patches:
+          - op: replace
+            path: aivo.config.config.services.identityService.clientSecret
+            value: "{{ params.internalSecret }}"
+          - op: replace
+            path: aivo.config.config.services.api.db.config.password
+            value: "{{ params.internalSecret }}"
+          - op: replace
+            path: aivo.config.config.services.api.redis.password
+            value: "{{ params.internalSecret }}"
+          - op: replace
+            path: aivo.config.config.services.api.fileStorage.config.secretAccessKey
+            value: "{{ params.internalSecret }}"
+          - op: replace
+            path: aivo.config.config.services.api.embeddings.apiKey
+            value: "{{ params.openaiApiKey }}"
+          - op: replace
+            path: aivo.config.config.services.api.stt.apiKey
+            value: "{{ params.openaiApiKey }}"
+          - op: replace
+            path: aivo.config.config.services.api.llmSmart.apiKey
+            value: "{{ params.googleApiKey }}"
+          - op: replace
+            path: aivo.config.config.services.api.llmSmart.model
+            value: "{{ params.llmModel }}"
+          - op: replace
+            path: aivo.config.config.services.api.llmFast.apiKey
+            value: "{{ params.googleApiKey }}"
+          - op: replace
+            path: aivo.config.config.services.api.llmFast.model
+            value: "{{ params.llmModel }}"
+          - op: replace
+            path: aivo.config.config.services.api.checkpointer.uri
+            value: "postgresql://checkpointer_user:{{ params.internalSecret }}@rai-postgres-prod-postgresql:5432/retail_ai_checkpointer"
+          - op: replace
+            path: aivo.config.config.services.ui.logoutUrl
+            value: "/oauth2/sign_out?rd=https%3A%2F%2F{{ params.appHostname }}%2Fauth%2Frealms%2Fmaster%2Fprotocol%2Fopenid-connect%2Flogout"
+          - op: replace
+            path: aivo.config.config.services.instance.endpoints.graphqlHttp
+            value: "https://{{ params.appHostname }}/graphql"
+          - op: replace
+            path: aivo.config.config.services.instance.endpoints.graphqlWs
+            value: "wss://{{ params.appHostname }}/graphql"
+          - op: replace
+            path: aivo.config.config.services.instance.brand.name
+            value: "{{ params.brandTitle }}"
+          - op: replace
+            path: aivo.config.config.services.instance.brand.title
+            value: "{{ params.brandTitle }}"
+
+  # ---------------------------------------------------------------------------
+  # The public door: authentication in front of the agent, and the routing that
+  # keeps the identity provider outside it.
+  # ---------------------------------------------------------------------------
+  - name: gateway
+    dependsOn:
+      - agent
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: retail-ai-gateway
+      version: "0.1.0"
+    deployment:
+      values:
+        base:
+          appHostname: ""
+          oauth2-proxy:
+            config:
+              clientID: retail-ai
+              clientSecret: ""
+              configFile: ""
+            alphaConfig:
+              configData:
+                providers:
+                  - id: keycloak
+                    provider: keycloak-oidc
+                    clientID: retail-ai
+                    clientSecret: ""
+                    loginURL: ""
+                    redeemURL: http://rai-keycloak-prod/auth/realms/master/protocol/openid-connect/token
+                    oidcConfig:
+                      issuerURL: ""
+                      jwksURL: http://rai-keycloak-prod/auth/realms/master/protocol/openid-connect/certs
+                      skipDiscovery: true
+                      emailClaim: email
+                      groupsClaim: groups
+                      userIDClaim: sub
+                    scope: openid email profile
+                injectRequestHeaders:
+                  - name: x-auth-subject
+                    values:
+                      - claimSource:
+                          claim: user
+                  - name: x-auth-user
+                    values:
+                      - claimSource:
+                          claim: user
+                  - name: x-auth-email
+                    values:
+                      - claimSource:
+                          claim: email
+                upstreamConfig:
+                  upstreams:
+                    - id: backend
+                      path: /graphql
+                      uri: http://retail-ai-system-prod-back
+                    - id: frontend
+                      path: /
+                      uri: http://retail-ai-system-prod-front
+        patches:
+          - op: replace
+            path: appHostname
+            value: "{{ params.appHostname }}"
+          - op: replace
+            path: oauth2-proxy.config.clientSecret
+            value: "{{ params.internalSecret }}"
+          - op: replace
+            path: "oauth2-proxy.alphaConfig.configData.providers.0.clientSecret"
+            value: "{{ params.internalSecret }}"
+          # Split horizon: the browser is sent to the public identity provider to log in, while
+          # the token exchange and key fetch happen over the in-cluster service. The issuer the
+          # token carries stays the public one either way.
+          - op: replace
+            path: "oauth2-proxy.alphaConfig.configData.providers.0.loginURL"
+            value: "https://{{ params.appHostname }}/auth/realms/master/protocol/openid-connect/auth"
+          - op: replace
+            path: "oauth2-proxy.alphaConfig.configData.providers.0.oidcConfig.issuerURL"
+            value: "https://{{ params.appHostname }}/auth/realms/master"
+          - op: replace
+            path: oauth2-proxy.config.configFile
+            value: |
+              email_domains = ["*"]
+              redirect_url = "https://{{ params.appHostname }}/oauth2/callback"
+              whitelist_domains = ["{{ params.appHostname }}"]
+              skip_provider_button = true
+              reverse_proxy = true
+
+              session_store_type = "redis"
+              redis_connection_url = "redis://default:{{ params.internalSecret }}@rai-redis-prod-master:6379/3"
+              cookie_secure = true
+              cookie_refresh = "1h"
+              cookie_expire = "168h"
+
+              standard_logging = true
+              auth_logging = true
+
+  # ---------------------------------------------------------------------------
+  # What turns "a dataset is attached" into "the agent can answer questions
+  # about it": data-source registration and the knowledge graph, both built from
+  # the descriptions the dataset publisher already wrote.
+  # ---------------------------------------------------------------------------
+  - name: grounding
+    dependsOn:
+      - agent
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: retail-ai-grounding
+      version: "0.1.0"
+    deployment:
+      values:
+        base:
+          internalSecret: ""
+          bindings: "[]"
+          llm:
+            provider: google
+            model: ""
+            apiKey: ""
+          embeddings:
+            model: text-embedding-3-small
+            dimensions: 1536
+            apiKey: ""
+        patches:
+          - op: replace
+            path: internalSecret
+            value: "{{ params.internalSecret }}"
+          - op: replace
+            path: bindings
+            value: "{{ data.datasets | json }}"
+          - op: replace
+            path: llm.model
+            value: "{{ params.llmModel }}"
+          - op: replace
+            path: llm.apiKey
+            value: "{{ params.googleApiKey }}"
+          - op: replace
+            path: embeddings.apiKey
+            value: "{{ params.openaiApiKey }}"
+
+outputs:
+  - id: appUrl
+    title: Agent
+    type: url
+    value: "https://{{ params.appHostname }}"
+
+  - id: signIn
+    title: Sign-in
+    type: string
+    value: "Username \"demo\", password: the internal credential you set."

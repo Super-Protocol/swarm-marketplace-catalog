@@ -1,0 +1,9 @@
+image: "ghcr.io/aivoagent/prefect-kb:latest"
+prefectApiUrl: "http://prefect-server:4200/api"
+workPool: "kubernetes-pool"
+
+# Full prefect deployment YAML (rendered into ConfigMap, mounted to /app/prefect.yaml)
+prefectYaml: ""
+
+# PEM-encoded CA certificate chain (creates x5-ca-chain ConfigMap if set)
+caCertPem: ""

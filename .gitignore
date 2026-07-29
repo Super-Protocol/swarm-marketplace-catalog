@@ -1,0 +1,3 @@
+# Subchart archives are resolved by `helm dependency update`, in CI and locally. Committing them
+# would put four copies of every upstream chart in history, one per dependent chart.
+charts/*/charts/

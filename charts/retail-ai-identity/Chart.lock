@@ -1,0 +1,6 @@
+dependencies:
+- name: keycloak
+  repository: file://../vendor/keycloak
+  version: 24.4.10
+digest: sha256:0693392c978954cff34e6e584b6254fe77ca15b68248a9f7996014a9684ea1bf
+generated: "2026-07-29T11:00:57.735838+03:00"

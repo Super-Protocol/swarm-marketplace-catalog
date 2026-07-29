@@ -1,0 +1,100 @@
+# The one credential every in-namespace backing service shares. The deployment's namespace is
+# the trust boundary: nothing outside it can reach these services, and the agent's own
+# configuration has to carry the password in plaintext anyway, so splitting it into six
+# separate secrets would buy appearance rather than isolation.
+internalSecret: ""
+
+# Container registry credentials for the agent's private images. The secret this creates is
+# named `regcred` and is referenced by the identity and agent components.
+imagePullSecret:
+  registry: ghcr.io
+  username: ""
+  password: ""
+
+neo4j:
+  image: neo4j:5.26.21-community
+  storage: 10Gi
+  heap:
+    initial: 1G
+    max: 2G
+  pagecache: 1G
+
+postgresql:
+  fullnameOverride: rai-postgres-prod-postgresql
+  global:
+    security:
+      allowInsecureImages: true
+  image:
+    registry: docker.io
+    # public.ecr.aws/bitnami is gone; the legacy mirror is what still serves these tags.
+    repository: bitnamilegacy/postgresql
+    tag: 17.3.0-debian-12-r1
+  rbac:
+    create: false
+  serviceAccount:
+    create: true
+  networkPolicy:
+    enabled: false
+  primary:
+    resourcesPreset: none
+    persistence:
+      size: 8Gi
+    initdb:
+      scriptsConfigMap: rai-postgres-initdb
+
+redis:
+  fullnameOverride: rai-redis-prod
+  global:
+    security:
+      allowInsecureImages: true
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/redis
+    tag: 7.4.2-debian-12-r2
+  architecture: standalone
+  rbac:
+    create: false
+  serviceAccount:
+    create: true
+  networkPolicy:
+    enabled: false
+  master:
+    resourcesPreset: none
+    persistence:
+      size: 8Gi
+
+nats:
+  fullnameOverride: rai-nats-prod
+  config:
+    monitor:
+      enabled: true
+      port: 8222
+    jetstream:
+      enabled: true
+      memoryStore:
+        enabled: true
+        maxSize: 1Gi
+      fileStore:
+        pvc:
+          size: 10Gi
+
+minio:
+  fullnameOverride: rai-minio-prod
+  mode: standalone
+  replicas: 1
+  persistence:
+    size: 20Gi
+  rootUser: root
+  ingress:
+    enabled: false
+  consoleIngress:
+    enabled: false
+  metrics:
+    serviceMonitor:
+      enabled: false
+  buckets:
+    - name: agent
+      policy: none
+      purge: false
+      versioning: false
+      objectlocking: false

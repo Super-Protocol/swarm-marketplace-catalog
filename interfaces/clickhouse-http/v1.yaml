@@ -1,0 +1,38 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: DataInterface
+
+metadata:
+  name: clickhouse-http
+  version: v1
+  title: ClickHouse HTTP Interface
+  description: Access to a ClickHouse database over its HTTP interface, the protocol most analytics clients and BI drivers speak.
+
+spec:
+  connection:
+    properties:
+      host:
+        type: string
+        description: ClickHouse server hostname.
+      port:
+        type: integer
+        default: 8443
+        description: HTTP interface port (8123 plain, 8443 over TLS).
+      database:
+        type: string
+        description: Database containing the dataset tables. Query generators address tables as <database>.<table>.
+      username:
+        type: string
+        description: Read-only user provisioned for this binding.
+      password:
+        type: string
+        secret: true
+        description: Password for the binding user. Sealed for the target TEE.
+      tls:
+        type: boolean
+        default: true
+        description: Whether to connect over HTTPS.
+    required:
+      - host
+      - port
+      - database
+      - username

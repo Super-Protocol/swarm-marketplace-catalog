@@ -1,0 +1,33 @@
+internalSecret: ""
+
+image: python:3.12-slim
+
+# The bindings the platform resolved for the agent's data slot, verbatim: one object per
+# dataset, each with its connection and the schema its publisher declared.
+bindings: "[]"
+
+llm:
+  provider: google
+  model: gemini-3.1-pro-preview
+  apiKey: ""
+
+embeddings:
+  model: text-embedding-3-small
+  dimensions: 1536
+  apiKey: ""
+
+neo4j:
+  uri: bolt://neo4j:7687
+  user: neo4j
+  database: neo4j
+
+postgres:
+  host: rai-postgres-prod-postgresql
+  port: 5432
+  user: retail_ai_user
+  database: retail_ai
+
+keycloak:
+  url: http://rai-keycloak-prod/auth
+  realm: master
+  clientId: identity

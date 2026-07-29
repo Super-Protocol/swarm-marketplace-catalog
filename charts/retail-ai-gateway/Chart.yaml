@@ -1,0 +1,10 @@
+apiVersion: v2
+name: retail-ai-gateway
+description: Public entry for the Retail AI agent — an authenticating reverse proxy in front of it, and the Ingress that routes to both it and the identity provider.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+dependencies:
+  - name: oauth2-proxy
+    version: 10.1.1
+    repository: "file://../vendor/oauth2-proxy"

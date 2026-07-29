@@ -1,0 +1,67 @@
+name: Publish charts
+
+# The chart repository is served from GitHub Pages. Packaging happens here rather than in the
+# repository so `charts/` stays readable source: no committed .tgz, no committed index.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'charts/**'
+      - '.github/workflows/publish-charts.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: Package every chart
+        run: |
+          mkdir -p site/charts
+          for chart in charts/*/; do
+            name=$(basename "$chart")
+            [ "$name" = "vendor" ] && continue
+            helm dependency update "$chart"
+            helm package "$chart" --destination site/charts
+          done
+          helm repo index site/charts \
+            --url "https://super-protocol.github.io/${GITHUB_REPOSITORY#*/}/charts"
+
+      - name: Landing page
+        run: |
+          cat > site/index.html <<'HTML'
+          <!doctype html>
+          <title>Swarm Cloud Marketplace charts</title>
+          <h1>Swarm Cloud Marketplace charts</h1>
+          <p>Helm repository for the applications in
+          <a href="https://github.com/Super-Protocol/swarm-marketplace-catalog">swarm-marketplace-catalog</a>.</p>
+          <pre>helm repo add swarm-marketplace https://super-protocol.github.io/swarm-marketplace-catalog/charts</pre>
+          HTML
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: package
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

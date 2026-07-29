@@ -1,0 +1,50 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: DataDefinition
+
+metadata:
+  name: acme-internal-knowledge-base
+  title: Acme Internal Knowledge Base
+  description: Acme engineering runbooks, product docs and support macros. Owned by your organization — restrict it or open it to partners.
+  category: language
+  tags:
+    - nlp
+    - multilingual
+    - support
+    - jsonl
+
+spec:
+  secrets:
+    - name: kbReadUser
+      title: ClickHouse read-only user
+      description: A user with SELECT on the docs database and nothing else.
+    - name: kbReadPass
+      title: ClickHouse read-only password
+
+  provides:
+    - interface: clickhouse-native/v1
+      connection:
+        static:
+          host: ch.acme-internal.svc
+          port: 9440
+          database: docs
+          username: "{{ secrets.kbReadUser }}"
+          password: "{{ secrets.kbReadPass }}"
+          tls: true
+
+  schema:
+    tables:
+      - name: documents
+        description: One row per document revision.
+        columns:
+          - name: doc_id
+            type: string
+            description: Stable document identifier.
+          - name: title
+            type: string
+            description: Document title.
+          - name: text
+            type: string
+            description: Full document body, plain text.
+          - name: updated_at
+            type: timestamp
+            description: Last revision time (UTC).

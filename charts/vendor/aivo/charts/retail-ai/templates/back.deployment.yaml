@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "app.fullname" . }}-back
+  labels:
+    {{- include "app.labelsBack" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.front.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "app.selectorLabelsBack" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "app.labelsBack" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: {{ .Chart.Name }}
+        {{- with .Values.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        image: "{{ .Values.back.image.repository }}:{{ .Values.back.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.back.image.pullPolicy }}
+        args: {{ .Values.back.config.args }}
+        env:
+        - name: NODE_OPTIONS
+          value: "--max-old-space-size={{ .Values.back.config.maxOldSpaceSize }}"
+        - name: PORT
+          value: {{ .Values.back.config.port | quote }}
+        - name: RAI_SERVICE_DISCOVERY_URL
+          value: http://{{ .Release.Name }}-service-discovery
+        {{- if .Values.global.caCert.enabled }}
+        - name: NODE_EXTRA_CA_CERTS
+          value: /etc/ssl/certs/x5-ca-chain.pem
+        {{- end }}
+        ports:
+        - name: http
+          containerPort: {{ .Values.back.config.port }}
+          protocol: TCP
+        {{- with .Values.livenessProbe }}
+        livenessProbe:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- with .Values.readinessProbe }}
+        readinessProbe:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- with .Values.resources }}
+        resources:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- if .Values.global.caCert.enabled }}
+        volumeMounts:
+        - name: ca-cert
+          mountPath: /etc/ssl/certs/x5-ca-chain.pem
+          subPath: ca-chain.pem
+          readOnly: true
+        {{- end }}
+      {{- if .Values.gatekeeper.enabled }}
+      - name: "gatekeeper"
+        securityContext:
+          {{- toYaml .Values.gatekeeper.securityContext | nindent 12 }}
+        image: "{{ .Values.gatekeeper.image.repository }}:{{ .Values.gatekeeper.image.tag }}"
+        imagePullPolicy: {{ .Values.gatekeeper.image.pullPolicy }}
+        args:
+          - --config
+          - /etc/gatekeeper/config.yaml
+        ports:
+          - name: gatekeeper
+            containerPort: {{ int .Values.gatekeeper.config.listen }}
+            protocol: TCP
+        resources:
+          {{- toYaml .Values.gatekeeper.resources | nindent 12 }}
+        volumeMounts:
+          - name: gatekeeper-config
+            mountPath: /etc/gatekeeper
+        {{- end }}
+      {{- if or .Values.gatekeeper.enabled .Values.global.caCert.enabled }}
+      volumes:
+      {{- if .Values.gatekeeper.enabled }}
+        - name: gatekeeper-config
+          secret:
+            secretName: "{{ include "app.fullname" . }}-back-gk-cfg"
+      {{- end }}
+      {{- if .Values.global.caCert.enabled }}
+        - name: ca-cert
+          configMap:
+            name: {{ .Release.Name }}-ca-cert
+      {{- end }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

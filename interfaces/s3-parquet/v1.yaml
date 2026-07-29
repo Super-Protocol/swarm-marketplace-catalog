@@ -1,0 +1,43 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: DataInterface
+
+metadata:
+  name: s3-parquet
+  version: v1
+  title: S3-Compatible Object Storage (Parquet)
+  description: Read access to Parquet files stored in an S3-compatible bucket. Each dataset table maps to a directory of Parquet files under the prefix.
+
+spec:
+  connection:
+    properties:
+      endpoint:
+        type: string
+        description: S3-compatible endpoint URL.
+      region:
+        type: string
+        default: us-east-1
+        description: Bucket region.
+      bucket:
+        type: string
+        description: Bucket containing the dataset.
+      prefix:
+        type: string
+        default: ""
+        description: Key prefix under which dataset tables are stored (one directory of Parquet files per table).
+      accessKeyId:
+        type: string
+        secret: true
+        description: Access key provisioned for this binding. Sealed for the target TEE.
+      secretAccessKey:
+        type: string
+        secret: true
+        description: Secret key provisioned for this binding. Sealed for the target TEE.
+      pathStyle:
+        type: boolean
+        default: true
+        description: Whether to use path-style addressing (required by most S3-compatible services).
+    required:
+      - endpoint
+      - bucket
+      - accessKeyId
+      - secretAccessKey

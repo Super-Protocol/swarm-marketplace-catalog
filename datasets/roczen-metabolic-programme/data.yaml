@@ -1,0 +1,486 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: DataDefinition
+
+metadata:
+  name: roczen-metabolic-programme
+  title: RocZen Metabolic Programme (UK)
+  description: "Longitudinal, de-identified clinical records from a UK metabolic and Type-2-Diabetes remission programme: enrolment, GLP-1 medication, daily wearable and self-reported measures, periodic labs, care interactions and programme outcomes."
+  category: healthcare
+  tags:
+    - healthcare
+    - clinical
+    - metabolic
+    - diabetes
+    - longitudinal
+    - synthetic
+
+spec:
+  secrets:
+    - name: readUser
+      title: ClickHouse read-only user
+      description: A user with SELECT on this database and nothing else.
+    - name: readPassword
+      title: ClickHouse read-only password
+
+  provides:
+    - interface: clickhouse-http/v1
+      connection:
+        static:
+          host: clinics-ch.anthrax63.fun
+          port: 8123
+          database: roczen_uk
+          username: "{{ secrets.readUser }}"
+          password: "{{ secrets.readPassword }}"
+          tls: false
+
+  schema:
+    tables:
+      - name: patients
+        description: "Patient profile: one row per enrolled patient (anonymised)."
+        columns:
+          - name: patient_id
+            type: string
+            role: dimension
+            description: "Anonymous patient identifier (primary key)."
+          - name: age_band
+            type: string
+            role: dimension
+            description: "Age band, e.g. 45-54."
+          - name: sex
+            type: string
+            role: dimension
+            description: "Sex: female/male."
+          - name: region
+            type: string
+            role: dimension
+            description: "Broad region within the country."
+          - name: enrolment_date
+            type: date
+            role: dimension
+            description: "Date the patient enrolled in the programme."
+          - name: programme_type
+            type: string
+            role: dimension
+            description: "Metabolic Reset / Weight Management / Type 2 Remission."
+          - name: referral_channel
+            type: string
+            role: dimension
+            description: "GP / Self-referral / Employer / Insurer."
+          - name: consent_status
+            type: string
+            role: dimension
+            description: "Granted or withdrawn."
+          - name: status
+            type: string
+            role: dimension
+            description: "Active / completed / dropped_out / paused."
+
+      - name: baseline_health
+        description: "Starting clinical picture at enrolment."
+        columns:
+          - name: patient_id
+            type: string
+            role: dimension
+            references: patients.patient_id
+            description: "Patient identifier."
+          - name: weight_kg
+            type: number
+            role: measure
+            description: "Baseline body weight in kilograms."
+          - name: height_cm
+            type: number
+            role: measure
+            description: "Height in centimetres."
+          - name: bmi
+            type: number
+            role: measure
+            description: "Body mass index at baseline."
+          - name: waist_cm
+            type: number
+            role: measure
+            description: "Waist circumference in centimetres."
+          - name: hba1c_pct
+            type: number
+            role: measure
+            description: "Baseline HbA1c percent (glycated haemoglobin)."
+          - name: fasting_glucose_mmol
+            type: number
+            role: measure
+            description: "Fasting glucose mmol/L."
+          - name: systolic_bp
+            type: integer
+            role: measure
+            description: "Systolic blood pressure mmHg."
+          - name: diastolic_bp
+            type: integer
+            role: measure
+            description: "Diastolic blood pressure mmHg."
+          - name: primary_diagnosis
+            type: string
+            role: dimension
+            description: "Type 2 Diabetes / Prediabetes / Obesity / Metabolic Syndrome."
+          - name: prior_treatment
+            type: string
+            role: dimension
+            description: "Metformin / Lifestyle only / None / Insulin."
+          - name: smoker
+            type: string
+            role: dimension
+            description: "Never / former / current."
+          - name: alcohol_units_week
+            type: integer
+            role: measure
+            description: "Alcohol units per week."
+          - name: family_history_t2d
+            type: integer
+            role: dimension
+            description: "Family history of type 2 diabetes (0/1)."
+
+      - name: care_plan
+        description: "Personalised care plan assigned at programme start."
+        columns:
+          - name: patient_id
+            type: string
+            role: dimension
+            references: patients.patient_id
+            description: "Patient identifier."
+          - name: diet_approach
+            type: string
+            role: dimension
+            description: "Low-carb / Mediterranean / Time-restricted eating / Very-low-calorie."
+          - name: fasting_window
+            type: string
+            role: dimension
+            description: "Fasting window, e.g. 16:8."
+          - name: calorie_target
+            type: integer
+            role: measure
+            description: "Daily calorie target."
+          - name: protein_target_g
+            type: integer
+            role: measure
+            description: "Daily protein target grams."
+          - name: exercise_goal_min_week
+            type: integer
+            role: measure
+            description: "Weekly exercise goal minutes."
+          - name: clinician
+            type: string
+            role: dimension
+            description: "Assigned clinician."
+          - name: mentor
+            type: string
+            role: dimension
+            description: "Assigned mentor."
+          - name: plan_start_date
+            type: date
+            role: dimension
+            description: "Care plan start date."
+
+      - name: medication
+        description: "GLP-1 / diabetes medication with dose changes over time."
+        columns:
+          - name: record_id
+            type: string
+            role: dimension
+            description: "Medication record id."
+          - name: patient_id
+            type: string
+            role: dimension
+            references: patients.patient_id
+            description: "Patient identifier."
+          - name: drug_name
+            type: string
+            role: dimension
+            description: "Semaglutide / Tirzepatide / Liraglutide / Metformin / Dulaglutide."
+          - name: drug_class
+            type: string
+            role: dimension
+            description: "GLP-1 RA / Biguanide / GLP-1/GIP."
+          - name: dose_mg
+            type: number
+            role: measure
+            description: "Dose in milligrams."
+          - name: frequency
+            type: string
+            role: dimension
+            description: "Weekly or daily."
+          - name: start_date
+            type: date
+            role: dimension
+            description: "Medication start date."
+          - name: end_date
+            type: date
+            role: dimension
+            nullable: true
+            description: "Medication end date (nullable)."
+          - name: adherence_pct
+            type: integer
+            role: measure
+            description: "Adherence percent."
+          - name: side_effects
+            type: string
+            role: dimension
+            description: "Reported side effects (nausea, vomiting, ...)."
+          - name: change_reason
+            type: string
+            role: dimension
+            description: "Titration / side effects / insufficient response / none."
+
+      - name: daily_health
+        description: "Daily wearable + self-reported record, one row per patient-day."
+        columns:
+          - name: patient_id
+            type: string
+            role: dimension
+            references: patients.patient_id
+            description: "Patient identifier."
+          - name: date
+            type: date
+            role: dimension
+            description: "Calendar date."
+          - name: weight_kg
+            type: number
+            role: measure
+            description: "Daily body weight kg."
+          - name: steps
+            type: integer
+            role: measure
+            description: "Daily step count."
+          - name: active_minutes
+            type: integer
+            role: measure
+            description: "Active minutes."
+          - name: sleep_hours
+            type: number
+            role: measure
+            description: "Hours slept."
+          - name: resting_hr
+            type: integer
+            role: measure
+            description: "Resting heart rate bpm."
+          - name: glucose_mmol
+            type: number
+            role: measure
+            description: "Glucose reading mmol/L."
+          - name: mood
+            type: integer
+            role: measure
+            description: "Self-rated mood 1-5."
+          - name: hunger
+            type: integer
+            role: measure
+            description: "Self-rated hunger 1-5."
+          - name: stress
+            type: integer
+            role: measure
+            description: "Self-rated stress 1-5."
+          - name: symptom
+            type: string
+            role: dimension
+            description: "Reported symptom or none."
+
+      - name: diet_fasting
+        description: "Meal-level diet and fasting log."
+        columns:
+          - name: patient_id
+            type: string
+            role: dimension
+            references: patients.patient_id
+            description: "Patient identifier."
+          - name: date
+            type: date
+            role: dimension
+            description: "Calendar date."
+          - name: meal
+            type: string
+            role: dimension
+            description: "Breakfast / lunch / dinner / snack."
+          - name: calories
+            type: integer
+            role: measure
+            description: "Meal calories."
+          - name: protein_g
+            type: integer
+            role: measure
+            description: "Protein grams."
+          - name: carbs_g
+            type: integer
+            role: measure
+            description: "Carbohydrate grams."
+          - name: fat_g
+            type: integer
+            role: measure
+            description: "Fat grams."
+          - name: fasting_hours
+            type: number
+            role: measure
+            description: "Fasting duration hours."
+          - name: eating_window_h
+            type: number
+            role: measure
+            description: "Eating window hours."
+          - name: adherence_flag
+            type: integer
+            role: dimension
+            description: "Within plan (0/1)."
+          - name: binge_flag
+            type: integer
+            role: dimension
+            description: "Binge-eating flag (0/1)."
+
+      - name: clinical_measurements
+        description: "Periodic labs / home test results."
+        columns:
+          - name: patient_id
+            type: string
+            role: dimension
+            references: patients.patient_id
+            description: "Patient identifier."
+          - name: date
+            type: date
+            role: dimension
+            description: "Measurement date."
+          - name: hba1c_pct
+            type: number
+            role: measure
+            description: "HbA1c percent."
+          - name: systolic_bp
+            type: integer
+            role: measure
+            description: "Systolic BP mmHg."
+          - name: diastolic_bp
+            type: integer
+            role: measure
+            description: "Diastolic BP mmHg."
+          - name: waist_cm
+            type: number
+            role: measure
+            description: "Waist cm."
+          - name: ldl_mmol
+            type: number
+            role: measure
+            description: "LDL cholesterol mmol/L."
+          - name: hdl_mmol
+            type: number
+            role: measure
+            description: "HDL cholesterol mmol/L."
+          - name: triglycerides_mmol
+            type: number
+            role: measure
+            description: "Triglycerides mmol/L."
+          - name: weight_kg
+            type: number
+            role: measure
+            description: "Weight kg."
+
+      - name: care_interactions
+        description: "Messages, calls, clinician reviews and mentor check-ins."
+        columns:
+          - name: patient_id
+            type: string
+            role: dimension
+            references: patients.patient_id
+            description: "Patient identifier."
+          - name: date
+            type: date
+            role: dimension
+            description: "Interaction date."
+          - name: channel
+            type: string
+            role: dimension
+            description: "Message / video call / phone / clinician review / mentor check-in."
+          - name: type
+            type: string
+            role: dimension
+            description: "Routine / issue / escalation."
+          - name: clinician
+            type: string
+            role: dimension
+            description: "Clinician involved."
+          - name: issue
+            type: string
+            role: dimension
+            description: "Issue category."
+          - name: action
+            type: string
+            role: dimension
+            description: "Action taken."
+          - name: follow_up
+            type: string
+            role: dimension
+            description: "None / scheduled / urgent."
+
+      - name: app_engagement
+        description: "Weekly app-engagement rollup."
+        columns:
+          - name: patient_id
+            type: string
+            role: dimension
+            references: patients.patient_id
+            description: "Patient identifier."
+          - name: week_start
+            type: date
+            role: dimension
+            description: "Week start date."
+          - name: logins
+            type: integer
+            role: measure
+            description: "Logins in the week."
+          - name: wearable_syncs
+            type: integer
+            role: measure
+            description: "Wearable syncs."
+          - name: meal_logs
+            type: integer
+            role: measure
+            description: "Meal logs."
+          - name: weigh_ins
+            type: integer
+            role: measure
+            description: "Weigh-ins."
+          - name: content_views
+            type: integer
+            role: measure
+            description: "Content views."
+          - name: messages_sent
+            type: integer
+            role: measure
+            description: "Messages sent."
+          - name: engagement_score
+            type: integer
+            role: measure
+            description: "Engagement score 0-100."
+
+      - name: outcomes
+        description: "Current programme outcome, one row per patient."
+        columns:
+          - name: patient_id
+            type: string
+            role: dimension
+            references: patients.patient_id
+            description: "Patient identifier."
+          - name: weight_loss_pct
+            type: number
+            role: measure
+            description: "Percent weight loss achieved."
+          - name: hba1c_change
+            type: number
+            role: measure
+            description: "HbA1c change (negative = improvement)."
+          - name: medication_reduction
+            type: string
+            role: dimension
+            description: "None / dose reduced / stopped."
+          - name: retention_days
+            type: integer
+            role: measure
+            description: "Days retained in programme."
+          - name: dropout
+            type: integer
+            role: dimension
+            description: "Dropped out (0/1)."
+          - name: response_category
+            type: string
+            role: dimension
+            description: "Strong responder / slow responder / non-responder / early dropout."

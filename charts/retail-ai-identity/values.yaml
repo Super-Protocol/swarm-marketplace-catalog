@@ -1,0 +1,56 @@
+internalSecret: ""
+
+# Public hostname the agent is served on. Keycloak's issuer must match it exactly, including
+# the /auth path, or the proxy in front of the agent rejects every token it mints.
+appHostname: ""
+
+# The tenant the demo user belongs to. The agent resolves a tenant from the user's Keycloak
+# organization; a user with none gets "Can't get tenant context" instead of a chat.
+tenant:
+  name: Demo
+  alias: demo
+
+demoUser:
+  username: demo
+  email: demo@example.invalid
+  firstName: Demo
+  lastName: User
+
+bootstrap:
+  # Keycloak's own image carries kcadm.sh and curl, so the bootstrap needs no image of its own.
+  enabled: true
+
+keycloak:
+  fullnameOverride: rai-keycloak-prod
+  global:
+    security:
+      allowInsecureImages: true
+    imagePullSecrets:
+      - name: regcred
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/keycloak
+    tag: 26.1.2-debian-12-r0
+  auth:
+    adminUser: admin
+  # TLS is terminated at the cluster's ingress, so Keycloak itself serves plain HTTP and is
+  # told to trust the forwarded protocol headers.
+  production: false
+  proxyHeaders: xforwarded
+  httpRelativePath: "/auth/"
+  resourcesPreset: none
+  rbac:
+    create: false
+  serviceAccount:
+    create: true
+  networkPolicy:
+    enabled: false
+  postgresql:
+    enabled: false
+  externalDatabase:
+    host: rai-postgres-prod-postgresql
+    port: 5432
+    user: keycloak_user
+    database: keycloak
+  ingress:
+    enabled: false

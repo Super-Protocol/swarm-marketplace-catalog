@@ -1,0 +1,414 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: DataDefinition
+
+metadata:
+  name: autonomyx-inflammation-monitoring
+  title: Autonomyx Inflammation Monitoring (UK)
+  description: "De-identified wearable biometrics and AI-derived inflammation scores from a UK remote-monitoring programme: high-frequency autonomic readings, daily symptom reports, treatment changes, labs, flare predictions and outcomes."
+  category: healthcare
+  tags:
+    - healthcare
+    - clinical
+    - wearables
+    - inflammation
+    - timeseries
+    - synthetic
+
+spec:
+  secrets:
+    - name: readUser
+      title: ClickHouse read-only user
+      description: A user with SELECT on this database and nothing else.
+    - name: readPassword
+      title: ClickHouse read-only password
+
+  provides:
+    - interface: clickhouse-http/v1
+      connection:
+        static:
+          host: clinics-ch.anthrax63.fun
+          port: 8123
+          database: autonomyx_uk
+          username: "{{ secrets.readUser }}"
+          password: "{{ secrets.readPassword }}"
+          tls: false
+
+  schema:
+    tables:
+      - name: patients
+        description: "Patient profile (anonymised)."
+        columns:
+          - name: patient_id
+            type: string
+            role: dimension
+            description: "Anonymous patient identifier (primary key)."
+          - name: age_band
+            type: string
+            role: dimension
+            description: "Age band."
+          - name: sex
+            type: string
+            role: dimension
+            description: "Sex."
+          - name: region
+            type: string
+            role: dimension
+            description: "Broad region."
+          - name: enrolment_date
+            type: date
+            role: dimension
+            description: "Enrolment date."
+          - name: diagnosis
+            type: string
+            role: dimension
+            description: "Type 2 Diabetes / Obesity / IBD / Rheumatoid Arthritis / Metabolic Syndrome."
+          - name: programme
+            type: string
+            role: dimension
+            description: "Inflammation Monitoring / GLP-1 Optimisation / Metabolic + ANS."
+          - name: consent_status
+            type: string
+            role: dimension
+            description: "Granted / withdrawn."
+          - name: status
+            type: string
+            role: dimension
+            description: "Active / completed / dropped_out."
+
+      - name: baseline_health
+        description: "Baseline health including inflammatory markers."
+        columns:
+          - name: patient_id
+            type: string
+            role: dimension
+            references: patients.patient_id
+            description: "Patient identifier."
+          - name: weight_kg
+            type: number
+            role: measure
+            description: "Weight kg."
+          - name: bmi
+            type: number
+            role: measure
+            description: "Body mass index."
+          - name: hba1c_pct
+            type: number
+            role: measure
+            description: "HbA1c percent."
+          - name: systolic_bp
+            type: integer
+            role: measure
+            description: "Systolic BP."
+          - name: diastolic_bp
+            type: integer
+            role: measure
+            description: "Diastolic BP."
+          - name: crp_mg_l
+            type: number
+            role: measure
+            description: "Baseline CRP mg/L (inflammatory marker)."
+          - name: cardio_risk
+            type: string
+            role: dimension
+            description: "Low / moderate / high."
+          - name: metabolic_risk
+            type: string
+            role: dimension
+            description: "Low / moderate / high."
+          - name: chronic_conditions
+            type: string
+            role: dimension
+            description: "Comma-separated chronic conditions."
+          - name: current_medication
+            type: string
+            role: dimension
+            description: "Current medication list."
+
+      - name: wearable_biometrics
+        description: "High-frequency wearable ANS biometrics time series."
+        columns:
+          - name: patient_id
+            type: string
+            role: dimension
+            references: patients.patient_id
+            description: "Patient identifier."
+          - name: ts
+            type: timestamp
+            role: dimension
+            description: "Reading timestamp."
+          - name: heart_rate
+            type: integer
+            role: measure
+            description: "Heart rate bpm."
+          - name: hrv_ms
+            type: integer
+            role: measure
+            description: "Heart-rate variability RMSSD ms."
+          - name: gsr_us
+            type: number
+            role: measure
+            description: "Galvanic skin response / skin conductance microsiemens."
+          - name: activity_level
+            type: number
+            role: measure
+            description: "Movement intensity 0-1."
+          - name: skin_temp_c
+            type: number
+            role: measure
+            description: "Skin temperature Celsius."
+          - name: resp_rate
+            type: integer
+            role: measure
+            description: "Respiration rate breaths/min."
+          - name: spo2
+            type: integer
+            role: measure
+            description: "Blood oxygen percent."
+
+      - name: daily_inputs
+        description: "Daily patient-reported symptoms and lifestyle."
+        columns:
+          - name: patient_id
+            type: string
+            role: dimension
+            references: patients.patient_id
+            description: "Patient identifier."
+          - name: date
+            type: date
+            role: dimension
+            description: "Calendar date."
+          - name: mood
+            type: integer
+            role: measure
+            description: "Mood 1-5."
+          - name: stress
+            type: integer
+            role: measure
+            description: "Stress 1-5."
+          - name: energy
+            type: integer
+            role: measure
+            description: "Energy 1-5."
+          - name: appetite
+            type: integer
+            role: measure
+            description: "Appetite 1-5."
+          - name: gi_symptoms
+            type: string
+            role: dimension
+            description: "GI symptoms: none/bloating/cramping/diarrhoea/nausea."
+          - name: side_effects
+            type: string
+            role: dimension
+            description: "Reported side effects."
+          - name: lifestyle_event
+            type: string
+            role: dimension
+            description: "Poor sleep / alcohol / travel / illness / high stress / none."
+
+      - name: treatment
+        description: "Medication and dose changes."
+        columns:
+          - name: record_id
+            type: string
+            role: dimension
+            description: "Treatment record id."
+          - name: patient_id
+            type: string
+            role: dimension
+            references: patients.patient_id
+            description: "Patient identifier."
+          - name: drug_name
+            type: string
+            role: dimension
+            description: "Drug name."
+          - name: drug_class
+            type: string
+            role: dimension
+            description: "GLP-1 RA / GLP-1/GIP / Biguanide / Immunomodulator."
+          - name: dose_mg
+            type: number
+            role: measure
+            description: "Dose mg."
+          - name: start_date
+            type: date
+            role: dimension
+            description: "Start date."
+          - name: end_date
+            type: date
+            role: dimension
+            nullable: true
+            description: "End date (nullable)."
+          - name: adherence_pct
+            type: integer
+            role: measure
+            description: "Adherence percent."
+          - name: clinician_note
+            type: string
+            role: dimension
+            description: "Clinician note."
+
+      - name: clinical_data
+        description: "Periodic labs and clinician assessments."
+        columns:
+          - name: patient_id
+            type: string
+            role: dimension
+            references: patients.patient_id
+            description: "Patient identifier."
+          - name: date
+            type: date
+            role: dimension
+            description: "Date."
+          - name: weight_kg
+            type: number
+            role: measure
+            description: "Weight kg."
+          - name: glucose_mmol
+            type: number
+            role: measure
+            description: "Glucose mmol/L."
+          - name: hba1c_pct
+            type: number
+            role: measure
+            description: "HbA1c percent."
+          - name: systolic_bp
+            type: integer
+            role: measure
+            description: "Systolic BP."
+          - name: diastolic_bp
+            type: integer
+            role: measure
+            description: "Diastolic BP."
+          - name: crp_mg_l
+            type: number
+            role: measure
+            description: "CRP mg/L (inflammation)."
+          - name: esr_mm_h
+            type: number
+            role: measure
+            description: "ESR mm/h (inflammation)."
+          - name: clinician_assessment
+            type: string
+            role: dimension
+            description: "Stable / mild activity / active flare."
+
+      - name: care_interactions
+        description: "Care interactions, often triggered by AI alerts."
+        columns:
+          - name: patient_id
+            type: string
+            role: dimension
+            references: patients.patient_id
+            description: "Patient identifier."
+          - name: date
+            type: date
+            role: dimension
+            description: "Date."
+          - name: channel
+            type: string
+            role: dimension
+            description: "Message / video call / phone / clinician review."
+          - name: type
+            type: string
+            role: dimension
+            description: "Routine / issue / escalation."
+          - name: clinician
+            type: string
+            role: dimension
+            description: "Clinician."
+          - name: trigger
+            type: string
+            role: dimension
+            description: "What prompted it, e.g. AI flare alert."
+          - name: action
+            type: string
+            role: dimension
+            description: "Action taken."
+          - name: medication_change
+            type: string
+            role: dimension
+            description: "Medication change made."
+          - name: follow_up
+            type: string
+            role: dimension
+            description: "None / scheduled / urgent."
+
+      - name: ai_scores
+        description: "AI-derived daily scores: inflammation and flare prediction."
+        columns:
+          - name: patient_id
+            type: string
+            role: dimension
+            references: patients.patient_id
+            description: "Patient identifier."
+          - name: date
+            type: date
+            role: dimension
+            description: "Date."
+          - name: inflammation_score
+            type: number
+            role: measure
+            description: "Personalised inflammation score 0-100."
+          - name: physio_stress_score
+            type: number
+            role: measure
+            description: "Physiological stress score 0-100."
+          - name: side_effect_risk
+            type: number
+            role: measure
+            description: "Side-effect risk 0-1."
+          - name: adherence_risk
+            type: number
+            role: measure
+            description: "Adherence risk 0-1."
+          - name: predicted_flare
+            type: integer
+            role: dimension
+            description: "Model predicts a flare in next 12-72h (0/1)."
+          - name: flare_horizon_h
+            type: integer
+            role: measure
+            nullable: true
+            description: "Predicted flare horizon in hours (nullable)."
+          - name: model_confidence
+            type: number
+            role: measure
+            description: "Model confidence 0-1."
+
+      - name: outcomes
+        description: "Outcomes, one row per patient."
+        columns:
+          - name: patient_id
+            type: string
+            role: dimension
+            references: patients.patient_id
+            description: "Patient identifier."
+          - name: weight_change_pct
+            type: number
+            role: measure
+            description: "Percent weight change."
+          - name: hba1c_change
+            type: number
+            role: measure
+            description: "HbA1c change."
+          - name: medication_tolerability
+            type: string
+            role: dimension
+            description: "Good / moderate / poor."
+          - name: dose_optimised
+            type: integer
+            role: dimension
+            description: "Dose optimised (0/1)."
+          - name: retention_days
+            type: integer
+            role: measure
+            description: "Days retained."
+          - name: clinical_response
+            type: string
+            role: dimension
+            description: "Responder / partial / non-responder."
+          - name: dropout
+            type: integer
+            role: dimension
+            description: "Dropped out (0/1)."

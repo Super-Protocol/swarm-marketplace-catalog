@@ -1,0 +1,12 @@
+{{- if .Values.global.caCert.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-ca-cert
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  ca-chain.pem: |
+    {{- .Values.global.caCert.content | nindent 4 }}
+{{- end }}

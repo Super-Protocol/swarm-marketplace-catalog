@@ -1,0 +1,132 @@
+# Every service name below is pinned rather than derived from the Helm release, because the
+# agent's own configuration addresses its siblings by name and the release name is chosen by
+# whoever deploys. A derived name would break those references on every new deployment.
+#
+# Credentials, hostnames and model settings are deliberately absent: the marketplace supplies
+# them per deployment, so nothing here has to be a placeholder that could be shipped by mistake.
+
+aivo:
+  kafka-llm-proxy:
+    enabled: false
+
+  config:
+    fullnameOverride: retail-ai-system-prod-config
+    image:
+      repository: ghcr.io/aivoagent/agent/backend
+      pullPolicy: Always
+      tag: latest
+    imagePullSecrets:
+      - name: regcred
+    config:
+      services:
+        identityService:
+          clientId: identity
+          endpoint: http://rai-keycloak-prod/auth
+          realm: master
+        api:
+          db:
+            type: postgresql
+            config:
+              host: rai-postgres-prod-postgresql
+              username: retail_ai_user
+              database: retail_ai
+              synchronize: true
+              logging: false
+          redis:
+            host: rai-redis-prod-master
+            port: 6379
+            db: 1
+          fileStorage:
+            type: s3
+            config:
+              region: us-east-1
+              bucket: agent
+              accessKeyId: root
+              endpoint: http://rai-minio-prod:9000
+          memory:
+            enabled: true
+            maxMessages: 5
+            summarizeThreshold: 10
+          embeddings:
+            provider: openai
+            model: text-embedding-3-small
+            dimensions: 1536
+          pythonExecutor:
+            type: docker
+            timeout: 30000
+            config:
+              image: aivo-python:latest
+              memoryLimit: 512m
+              cpuLimit: "1.0"
+              network: none
+              autoRemove: true
+          llmSmart:
+            provider: google
+            temperature: 1
+          llmFast:
+            provider: google
+            temperature: 1
+          recursionLimit: 100
+          fileUpload:
+            maxFileSize: 10485760
+          langfuse:
+            tracing: false
+          langsmith:
+            tracing: false
+          checkpointer:
+            type: postgres
+          nats:
+            url: nats://rai-nats-prod:4222
+          stt:
+            provider: openai
+            model: whisper-1
+        instance:
+          instanceId: retail-ai
+
+  service-discovery:
+    fullnameOverride: retail-ai-system-prod-service-discovery
+    image:
+      repository: ghcr.io/aivoagent/agent/backend
+      pullPolicy: Always
+      tag: latest
+    imagePullSecrets:
+      - name: regcred
+
+  identity:
+    fullnameOverride: retail-ai-system-prod-identity
+    image:
+      repository: ghcr.io/aivoagent/agent/backend
+      pullPolicy: Always
+      tag: latest
+    imagePullSecrets:
+      - name: regcred
+
+  instance:
+    fullnameOverride: retail-ai-system-prod-instance
+    image:
+      repository: ghcr.io/aivoagent/agent/backend
+      pullPolicy: Always
+      tag: latest
+    imagePullSecrets:
+      - name: regcred
+
+  retail-ai:
+    fullnameOverride: retail-ai-system-prod
+    imagePullSecrets:
+      - name: regcred
+    # Traffic reaches the agent through the gateway component, which is where authentication
+    # happens; an Ingress here would be a second, unauthenticated door.
+    ingress:
+      enabled: false
+    gatekeeper:
+      enabled: false
+    back:
+      image:
+        repository: ghcr.io/aivoagent/agent/backend
+        pullPolicy: Always
+        tag: latest
+    front:
+      image:
+        repository: ghcr.io/aivoagent/agent/frontend
+        pullPolicy: Always
+        tag: latest

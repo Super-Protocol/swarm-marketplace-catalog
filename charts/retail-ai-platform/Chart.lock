@@ -1,0 +1,15 @@
+dependencies:
+- name: postgresql
+  repository: file://../vendor/postgresql
+  version: 16.4.10
+- name: redis
+  repository: file://../vendor/redis
+  version: 20.7.1
+- name: nats
+  repository: file://../vendor/nats
+  version: 2.12.3
+- name: minio
+  repository: file://../vendor/minio
+  version: 5.0.11
+digest: sha256:fc92268464c12970282568dd4bd43da224d843b6da0962b9a2bb0e7a0c6c5765
+generated: "2026-07-29T11:00:34.362603+03:00"

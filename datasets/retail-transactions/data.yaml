@@ -1,0 +1,55 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: DataDefinition
+
+metadata:
+  name: retail-transactions
+  title: Retail Transactions 2024
+  description: Anonymized point-of-sale transactions from a European retail chain, updated daily.
+  category: retail
+  tags:
+    - retail
+    - transactions
+    - timeseries
+
+spec:
+  secrets:
+    - name: chReadUser
+      title: ClickHouse read-only user
+    - name: chReadPass
+      title: ClickHouse read-only password
+
+  provides:
+    - interface: clickhouse-native/v1
+      connection:
+        static:
+          host: ch.acme-data.internal
+          port: 9440
+          database: retail
+          username: "{{ secrets.chReadUser }}"
+          password: "{{ secrets.chReadPass }}"
+          tls: true
+
+  schema:
+    tables:
+      - name: transactions
+        description: One row per purchased line item.
+        columns:
+          - name: ts
+            type: timestamp
+            description: Purchase time (UTC).
+          - name: store_id
+            type: string
+            description: Anonymized store identifier.
+          - name: sku
+            type: string
+            description: Stock keeping unit.
+          - name: quantity
+            type: integer
+            description: Units purchased.
+          - name: amount
+            type: number
+            description: Line total in EUR.
+          - name: text
+            type: string
+            nullable: true
+            description: Free-text product description.

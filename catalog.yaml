@@ -1,0 +1,182 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: CatalogSeed
+
+# Everything below is *policy*, not definition. The specification deliberately keeps visibility,
+# price, usage terms and grants off the AppDefinition and DataDefinition — they change without
+# republishing, and Git is the wrong place for something meant to change instantly. This file is
+# how a marketplace is filled from this repository for a demo or a test stand; a production
+# marketplace gets the same facts from its own console.
+#
+# `${VAR}` is substituted from the environment at seed time. Real credentials never live here.
+
+organizations:
+  - slug: acme-corp
+    name: Acme Corp
+    verifiedPublisher: true
+  - slug: meridian-data
+    name: Meridian Data
+    verifiedPublisher: false
+  - slug: aivo
+    name: Aivo
+    verifiedPublisher: true
+  - slug: reset-health
+    name: Reset Health
+    verifiedPublisher: true
+
+apps:
+  - path: apps/ollama-webui
+    organization: acme-corp
+  - path: apps/rag-agent
+    organization: acme-corp
+  - path: apps/retail-ai-agent
+    organization: aivo
+    secrets:
+      registryUsername: ${AIVO_REGISTRY_USERNAME}
+      registryToken: ${AIVO_REGISTRY_TOKEN}
+
+datasets:
+  - path: datasets/acme-internal-knowledge-base
+    organization: acme-corp
+    sourceType: clickhouse
+    visibility: restricted
+    price: Internal
+    expectedUpdate: Continuous (live table)
+    secrets:
+      kbReadUser: kb_reader
+      kbReadPass: seed-only-password
+    statistics:
+      sizeBytes: "398458880"
+      recordCount: "52000"
+      format: JSONL
+      usability: 9.6
+      provenanceScore: 96
+      provenanceAttested: true
+
+  - path: datasets/retail-transactions
+    organization: meridian-data
+    sourceType: clickhouse
+    visibility: public
+    price: €0.02 / 1k rows
+    expectedUpdate: Daily
+    secrets:
+      chReadUser: retail_reader
+      chReadPass: seed-only-password
+    statistics:
+      sizeBytes: "4509715660"
+      recordCount: "88000000"
+      format: Parquet
+      usability: 8.8
+      provenanceScore: 91
+      provenanceAttested: true
+
+  - path: datasets/roczen-metabolic-programme
+    organization: reset-health
+    sourceType: clickhouse
+    visibility: restricted
+    price: On request
+    expectedUpdate: Daily
+    usageTerms: >-
+      De-identified research use only. Aggregate results may be published; re-identification and
+      record-level extraction are prohibited.
+    secrets:
+      readUser: ${CLINICS_READ_USER}
+      readPassword: ${CLINICS_READ_PASSWORD}
+    statistics:
+      sizeBytes: "1288490188"
+      recordCount: "2400000"
+      format: ClickHouse MergeTree
+      usability: 9.4
+      provenanceScore: 94
+      provenanceAttested: true
+
+  - path: datasets/autonomyx-inflammation-monitoring
+    organization: reset-health
+    sourceType: clickhouse
+    visibility: restricted
+    price: On request
+    expectedUpdate: Continuous (live table)
+    usageTerms: >-
+      De-identified research use only. Aggregate results may be published; re-identification and
+      record-level extraction are prohibited.
+    secrets:
+      readUser: ${CLINICS_READ_USER}
+      readPassword: ${CLINICS_READ_PASSWORD}
+    statistics:
+      sizeBytes: "6871947674"
+      recordCount: "31000000"
+      format: ClickHouse MergeTree
+      usability: 9.1
+      provenanceScore: 94
+      provenanceAttested: true
+
+grants:
+  - dataset: acme-internal-knowledge-base
+    organizations: [acme-corp]
+    apps: [rag-agent]
+  - dataset: retail-transactions
+    organizations: [acme-corp]
+    apps: [rag-agent]
+  # The clinical datasets are the point of the Retail AI listing: compatible *and* granted, so a
+  # consumer can actually bind them rather than only see that they would fit.
+  - dataset: roczen-metabolic-programme
+    organizations: [reset-health, aivo]
+    apps: [retail-ai-agent]
+  - dataset: autonomyx-inflammation-monitoring
+    organizations: [reset-health, aivo]
+    apps: [retail-ai-agent]
+
+reviews:
+  - app: ollama-webui
+    kind: community
+    rating: 5
+    title: Deployed in minutes, evidence matched
+    body: >-
+      The expected digest on the listing matched what our cluster space reported after
+      publishing. Model selection worked as documented.
+    appVersion: "1.0.0"
+    verifiedDeployment: true
+    authorName: Alex Morgan
+    authorRole: Platform engineer, Novus Bio
+
+  - app: ollama-webui
+    kind: lane
+    lane: automated
+    authorName: Container scanner
+    score: 94
+    verdict: No findings
+    title: No known vulnerabilities in pinned images
+    body: Both pinned digests scanned clean against the current advisory database.
+
+  - app: ollama-webui
+    kind: lane
+    lane: ai
+    authorName: AI reviewer
+    score: 88
+    verdict: Passed
+    title: Definition matches its stated behaviour
+    body: >-
+      Declared parameters, resources and network exposure are consistent with the referenced
+      charts.
+
+  - app: rag-agent
+    kind: community
+    rating: 4
+    title: Slot matching saved us a week
+    body: >-
+      Compatible datasets were listed before we deployed anything, so we knew what we were
+      missing access to.
+    appVersion: "1.2.0"
+    authorName: Priya Raman
+    authorRole: Data lead, Acme Corp
+
+  - app: retail-ai-agent
+    kind: lane
+    lane: ai
+    authorName: AI reviewer
+    score: 91
+    verdict: Passed
+    title: Grounding is derived, not hand-written
+    body: >-
+      The knowledge graph and the data-source registrations are built at deploy time from the
+      bound datasets' published schemas, so what the agent believes about the data cannot drift
+      from what the data owner declared.

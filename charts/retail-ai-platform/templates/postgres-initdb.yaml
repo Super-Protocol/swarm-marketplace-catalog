@@ -1,0 +1,32 @@
+{{- /*
+Databases and users the agent expects to already exist. Delivered as a ConfigMap rather than
+inline chart values so the password never has to travel through a values file that a chart
+repository, a rendered blueprint or a support ticket might carry.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rai-postgres-initdb
+data:
+  create_databases.sql: |
+    CREATE DATABASE keycloak;
+    CREATE DATABASE retail_ai;
+    CREATE DATABASE retail_ai_checkpointer;
+
+    CREATE USER keycloak_user WITH ENCRYPTED PASSWORD '{{ include "platform.internalSecret" . }}';
+    CREATE USER retail_ai_user WITH ENCRYPTED PASSWORD '{{ include "platform.internalSecret" . }}';
+    CREATE USER checkpointer_user WITH ENCRYPTED PASSWORD '{{ include "platform.internalSecret" . }}';
+
+    GRANT ALL PRIVILEGES ON DATABASE keycloak TO keycloak_user;
+    GRANT ALL PRIVILEGES ON DATABASE retail_ai TO retail_ai_user;
+    GRANT ALL PRIVILEGES ON DATABASE retail_ai_checkpointer TO checkpointer_user;
+
+    {{- range $database, $owner := dict "keycloak" "keycloak_user" "retail_ai" "retail_ai_user" "retail_ai_checkpointer" "checkpointer_user" }}
+
+    \c {{ $database }}
+    ALTER SCHEMA public OWNER TO {{ $owner }};
+    GRANT ALL ON SCHEMA public TO {{ $owner }};
+    GRANT USAGE, CREATE ON SCHEMA public TO {{ $owner }};
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {{ $owner }};
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {{ $owner }};
+    {{- end }}

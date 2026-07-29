@@ -1,0 +1,275 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "app.fullname" . }}-config
+data:
+  bootstrap.yaml: |
+    configSource:
+      type: yaml
+      path: conf/services.yaml
+  services.yaml: |
+    configs:
+    - name: ui
+      config: |
+        graphqlHttp: {{ .Values.config.services.instance.endpoints.graphqlHttp }}
+        graphqlWs: {{ .Values.config.services.instance.endpoints.graphqlWs }}
+        {{- if .Values.config.services.ui }}
+        {{- if .Values.config.services.ui.logoutUrl }}
+        logoutUrl: {{ .Values.config.services.ui.logoutUrl | quote }}
+        {{- end }}
+        {{- end }}
+    - name: instance
+      version: '*'
+      config: |
+        port: {{ .Values.config.port }}
+        instanceId: {{ .Values.config.services.instance.instanceId }}
+        endpoints:
+          graphqlHttp: {{ .Values.config.services.instance.endpoints.graphqlHttp }}
+          graphqlWs: {{ .Values.config.services.instance.endpoints.graphqlWs }}
+        brand:
+          name: {{ .Values.config.services.instance.brand.name }}
+          {{- if .Values.config.services.instance.brand.title }}
+          title: {{ .Values.config.services.instance.brand.title | quote }}
+          {{- end }}
+          {{- if .Values.config.services.instance.brand.theme }}
+          theme:
+            {{- if .Values.config.services.instance.brand.theme.primaryColor }}
+            primaryColor: {{ .Values.config.services.instance.brand.theme.primaryColor | quote }}
+            {{- end }}
+            {{- if .Values.config.services.instance.brand.theme.secondaryColor }}
+            secondaryColor: {{ .Values.config.services.instance.brand.theme.secondaryColor | quote }}
+            {{- end }}
+          {{- end }}
+          {{- if .Values.config.services.instance.brand.favicon }}
+          favicon: |-
+            {{ .Values.config.services.instance.brand.favicon | nindent 14 }}
+          {{- end }}
+          logoSvg:
+            dark: |-
+              {{ .Values.config.services.instance.brand.logoSvg.dark | nindent 14 }}
+            light: |-
+              {{ .Values.config.services.instance.brand.logoSvg.light | nindent 14 }}
+            darkSmall: |-
+              {{ .Values.config.services.instance.brand.logoSvg.darkSmall | nindent 14 }}
+            lightSmall: |-
+              {{ .Values.config.services.instance.brand.logoSvg.lightSmall | nindent 14 }}
+    - name: api
+      version: '*'
+      config: |
+        port: {{ .Values.config.port }}
+        host: 0.0.0.0
+        cors:
+          origin: {{ .Values.config.services.api.cors.origin }}
+          credentials: {{ .Values.config.services.api.cors.credentials }}
+          methods:
+          {{- range .Values.config.services.api.cors.methods }}
+          - {{ . }}
+          {{- end }}
+          allowedHeaders:
+          {{- range .Values.config.services.api.cors.allowedHeaders }}
+          - {{ . }}
+          {{- end }}
+        db:
+          type: {{ .Values.config.services.api.db.type }}
+          config:
+            {{- if eq .Values.config.services.api.db.type "postgresql" }}
+            host: {{ .Values.config.services.api.db.config.host | quote }}
+            port: {{ .Values.config.services.api.db.config.port }}
+            username: {{ .Values.config.services.api.db.config.username | quote }}
+            password: {{ .Values.config.services.api.db.config.password | quote }}
+            database: {{ .Values.config.services.api.db.config.database | quote }}
+            {{- if .Values.config.services.api.db.config.ssl }}
+            ssl: {{ .Values.config.services.api.db.config.ssl }}
+            {{- end }}
+            {{- else if eq .Values.config.services.api.db.type "sqlite" }}
+            database: {{ .Values.config.services.api.db.config.database | quote }}
+            {{- end }}
+            synchronize: {{ .Values.config.services.api.db.config.synchronize }}
+            autoLoadEntities: {{ .Values.config.services.api.db.config.autoLoadEntities }}
+            logging: {{ .Values.config.services.api.db.config.logging }}
+        embeddings:
+          provider: {{ .Values.config.services.api.embeddings.provider }}
+          model: {{ .Values.config.services.api.embeddings.model | quote }}
+          dimensions: {{ .Values.config.services.api.embeddings.dimensions }}
+          {{- if .Values.config.services.api.embeddings.apiKey }}
+          apiKey: {{ .Values.config.services.api.embeddings.apiKey | quote }}
+          {{- end }}
+          {{- if .Values.config.services.api.embeddings.encodingFormat }}
+          encodingFormat: {{ .Values.config.services.api.embeddings.encodingFormat }}
+          {{- end }}
+          {{- if .Values.config.services.api.embeddings.ollamaBaseUrl }}
+          ollamaBaseUrl: {{ .Values.config.services.api.embeddings.ollamaBaseUrl | quote }}
+          {{- end }}
+          {{- if .Values.config.services.api.embeddings.baseUrl }}
+          baseUrl: {{ .Values.config.services.api.embeddings.baseUrl | quote }}
+          {{- end }}
+        pythonExecutor:
+          type: {{ .Values.config.services.api.pythonExecutor.type }}
+          timeout: {{ .Values.config.services.api.pythonExecutor.timeout }}
+          config:
+            {{- if eq .Values.config.services.api.pythonExecutor.type "docker" }}
+            image: {{ .Values.config.services.api.pythonExecutor.config.image | quote }}
+            memoryLimit: {{ .Values.config.services.api.pythonExecutor.config.memoryLimit | quote }}
+            cpuLimit: {{ .Values.config.services.api.pythonExecutor.config.cpuLimit | quote }}
+            network: {{ .Values.config.services.api.pythonExecutor.config.network }}
+            autoRemove: {{ .Values.config.services.api.pythonExecutor.config.autoRemove }}
+            {{- else if eq .Values.config.services.api.pythonExecutor.type "local" }}
+            pythonPath: {{ .Values.config.services.api.pythonExecutor.config.pythonPath | quote }}
+            tempDir: {{ .Values.config.services.api.pythonExecutor.config.tempDir | quote }}
+            {{- else if eq .Values.config.services.api.pythonExecutor.type "lambda" }}
+            functionName: {{ .Values.config.services.api.pythonExecutor.config.functionName | quote }}
+            region: {{ .Values.config.services.api.pythonExecutor.config.region | quote }}
+            {{- end }}
+        recursionLimit: {{ .Values.config.services.api.recursionLimit }}
+        llmSmart:
+          provider: {{ .Values.config.services.api.llmSmart.provider }}
+          apiKey: {{ .Values.config.services.api.llmSmart.apiKey | quote }}
+          model: {{ .Values.config.services.api.llmSmart.model | quote }}
+          temperature: {{ .Values.config.services.api.llmSmart.temperature }}
+          {{- if and (eq .Values.config.services.api.llmSmart.provider "openai") .Values.config.services.api.llmSmart.baseURL }}
+          baseURL: {{ .Values.config.services.api.llmSmart.baseURL | quote }}
+          {{- end }}
+        llmFast:
+          provider: {{ .Values.config.services.api.llmFast.provider }}
+          apiKey: {{ .Values.config.services.api.llmFast.apiKey | quote }}
+          model: {{ .Values.config.services.api.llmFast.model | quote }}
+          temperature: {{ .Values.config.services.api.llmFast.temperature }}
+          {{- if and (eq .Values.config.services.api.llmFast.provider "openai") .Values.config.services.api.llmFast.baseURL }}
+          baseURL: {{ .Values.config.services.api.llmFast.baseURL | quote }}
+          {{- end }}
+        langsmith:
+          endpoint: {{ .Values.config.services.api.langsmith.endpoint | quote }}
+          {{- if .Values.config.services.api.langsmith.apiKey }}
+          apiKey: {{ .Values.config.services.api.langsmith.apiKey | quote }}
+          {{- end }}
+          tracing: {{ .Values.config.services.api.langsmith.tracing }}
+          project: {{ .Values.config.services.api.langsmith.project | quote }}
+        {{- if .Values.config.services.api.langfuse }}
+        langfuse:
+          host: {{ .Values.config.services.api.langfuse.host | quote }}
+          {{- if .Values.config.services.api.langfuse.publicKey }}
+          publicKey: {{ .Values.config.services.api.langfuse.publicKey | quote }}
+          {{- end }}
+          {{- if .Values.config.services.api.langfuse.secretKey }}
+          secretKey: {{ .Values.config.services.api.langfuse.secretKey | quote }}
+          {{- end }}
+          tracing: {{ .Values.config.services.api.langfuse.tracing }}
+        {{- end }}
+        checkpointer:
+          type: {{ .Values.config.services.api.checkpointer.type }}
+          {{- if and (eq .Values.config.services.api.checkpointer.type "postgres") .Values.config.services.api.checkpointer.uri }}
+          uri: {{ .Values.config.services.api.checkpointer.uri | quote }}
+          {{- end }}
+        nats:
+          url: {{ .Values.config.services.api.nats.url | quote }}
+        memory:
+          enabled: {{ .Values.config.services.api.memory.enabled }}
+          maxMessages: {{ .Values.config.services.api.memory.maxMessages }}
+          summarizeThreshold: {{ .Values.config.services.api.memory.summarizeThreshold }}
+          approximateTokenCounting: {{ .Values.config.services.api.memory.approximateTokenCounting }}
+        fileStorage:
+          type: {{ .Values.config.services.api.fileStorage.type }}
+          config:
+            region: {{ .Values.config.services.api.fileStorage.config.region | quote }}
+            bucket: {{ .Values.config.services.api.fileStorage.config.bucket | quote }}
+            accessKeyId: {{ .Values.config.services.api.fileStorage.config.accessKeyId | quote }}
+            secretAccessKey: {{ .Values.config.services.api.fileStorage.config.secretAccessKey | quote }}
+            {{- if .Values.config.services.api.fileStorage.config.endpoint }}
+            endpoint: {{ .Values.config.services.api.fileStorage.config.endpoint | quote }}
+            {{- end }}
+        fileUpload:
+          maxFileSize: {{ .Values.config.services.api.fileUpload.maxFileSize }}
+          indexTextFiles: {{ .Values.config.services.api.fileUpload.indexTextFiles }}
+          defaultTTL: {{ .Values.config.services.api.fileUpload.defaultTTL }}
+          textMimeTypes:
+          {{- range .Values.config.services.api.fileUpload.textMimeTypes }}
+          - {{ . | quote }}
+          {{- end }}
+        redis:
+          host: {{ .Values.config.services.api.redis.host | quote }}
+          port: {{ .Values.config.services.api.redis.port }}
+          {{- if .Values.config.services.api.redis.password }}
+          password: {{ .Values.config.services.api.redis.password | quote }}
+          {{- end }}
+          db: {{ .Values.config.services.api.redis.db }}
+        {{- if .Values.config.services.api.stt }}
+        stt:
+          provider: {{ .Values.config.services.api.stt.provider }}
+          apiKey: {{ .Values.config.services.api.stt.apiKey | quote }}
+          model: {{ .Values.config.services.api.stt.model | quote }}
+          {{- if .Values.config.services.api.stt.baseUrl }}
+          baseUrl: {{ .Values.config.services.api.stt.baseUrl | quote }}
+          {{- end }}
+          maxDurationSeconds: {{ .Values.config.services.api.stt.maxDurationSeconds | default 120 }}
+          maxFileSizeMb: {{ .Values.config.services.api.stt.maxFileSizeMb | default 25 }}
+        {{- end }}
+    - name: kafka-llm-proxy
+      config: |
+        port: {{ .Values.config.port }}
+        kafka:
+          brokers:
+          {{- range .Values.config.services.kafkaLlmProxy.kafka.brokers }}
+          - {{ . | quote }}
+          {{- end }}
+          groupId: {{ .Values.config.services.kafkaLlmProxy.kafka.groupId }}
+          requestsTopic: {{ .Values.config.services.kafkaLlmProxy.kafka.requestsTopic }}
+          responsesTopic: {{ .Values.config.services.kafkaLlmProxy.kafka.responsesTopic }}
+          {{- if .Values.config.services.kafkaLlmProxy.kafka.clarificationResponsesTopic }}
+          clarificationResponsesTopic: {{ .Values.config.services.kafkaLlmProxy.kafka.clarificationResponsesTopic }}
+          {{- end }}
+          ssl:
+            enabled: {{ .Values.config.services.kafkaLlmProxy.kafka.ssl.enabled }}
+            {{- if .Values.config.services.kafkaLlmProxy.kafka.ssl.caFile }}
+            caFile: {{ .Values.config.services.kafkaLlmProxy.kafka.ssl.caFile | quote }}
+            {{- end }}
+            {{- if .Values.config.services.kafkaLlmProxy.kafka.ssl.certFile }}
+            certFile: {{ .Values.config.services.kafkaLlmProxy.kafka.ssl.certFile | quote }}
+            {{- end }}
+            {{- if .Values.config.services.kafkaLlmProxy.kafka.ssl.keyFile }}
+            keyFile: {{ .Values.config.services.kafkaLlmProxy.kafka.ssl.keyFile | quote }}
+            {{- end }}
+          requestTimeoutMs: {{ .Values.config.services.kafkaLlmProxy.kafka.requestTimeoutMs }}
+          taskName: {{ .Values.config.services.kafkaLlmProxy.kafka.taskName }}
+          userId: {{ .Values.config.services.kafkaLlmProxy.kafka.userId | quote }}
+    - name: service-discovery
+      # version: '*'
+      config: |
+        port: {{ .Values.config.port }}
+        source:
+          type: static
+          apis:
+          - name: agent
+            version: 1.0.0
+            url: http://localhost:5000
+          services:
+          - name: identity
+            version: 0.0.0
+            url: http://{{ .Release.Name }}-identity
+          - name: secrets
+            version: 0.0.0
+            url: http://{{ .Release.Name }}-secrets
+          - name: instance
+            version: 0.0.0
+            url: http://{{ .Release.Name }}-instance
+          - name: api
+            version: 0.0.0
+            url: http://{{ .Release.Name }}-api
+          - name: config
+            version: 0.0.0
+            url: http://{{ .Release.Name }}-config
+          - name: service-discovery
+            version: 0.0.0
+            url: http://{{ .Release.Name }}-service-discovery
+          - name: kafka-llm-proxy
+            version: 0.0.0
+            url: http://{{ .Release.Name }}-kafka-llm-proxy
+    - name: identity
+      # version: '*'
+      config: |
+        port: {{ .Values.config.port }}
+        provider: keycloak
+        keycloak:
+          clientId: {{ .Values.config.services.identityService.clientId }}
+          clientSecret: {{ .Values.config.services.identityService.clientSecret }}
+          endpoint: {{ .Values.config.services.identityService.endpoint }}
+          realm: {{ .Values.config.services.identityService.realm }}

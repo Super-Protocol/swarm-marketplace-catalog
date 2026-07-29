@@ -1,0 +1,28 @@
+global:
+  caCert:
+    enabled: false
+    content: ""
+
+config:
+  enabled: true
+  replicaCount: 1
+
+service-discovery:
+  enabled: true
+  replicaCount: 1
+
+instance:
+  enabled: true
+  replicaCount: 1
+
+identity:
+  enabled: true
+  replicaCount: 1
+
+kafka-llm-proxy:
+  enabled: true
+  replicaCount: 1
+
+retail-ai:
+  enabled: true
+  replicaCount: 1

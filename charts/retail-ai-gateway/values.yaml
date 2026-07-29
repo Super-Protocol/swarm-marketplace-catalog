@@ -1,0 +1,32 @@
+appHostname: ""
+
+ingress:
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "30m"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: 256k
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
+    # The agent streams answers over a long-lived connection; the default 60s read timeout
+    # cuts them off mid-reply.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+
+oauth2-proxy:
+  fullnameOverride: retail-ai-oauth2-proxy-prod
+  image:
+    tag: v7.14.0
+  service:
+    type: ClusterIP
+    portNumber: 4180
+  ingress:
+    enabled: false
+  rbac:
+    create: false
+  serviceAccount:
+    create: true
+  alphaConfig:
+    enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi

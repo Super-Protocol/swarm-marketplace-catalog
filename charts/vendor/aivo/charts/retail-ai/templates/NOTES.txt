@@ -1,0 +1,15 @@
+Aivo application has been deployed successfully!
+
+{{- if .Values.ingress.enabled }}
+
+Application URL: http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}
+
+{{- else }}
+
+The application is accessible via internal services:
+- Backend (GraphQL): {{ include "app.fullname" . }}-back:{{ .Values.back.service.port }}
+- Frontend: {{ include "app.fullname" . }}-front:{{ .Values.front.service.port }}
+
+Note: Ingress is disabled. Access is expected through oauth2-proxy.
+
+{{- end }}

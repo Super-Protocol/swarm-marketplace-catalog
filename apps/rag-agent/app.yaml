@@ -1,0 +1,123 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: AppDefinition
+
+metadata:
+  name: rag-agent
+  title: RAG Agent
+  description: Retrieval-augmented AI agent that answers questions over connected datasets.
+  version: "1.2.0"
+  category: ai-inference
+  license: Apache-2.0
+  tags:
+    - ai
+    - agent
+    - rag
+
+ui:
+  sections:
+    - id: model
+      title: Model
+      description: The model used to generate answers.
+      fields:
+        - parameterId: modelName
+          widget: select
+    - id: access
+      title: Access
+      fields:
+        - parameterId: apiKey
+          widget: password
+
+parameters:
+  - id: modelName
+    type: string
+    title: Model
+    description: The LLM used for answer generation.
+    required: true
+    default: "llama3.1:8b"
+    options:
+      source:
+        type: static
+        values:
+          - value: "llama3.1:8b"
+            label: Llama 3.1 (8B)
+          - value: "qwen2.5:7b"
+            label: Qwen 2.5 (7B)
+
+  - id: apiKey
+    type: string
+    title: API Key
+    description: Bearer token clients must present. Auto-generated if left blank.
+    sensitive: true
+    generated: true
+
+resources:
+  min:
+    cpu: "4"
+    memory: "8Gi"
+  recommended:
+    cpu: "8"
+    memory: "16Gi"
+
+data:
+  slots:
+    - name: corpus
+      title: Knowledge Base
+      description: Datasets the agent retrieves answers from. At least one is required.
+      required: true
+      multiple: true
+      accepts:
+        - interface: clickhouse-native/v1
+        - interface: s3-parquet/v1
+      schema:
+        tables:
+          - columns:
+              - name: text
+                type: string
+
+    - name: feedback
+      title: Feedback Store
+      description: Optional dataset with prior user feedback used to improve answers.
+      accepts:
+        - interface: clickhouse-native/v1
+
+components:
+  - name: agent
+    source:
+      type: helm
+      repoUrl: https://charts.example.com/rag-agent
+      chart: rag-agent
+      version: "0.4.0"
+    images:
+      - name: ghcr.io/swarm-cloud/rag-agent
+        digest: sha256:3f79bb7b435b05321651daefd374cdc681dc06faa65e374e38337b88ca046dea
+    deployment:
+      values:
+        base:
+          model: ""
+          auth:
+            apiKey: ""
+          datasources:
+            corpusJson: ""
+        patches:
+          - op: replace
+            path: model
+            value: "{{ params.modelName }}"
+
+          - op: replace
+            path: auth.apiKey
+            value: "{{ params.apiKey }}"
+
+          - op: replace
+            path: datasources.corpusJson
+            value: "{{ data.corpus | json }}"
+
+          - op: add
+            path: datasources.feedback.url
+            value: "clickhouse://{{ data.feedback.connection.host }}:{{ data.feedback.connection.port }}/{{ data.feedback.connection.database }}"
+            when: "data.feedback.count > 0"
+
+outputs:
+  - id: agentApi
+    title: Agent API
+    type: url
+    value: "http://{{ components.agent.release }}.{{ namespace }}.svc.cluster.local:8080"
