@@ -1,6 +1,8 @@
-# Every service name below is pinned rather than derived from the Helm release, because the
-# agent's own configuration addresses its siblings by name and the release name is chosen by
-# whoever deploys. A derived name would break those references on every new deployment.
+# Object names are left to derive from the Helm release, because the subcharts address one
+# another as `<release>-<subchart>` in their own templates. Pinning the names renames the objects
+# and not the references to them, and the services then look each other up at addresses that no
+# longer exist. Anything outside this chart that needs to reach them resolves the release name
+# through `{{ components.agent.release }}` instead of guessing.
 #
 # Credentials, hostnames and model settings are deliberately absent: the marketplace supplies
 # them per deployment, so nothing here has to be a placeholder that could be shipped by mistake.
@@ -13,7 +15,6 @@ aivo:
     enabled: false
 
   config:
-    fullnameOverride: analyst-config
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
@@ -87,7 +88,6 @@ aivo:
           instanceId: analyst
 
   service-discovery:
-    fullnameOverride: analyst-service-discovery
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
@@ -96,7 +96,6 @@ aivo:
       - name: regcred
 
   identity:
-    fullnameOverride: analyst-identity
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
@@ -105,7 +104,6 @@ aivo:
       - name: regcred
 
   instance:
-    fullnameOverride: analyst-instance
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
@@ -116,7 +114,6 @@ aivo:
   # The vendored subchart is named retail-ai upstream; the key has to match it. What the objects
   # are called is set below and is ours to choose.
   retail-ai:
-    fullnameOverride: analyst
     imagePullSecrets:
       - name: regcred
     # Traffic reaches the agent through the gateway component, which is where authentication

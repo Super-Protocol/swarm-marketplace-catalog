@@ -9,7 +9,7 @@ metadata:
     plain language: the agent finds the relevant tables, writes the SQL, runs it inside the
     confidential cluster space and answers with figures and charts. Raw records never leave the
     space and never reach the model — only aggregates do.
-  version: "1.0.2"
+  version: "1.1.0"
   category: ai-agents
   license: Proprietary
   tags:
@@ -213,7 +213,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-identity
-      version: "0.2.1"
+      version: "0.3.0"
     deployment:
       values:
         base:
@@ -228,6 +228,10 @@ components:
             externalDatabase:
               password: ""
             extraEnvVars:
+              # The issuer must match the public URL down to the /auth path, or the gateway
+              # rejects every token this realm mints.
+              - name: KC_HOSTNAME
+                value: ""
               - name: KC_HOSTNAME_STRICT
                 value: "false"
               - name: KC_HTTP_ENABLED
@@ -237,7 +241,7 @@ components:
               - name: KEYCLOAK_EXTRA_ARGS
                 value: "--features organization"
               - name: RAI_SERVICE_DISCOVERY_URL
-                value: http://analyst-service-discovery
+                value: ""
         patches:
           - op: replace
             path: internalSecret
@@ -254,13 +258,12 @@ components:
           - op: replace
             path: keycloak.externalDatabase.password
             value: "{{ params.internalSecret }}"
-          # The issuer must match the public URL down to the /auth path, or the gateway rejects
-          # every token this realm mints.
-          - op: add
-            path: keycloak.extraEnvVars.0
-            value:
-              name: KC_HOSTNAME
-              value: "https://{{ params.appHostname }}/auth"
+          - op: replace
+            path: keycloak.extraEnvVars.0.value
+            value: "https://{{ params.appHostname }}/auth"
+          - op: replace
+            path: keycloak.extraEnvVars.4.value
+            value: "http://{{ components.agent.release }}-service-discovery"
 
   # ---------------------------------------------------------------------------
   # The agent itself.
@@ -272,7 +275,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-agent
-      version: "0.2.0"
+      version: "0.3.0"
     deployment:
       values:
         base:
@@ -373,7 +376,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-gateway
-      version: "0.2.0"
+      version: "0.3.0"
     deployment:
       values:
         base:
@@ -417,10 +420,10 @@ components:
                   upstreams:
                     - id: backend
                       path: /graphql
-                      uri: http://analyst-back
+                      uri: ""
                     - id: frontend
                       path: /
-                      uri: http://analyst-front
+                      uri: ""
         patches:
           - op: replace
             path: appHostname
@@ -440,6 +443,12 @@ components:
           - op: replace
             path: "oauth2-proxy.alphaConfig.configData.providers.0.oidcConfig.issuerURL"
             value: "https://{{ params.appHostname }}/auth/realms/master"
+          - op: replace
+            path: "oauth2-proxy.alphaConfig.configData.upstreamConfig.upstreams.0.uri"
+            value: "http://{{ components.agent.release }}-retail-ai-back"
+          - op: replace
+            path: "oauth2-proxy.alphaConfig.configData.upstreamConfig.upstreams.1.uri"
+            value: "http://{{ components.agent.release }}-retail-ai-front"
           - op: replace
             path: oauth2-proxy.config.configFile
             value: |
