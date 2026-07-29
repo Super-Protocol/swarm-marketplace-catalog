@@ -334,6 +334,10 @@ def domain_brief(bindings):
 # Neo4j: the graph the agent searches
 # ---------------------------------------------------------------------------
 
+# Marks every node this job owns, so pruning can tell them from a semantic layer someone else
+# curated in the same graph.
+MANAGED_BY = "swarm-marketplace"
+
 CONSTRAINTS = [
     "CREATE CONSTRAINT IF NOT EXISTS FOR (s:System)    REQUIRE s.systemId    IS UNIQUE",
     "CREATE CONSTRAINT IF NOT EXISTS FOR (n:Namespace) REQUIRE n.namespaceId IS UNIQUE",
@@ -378,14 +382,20 @@ def build_graph(bindings):
 
         # A dataset that is no longer bound must stop being findable; leaving it in the graph
         # would have the agent generate SQL against data it can no longer reach.
+        #
+        # Scoped to nodes this job wrote. The agent's graph can also hold a semantic layer —
+        # concepts, terms, curated measures — that nobody here created, and a graph belonging to
+        # more than one source is exactly the case where "delete what I did not just write" is
+        # the difference between pruning and wiping.
         keep = [identifier(binding["dataset"]) for binding in bindings]
         session.run(
-            "MATCH (s:System) WHERE NOT s.systemId IN $keep "
-            "OPTIONAL MATCH (n:Namespace)-[:BELONGS_TO]->(s) "
-            "OPTIONAL MATCH (d:Dataset)-[:BELONGS_TO]->(n) "
-            "OPTIONAL MATCH (f:Field)-[:BELONGS_TO]->(d) "
+            "MATCH (s:System {managedBy:$owner}) WHERE NOT s.systemId IN $keep "
+            "OPTIONAL MATCH (n:Namespace {managedBy:$owner})-[:BELONGS_TO]->(s) "
+            "OPTIONAL MATCH (d:Dataset {managedBy:$owner})-[:BELONGS_TO]->(n) "
+            "OPTIONAL MATCH (f:Field {managedBy:$owner})-[:BELONGS_TO]->(d) "
             "DETACH DELETE f, d, n, s",
             keep=keep,
+            owner=MANAGED_BY,
         )
 
         for binding in bindings:
@@ -394,15 +404,17 @@ def build_graph(bindings):
             title = binding.get("title", binding["dataset"])
 
             session.run(
-                "MERGE (s:System {systemId:$id}) SET s.displayName=$name, s.engine='clickhouse'",
+                "MERGE (s:System {systemId:$id}) SET s.displayName=$name, s.engine='clickhouse', s.managedBy=$owner",
                 id=system_id,
                 name=title,
+                owner=MANAGED_BY,
             )
             session.run(
-                "MERGE (n:Namespace {namespaceId:$ns}) SET n.name=$ns "
+                "MERGE (n:Namespace {namespaceId:$ns}) SET n.name=$ns, n.managedBy=$owner "
                 "WITH n MATCH (s:System {systemId:$id}) MERGE (n)-[:BELONGS_TO]->(s)",
                 ns=namespace,
                 id=system_id,
+                owner=MANAGED_BY,
             )
 
             for table in binding.get("schema", {}).get("tables", []):
@@ -411,13 +423,14 @@ def build_graph(bindings):
                 search_text = f"table: {dataset_id} | description: {description}"
                 session.run(
                     "MERGE (d:Dataset {datasetId:$id}) SET d:Searchable, d.name=$name, "
-                    "d.description=$description, d.searchText=$text "
+                    "d.description=$description, d.searchText=$text, d.managedBy=$owner "
                     "WITH d MATCH (n:Namespace {namespaceId:$ns}) MERGE (d)-[:BELONGS_TO]->(n)",
                     id=dataset_id,
                     name=table["name"],
                     description=description,
                     text=search_text,
                     ns=namespace,
+                    owner=MANAGED_BY,
                 )
                 to_embed.append(("Dataset", "datasetId", dataset_id, search_text))
 
@@ -430,7 +443,7 @@ def build_graph(bindings):
                     )
                     session.run(
                         "MERGE (f:Field {fieldId:$id}) SET f:Searchable, f.name=$name, f.role=$role, "
-                        "f.type=$type, f.comment=$comment, f.searchText=$text "
+                        "f.type=$type, f.comment=$comment, f.searchText=$text, f.managedBy=$owner "
                         "WITH f MATCH (d:Dataset {datasetId:$dataset}) MERGE (f)-[:BELONGS_TO]->(d)",
                         id=field_id,
                         name=column["name"],
@@ -439,6 +452,7 @@ def build_graph(bindings):
                         comment=comment,
                         text=field_text,
                         dataset=dataset_id,
+                        owner=MANAGED_BY,
                     )
                     to_embed.append(("Field", "fieldId", field_id, field_text))
 
