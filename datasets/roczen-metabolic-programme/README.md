@@ -28,3 +28,9 @@ This matters because consumers build a semantic layer from it — a text-to-SQL 
 ## Access
 
 Restricted. De-identified research use only: aggregate results may be published; re-identification and record-level extraction are not permitted. The data is synthetic and generated deterministically, so it is safe to share and stable across regenerations.
+
+## Endpoint
+
+Served over the ClickHouse HTTP interface. The account behind the card's publisher secrets is
+read-only and confined to this database; write statements are refused by the server, not by
+convention.
