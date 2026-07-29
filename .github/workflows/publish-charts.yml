@@ -34,7 +34,9 @@ jobs:
           mkdir -p site/charts
           for chart in charts/*/; do
             name=$(basename "$chart")
-            [ "$name" = "vendor" ] && continue
+            if [ "$name" = "vendor" ]; then
+              continue
+            fi
             helm dependency update "$chart"
             helm package "$chart" --destination site/charts
           done
