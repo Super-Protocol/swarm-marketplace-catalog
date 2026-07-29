@@ -9,7 +9,7 @@ metadata:
     plain language: the agent finds the relevant tables, writes the SQL, runs it inside the
     confidential cluster space and answers with figures and charts. Raw records never leave the
     space and never reach the model — only aggregates do.
-  version: "1.0.1"
+  version: "1.0.2"
   category: ai-agents
   license: Proprietary
   tags:
@@ -128,7 +128,9 @@ resources:
   min:
     cpu: "6"
     memory: "16Gi"
-    storage: "60Gi"
+    # PostgreSQL 8, Redis 8, NATS 10, MinIO 20 and Neo4j 10 come to 56 before the platform
+    # rounds anything, and a quota that tight fails at the last volume rather than the first.
+    storage: "80Gi"
   recommended:
     cpu: "12"
     memory: "32Gi"
