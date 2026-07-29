@@ -1,6 +1,6 @@
 apiVersion: v2
 name: conversational-analyst-identity
-description: Keycloak for the the analyst, with the realm bootstrap that creates its clients, demo user and tenant organization.
+description: Keycloak for the analyst, with the realm bootstrap that creates its clients, demo user and tenant organization.
 type: application
 version: 0.2.0
 appVersion: "1.0.0"

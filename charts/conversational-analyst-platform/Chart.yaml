@@ -1,6 +1,6 @@
 apiVersion: v2
 name: conversational-analyst-platform
-description: Backing services for the the analyst — PostgreSQL, Redis, NATS, MinIO and a Neo4j knowledge graph.
+description: Backing services for the analyst — PostgreSQL, Redis, NATS, MinIO and a Neo4j knowledge graph.
 type: application
 version: 0.2.0
 appVersion: "1.0.0"
