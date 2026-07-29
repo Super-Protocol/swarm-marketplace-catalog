@@ -65,9 +65,11 @@ data:
     # Realm admin, because this is the operator's own account: they are the one who has to add
     # colleagues, wire an external identity provider, and see what the agent is doing. A first
     # user who cannot administer the realm they were just given is not an administrator.
-    echo "== realm-admin rights =="
-    $KCADM add-roles $CFG -r master --uusername {{ .Values.demoUser.username | quote }} \
-      --cclientid master-realm --rolename realm-admin 2>&1 | tail -1
+    #
+    # The realm role `admin` is the grant that means this in the master realm. The `realm-admin`
+    # composite people reach for first belongs to a *managed* realm's realm-management client and
+    # does not exist here.
+    echo "== administrator rights =="
     $KCADM add-roles $CFG -r master --uusername {{ .Values.demoUser.username | quote }} \
       --rolename admin 2>&1 | tail -1
 
