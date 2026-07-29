@@ -63,12 +63,26 @@ def get_json(url, token):
         return json.load(response)
 
 
-def resolve_tenant():
+def resolve_tenant(attempts=120, delay=5):
     """The agent's tenant is a Keycloak organization, and its id is generated at bootstrap.
 
-    Asking Keycloak for it here, rather than threading it out of the bootstrap Job, means the
-    two Jobs share no state and either can be re-run alone.
+    Asking Keycloak for it here, rather than threading it out of the bootstrap Job, means the two
+    Jobs share no state and either can be re-run alone. It also means waiting: this runs while the
+    rest of the deployment is still starting, and an identity provider that is not up yet is the
+    normal first answer, not a failure.
     """
+    for attempt in range(attempts):
+        try:
+            return ask_for_tenant()
+        except Exception as error:  # noqa: BLE001 — anything here means "not ready yet"
+            if attempt == attempts - 1:
+                raise
+            if attempt % 6 == 0:
+                log(f"waiting for the identity provider ({error.__class__.__name__})")
+            time.sleep(delay)
+
+
+def ask_for_tenant():
     token = post_form(
         f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/token",
         {
@@ -80,7 +94,7 @@ def resolve_tenant():
 
     organizations = get_json(f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}/organizations", token)
     if not organizations:
-        raise SystemExit("Keycloak has no organization: the identity bootstrap has not run yet")
+        raise RuntimeError("Keycloak has no organization yet; the identity bootstrap has not finished")
     return organizations[0]["id"]
 
 

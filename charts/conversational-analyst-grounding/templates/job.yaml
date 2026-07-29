@@ -27,7 +27,9 @@ metadata:
   # normal operation rather than a redeploy; the superseded Job is pruned with the old bundle.
   name: analyst-grounding-{{ .Values.bindings | sha256sum | trunc 8 }}
 spec:
-  backoffLimit: 6
+  # This waits on the rest of the deployment from inside, so a retry here means the wait
+  # itself ran out — rare, and worth a few more attempts before the Job is called failed.
+  backoffLimit: 10
   template:
     spec:
       restartPolicy: OnFailure

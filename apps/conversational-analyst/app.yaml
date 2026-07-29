@@ -479,7 +479,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-grounding
-      version: "0.2.1"
+      version: "0.3.0"
     deployment:
       values:
         base:
