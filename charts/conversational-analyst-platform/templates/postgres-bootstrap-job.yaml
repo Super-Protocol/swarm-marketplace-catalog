@@ -1,0 +1,46 @@
+{{- /*
+Creates the databases and roles the agent expects.
+
+Run as a Job rather than through the chart's initdb hook. That hook fires once, only on an empty
+data directory, at debug log level, from inside an entrypoint that had already created a database
+and a role of its own — and when part of the script silently did not take effect there was
+nothing to read and nothing to re-run. A Job is observable, has an exit code, and re-runs on
+reconfigure; the SQL is idempotent, so re-running it converges.
+*/ -}}
+{{- $secret := include "platform.internalSecret" . }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Follows the content, because a Job's pod template cannot be updated in place.
+  name: analyst-postgres-bootstrap-{{ $secret | sha256sum | trunc 8 }}
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bootstrap
+          image: "{{ .Values.postgresql.image.registry }}/{{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}"
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              for i in $(seq 1 120); do
+                pg_isready -h "$PGHOST" -U postgres >/dev/null 2>&1 && break
+                sleep 5
+              done
+              psql -v ON_ERROR_STOP=1 -h "$PGHOST" -U postgres -d postgres -f /sql/create_databases.sql
+              echo "databases and roles are in place"
+          env:
+            - name: PGHOST
+              value: {{ .Values.postgresql.fullnameOverride | quote }}
+            - name: PGPASSWORD
+              value: {{ $secret | quote }}
+          volumeMounts:
+            - name: sql
+              mountPath: /sql
+      volumes:
+        - name: sql
+          configMap:
+            name: analyst-postgres-initdb

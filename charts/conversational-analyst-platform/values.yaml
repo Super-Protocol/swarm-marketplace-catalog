@@ -39,8 +39,6 @@ postgresql:
     resourcesPreset: none
     persistence:
       size: 8Gi
-    initdb:
-      scriptsConfigMap: analyst-postgres-initdb
     # Network policy belongs to the cluster space, which already isolates the namespace; a
     # deployment that ships its own is refused. This chart moved the switch under `primary`,
     # so the top-level one above no longer reaches it.
