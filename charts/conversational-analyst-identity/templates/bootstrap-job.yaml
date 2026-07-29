@@ -68,15 +68,32 @@ data:
       | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
     curl -s -X PUT "$SRV/admin/realms/master" -H "Authorization: Bearer $T" -H "Content-Type: application/json" \
       -d '{"organizationsEnabled":true}' -o /dev/null -w "  realm org-enable: %{http_code}\n"
-    curl -s -X POST "$SRV/admin/realms/master/organizations" -H "Authorization: Bearer $T" -H "Content-Type: application/json" \
-      -d '{"name":{{ .Values.tenant.name | quote }},"alias":{{ .Values.tenant.alias | quote }},"enabled":true}' \
-      -o /dev/null -w "  org create: %{http_code}\n"
+    # Keycloak refuses an organization without at least one domain, and answers 400 rather than
+    # explaining. The agent resolves a tenant from the user's organization, so a realm without one
+    # leaves every sign-in without a tenant context.
+    ORG_CODE=$(curl -s -X POST "$SRV/admin/realms/master/organizations" -H "Authorization: Bearer $T" -H "Content-Type: application/json" \
+      -d '{"name":{{ .Values.tenant.name | quote }},"alias":{{ .Values.tenant.alias | quote }},"enabled":true,"domains":[{"name":{{ .Values.appHostname | quote }},"verified":true}]}' \
+      -o /tmp/org.json -w "%{http_code}")
+    echo "  org create: $ORG_CODE"
+    if [ "$ORG_CODE" != "201" ] && [ "$ORG_CODE" != "409" ]; then
+      echo "  organization was not created:"; cat /tmp/org.json; echo
+      exit 1
+    fi
     ORGID=$(curl -s "$SRV/admin/realms/master/organizations?search={{ .Values.tenant.name }}" -H "Authorization: Bearer $T" \
       | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
     DUID=$(curl -s "$SRV/admin/realms/master/users?username={{ .Values.demoUser.username }}" -H "Authorization: Bearer $T" \
       | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
-    curl -s -X POST "$SRV/admin/realms/master/organizations/$ORGID/members" -H "Authorization: Bearer $T" -H "Content-Type: application/json" \
-      -d "\"$DUID\"" -o /dev/null -w "  add demo to org: %{http_code}\n"
+    if [ -z "$ORGID" ] || [ -z "$DUID" ]; then
+      echo "  could not resolve the organization ($ORGID) or the demo user ($DUID)"
+      exit 1
+    fi
+    MEMBER_CODE=$(curl -s -X POST "$SRV/admin/realms/master/organizations/$ORGID/members" -H "Authorization: Bearer $T" -H "Content-Type: application/json" \
+      -d "\"$DUID\"" -o /tmp/member.json -w "%{http_code}")
+    echo "  add demo to org: $MEMBER_CODE"
+    if [ "$MEMBER_CODE" != "201" ] && [ "$MEMBER_CODE" != "409" ]; then
+      echo "  the demo user is not a member of the tenant:"; cat /tmp/member.json; echo
+      exit 1
+    fi
 
     echo "ORG_ID (tenant) = $ORGID"
     echo "== done =="
