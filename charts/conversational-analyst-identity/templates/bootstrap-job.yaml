@@ -79,9 +79,12 @@ data:
       echo "  organization was not created:"; cat /tmp/org.json; echo
       exit 1
     fi
-    ORGID=$(curl -s "$SRV/admin/realms/master/organizations?search={{ .Values.tenant.name }}" -H "Authorization: Bearer $T" \
+    # Listed rather than searched: a workspace name may contain spaces, and interpolating one
+    # into a query string produced a request Keycloak answered with nothing at all — leaving the
+    # bootstrap unable to find the organization it had just created. The realm holds exactly one.
+    ORGID=$(curl -s "$SRV/admin/realms/master/organizations" -H "Authorization: Bearer $T" \
       | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
-    DUID=$(curl -s "$SRV/admin/realms/master/users?username={{ .Values.demoUser.username }}" -H "Authorization: Bearer $T" \
+    DUID=$(curl -s "$SRV/admin/realms/master/users?username={{ .Values.demoUser.username }}&exact=true" -H "Authorization: Bearer $T" \
       | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
     if [ -z "$ORGID" ] || [ -z "$DUID" ]; then
       echo "  could not resolve the organization ($ORGID) or the demo user ($DUID)"

@@ -9,7 +9,7 @@ metadata:
     plain language: the agent finds the relevant tables, writes the SQL, runs it inside the
     confidential cluster space and answers with figures and charts. Raw records never leave the
     space and never reach the model — only aggregates do.
-  version: "1.3.0"
+  version: "1.3.1"
   category: ai-agents
   license: Proprietary
   tags:
@@ -213,7 +213,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-identity
-      version: "0.4.0"
+      version: "0.4.1"
     deployment:
       values:
         base:
