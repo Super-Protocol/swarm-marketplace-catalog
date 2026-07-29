@@ -6,7 +6,7 @@ repository, a rendered blueprint or a support ticket might carry.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: rai-postgres-initdb
+  name: analyst-postgres-initdb
 data:
   create_databases.sql: |
     CREATE DATABASE keycloak;

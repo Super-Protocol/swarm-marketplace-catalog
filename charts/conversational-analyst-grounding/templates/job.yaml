@@ -7,7 +7,7 @@ passwords out of the deployment evidence the marketplace publishes.
 apiVersion: v1
 kind: Secret
 metadata:
-  name: retail-ai-grounding-bindings
+  name: analyst-grounding-bindings
 type: Opaque
 stringData:
   bindings.json: {{ .Values.bindings | quote }}
@@ -15,14 +15,14 @@ stringData:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: retail-ai-grounding-scripts
+  name: analyst-grounding-scripts
 data:
 {{ (.Files.Glob "files/*").AsConfig | indent 2 }}
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: retail-ai-grounding
+  name: analyst-grounding
   annotations:
     # A Job's pod template is immutable, so reconfiguring with a different set of datasets has
     # to produce a different Job. Keying the name off the bindings is what makes rebinding data
@@ -46,7 +46,7 @@ spec:
             - name: BINDINGS
               valueFrom:
                 secretKeyRef:
-                  name: retail-ai-grounding-bindings
+                  name: analyst-grounding-bindings
                   key: bindings.json
             - name: NEO4J_URI
               value: {{ .Values.neo4j.uri | quote }}
@@ -92,4 +92,4 @@ spec:
       volumes:
         - name: scripts
           configMap:
-            name: retail-ai-grounding-scripts
+            name: analyst-grounding-scripts

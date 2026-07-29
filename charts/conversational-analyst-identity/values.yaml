@@ -21,7 +21,7 @@ bootstrap:
   enabled: true
 
 keycloak:
-  fullnameOverride: rai-keycloak-prod
+  fullnameOverride: analyst-keycloak
   global:
     security:
       allowInsecureImages: true
@@ -48,7 +48,7 @@ keycloak:
   postgresql:
     enabled: false
   externalDatabase:
-    host: rai-postgres-prod-postgresql
+    host: analyst-postgresql
     port: 5432
     user: keycloak_user
     database: keycloak

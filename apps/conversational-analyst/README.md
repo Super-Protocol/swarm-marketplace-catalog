@@ -1,4 +1,4 @@
-# Retail AI Analyst
+# Conversational Analyst
 
 A conversational analyst for datasets you connect to it. A user asks a question in plain language; the agent searches a knowledge graph for the relevant tables, generates ClickHouse SQL, runs it inside the cluster space, and answers with aggregates and charts. Raw records never leave the space and are never sent to the model.
 

@@ -1,6 +1,6 @@
 apiVersion: v2
-name: retail-ai-grounding
+name: conversational-analyst-grounding
 description: Turns the datasets bound to the agent into everything it needs to answer questions about them — data sources, a knowledge graph and a domain briefing.
 type: application
-version: 0.1.1
+version: 0.2.0
 appVersion: "1.0.0"

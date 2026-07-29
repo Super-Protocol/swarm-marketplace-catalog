@@ -22,12 +22,12 @@ neo4j:
   database: neo4j
 
 postgres:
-  host: rai-postgres-prod-postgresql
+  host: analyst-postgresql
   port: 5432
   user: retail_ai_user
   database: retail_ai
 
 keycloak:
-  url: http://rai-keycloak-prod/auth
+  url: http://analyst-keycloak/auth
   realm: master
   clientId: identity

@@ -5,7 +5,7 @@ sit behind the proxy that depends on it, or logging in requires being logged in.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: retail-ai-agent
+  name: conversational-analyst
   annotations:
     {{- toYaml .Values.ingress.annotations | nindent 4 }}
 spec:
@@ -18,13 +18,13 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: rai-keycloak-prod
+                name: analyst-keycloak
                 port:
                   number: 80
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: retail-ai-oauth2-proxy-prod
+                name: analyst-oauth2-proxy
                 port:
                   number: 4180

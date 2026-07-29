@@ -42,7 +42,7 @@ The seeder reads `catalog.yaml`, publishes every definition it names through the
 
 | Listing | Kind | Notes |
 |---------|------|-------|
-| `retail-ai-agent` | Application | A conversational analyst over connected datasets. Five components; the grounding component turns whatever is bound into the agent's knowledge graph and data-source registrations. |
+| `conversational-analyst` | Application | A conversational analyst over connected datasets. Five components; the grounding component turns whatever is bound into the agent's knowledge graph and data-source registrations. |
 | `ollama-webui` | Application | Ollama with a chat UI. The simplest thing that exercises parameters, ingress and pinned images. |
 | `rag-agent` | Application | Data slots, including a schema-constrained one. |
 | `roczen-metabolic-programme` | Dataset | De-identified longitudinal metabolic-programme records, 10 tables. |
@@ -52,6 +52,6 @@ The seeder reads `catalog.yaml`, publishes every definition it names through the
 
 ## Why the dataset cards are this detailed
 
-Every column in the clinical datasets carries a `description`, a `role` (`measure` or `dimension`) and, where it is a foreign key, a `references`. That is not documentation for humans — it is the input the `retail-ai-agent` grounding job turns into a Neo4j knowledge graph and a domain briefing for the model.
+Every column in the clinical datasets carries a `description`, a `role` (`measure` or `dimension`) and, where it is a foreign key, a `references`. That is not documentation for humans — it is the input the `conversational-analyst` grounding job turns into a Neo4j knowledge graph and a domain briefing for the model.
 
 A dataset published with a bare schema still deploys; the agent simply knows less about it. A dataset published with a described schema needs no second description anywhere, and cannot have one that drifts.

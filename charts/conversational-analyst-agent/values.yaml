@@ -13,7 +13,7 @@ aivo:
     enabled: false
 
   config:
-    fullnameOverride: retail-ai-system-prod-config
+    fullnameOverride: analyst-config
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
@@ -24,19 +24,19 @@ aivo:
       services:
         identityService:
           clientId: identity
-          endpoint: http://rai-keycloak-prod/auth
+          endpoint: http://analyst-keycloak/auth
           realm: master
         api:
           db:
             type: postgresql
             config:
-              host: rai-postgres-prod-postgresql
+              host: analyst-postgresql
               username: retail_ai_user
               database: retail_ai
               synchronize: true
               logging: false
           redis:
-            host: rai-redis-prod-master
+            host: analyst-redis-master
             port: 6379
             db: 1
           fileStorage:
@@ -45,7 +45,7 @@ aivo:
               region: us-east-1
               bucket: agent
               accessKeyId: root
-              endpoint: http://rai-minio-prod:9000
+              endpoint: http://analyst-minio:9000
           memory:
             enabled: true
             maxMessages: 5
@@ -79,15 +79,15 @@ aivo:
           checkpointer:
             type: postgres
           nats:
-            url: nats://rai-nats-prod:4222
+            url: nats://analyst-nats:4222
           stt:
             provider: openai
             model: whisper-1
         instance:
-          instanceId: retail-ai
+          instanceId: analyst
 
   service-discovery:
-    fullnameOverride: retail-ai-system-prod-service-discovery
+    fullnameOverride: analyst-service-discovery
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
@@ -96,7 +96,7 @@ aivo:
       - name: regcred
 
   identity:
-    fullnameOverride: retail-ai-system-prod-identity
+    fullnameOverride: analyst-identity
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
@@ -105,7 +105,7 @@ aivo:
       - name: regcred
 
   instance:
-    fullnameOverride: retail-ai-system-prod-instance
+    fullnameOverride: analyst-instance
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
@@ -113,8 +113,10 @@ aivo:
     imagePullSecrets:
       - name: regcred
 
+  # The vendored subchart is named retail-ai upstream; the key has to match it. What the objects
+  # are called is set below and is ours to choose.
   retail-ai:
-    fullnameOverride: retail-ai-system-prod
+    fullnameOverride: analyst
     imagePullSecrets:
       - name: regcred
     # Traffic reaches the agent through the gateway component, which is where authentication

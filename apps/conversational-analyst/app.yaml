@@ -2,14 +2,14 @@ apiVersion: swarm.cloud/v1alpha1
 kind: AppDefinition
 
 metadata:
-  name: retail-ai-agent
-  title: Retail AI Analyst
+  name: conversational-analyst
+  title: Conversational Analyst
   description: >-
     A conversational analyst for your own data. Connect one or more datasets and ask questions in
     plain language: the agent finds the relevant tables, writes the SQL, runs it inside the
     confidential cluster space and answers with figures and charts. Raw records never leave the
     space and never reach the model — only aggregates do.
-  version: "1.0.3"
+  version: "1.0.0"
   category: ai-agents
   license: Proprietary
   tags:
@@ -158,8 +158,8 @@ components:
     source:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
-      chart: retail-ai-platform
-      version: "0.1.1"
+      chart: conversational-analyst-platform
+      version: "0.2.0"
     deployment:
       values:
         base:
@@ -212,8 +212,8 @@ components:
     source:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
-      chart: retail-ai-identity
-      version: "0.1.0"
+      chart: conversational-analyst-identity
+      version: "0.2.0"
     deployment:
       values:
         base:
@@ -237,7 +237,7 @@ components:
               - name: KEYCLOAK_EXTRA_ARGS
                 value: "--features organization"
               - name: RAI_SERVICE_DISCOVERY_URL
-                value: http://retail-ai-system-prod-service-discovery
+                value: http://analyst-service-discovery
         patches:
           - op: replace
             path: internalSecret
@@ -271,8 +271,8 @@ components:
     source:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
-      chart: retail-ai
-      version: "0.1.1"
+      chart: conversational-analyst-agent
+      version: "0.2.0"
     deployment:
       values:
         base:
@@ -345,7 +345,7 @@ components:
             value: "{{ params.llmModel }}"
           - op: replace
             path: aivo.config.config.services.api.checkpointer.uri
-            value: "postgresql://checkpointer_user:{{ params.internalSecret }}@rai-postgres-prod-postgresql:5432/retail_ai_checkpointer"
+            value: "postgresql://checkpointer_user:{{ params.internalSecret }}@analyst-postgresql:5432/retail_ai_checkpointer"
           - op: replace
             path: aivo.config.config.services.ui.logoutUrl
             value: "/oauth2/sign_out?rd=https%3A%2F%2F{{ params.appHostname }}%2Fauth%2Frealms%2Fmaster%2Fprotocol%2Fopenid-connect%2Flogout"
@@ -372,15 +372,15 @@ components:
     source:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
-      chart: retail-ai-gateway
-      version: "0.1.0"
+      chart: conversational-analyst-gateway
+      version: "0.2.0"
     deployment:
       values:
         base:
           appHostname: ""
           oauth2-proxy:
             config:
-              clientID: retail-ai
+              clientID: analyst
               clientSecret: ""
               configFile: ""
             alphaConfig:
@@ -388,13 +388,13 @@ components:
                 providers:
                   - id: keycloak
                     provider: keycloak-oidc
-                    clientID: retail-ai
+                    clientID: analyst
                     clientSecret: ""
                     loginURL: ""
-                    redeemURL: http://rai-keycloak-prod/auth/realms/master/protocol/openid-connect/token
+                    redeemURL: http://analyst-keycloak/auth/realms/master/protocol/openid-connect/token
                     oidcConfig:
                       issuerURL: ""
-                      jwksURL: http://rai-keycloak-prod/auth/realms/master/protocol/openid-connect/certs
+                      jwksURL: http://analyst-keycloak/auth/realms/master/protocol/openid-connect/certs
                       skipDiscovery: true
                       emailClaim: email
                       groupsClaim: groups
@@ -417,10 +417,10 @@ components:
                   upstreams:
                     - id: backend
                       path: /graphql
-                      uri: http://retail-ai-system-prod-back
+                      uri: http://analyst-back
                     - id: frontend
                       path: /
-                      uri: http://retail-ai-system-prod-front
+                      uri: http://analyst-front
         patches:
           - op: replace
             path: appHostname
@@ -450,7 +450,7 @@ components:
               reverse_proxy = true
 
               session_store_type = "redis"
-              redis_connection_url = "redis://default:{{ params.internalSecret }}@rai-redis-prod-master:6379/3"
+              redis_connection_url = "redis://default:{{ params.internalSecret }}@analyst-redis-master:6379/3"
               cookie_secure = true
               cookie_refresh = "1h"
               cookie_expire = "168h"
@@ -469,8 +469,8 @@ components:
     source:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
-      chart: retail-ai-grounding
-      version: "0.1.1"
+      chart: conversational-analyst-grounding
+      version: "0.2.0"
     deployment:
       values:
         base:

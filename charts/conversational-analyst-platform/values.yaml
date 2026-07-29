@@ -20,7 +20,7 @@ neo4j:
   pagecache: 1G
 
 postgresql:
-  fullnameOverride: rai-postgres-prod-postgresql
+  fullnameOverride: analyst-postgresql
   global:
     security:
       allowInsecureImages: true
@@ -40,7 +40,7 @@ postgresql:
     persistence:
       size: 8Gi
     initdb:
-      scriptsConfigMap: rai-postgres-initdb
+      scriptsConfigMap: analyst-postgres-initdb
     # Network policy belongs to the cluster space, which already isolates the namespace; a
     # deployment that ships its own is refused. This chart moved the switch under `primary`,
     # so the top-level one above no longer reaches it.
@@ -48,7 +48,7 @@ postgresql:
       enabled: false
 
 redis:
-  fullnameOverride: rai-redis-prod
+  fullnameOverride: analyst-redis
   global:
     security:
       allowInsecureImages: true
@@ -69,7 +69,7 @@ redis:
       size: 8Gi
 
 nats:
-  fullnameOverride: rai-nats-prod
+  fullnameOverride: analyst-nats
   config:
     monitor:
       enabled: true
@@ -84,7 +84,7 @@ nats:
           size: 10Gi
 
 minio:
-  fullnameOverride: rai-minio-prod
+  fullnameOverride: analyst-minio
   mode: standalone
   replicas: 1
   persistence:

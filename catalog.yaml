@@ -28,7 +28,7 @@ apps:
     organization: acme-corp
   - path: apps/rag-agent
     organization: acme-corp
-  - path: apps/retail-ai-agent
+  - path: apps/conversational-analyst
     organization: aivo
     secrets:
       registryUsername: ${AIVO_REGISTRY_USERNAME}
@@ -116,14 +116,14 @@ grants:
   - dataset: retail-transactions
     organizations: [acme-corp]
     apps: [rag-agent]
-  # The clinical datasets are the point of the Retail AI listing: compatible *and* granted, so a
+  # The clinical datasets are the point of the Conversational Analyst listing: compatible *and* granted, so a
   # consumer can actually bind them rather than only see that they would fit.
   - dataset: roczen-metabolic-programme
     organizations: [reset-health, aivo]
-    apps: [retail-ai-agent]
+    apps: [conversational-analyst]
   - dataset: autonomyx-inflammation-monitoring
     organizations: [reset-health, aivo]
-    apps: [retail-ai-agent]
+    apps: [conversational-analyst]
 
 reviews:
   - app: ollama-webui
@@ -169,7 +169,7 @@ reviews:
     authorName: Priya Raman
     authorRole: Data lead, Acme Corp
 
-  - app: retail-ai-agent
+  - app: conversational-analyst
     kind: lane
     lane: ai
     authorName: AI reviewer

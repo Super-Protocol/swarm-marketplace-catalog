@@ -12,7 +12,7 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
 
 oauth2-proxy:
-  fullnameOverride: retail-ai-oauth2-proxy-prod
+  fullnameOverride: analyst-oauth2-proxy
   image:
     tag: v7.14.0
   service:

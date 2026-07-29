@@ -13,14 +13,14 @@ which is what makes reconfiguring the deployment safe.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: retail-ai-keycloak-bootstrap
+  name: analyst-keycloak-bootstrap
 data:
   bootstrap.sh: |
     #!/bin/bash
     set -u
     KCADM=/opt/bitnami/keycloak/bin/kcadm.sh
     CFG="--config /tmp/kcadm.config"
-    SRV=http://rai-keycloak-prod/auth
+    SRV=http://analyst-keycloak/auth
     APP={{ $app | quote }}
     SECRET={{ $secret | quote }}
 
@@ -45,9 +45,9 @@ data:
       $KCADM add-roles $CFG -r master --uusername service-account-identity --cclientid master-realm --rolename "$role" 2>&1 | tail -1
     done
 
-    echo "== retail-ai client =="
+    echo "== analyst client =="
     $KCADM create $CFG clients -r master \
-      -s clientId=retail-ai -s enabled=true -s protocol=openid-connect \
+      -s clientId=analyst -s enabled=true -s protocol=openid-connect \
       -s publicClient=false -s serviceAccountsEnabled=false \
       -s standardFlowEnabled=true -s directAccessGrantsEnabled=true \
       -s "redirectUris=[\"$APP/*\"]" -s "webOrigins=[\"$APP\"]" \
@@ -84,7 +84,7 @@ data:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: retail-ai-keycloak-bootstrap
+  name: analyst-keycloak-bootstrap
   annotations:
     # The script's content changes whenever the hostname or the tenant does, and the Job would
     # otherwise be immutable-rejected on reconfigure; this makes the name follow the content.
@@ -108,5 +108,5 @@ spec:
       volumes:
         - name: scripts
           configMap:
-            name: retail-ai-keycloak-bootstrap
+            name: analyst-keycloak-bootstrap
 {{- end }}
