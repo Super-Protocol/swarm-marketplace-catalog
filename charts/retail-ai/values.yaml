@@ -4,6 +4,9 @@
 #
 # Credentials, hostnames and model settings are deliberately absent: the marketplace supplies
 # them per deployment, so nothing here has to be a placeholder that could be shipped by mistake.
+#
+# The images are pulled through a proxy of the vendor's registry; the account behind `regcred`
+# is read-only and issued for the marketplace.
 
 aivo:
   kafka-llm-proxy:
@@ -12,7 +15,7 @@ aivo:
   config:
     fullnameOverride: retail-ai-system-prod-config
     image:
-      repository: ghcr.io/aivoagent/agent/backend
+      repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
       tag: latest
     imagePullSecrets:
@@ -86,7 +89,7 @@ aivo:
   service-discovery:
     fullnameOverride: retail-ai-system-prod-service-discovery
     image:
-      repository: ghcr.io/aivoagent/agent/backend
+      repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
       tag: latest
     imagePullSecrets:
@@ -95,7 +98,7 @@ aivo:
   identity:
     fullnameOverride: retail-ai-system-prod-identity
     image:
-      repository: ghcr.io/aivoagent/agent/backend
+      repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
       tag: latest
     imagePullSecrets:
@@ -104,7 +107,7 @@ aivo:
   instance:
     fullnameOverride: retail-ai-system-prod-instance
     image:
-      repository: ghcr.io/aivoagent/agent/backend
+      repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
       tag: latest
     imagePullSecrets:
@@ -122,11 +125,11 @@ aivo:
       enabled: false
     back:
       image:
-        repository: ghcr.io/aivoagent/agent/backend
+        repository: registry.aggregion.com/gh/aivoagent/agent/backend
         pullPolicy: Always
         tag: latest
     front:
       image:
-        repository: ghcr.io/aivoagent/agent/frontend
+        repository: registry.aggregion.com/gh/aivoagent/agent/frontend
         pullPolicy: Always
         tag: latest

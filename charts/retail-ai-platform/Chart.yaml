@@ -2,7 +2,7 @@ apiVersion: v2
 name: retail-ai-platform
 description: Backing services for the Retail AI agent — PostgreSQL, Redis, NATS, MinIO and a Neo4j knowledge graph.
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "1.0.0"
 dependencies:
   - name: postgresql

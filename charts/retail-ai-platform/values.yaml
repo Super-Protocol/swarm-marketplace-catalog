@@ -41,6 +41,11 @@ postgresql:
       size: 8Gi
     initdb:
       scriptsConfigMap: rai-postgres-initdb
+    # Network policy belongs to the cluster space, which already isolates the namespace; a
+    # deployment that ships its own is refused. This chart moved the switch under `primary`,
+    # so the top-level one above no longer reaches it.
+    networkPolicy:
+      enabled: false
 
 redis:
   fullnameOverride: rai-redis-prod
