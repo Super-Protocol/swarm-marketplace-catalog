@@ -22,12 +22,10 @@ data:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: analyst-grounding
-  annotations:
-    # A Job's pod template is immutable, so reconfiguring with a different set of datasets has
-    # to produce a different Job. Keying the name off the bindings is what makes rebinding data
-    # a normal operation rather than a redeploy.
-    checksum/bindings: {{ .Values.bindings | sha256sum | trunc 8 }}
+  # A Job's pod template is immutable, so reconfiguring with a different set of datasets has to
+  # produce a different Job. Keying the name off the bindings is what makes rebinding data a
+  # normal operation rather than a redeploy; the superseded Job is pruned with the old bundle.
+  name: analyst-grounding-{{ .Values.bindings | sha256sum | trunc 8 }}
 spec:
   backoffLimit: 6
   template:

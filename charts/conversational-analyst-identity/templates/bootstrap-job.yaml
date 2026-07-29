@@ -84,11 +84,10 @@ data:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: analyst-keycloak-bootstrap
-  annotations:
-    # The script's content changes whenever the hostname or the tenant does, and the Job would
-    # otherwise be immutable-rejected on reconfigure; this makes the name follow the content.
-    checksum/script: {{ printf "%s|%s|%s" $app .Values.tenant.name .Values.demoUser.username | sha256sum | trunc 8 }}
+  # A Job's pod template is immutable, so a changed script cannot be applied over the Job that
+  # ran the old one — the name has to follow the content. Reconfiguring prunes what the previous
+  # bundle had and this one does not, so the superseded Job goes with it.
+  name: analyst-keycloak-bootstrap-{{ printf "%s|%s|%s" $app .Values.tenant.name .Values.demoUser.username | sha256sum | trunc 8 }}
 spec:
   backoffLimit: 6
   template:
