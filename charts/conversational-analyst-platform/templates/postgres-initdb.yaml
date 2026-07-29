@@ -1,27 +1,41 @@
 {{- /*
-Databases and users the agent expects to already exist. Delivered as a ConfigMap rather than
-inline chart values so the password never has to travel through a values file that a chart
-repository, a rendered blueprint or a support ticket might carry.
+Databases and users the agent expects to already exist.
+
+Delivered as a ConfigMap rather than inline chart values so the password never travels through a
+values file that a chart repository, a rendered blueprint or a support ticket might carry.
+
+Every statement is guarded. The chart creates a database and a user of its own from
+`auth.database` / `auth.username` before this runs, so a bare `CREATE DATABASE` meets one that
+already exists — and psql runs init scripts with ON_ERROR_STOP, so the *next* statement never
+runs either. That is how a Keycloak configured with the right password still failed to
+authenticate: its user had never been created, because a statement two lines above it aborted
+the script.
 */ -}}
+{{- $secret := include "platform.internalSecret" . -}}
+{{- $owners := dict "keycloak" "keycloak_user" "retail_ai" "retail_ai_user" "retail_ai_checkpointer" "checkpointer_user" -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: analyst-postgres-initdb
 data:
   create_databases.sql: |
-    CREATE DATABASE keycloak;
-    CREATE DATABASE retail_ai;
-    CREATE DATABASE retail_ai_checkpointer;
+    {{- range $database, $owner := $owners }}
+    SELECT 'CREATE DATABASE {{ $database }}'
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{{ $database }}')\gexec
 
-    CREATE USER keycloak_user WITH ENCRYPTED PASSWORD '{{ include "platform.internalSecret" . }}';
-    CREATE USER retail_ai_user WITH ENCRYPTED PASSWORD '{{ include "platform.internalSecret" . }}';
-    CREATE USER checkpointer_user WITH ENCRYPTED PASSWORD '{{ include "platform.internalSecret" . }}';
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT FROM pg_roles WHERE rolname = '{{ $owner }}') THEN
+        ALTER ROLE {{ $owner }} WITH LOGIN ENCRYPTED PASSWORD '{{ $secret }}';
+      ELSE
+        CREATE ROLE {{ $owner }} WITH LOGIN ENCRYPTED PASSWORD '{{ $secret }}';
+      END IF;
+    END
+    $$;
 
-    GRANT ALL PRIVILEGES ON DATABASE keycloak TO keycloak_user;
-    GRANT ALL PRIVILEGES ON DATABASE retail_ai TO retail_ai_user;
-    GRANT ALL PRIVILEGES ON DATABASE retail_ai_checkpointer TO checkpointer_user;
-
-    {{- range $database, $owner := dict "keycloak" "keycloak_user" "retail_ai" "retail_ai_user" "retail_ai_checkpointer" "checkpointer_user" }}
+    GRANT ALL PRIVILEGES ON DATABASE {{ $database }} TO {{ $owner }};
+    {{- end }}
+    {{- range $database, $owner := $owners }}
 
     \c {{ $database }}
     ALTER SCHEMA public OWNER TO {{ $owner }};
