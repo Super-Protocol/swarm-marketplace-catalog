@@ -29,6 +29,24 @@ jobs:
         with:
           version: v3.16.2
 
+      # A published application pins the chart versions it was tested against, so the repository
+      # has to be append-only. `helm repo index` rebuilds from whatever is on disk, which on a
+      # fresh runner is only the versions in this commit — every older one would silently vanish
+      # and every deployment pinned to it would stop being reconfigurable.
+      - name: Carry forward what is already published
+        continue-on-error: true
+        run: |
+          mkdir -p site/charts
+          base="https://super-protocol.github.io/${GITHUB_REPOSITORY#*/}/charts"
+          if curl -sfL --retry 3 --max-time 60 "$base/index.yaml" -o site/charts/index.yaml; then
+            grep -oE 'https?://\S+\.tgz' site/charts/index.yaml | sort -u | while read -r url; do
+              curl -sfL --retry 3 --max-time 120 "$url" -O --output-dir site/charts || true
+            done
+            echo "carried forward: $(ls site/charts/*.tgz 2>/dev/null | wc -l) chart(s)"
+          else
+            echo "no published index yet"
+          fi
+
       - name: Package every chart
         run: |
           mkdir -p site/charts
@@ -40,8 +58,15 @@ jobs:
             helm dependency update "$chart"
             helm package "$chart" --destination site/charts
           done
-          helm repo index site/charts \
-            --url "https://super-protocol.github.io/${GITHUB_REPOSITORY#*/}/charts"
+          # --merge keeps the entries of versions whose archives are no longer produced here but
+          # were carried forward above.
+          if [ -f site/charts/index.yaml ]; then
+            helm repo index site/charts --merge site/charts/index.yaml \
+              --url "https://super-protocol.github.io/${GITHUB_REPOSITORY#*/}/charts"
+          else
+            helm repo index site/charts \
+              --url "https://super-protocol.github.io/${GITHUB_REPOSITORY#*/}/charts"
+          fi
 
       - name: Landing page
         run: |
