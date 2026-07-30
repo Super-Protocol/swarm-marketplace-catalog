@@ -22,6 +22,13 @@ spec:
     - name: readPassword
       title: ClickHouse read-only password
 
+  # Consumers never receive this connection. An application is given an address it can only reach
+  # the data through, and every request is admitted against the deployment evidence it published —
+  # so an application that changes after we approved it stops being served, and the credentials
+  # below never enter anyone else's cluster.
+  access:
+    mode: gateway
+
   provides:
     - interface: clickhouse-http/v1
       connection:
