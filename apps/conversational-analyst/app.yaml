@@ -9,7 +9,7 @@ metadata:
     plain language: the agent finds the relevant tables, writes the SQL, runs it inside the
     confidential cluster space and answers with figures and charts. Raw records never leave the
     space and never reach the model — only aggregates do.
-  version: "2.0.1"
+  version: "3.0.0"
   category: ai-agents
   license: Proprietary
   tags:
@@ -535,3 +535,64 @@ outputs:
     title: Sign-in
     type: string
     value: "Sign in as {{ consumer.user.email }} with the internal credential. That account administers the realm."
+
+# What a deployment of this version attests to.
+#
+# The digest is over the namespace as the cluster returns it, so anything a consumer chooses would
+# otherwise make it their digest rather than this version's. The exclusions below name exactly what
+# varies, found by rendering the application as two different consumers and diffing
+# (`cli/evidence-preview.js`), and the resulting set is itself part of what gets digested — a running
+# deployment cannot widen it.
+#
+# What stays attested is the software and how it is wired: every image, the replica counts, the
+# commands, the ports, the volumes, the service topology, and the egress configuration through which
+# this application reaches gated data. What is not attested is the value of the credential the
+# platform generated for this deployment, anything derived from it (the checksum annotations charts
+# put on their pods), and the hostname the operator chose — the gate binds evidence to the host it
+# fetched it from, so the hostname is established by the channel rather than by the digest.
+evidence:
+  exclude:
+    # Every deployment lives in a namespace of its own.
+    - fields:
+        - "/metadata/namespace"
+
+    # Derived from the generated internal credential, so different for every deployment.
+    - match: { kind: ConfigMap, name: analyst-keycloak-bootstrap }
+      fields:
+        - "/data/bootstrap.sh"
+    - match: { kind: ConfigMap, name: analyst-keycloak-env-vars }
+      fields:
+        - "/data/JAVA_OPTS_APPEND"
+    - match: { kind: ConfigMap, name: analyst-oauth2-proxy }
+      fields:
+        - "/data/oauth2_proxy.cfg"
+    - match: { kind: ConfigMap, name: analyst-postgres-initdb }
+      fields:
+        - "/data/create_databases.sql"
+    - match: { kind: ConfigMap, name: conversational-analyst-agent-config-config }
+      fields:
+        - "/data/services.yaml"
+    - match: { kind: Deployment, name: analyst-minio }
+      fields:
+        - "/spec/template/metadata/annotations/checksum~1secrets"
+    - match: { kind: Deployment, name: analyst-oauth2-proxy }
+      fields:
+        - "/spec/template/metadata/annotations/checksum~1alpha-config"
+        - "/spec/template/metadata/annotations/checksum~1config"
+        - "/spec/template/metadata/annotations/checksum~1secret"
+    - match: { kind: StatefulSet, name: analyst-keycloak }
+      fields:
+        - "/spec/template/metadata/annotations/checksum~1configmap-env-vars"
+        - "/spec/template/metadata/annotations/checksum~1secrets"
+        - "/spec/template/spec/containers/0/env/6/value"
+    - match: { kind: StatefulSet, name: analyst-redis-master }
+      fields:
+        - "/spec/template/metadata/annotations/checksum~1secret"
+    - match: { kind: StatefulSet, name: neo4j }
+      fields:
+        - "/spec/template/spec/containers/0/env/0/value"
+
+    # The hostname the operator chose.
+    - match: { kind: Ingress, name: conversational-analyst }
+      fields:
+        - "/spec/rules/0/host"
