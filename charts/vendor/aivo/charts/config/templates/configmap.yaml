@@ -23,6 +23,12 @@ data:
       config: |
         port: {{ .Values.config.port }}
         instanceId: {{ .Values.config.services.instance.instanceId }}
+        {{- with .Values.config.services.instance.locales }}
+        locales:
+        {{- range . }}
+        - {{ . | quote }}
+        {{- end }}
+        {{- end }}
         endpoints:
           graphqlHttp: {{ .Values.config.services.instance.endpoints.graphqlHttp }}
           graphqlWs: {{ .Values.config.services.instance.endpoints.graphqlWs }}

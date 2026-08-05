@@ -244,6 +244,11 @@ config:
         userId: "00000000-0000-0000-0000-000000000001"
     instance:
       instanceId: kkk
+      # Locales offered in the UI. Omit (or leave empty) for all supported ones
+      # (ru, en); the first entry is used as the default locale.
+      # locales:
+      #   - ru
+      #   - en
       endpoints:
         graphqlHttp: http://localhost:3004/graphql
         graphqlWs: ws://localhost:3004/graphql

@@ -9,6 +9,11 @@
 #
 # The images are pulled through a proxy of the vendor's registry; the account behind `regcred`
 # is read-only and issued for the marketplace.
+#
+# Every tag is an immutable build number, not `latest` or `develop`. A moving tag would leave the
+# manifests — and so the digest a deployment attests to — unchanged while the software behind them
+# was replaced, which is the one thing this listing exists to make impossible. Raising a version
+# here is therefore a deliberate act with a new measurement behind it.
 
 aivo:
   kafka-llm-proxy:
@@ -18,7 +23,7 @@ aivo:
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
-      tag: latest
+      tag: develop-452
     imagePullSecrets:
       - name: regcred
     config:
@@ -86,12 +91,19 @@ aivo:
             model: whisper-1
         instance:
           instanceId: analyst
+          # The UI ships with a Russian and an English translation and offers both unless told
+          # otherwise. A marketplace listing is read by whoever finds it, so it is served in one
+          # language rather than in whichever one a stale cookie last selected; the first entry
+          # is also the default. Requires an agent build that understands the key — before
+          # `d8c05e7` the instance service rejects it at startup.
+          locales:
+            - en
 
   service-discovery:
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
-      tag: latest
+      tag: develop-452
     imagePullSecrets:
       - name: regcred
 
@@ -99,7 +111,7 @@ aivo:
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
-      tag: latest
+      tag: develop-452
     imagePullSecrets:
       - name: regcred
 
@@ -107,7 +119,7 @@ aivo:
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
-      tag: latest
+      tag: develop-452
     imagePullSecrets:
       - name: regcred
 
@@ -126,9 +138,9 @@ aivo:
       image:
         repository: registry.aggregion.com/gh/aivoagent/agent/backend
         pullPolicy: Always
-        tag: latest
+        tag: develop-452
     front:
       image:
         repository: registry.aggregion.com/gh/aivoagent/agent/frontend
         pullPolicy: Always
-        tag: latest
+        tag: develop-448

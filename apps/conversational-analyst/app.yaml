@@ -9,7 +9,7 @@ metadata:
     plain language: the agent finds the relevant tables, writes the SQL, runs it inside the
     confidential cluster space and answers with figures and charts. Raw records never leave the
     space and never reach the model — only aggregates do.
-  version: "3.0.5"
+  version: "3.0.6"
   category: ai-agents
   license: Proprietary
   tags:
@@ -283,7 +283,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-agent
-      version: "0.3.0"
+      version: "0.4.0"
     deployment:
       values:
         base:
@@ -543,8 +543,12 @@ outputs:
 # platform generated for this deployment, anything derived from it (the checksum annotations charts
 # put on their pods), and the hostname the operator chose — the gate binds evidence to the host it
 # fetched it from, so the hostname is established by the channel rather than by the digest.
+#
+# `expectedDigest` is deliberately absent until this version has been deployed once and measured.
+# It cannot be derived from the charts — a cluster defaults fields no template writes — so it comes
+# from a reference deployment's own published evidence. Carrying the previous version's value here
+# would be a declaration nothing was ever compared against, and would read as one that was.
 evidence:
-  expectedDigest: "f496e0159594187a63bec823580be59e9640fbc59826642c37c27bd5c48588b0"
   exclude:
     # Every deployment lives in a namespace of its own.
     - fields:
