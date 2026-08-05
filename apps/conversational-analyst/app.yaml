@@ -544,11 +544,11 @@ outputs:
 # put on their pods), and the hostname the operator chose — the gate binds evidence to the host it
 # fetched it from, so the hostname is established by the channel rather than by the digest.
 #
-# `expectedDigest` is deliberately absent until this version has been deployed once and measured.
-# It cannot be derived from the charts — a cluster defaults fields no template writes — so it comes
-# from a reference deployment's own published evidence. Carrying the previous version's value here
-# would be a declaration nothing was ever compared against, and would read as one that was.
+# The value below was measured, not carried over: 3.0.6 was deployed once and this is the digest
+# that deployment published in its own signed bundle. It cannot be derived from the charts, because
+# a cluster defaults fields no template writes.
 evidence:
+  expectedDigest: "386723dd783160c04a2c6d332ce269bbe413a1b0ad8c8566e885eb1d5e9c3764"
   exclude:
     # Every deployment lives in a namespace of its own.
     - fields:
