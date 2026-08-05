@@ -9,7 +9,7 @@ metadata:
     plain language: the agent finds the relevant tables, writes the SQL, runs it inside the
     confidential cluster space and answers with figures and charts. Raw records never leave the
     space and never reach the model — only aggregates do.
-  version: "3.0.0"
+  version: "3.0.5"
   category: ai-agents
   license: Proprietary
   tags:
@@ -26,6 +26,7 @@ ui:
       description: Where the agent is reachable and who may sign in.
       fields:
         - parameterId: appHostname
+          widget: hostname
         - parameterId: internalSecret
 
     - id: model
@@ -34,8 +35,6 @@ ui:
       fields:
         - parameterId: llmModel
           widget: select
-        - parameterId: googleApiKey
-        - parameterId: openaiApiKey
 
     - id: appearance
       title: Appearance
@@ -47,8 +46,8 @@ parameters:
     type: string
     title: Hostname
     description: >-
-      The public hostname the agent is served on, e.g. analyst.example.com. Point it at this
-      cloud's gateway before publishing the deployment.
+      The public hostname the agent is served on. Take the one offered and the DNS is written for
+      you; bring your own and point it at this cloud's gateway before publishing the deployment.
     required: true
     validation:
       pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
@@ -85,22 +84,6 @@ parameters:
           - value: gemini-2.5-flash
             label: Gemini 2.5 Flash
 
-  - id: googleApiKey
-    type: string
-    title: Google AI API key
-    description: Used to call the selected Gemini model.
-    required: true
-    sensitive: true
-
-  - id: openaiApiKey
-    type: string
-    title: OpenAI API key
-    description: >-
-      Used to embed your datasets' table and column descriptions, which is how the agent finds
-      the right tables for a question. Also used for voice input.
-    required: true
-    sensitive: true
-
   - id: brandTitle
     type: string
     title: Product name
@@ -109,6 +92,16 @@ parameters:
     default: AI Analyst
 
 secrets:
+  - name: googleApiKey
+    title: Google AI API key
+    description: >-
+      Calls the selected Gemini model. Held by the publisher, so the same account answers for every
+      deployment and nobody deploying has to bring one.
+  - name: openaiApiKey
+    title: OpenAI API key
+    description: >-
+      Embeds the table and column descriptions of the connected datasets, which is how the agent
+      finds the right tables for a question. Also used for voice input.
   - name: registryUsername
     title: Container registry username
     description: An account with read access to the agent's images.
@@ -345,19 +338,19 @@ components:
             value: "{{ params.internalSecret }}"
           - op: replace
             path: aivo.config.config.services.api.embeddings.apiKey
-            value: "{{ params.openaiApiKey }}"
+            value: "{{ secrets.openaiApiKey }}"
           - op: replace
             path: aivo.config.config.services.api.stt.apiKey
-            value: "{{ params.openaiApiKey }}"
+            value: "{{ secrets.openaiApiKey }}"
           - op: replace
             path: aivo.config.config.services.api.llmSmart.apiKey
-            value: "{{ params.googleApiKey }}"
+            value: "{{ secrets.googleApiKey }}"
           - op: replace
             path: aivo.config.config.services.api.llmSmart.model
             value: "{{ params.llmModel }}"
           - op: replace
             path: aivo.config.config.services.api.llmFast.apiKey
-            value: "{{ params.googleApiKey }}"
+            value: "{{ secrets.googleApiKey }}"
           - op: replace
             path: aivo.config.config.services.api.llmFast.model
             value: "{{ params.llmModel }}"
@@ -520,10 +513,10 @@ components:
             value: "{{ params.llmModel }}"
           - op: replace
             path: llm.apiKey
-            value: "{{ params.googleApiKey }}"
+            value: "{{ secrets.googleApiKey }}"
           - op: replace
             path: embeddings.apiKey
-            value: "{{ params.openaiApiKey }}"
+            value: "{{ secrets.openaiApiKey }}"
 
 outputs:
   - id: appUrl
@@ -551,6 +544,7 @@ outputs:
 # put on their pods), and the hostname the operator chose — the gate binds evidence to the host it
 # fetched it from, so the hostname is established by the channel rather than by the digest.
 evidence:
+  expectedDigest: "f496e0159594187a63bec823580be59e9640fbc59826642c37c27bd5c48588b0"
   exclude:
     # Every deployment lives in a namespace of its own.
     - fields:
@@ -596,3 +590,4 @@ evidence:
     - match: { kind: Ingress, name: conversational-analyst }
       fields:
         - "/spec/rules/0/host"
+
