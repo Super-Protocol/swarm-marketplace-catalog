@@ -1,0 +1,247 @@
+{{- $name := include "cp.console.name" . -}}
+{{- /*
+The seed configuration Prometheus and Alertmanager start from, taken verbatim from Confluent's
+cp-all-in-one 8.3.1 except for the Alertmanager address, which is a loopback here because the three
+processes share one pod. It cannot be mounted directly: Control Center rewrites the trigger rules
+and the Alertmanager configuration whenever someone edits an alert in the console, and a ConfigMap
+mount is read-only. So an init container copies it into a writable volume the three then share.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-seed
+data:
+{{ (.Files.Glob "files/*").AsConfig | indent 2 }}
+---
+{{- if .Values.auth.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-jaas
+data:
+  {{- /*
+  Control Center authenticates against a Jetty login module reading a property file. The realm name
+  has to be `c3` — that is what confluent.controlcenter.rest.authentication.realm names below.
+  */}}
+  jaas.conf: |
+    c3 {
+      org.eclipse.jetty.security.jaas.spi.PropertyFileLoginModule required
+      file="/etc/c3-auth/password.properties";
+    };
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}-auth
+type: Opaque
+stringData:
+  {{- /*
+  `user: password,role` per line. Administrators may change the cluster; Restricted is Control
+  Center's read-only role, which cannot create or delete topics.
+  */}}
+  password.properties: |
+    {{ .Values.auth.adminUser }}: {{ required "auth.adminPassword is required when auth is enabled" .Values.auth.adminPassword }},Administrators
+    {{- if .Values.auth.viewerPassword }}
+    {{ .Values.auth.viewerUser }}: {{ .Values.auth.viewerPassword }},Restricted
+    {{- end }}
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/name: control-center
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 9021
+      targetPort: http
+    {{- /* The broker pushes its metrics here; nothing outside the namespace reaches it. */}}
+    - name: otlp
+      port: 9090
+      targetPort: prometheus
+  selector:
+    app.kubernetes.io/name: control-center
+    app.kubernetes.io/instance: {{ .Release.Name }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/name: control-center
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  {{- /* One writable config directory, held by one pod: a second replica would fight over it. */}}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: control-center
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: control-center
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        fsGroup: 1000
+      initContainers:
+        {{- /*
+        The Confluent images are built on ubi9-micro, which usually means no shell at all; this one
+        carries sh and cp, which is why it is what does the copying rather than a busybox nobody
+        declared.
+        */}}
+        - name: seed-config
+          image: {{ .Values.images.prometheus | quote }}
+          command:
+            - sh
+            - -c
+            - cp /seed/*.yml /mnt/config/
+          volumeMounts:
+            - name: seed
+              mountPath: /seed
+            - name: config
+              mountPath: /mnt/config
+      containers:
+        - name: control-center
+          image: {{ .Values.images.controlCenter | quote }}
+          ports:
+            - name: http
+              containerPort: 9021
+          env:
+            - name: PORT
+              value: "9021"
+            - name: CONTROL_CENTER_BOOTSTRAP_SERVERS
+              value: {{ include "cp.bootstrap" . | quote }}
+            {{- if .Values.schemaRegistry.enabled }}
+            - name: CONTROL_CENTER_SCHEMA_REGISTRY_URL
+              value: "http://{{ include "cp.schemaRegistry.name" . }}:8081"
+            {{- end }}
+            - name: CONTROL_CENTER_REPLICATION_FACTOR
+              value: "1"
+            - name: CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS
+              value: "1"
+            - name: CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS
+              value: "1"
+            - name: CONFLUENT_METRICS_TOPIC_REPLICATION
+              value: "1"
+            {{- /* Its metrics backend and its alert sink, both beside it in this pod. */}}
+            - name: CONTROL_CENTER_PROMETHEUS_ENABLE
+              value: "true"
+            - name: CONTROL_CENTER_PROMETHEUS_URL
+              value: "http://localhost:9090"
+            - name: CONTROL_CENTER_PROMETHEUS_RULES_FILE
+              value: "/mnt/config/trigger_rules-generated.yml"
+            - name: CONTROL_CENTER_ALERTMANAGER_URL
+              value: "http://localhost:9093"
+            - name: CONTROL_CENTER_ALERTMANAGER_CONFIG_FILE
+              value: "/mnt/config/alertmanager-generated.yml"
+            {{- if .Values.auth.enabled }}
+            - name: CONTROL_CENTER_REST_AUTHENTICATION_METHOD
+              value: "BASIC"
+            - name: CONTROL_CENTER_REST_AUTHENTICATION_REALM
+              value: "c3"
+            - name: CONTROL_CENTER_REST_AUTHENTICATION_ROLES
+              value: "Administrators,Restricted"
+            - name: CONTROL_CENTER_AUTH_RESTRICTED_ROLES
+              value: "Restricted"
+            - name: CONTROL_CENTER_OPTS
+              value: "-Djava.security.auth.login.config=/etc/c3-auth/jaas.conf"
+            {{- end }}
+            {{- if .Values.license }}
+            - name: CONTROL_CENTER_CONFLUENT_LICENSE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cp.fullname" . }}-license
+                  key: license
+            {{- end }}
+            - name: CONTROL_CENTER_HEAP_OPTS
+              value: {{ .Values.controlCenter.controlCenter.heapOpts | quote }}
+          volumeMounts:
+            - name: config
+              mountPath: /mnt/config
+            - name: c3-data
+              mountPath: /var/lib/confluent-control-center-next-gen
+            {{- if .Values.auth.enabled }}
+            - name: jaas
+              mountPath: /etc/c3-auth/jaas.conf
+              subPath: jaas.conf
+            - name: auth
+              mountPath: /etc/c3-auth/password.properties
+              subPath: password.properties
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            {{- /* Basic auth answers 401 before a session exists, which is a healthy console. */}}
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 20
+          resources:
+            {{- toYaml .Values.controlCenter.controlCenter.resources | nindent 12 }}
+        - name: prometheus
+          image: {{ .Values.images.prometheus | quote }}
+          ports:
+            - name: prometheus
+              containerPort: 9090
+          env:
+            - name: CONFIG_PATH
+              value: "/mnt/config"
+            - name: SHOULD_LOG_TO_FILE
+              value: "false"
+            - name: LOG_FILE
+              value: "/dev/null"
+          volumeMounts:
+            - name: config
+              mountPath: /mnt/config
+            - name: prometheus-data
+              mountPath: /var/lib/confluent/control-center/prometheus/data
+          resources:
+            {{- toYaml .Values.controlCenter.prometheus.resources | nindent 12 }}
+        - name: alertmanager
+          image: {{ .Values.images.alertmanager | quote }}
+          ports:
+            - name: alertmanager
+              containerPort: 9093
+          env:
+            - name: CONFIG_PATH
+              value: "/mnt/config"
+            - name: SHOULD_LOG_TO_FILE
+              value: "false"
+            - name: LOG_FILE
+              value: "/dev/null"
+          volumeMounts:
+            - name: config
+              mountPath: /mnt/config
+            - name: alertmanager-data
+              mountPath: /var/lib/confluent/control-center/alertmanager
+          resources:
+            {{- toYaml .Values.controlCenter.alertmanager.resources | nindent 12 }}
+      volumes:
+        - name: seed
+          configMap:
+            name: {{ $name }}-seed
+        - name: config
+          emptyDir: {}
+        - name: c3-data
+          emptyDir: {}
+        - name: prometheus-data
+          emptyDir:
+            sizeLimit: {{ .Values.controlCenter.prometheus.storage | quote }}
+        - name: alertmanager-data
+          emptyDir: {}
+        {{- if .Values.auth.enabled }}
+        - name: jaas
+          configMap:
+            name: {{ $name }}-jaas
+        - name: auth
+          secret:
+            secretName: {{ $name }}-auth
+        {{- end }}

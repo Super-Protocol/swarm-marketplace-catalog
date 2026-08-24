@@ -1,0 +1,13 @@
+{{- if .Values.license }}
+{{- /*
+The licence arrives as a sealed value, so it exists as a Secret in the namespace and never inside a
+manifest. Both the broker and the console read it from here.
+*/}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "cp.fullname" . }}-license
+type: Opaque
+stringData:
+  license: {{ .Values.license | quote }}
+{{- end }}

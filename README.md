@@ -44,6 +44,7 @@ The seeder reads `catalog.yaml`, publishes every definition it names through the
 |---------|------|-------|
 | `conversational-analyst` | Application | A conversational analyst over connected datasets. Five components; the grounding component turns whatever is bound into the agent's knowledge graph and data-source registrations. |
 | `ollama-webui` | Application | Ollama with a chat UI. The simplest thing that exercises parameters, ingress and pinned images. |
+| `confluent-platform` | Application | Kafka with Confluent's Control Center. A chart of our own, because Confluent's Kubernetes path needs an operator; shows a multi-container pod and generated console credentials. |
 | `rag-agent` | Application | Data slots, including a schema-constrained one. |
 | `roczen-metabolic-programme` | Dataset | De-identified longitudinal metabolic-programme records, 10 tables. |
 | `autonomyx-inflammation-monitoring` | Dataset | De-identified wearable biometrics and AI inflammation scores, 9 tables. |

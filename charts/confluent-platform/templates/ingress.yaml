@@ -1,0 +1,27 @@
+{{- /*
+Only the console is published. The broker, Schema Registry and Prometheus stay inside the cluster
+space: none of them authenticates a caller here, and an Ingress in front of any of them would be an
+unauthenticated way into the data.
+
+The class is named explicitly. Without it the object is created, the cloud registers the hostname
+and writes its DNS, and nothing serves it — the ingress controller only picks up what names it.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "cp.console.name" . }}
+  annotations:
+    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ required "consoleHostname must be set" .Values.consoleHostname | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "cp.console.name" . }}
+                port:
+                  number: 9021

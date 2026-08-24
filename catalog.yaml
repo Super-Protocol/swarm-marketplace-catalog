@@ -22,12 +22,20 @@ organizations:
   - slug: reset-health
     name: Reset Health
     verifiedPublisher: true
+  # An internal platform team, which is who publishes third-party infrastructure in a company's own
+  # marketplace. Deliberately not "Confluent": the publisher of a listing is whoever stands behind
+  # it on this marketplace, and that is not the vendor here.
+  - slug: platform-team
+    name: Platform Team
+    verifiedPublisher: true
 
 apps:
   - path: apps/ollama-webui
     organization: acme-corp
   - path: apps/rag-agent
     organization: acme-corp
+  - path: apps/confluent-platform
+    organization: platform-team
   - path: apps/conversational-analyst
     organization: aivo
     secrets:

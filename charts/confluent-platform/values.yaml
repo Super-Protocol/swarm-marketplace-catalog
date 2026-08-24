@@ -1,0 +1,111 @@
+# Confluent Platform, as one chart rendering plain namespaced objects.
+#
+# Confluent's own supported path onto Kubernetes is the CFK operator, which installs
+# CustomResourceDefinitions and cluster-scoped RBAC. A cluster space is one namespace with
+# namespace-scoped rights, so that path is unavailable here — and `confluentinc/cp-helm-charts`,
+# the old plain-manifest chart, no longer exists. This chart therefore drives the official
+# `confluentinc/cp-*` images directly, following Confluent's own `cp-all-in-one` compose for
+# 8.3.1 as the reference for every environment variable below.
+#
+# Everything is sized for one broker on purpose. A single-broker cluster runs under Confluent's
+# developer license: all commercial features, free, no expiry. Adding a second broker starts a
+# 30-day trial that cannot be reverted, so growing this deployment is a licensing decision, not
+# just a capacity one.
+
+consoleHostname: ""
+
+# Enterprise license key, for a deployment that has outgrown the single-broker developer licence.
+# Empty is the normal case. It can also be pasted into Control Center after the fact — it writes
+# the key to the shared _confluent-command topic, from where the broker picks it up without a
+# restart — so nothing here has to be decided up front.
+license: ""
+
+# Control Center serves an unauthenticated administrative UI: whoever reaches it can create and
+# delete topics and read any message in the cluster. Since the whole point of this listing is to
+# publish that UI on a hostname, HTTP Basic authentication is on and the marketplace generates the
+# passwords. Turning it off leaves Kafka administration open to anyone who finds the name.
+auth:
+  enabled: true
+  adminUser: admin
+  adminPassword: ""
+  # A second account that can read the cluster but not change it — Control Center's own notion of
+  # a restricted role, useful for handing the console out more widely than its administration.
+  viewerUser: viewer
+  viewerPassword: ""
+
+kafka:
+  # Left empty, the cluster id is derived from the namespace and release, which are stable for the
+  # life of a deployment: the storage is formatted with it on first start and refuses to open under
+  # a different one, so it must not be regenerated on a reconfigure.
+  clusterId: ""
+  storage: 20Gi
+  storageClass: ""
+  heapOpts: "-Xms512m -Xmx1g"
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      memory: 3Gi
+
+schemaRegistry:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+# Control Center 2.x, its Prometheus and its Alertmanager run as three containers in one pod.
+# That is not packaging convenience: Control Center *writes* the trigger rules and the Alertmanager
+# configuration that the other two read, so the three share one directory. Across three pods that
+# would need a read-write-many volume; in one pod it is an emptyDir. Confluent also requires the
+# three images to carry the same tag.
+controlCenter:
+  controlCenter:
+    heapOpts: "-Xmx2g"
+    resources:
+      requests:
+        cpu: 500m
+        memory: 2560Mi
+      limits:
+        memory: 3Gi
+  prometheus:
+    resources:
+      requests:
+        cpu: 200m
+        memory: 1Gi
+      limits:
+        memory: 2Gi
+    # Metrics live for as long as the pod does. A restart loses the history and keeps the cluster
+    # running, which is the right trade for an evaluation deployment; nothing else reads this data.
+    storage: 8Gi
+  alertmanager:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 256Mi
+
+ingress:
+  className: nginx
+  annotations:
+    # Control Center holds long-lived connections open for live cluster updates; the default
+    # 60-second read timeout closes them and the console stops refreshing.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+
+images:
+  server: confluentinc/cp-server:8.3.1
+  schemaRegistry: confluentinc/cp-schema-registry:8.3.1
+  controlCenter: confluentinc/cp-enterprise-control-center-next-gen:2.5.0
+  prometheus: confluentinc/cp-enterprise-prometheus:2.5.0
+  alertmanager: confluentinc/cp-enterprise-alertmanager:2.5.0
+
+# Which broker metrics reach Prometheus. Verbatim from Confluent's cp-all-in-one 8.3.1 compose:
+# Control Center's dashboards query exactly these series, and a shorter list renders as a console
+# with empty panels rather than as an error.
+telemetryMetricsInclude: "io.confluent.kafka.server.request.(?!.*delta).*|io.confluent.kafka.server.server.broker.state|io.confluent.kafka.server.replica.manager.leader.count|io.confluent.kafka.server.request.queue.size|io.confluent.kafka.server.broker.topic.failed.produce.requests.rate.1.min|io.confluent.kafka.server.tier.archiver.total.lag|io.confluent.kafka.server.request.total.time.ms.p99|io.confluent.kafka.server.broker.topic.failed.fetch.requests.rate.1.min|io.confluent.kafka.server.broker.topic.total.fetch.requests.rate.1.min|io.confluent.kafka.server.partition.caught.up.replicas.count|io.confluent.kafka.server.partition.observer.replicas.count|io.confluent.kafka.server.tier.tasks.num.partitions.in.error|io.confluent.kafka.server.broker.topic.bytes.out.rate.1.min|io.confluent.kafka.server.request.total.time.ms.p95|io.confluent.kafka.server.controller.active.controller.count|io.confluent.kafka.server.request.total.time.ms.p999|io.confluent.kafka.server.controller.active.broker.count|io.confluent.kafka.server.request.handler.pool.request.handler.avg.idle.percent.rate.1.min|io.confluent.kafka.server.controller.unclean.leader.elections.rate.1.min|io.confluent.kafka.server.replica.manager.partition.count|io.confluent.kafka.server.controller.unclean.leader.elections.total|io.confluent.kafka.server.partition.replicas.count|io.confluent.kafka.server.broker.topic.total.produce.requests.rate.1.min|io.confluent.kafka.server.controller.offline.partitions.count|io.confluent.kafka.server.socket.server.network.processor.avg.idle.percent|io.confluent.kafka.server.partition.under.replicated|io.confluent.kafka.server.log.log.start.offset|io.confluent.kafka.server.log.tier.size|io.confluent.kafka.server.log.size|io.confluent.kafka.server.tier.fetcher.bytes.fetched.total|io.confluent.kafka.server.request.total.time.ms.p50|io.confluent.kafka.server.tenant.consumer.lag.offsets|io.confluent.kafka.server.log.log.end.offset|io.confluent.kafka.server.broker.topic.bytes.in.rate.1.min|io.confluent.kafka.server.partition.under.min.isr|io.confluent.kafka.server.partition.in.sync.replicas.count|io.confluent.telemetry.http.exporter.batches.dropped|io.confluent.telemetry.http.exporter.items.total|io.confluent.telemetry.http.exporter.items.succeeded|io.confluent.telemetry.http.exporter.send.time.total.millis|io.confluent.kafka.server.controller.leader.election.rate.(?!.*delta).*|io.confluent.telemetry.http.exporter.batches.failed"

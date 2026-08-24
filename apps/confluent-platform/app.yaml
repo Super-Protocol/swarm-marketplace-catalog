@@ -1,0 +1,215 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: AppDefinition
+
+metadata:
+  name: confluent-platform
+  title: Confluent Platform
+  description: Apache Kafka with Confluent's Control Center — topics, schemas, consumer lag and message inspection from a browser.
+  version: "1.0.0"
+  category: data-streaming
+  # The chart this listing deploys, which is where the wiring can be read; Confluent Platform
+  # itself is not open source.
+  sourceRepo: https://github.com/Super-Protocol/swarm-marketplace-catalog/tree/main/charts/confluent-platform
+  # No SPDX identifier exists for Confluent's own licences, so it is named as a reference.
+  license: LicenseRef-Confluent-Enterprise
+  tags:
+    - kafka
+    - streaming
+    - messaging
+    - confluent
+
+ui:
+  sections:
+    - id: access
+      title: Access
+      description: Where the console is served, and who may sign in to it.
+      fields:
+        - parameterId: consoleHostname
+          widget: hostname
+        - parameterId: adminPassword
+          widget: password
+        - parameterId: viewerPassword
+          widget: password
+
+    - id: licensing
+      title: Licence
+      description: >-
+        A single-broker cluster runs under Confluent's developer licence: every commercial feature,
+        free, with no expiry. Leave this empty unless you have been given an Enterprise key — and
+        even then it can wait, because Control Center accepts one at any time under
+        Administration → About → Licence.
+      fields:
+        - parameterId: licenseKey
+          widget: password
+
+    - id: components
+      title: Components
+      fields:
+        - parameterId: schemaRegistry
+          widget: switch
+
+    - id: storage
+      title: Storage
+      fields:
+        - parameterId: kafkaStorage
+          widget: select
+
+parameters:
+  - id: consoleHostname
+    type: string
+    title: Console hostname
+    description: >-
+      Where Control Center is served. Take the one offered and the DNS is written for you; bring
+      your own and point it at this cloud's gateway before publishing the deployment.
+    required: true
+    validation:
+      pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+
+  - id: adminPassword
+    type: string
+    title: Administrator password
+    description: >-
+      For the `admin` account, which may create and delete topics and read any message in the
+      cluster. Generated if left blank, and shown once this is deployed.
+    sensitive: true
+    generated: true
+
+  - id: viewerPassword
+    type: string
+    title: Read-only password
+    description: >-
+      For the `viewer` account, which can watch the cluster but not change it. Generated if left
+      blank. Hand this one out rather than the administrator password.
+    sensitive: true
+    generated: true
+
+  - id: licenseKey
+    type: string
+    title: Enterprise licence key
+    description: >-
+      Only needed once this cluster grows past one broker. Adding it here restarts the broker and
+      the console with it; adding it in Control Center instead takes effect immediately, because
+      the key is written to the cluster's own licence topic and every component reads it from
+      there.
+    sensitive: true
+
+  - id: schemaRegistry
+    type: boolean
+    title: Schema Registry
+    description: >-
+      Serves Avro, Protobuf and JSON Schema subjects, and is what makes the console's Schemas
+      section work. Reachable inside the cluster space only.
+    default: true
+
+  - id: kafkaStorage
+    type: string
+    title: Log storage
+    description: >-
+      Holds the topic log. Kafka keeps messages for seven days by default, so this is a function of
+      how much you write rather than of how much you keep.
+    required: true
+    default: "20Gi"
+    options:
+      source:
+        type: static
+        values:
+          - value: "20Gi"
+            label: 20 GB
+          - value: "50Gi"
+            label: 50 GB
+          - value: "100Gi"
+            label: 100 GB
+          - value: "250Gi"
+            label: 250 GB
+
+resources:
+  # The quota the cluster space is created with, so it has to cover every container's limit at
+  # once: the broker, Schema Registry, and the console pod's three processes together.
+  min:
+    cpu: "2"
+    memory: "10Gi"
+    storage: "30Gi"
+  recommended:
+    cpu: "4"
+    memory: "12Gi"
+    storage: "60Gi"
+
+components:
+  - name: platform
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: confluent-platform
+      version: "0.1.0"
+    # Pinned by digest, and the render fails if the chart ever references an image not listed here.
+    # Confluent ships Control Center, its Prometheus and its Alertmanager as one matched set, so
+    # the three carry the same version and are raised together.
+    images:
+      - name: confluentinc/cp-server
+        digest: sha256:62e3b04c4c88d03fbb484b9976e6145f751c2e908310f3f8b2db5ae7fcd3608f
+      - name: confluentinc/cp-schema-registry
+        digest: sha256:f0cfd047a839c1ace54d93b92e3459f0d03dc3b5c9db1192a2246fd79b4f44c4
+      - name: confluentinc/cp-enterprise-control-center-next-gen
+        digest: sha256:10d81f0c7082ad3c7eed1efe4ebb702d9cdb092ba297c15b97b7fd8f89df097f
+      - name: confluentinc/cp-enterprise-prometheus
+        digest: sha256:19fa37215dc599ee81aeaf6c64efab2501b79048a3fad105eaecede5c95329a9
+      - name: confluentinc/cp-enterprise-alertmanager
+        digest: sha256:787c71440e0a17f5755854701b886b3878979d7cb62eac6897850c99ae7cd844
+    deployment:
+      values:
+        base:
+          consoleHostname: "{{ params.consoleHostname }}"
+          license: "{{ params.licenseKey }}"
+          auth:
+            enabled: true
+            adminUser: admin
+            adminPassword: "{{ params.adminPassword }}"
+            viewerUser: viewer
+            viewerPassword: "{{ params.viewerPassword }}"
+          kafka:
+            storage: "{{ params.kafkaStorage }}"
+          schemaRegistry:
+            enabled: true
+        patches:
+          - op: replace
+            path: schemaRegistry.enabled
+            value: false
+            when: "params.schemaRegistry == false"
+
+outputs:
+  - id: consoleUrl
+    title: Control Center
+    type: url
+    value: "https://{{ params.consoleHostname }}"
+
+  - id: adminSignIn
+    title: Administrator
+    type: string
+    value: "admin"
+
+  - id: adminPassword
+    title: Administrator password
+    type: secret
+    value: "{{ params.adminPassword }}"
+
+  - id: viewerPassword
+    title: Read-only password (user "viewer")
+    type: secret
+    value: "{{ params.viewerPassword }}"
+
+  - id: bootstrapServers
+    title: Kafka, inside the cluster space
+    type: string
+    value: "{{ components.platform.release }}-kafka.{{ namespace }}.svc.cluster.local:9092"
+
+  - id: schemaRegistryUrl
+    title: Schema Registry, inside the cluster space
+    type: string
+    when: "params.schemaRegistry == true"
+    value: "http://{{ components.platform.release }}-schema-registry.{{ namespace }}.svc.cluster.local:8081"
+
+  - id: licenceState
+    title: Licence
+    type: string
+    when: "params.licenseKey == ''"
+    value: "Developer licence: one broker, every commercial feature, no expiry. An Enterprise key can be added later in Control Center under Administration → About → Licence."
