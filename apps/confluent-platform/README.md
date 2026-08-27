@@ -45,8 +45,13 @@ Only the console. The broker, Schema Registry and Prometheus stay inside the clu
   name the ability to read every topic and write to any of them.
 - Control Center is an **administrative** UI — create and delete topics, read any message. It is
   therefore served behind HTTP Basic authentication, with two accounts whose passwords the
-  marketplace generates: `admin`, which may change the cluster, and `viewer`, which may only watch
-  it. Both are shown once, after deploying.
+  marketplace generates: **`admin`**, which may change the cluster, and **`viewer`**, which may only
+  watch it. The passwords are in the deployment's credentials; the user names are these two and are
+  not configurable.
+
+  The page itself loads without a challenge — Control Center serves its shell to anyone and
+  authenticates every call it then makes, so the browser asks for the password once the console
+  starts fetching. An unauthenticated visitor sees an empty frame and no cluster data.
 
 Applications in the same cluster space reach Kafka at the bootstrap address in the outputs.
 

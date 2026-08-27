@@ -5,7 +5,7 @@ metadata:
   name: confluent-platform
   title: Confluent Platform
   description: Apache Kafka with Confluent's Control Center — topics, schemas, consumer lag and message inspection from a browser.
-  version: "1.0.0"
+  version: "1.0.1"
   category: data-streaming
   # The chart this listing deploys, which is where the wiring can be read; Confluent Platform
   # itself is not open source.
@@ -67,7 +67,9 @@ parameters:
 
   - id: adminPassword
     type: string
-    title: Administrator password
+    # The user name belongs in the title because this is the only place a person meets it: the
+    # console asks for both at a browser prompt, and a password on its own does not open it.
+    title: "Administrator password (user: admin)"
     description: >-
       For the `admin` account, which may create and delete topics and read any message in the
       cluster. Generated if left blank, and shown once this is deployed.
@@ -76,7 +78,7 @@ parameters:
 
   - id: viewerPassword
     type: string
-    title: Read-only password
+    title: "Read-only password (user: viewer)"
     description: >-
       For the `viewer` account, which can watch the cluster but not change it. Generated if left
       blank. Hand this one out rather than the administrator password.
@@ -182,18 +184,18 @@ outputs:
     type: url
     value: "https://{{ params.consoleHostname }}"
 
-  - id: adminSignIn
-    title: Administrator
+  - id: signIn
+    title: Sign in to the console
     type: string
-    value: "admin"
+    value: "Two accounts: admin, which may change the cluster, and viewer, which may only watch it. Their passwords are below."
 
   - id: adminPassword
-    title: Administrator password
+    title: Password for admin
     type: secret
     value: "{{ params.adminPassword }}"
 
   - id: viewerPassword
-    title: Read-only password (user "viewer")
+    title: Password for viewer
     type: secret
     value: "{{ params.viewerPassword }}"
 
