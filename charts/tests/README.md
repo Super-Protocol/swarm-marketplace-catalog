@@ -20,11 +20,12 @@ output does not move with whoever ran it.
 
 | Case | Axis it pins |
 | --- | --- |
-| `api-one-model` / `api-three-models` | the model booleans: `models[]` and `endpoints[]` in the rendered `router.yaml` are built from them |
+| `api-one-model` / `api-three-models` | the `models` list: `models[]` and `endpoints[]` in the rendered `router.yaml` are built from it |
 | `api-billing-manual` / `api-billing-stripe` | the billing mode, and the `NODE_ENV` that follows from it — the manual provider is refused in production |
-| `api-no-models` | every model off: an empty catalogue renders, rather than a chart that cannot be installed |
+| `api-no-models` | an empty selection: an empty catalogue renders, rather than a chart that cannot be installed |
 | `api-external-postgres` | `postgresql.enabled: false` with a DSN of the deployment's own |
-| `litellm-one-model` / `litellm-three-models` | the same booleans on the other side, so the two charts' model names can be diffed against each other |
+| `litellm-one-model` / `litellm-three-models` | the same list on the other side, so the two charts' model names can be diffed against each other |
+| `api-bootstrap-token` | the SUP-95 auth seam: the one `CR_API_*` env var, rendered only when a token is set |
 | `ui-default` | the console's env and ingress, including the API-origin check |
 | `ollama-gpu-off` / `ollama-gpu-on` | the GPU switch |
 

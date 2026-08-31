@@ -19,14 +19,14 @@ data:
           model: "ollama_chat/llama3.2:3b"
           api_base: "http://ollama:11434"
           keep_alive: "24h"
-      - model_name: "phi4:14b"
+      - model_name: "mistral:7b"
         litellm_params:
-          model: "ollama_chat/phi4:14b"
+          model: "ollama_chat/mistral:7b"
           api_base: "http://ollama:11434"
           keep_alive: "24h"
-      - model_name: "qwen2.5:7b"
+      - model_name: "gemma2:2b"
         litellm_params:
-          model: "ollama_chat/qwen2.5:7b"
+          model: "ollama_chat/gemma2:2b"
           api_base: "http://ollama:11434"
           keep_alive: "24h"
 
@@ -78,7 +78,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: 2ce965f720d1a917c12cbff8f7058bb61b7e07165c12b89712bd1be4b513e6db
+        checksum/config: a5c271958677c50c5b2236a521744783ab4e1c1e7b351731886bb79874c19a15
       labels:
         app.kubernetes.io/name: confidential-router-litellm
         app.kubernetes.io/instance: cr

@@ -1,4 +1,4 @@
-{{- $modelKeys := include "confidential-router-litellm.enabledModelKeys" . | fromJsonArray -}}
+{{- $modelNames := include "confidential-router-litellm.selectedModels" . | fromJsonArray -}}
 {{- /*
 `config.yaml` for the LiteLLM proxy: one entry per model the deployment has
 switched on, each pointing at the same Ollama.
@@ -15,11 +15,9 @@ metadata:
     {{- include "confidential-router-litellm.labels" . | nindent 4 }}
 data:
   config.yaml: |
-    {{- if $modelKeys }}
+    {{- if $modelNames }}
     model_list:
-      {{- range $key := $modelKeys }}
-      {{- $model := get $.Values.modelCatalog $key }}
-      {{- $name := required (printf "modelCatalog.%s.ollamaModel must be set" $key) $model.ollamaModel }}
+      {{- range $name := $modelNames }}
       - model_name: {{ $name | quote }}
         litellm_params:
           model: {{ printf "ollama_chat/%s" $name | quote }}

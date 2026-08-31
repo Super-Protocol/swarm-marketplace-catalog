@@ -35,40 +35,13 @@ masterKey: ""
 existingSecret: ""
 existingSecretKey: master-key
 
-# The same booleans the confidential-router-api chart takes, with the same names.
-# Both charts have to be given the same values or the router will advertise a
-# model this proxy cannot serve.
+# The models this proxy serves: the same plain list the
+# confidential-router-api chart takes, with the same names. Give both charts the
+# same list, or the router will advertise a model this proxy cannot serve —
+# there is no catalogue here to disagree with, because the list entry *is* the
+# Ollama model name and therefore also the name LiteLLM publishes.
 models:
-  llama32_3b: true
-  llama31_8b: false
-  qwen25_7b: false
-  qwen25_coder_7b: false
-  mistral_7b: false
-  gemma2_9b: false
-  phi4_14b: false
-  deepseek_r1_14b: false
-
-# `ollamaModel` is what Ollama is asked to run and, kept identical to the router
-# chart's `litellmModel`, is also the name LiteLLM publishes — so the string a
-# client sends, the string the router forwards and the string Ollama loads are
-# one string, checkable by eye across the two charts.
-modelCatalog:
-  llama32_3b:
-    ollamaModel: llama3.2:3b
-  llama31_8b:
-    ollamaModel: llama3.1:8b
-  qwen25_7b:
-    ollamaModel: qwen2.5:7b
-  qwen25_coder_7b:
-    ollamaModel: qwen2.5-coder:7b
-  mistral_7b:
-    ollamaModel: mistral:7b
-  gemma2_9b:
-    ollamaModel: gemma2:9b
-  phi4_14b:
-    ollamaModel: phi4:14b
-  deepseek_r1_14b:
-    ollamaModel: deepseek-r1:14b
+  - "llama3.2:3b"
 
 # How long Ollama keeps a model in memory after answering. The default is five
 # minutes, after which the next request pays the load again — and the router

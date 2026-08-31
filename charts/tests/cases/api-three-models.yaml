@@ -1,4 +1,4 @@
-# Same deployment, three models switched on. Only `models[]` should move —
+# Same deployment, three models selected. Only `models[]` should move —
 # `endpoints[]` stays one entry, because all three are served by this one
 # confidential deployment.
 apiHostname: api.confidential-router.example
@@ -8,6 +8,6 @@ auth:
 database:
   password: golden-test-password
 models:
-  llama32_3b: true
-  qwen25_7b: true
-  phi4_14b: true
+  - "llama3.2:3b"
+  - "mistral:7b"
+  - "gemma2:2b"

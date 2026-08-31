@@ -1,7 +1,8 @@
 # The same three models as api-three-models. `model_name` here and
-# `litellmModel` there are the same strings, which is the point of the pairing.
+# `litellmModel` there are the same strings — the same strings that are in
+# `models` in both charts, which is the point of the pairing.
 ollamaUrl: http://ollama:11434
 models:
-  llama32_3b: true
-  qwen25_7b: true
-  phi4_14b: true
+  - "llama3.2:3b"
+  - "mistral:7b"
+  - "gemma2:2b"

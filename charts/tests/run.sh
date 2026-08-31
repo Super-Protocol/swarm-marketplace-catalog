@@ -95,7 +95,7 @@ while IFS=$'\t' read -r name chart repo version; do
   rm -f /tmp/chart-golden-diff.$$
 done < charts/tests/cases.tsv
 
-# The two charts are installed separately and have to be given the same booleans.
+# The two charts are installed separately and have to be given the same list.
 # Nothing enforces that at deploy time, so it is enforced here: the router's
 # `litellmModel` and the proxy's `model_name` are one string, and a golden pair
 # that disagreed would mean the router advertising a model nothing serves.
@@ -138,8 +138,15 @@ refuses "stripe billing with no credentials" "billing.stripe.secretKey" \
 refuses "production with the console mailer" "written to the log" \
   "${base_api[@]}" --set nodeEnv=production
 
-refuses "a model boolean the catalogue has no entry for" "modelCatalog has no entry" \
-  "${base_api[@]}" --set models.llama32_4b=true
+refuses "a model name the catalogue has no entry for" "modelCatalog has no entry" \
+  "${base_api[@]}" --set 'models[0]=llama3.2:4b'
+
+refuses "the same model twice" "twice" \
+  "${base_api[@]}" --set 'models[0]=llama3.2:3b' --set 'models[1]=llama3.2:3b'
+
+refuses "the same model twice, on the proxy" "twice" \
+  helm template "$RELEASE" charts/confidential-router-litellm --namespace "$NAMESPACE" \
+    --set 'models[0]=llama3.2:3b' --set 'models[1]=llama3.2:3b'
 
 refuses "an unpinned image" "pinned by digest" \
   "${base_api[@]}" --set image.digest= --set image.tag=

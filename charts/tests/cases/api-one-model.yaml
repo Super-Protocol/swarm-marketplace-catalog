@@ -1,4 +1,4 @@
-# The default catalogue: one model, manual billing, the bundled PostgreSQL.
+# The default selection: one model, manual billing, the bundled PostgreSQL.
 apiHostname: api.confidential-router.example
 consoleHostname: console.confidential-router.example
 auth:

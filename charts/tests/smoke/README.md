@@ -11,8 +11,8 @@ chart brings — and then asks the deployment for the things it exists to do:
 - the console serves `/login` through its own Ingress;
 - a magic-link sign-in, a manual top-up and an API key, obtained the way the
   console obtains them — there is no path that reaches into the database;
-- `GET /v1/models` lists exactly the models the chart's booleans switched on, and
-  LiteLLM publishes the same names;
+- `GET /v1/models` lists exactly the models the chart's `models` list selected,
+  and LiteLLM publishes the same names;
 - a generation is answered through LiteLLM and Ollama and is metered;
 - a streamed generation arrives as more than one chunk, as `text/event-stream`,
   through the Ingress — which is what the SSE annotations are for.

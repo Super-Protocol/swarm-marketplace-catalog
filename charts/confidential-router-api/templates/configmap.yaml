@@ -1,5 +1,5 @@
 {{- include "confidential-router-api.validate" . -}}
-{{- $modelKeys := include "confidential-router-api.enabledModelKeys" . | fromJsonArray -}}
+{{- $modelNames := include "confidential-router-api.selectedModels" . | fromJsonArray -}}
 {{- $endpointNames := include "confidential-router-api.referencedEndpoints" . | fromJsonArray -}}
 {{- /*
 `conf/router.yaml` for the router API, rendered from this chart's values.
@@ -66,16 +66,18 @@ data:
     endpoints: []
     {{- end }}
 
-    {{- if $modelKeys }}
+    {{- if $modelNames }}
 
+    # `litellmModel` is the catalogue key, which is the Ollama model name and the
+    # name LiteLLM publishes: one string, all the way down.
     models:
-      {{- range $key := $modelKeys }}
-      {{- $model := get $.Values.modelCatalog $key }}
-      - id: {{ required (printf "modelCatalog.%s.id must be set" $key) $model.id | quote }}
-        name: {{ required (printf "modelCatalog.%s.name must be set" $key) $model.name | quote }}
-        litellmModel: {{ required (printf "modelCatalog.%s.litellmModel must be set" $key) $model.litellmModel | quote }}
+      {{- range $name := $modelNames }}
+      {{- $model := get $.Values.modelCatalog $name }}
+      - id: {{ required (printf "modelCatalog.%q.id must be set" $name) $model.id | quote }}
+        name: {{ required (printf "modelCatalog.%q.name must be set" $name) $model.name | quote }}
+        litellmModel: {{ $name | quote }}
         endpoint: {{ $model.endpoint | quote }}
-        contextLength: {{ required (printf "modelCatalog.%s.contextLength must be set" $key) $model.contextLength | int64 }}
+        contextLength: {{ required (printf "modelCatalog.%q.contextLength must be set" $name) $model.contextLength | int64 }}
         capabilities: [{{ join ", " ($model.capabilities | default (list "chat" "completions")) }}]
         pricing:
           promptPer1mMicros: {{ $model.pricing.promptPer1mMicros | int64 }}

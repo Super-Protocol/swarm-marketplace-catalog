@@ -1,10 +1,9 @@
-# Every model off. The chart still installs; /v1 answers model_not_found until
-# one is switched on, and there is no endpoint to publish evidence for.
+# An empty selection. The chart still installs; /v1 answers model_not_found until
+# a model is chosen, and there is no endpoint to publish evidence for.
 apiHostname: api.confidential-router.example
 consoleHostname: console.confidential-router.example
 auth:
   secret: golden-test-auth-secret-not-a-real-one
 database:
   password: golden-test-password
-models:
-  llama32_3b: false
+models: []

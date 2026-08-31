@@ -3,7 +3,7 @@
   Gateway    {{ include "confidential-router-api.apiUrl" . }}/v1
   GraphQL    {{ include "confidential-router-api.apiUrl" . }}{{ .Values.graphql.path }}
   Backend    {{ .Values.litellmUrl }}
-  Models     {{ include "confidential-router-api.enabledModelKeys" . | fromJsonArray | join ", " | default "none — /v1 answers model_not_found" }}
+  Models     {{ include "confidential-router-api.selectedModels" . | fromJsonArray | join ", " | default "none — /v1 answers model_not_found" }}
   Mode       NODE_ENV={{ include "confidential-router-api.nodeEnv" . }}, billing={{ .Values.billing.mode }}
 
 {{ if ne .Values.billing.mode "stripe" }}

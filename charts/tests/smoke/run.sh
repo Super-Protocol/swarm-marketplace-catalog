@@ -34,10 +34,10 @@ INGRESS_NGINX=${INGRESS_NGINX:-https://raw.githubusercontent.com/kubernetes/ingr
 CONFIDENTIAL_ROUTER=${CONFIDENTIAL_ROUTER:-}
 
 # One model, so the run does not spend ten minutes downloading weights. The
-# assertions compare against this list rather than a hard-coded one.
-MODEL_KEY=llama32_3b
-ROUTER_MODEL_ID=meta/llama-3.2-3b-instruct:tee
+# assertions compare against what the chart renders rather than a hard-coded
+# list. `OLLAMA_MODEL` is the one name all three charts are given.
 OLLAMA_MODEL=llama3.2:3b
+ROUTER_MODEL_ID=meta/llama-3.2-3b-instruct:tee
 
 api() { curl -s --resolve "$API_HOST:80:127.0.0.1" "$@"; }
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
@@ -97,7 +97,7 @@ for release in litellm api ui; do
   esac
   helm upgrade --install "$name" "$chart" -n "$NS" -f "$here/$release.yaml" \
     --set "apiHostname=$API_HOST" --set "consoleHostname=$CONSOLE_HOST" \
-    --set "models.$MODEL_KEY=true" "${extra[@]}" >/dev/null
+    --set "models[0]=$OLLAMA_MODEL" "${extra[@]}" >/dev/null
 done
 ok "four releases installed"
 
@@ -126,9 +126,9 @@ ok "console /login"
   || die "/health is reachable from outside the cluster"
 ok "api /health is not published"
 
-step "The catalogue is the one the booleans asked for"
+step "The catalogue is the one the list asked for"
 expected=$(helm template x charts/confidential-router-api -f "$here/api.yaml" \
-  --set "apiHostname=$API_HOST" --set "consoleHostname=$CONSOLE_HOST" --set "models.$MODEL_KEY=true" \
+  --set "apiHostname=$API_HOST" --set "consoleHostname=$CONSOLE_HOST" --set "models[0]=$OLLAMA_MODEL" \
   --set "image.repository=${ROUTER_API_IMAGE%%:*}" --set "image.tag=${ROUTER_API_IMAGE##*:}" \
   --show-only templates/configmap.yaml \
   | grep -o '^ *- id: "[^"]*"' | sed 's/.*id: "//; s/"$//' | sort)
@@ -168,7 +168,7 @@ ok "topped up to \$$((balance / 1000000))"
 key=$(gql "{\"query\":\"mutation K(\$i: CreateApiKeyInput!){ createApiKey(input:\$i){ secret } }\",\"variables\":{\"i\":{\"workspaceId\":\"$workspace\",\"name\":\"smoke\"}}}" | jq -r '.data.createApiKey.secret')
 case "$key" in sk-tee-v1-*) ok "minted ${key:0:14}…" ;; *) die "createApiKey returned $key" ;; esac
 
-step "/v1/models lists exactly the models that were switched on"
+step "/v1/models lists exactly the models that were selected"
 v1_models=$(api "http://$API_HOST/v1/models" -H "authorization: Bearer $key" | jq -r '.data[].id' | sort)
 [ "$v1_models" = "$expected" ] || die "/v1/models listed [$v1_models], the chart rendered [$expected]"
 ok "$(printf '%s' "$v1_models" | tr '\n' ' ')"

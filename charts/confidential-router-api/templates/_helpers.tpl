@@ -89,33 +89,37 @@ development
 {{- end -}}
 
 {{/*
-The catalogue keys that are switched on, as a JSON array so the caller can
-`fromJsonArray` it. A boolean naming an entry the catalogue does not have is a
-typo, and a typo that silently served nothing would be found in production.
-*/}}
-{{- define "confidential-router-api.enabledModelKeys" -}}
-{{- $keys := list -}}
-{{- range $key, $on := .Values.models -}}
-{{- if $on -}}
-{{- if not (hasKey $.Values.modelCatalog $key) -}}
-{{- fail (printf "models.%s is on, but modelCatalog has no entry named %s" $key $key) -}}
-{{- end -}}
-{{- $keys = append $keys $key -}}
-{{- end -}}
-{{- end -}}
-{{- toJson $keys -}}
-{{- end -}}
+The selected model names, as a JSON array so the caller can `fromJsonArray` it.
 
-{{/* The endpoint names the enabled models refer to, deduplicated, sorted. */}}
-{{- define "confidential-router-api.referencedEndpoints" -}}
+The list is passed through in the order it was given — that is the order the
+console shows — but a name the catalogue does not know, or one given twice, is a
+values mistake that would otherwise render a catalogue nobody asked for.
+*/}}
+{{- define "confidential-router-api.selectedModels" -}}
+{{- $known := keys .Values.modelCatalog | sortAlpha -}}
 {{- $seen := dict -}}
-{{- range $key := (include "confidential-router-api.enabledModelKeys" . | fromJsonArray) -}}
-{{- $model := get $.Values.modelCatalog $key -}}
-{{- $name := required (printf "modelCatalog.%s.endpoint must name an endpoint" $key) $model.endpoint -}}
-{{- if not (hasKey $.Values.endpoints $name) -}}
-{{- fail (printf "modelCatalog.%s.endpoint is %q, which endpoints does not define" $key $name) -}}
+{{- range $name := .Values.models -}}
+{{- if not (hasKey $.Values.modelCatalog $name) -}}
+{{- fail (printf "models lists %q, which modelCatalog has no entry for. Known: %s" $name (join ", " $known)) -}}
+{{- end -}}
+{{- if hasKey $seen $name -}}
+{{- fail (printf "models lists %q twice" $name) -}}
 {{- end -}}
 {{- $_ := set $seen $name true -}}
+{{- end -}}
+{{- toJson .Values.models -}}
+{{- end -}}
+
+{{/* The endpoint names the selected models refer to, deduplicated, sorted. */}}
+{{- define "confidential-router-api.referencedEndpoints" -}}
+{{- $seen := dict -}}
+{{- range $name := (include "confidential-router-api.selectedModels" . | fromJsonArray) -}}
+{{- $model := get $.Values.modelCatalog $name -}}
+{{- $endpoint := required (printf "modelCatalog.%q.endpoint must name an endpoint" $name) $model.endpoint -}}
+{{- if not (hasKey $.Values.endpoints $endpoint) -}}
+{{- fail (printf "modelCatalog.%q.endpoint is %q, which endpoints does not define" $name $endpoint) -}}
+{{- end -}}
+{{- $_ := set $seen $endpoint true -}}
 {{- end -}}
 {{- keys $seen | sortAlpha | toJson -}}
 {{- end -}}

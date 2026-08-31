@@ -2,10 +2,10 @@
 
   Proxy    http://{{ include "confidential-router-litellm.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
   Backend  {{ .Values.ollamaUrl }}
-  Models   {{ include "confidential-router-litellm.enabledModelKeys" . | fromJsonArray | join ", " | default "none" }}
+  Models   {{ include "confidential-router-litellm.selectedModels" . | fromJsonArray | join ", " | default "none" }}
 
 ClusterIP only, and not by accident: this proxy is not authenticated in a way
 that should ever face a network. The router API is what clients talk to.
 
-Give the confidential-router-api chart the same `models` values, or the router
+Give the confidential-router-api chart the same `models` list, or the router
 will advertise a model this proxy cannot serve.

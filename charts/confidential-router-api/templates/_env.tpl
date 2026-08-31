@@ -61,6 +61,23 @@ percent-encoding has to come through `database.url` instead.
       name: {{ .Values.auth.magicLink.resendApiKeyExistingSecret | default (include "confidential-router-api.secretName" .) }}
       key: {{ if .Values.auth.magicLink.resendApiKeyExistingSecret }}{{ .Values.auth.magicLink.resendApiKeyExistingSecretKey }}{{ else }}resend-api-key{{ end }}
 {{- end }}
+{{- if or .Values.auth.bootstrapToken .Values.auth.bootstrapTokenExistingSecret }}
+{{- /*
+The one `CR_API_*` variable here, and deliberately so: this is configuration, not
+a placeholder the config file substitutes. `CR_API_AUTH__BOOTSTRAP_TOKEN` is read
+by the environment layer as `auth.bootstrapToken`, which is a key the schema has
+only from SUP-95 onwards — hence the condition around it.
+*/}}
+- name: CR_API_AUTH__BOOTSTRAP_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.auth.bootstrapTokenExistingSecret | default (include "confidential-router-api.secretName" .) }}
+      key: {{ if .Values.auth.bootstrapTokenExistingSecret }}{{ .Values.auth.bootstrapTokenExistingSecretKey }}{{ else }}bootstrap-token{{ end }}
+{{- if .Values.auth.bootstrapEmail }}
+- name: CR_API_AUTH__BOOTSTRAP_EMAIL
+  value: {{ .Values.auth.bootstrapEmail | quote }}
+{{- end }}
+{{- end }}
 {{- if .Values.auth.github.clientId }}
 - name: ROUTER_GITHUB_CLIENT_SECRET
   valueFrom:

@@ -38,16 +38,18 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
-{{/* The catalogue keys that are switched on, as a JSON array. */}}
-{{- define "confidential-router-litellm.enabledModelKeys" -}}
-{{- $keys := list -}}
-{{- range $key, $on := .Values.models -}}
-{{- if $on -}}
-{{- if not (hasKey $.Values.modelCatalog $key) -}}
-{{- fail (printf "models.%s is on, but modelCatalog has no entry named %s" $key $key) -}}
+{{/*
+The selected model names, as a JSON array. The list is passed through in the
+order it was given; a name given twice would render two `model_list` entries
+LiteLLM would resolve arbitrarily between.
+*/}}
+{{- define "confidential-router-litellm.selectedModels" -}}
+{{- $seen := dict -}}
+{{- range $name := .Values.models -}}
+{{- if hasKey $seen $name -}}
+{{- fail (printf "models lists %q twice" $name) -}}
 {{- end -}}
-{{- $keys = append $keys $key -}}
+{{- $_ := set $seen $name true -}}
 {{- end -}}
-{{- end -}}
-{{- toJson $keys -}}
+{{- toJson .Values.models -}}
 {{- end -}}
