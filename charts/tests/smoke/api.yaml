@@ -1,0 +1,20 @@
+# http rather than https: this cluster has no certificate, and `publicScheme` is
+# what every URL the API hands out is built from. The hostnames come from
+# run.sh, which has to give the same pair to every chart.
+publicScheme: http
+litellmUrl: http://confidential-router-litellm:4000
+auth:
+  secret: smoke-test-auth-secret-thirty-two-plus
+database:
+  password: smoke-test-password
+# The published image is a private package, so the smoke runs one built from a
+# confidential-router checkout and loaded into the node. Everything else about
+# the deployment is what the chart renders by default.
+image:
+  registry: docker.io
+  digest: ""
+  pullPolicy: Never
+postgresql:
+  primary:
+    persistence:
+      size: 2Gi

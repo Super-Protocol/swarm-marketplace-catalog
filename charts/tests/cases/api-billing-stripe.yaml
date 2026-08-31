@@ -1,0 +1,22 @@
+# Three models, Stripe. NODE_ENV becomes production, which in turn makes the
+# console mailer illegal — so a real mailer is part of this case, not an extra.
+apiHostname: api.confidential-router.example
+consoleHostname: console.confidential-router.example
+auth:
+  secret: golden-test-auth-secret-not-a-real-one
+  magicLink:
+    mailer: resend
+    from: no-reply@confidential-router.example
+    resendApiKey: re_golden_test_not_a_real_key
+database:
+  password: golden-test-password
+models:
+  llama32_3b: true
+  qwen25_7b: true
+  phi4_14b: true
+billing:
+  mode: stripe
+  stripe:
+    secretKey: sk_test_golden_not_a_real_key
+    webhookSecret: whsec_golden_not_a_real_key
+    currency: usd

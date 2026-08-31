@@ -1,0 +1,7 @@
+# The console. `image.builtForApiOrigin` matches the API origin below on
+# purpose: a mismatch is a render-time failure, and the case that proves it is in
+# run.sh rather than here.
+consoleHostname: console.confidential-router.example
+apiHostname: api.confidential-router.example
+image:
+  builtForApiOrigin: https://api.confidential-router.example

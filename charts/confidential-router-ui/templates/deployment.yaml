@@ -1,0 +1,101 @@
+{{- include "confidential-router-ui.validate" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "confidential-router-ui.fullname" . }}
+  labels:
+    {{- include "confidential-router-ui.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "confidential-router-ui.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "confidential-router-ui.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: router-ui
+          image: {{ include "confidential-router-ui.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+          env:
+            - name: PORT
+              value: {{ .Values.service.targetPort | quote }}
+            - name: HOSTNAME
+              value: 0.0.0.0
+            # Read by the server half of Next.js only — the browser bundle
+            # already has these compiled in (see image.builtForApiOrigin). They
+            # are set anyway so a `kubectl exec env` says what this console is
+            # pointed at, and so server components resolve the same origin.
+            - name: NEXT_PUBLIC_API_ORIGIN
+              value: {{ include "confidential-router-ui.apiOrigin" . | quote }}
+            - name: NEXT_PUBLIC_GRAPHQL_HTTP
+              value: {{ printf "%s/graphql" (include "confidential-router-ui.apiOrigin" .) | quote }}
+            - name: NEXT_PUBLIC_AUTH_CALLBACK_URL
+              value: {{ .Values.authCallbackUrl | quote }}
+          # `/login` rather than `/`: it is the one route the console serves
+          # without a session cookie, so a healthy pod answers 200 and not a
+          # redirect.
+          startupProbe:
+            httpGet:
+              path: /login
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /login
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /login
+              port: http
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            # Next.js writes its cache under the app directory; the root
+            # filesystem is read-only otherwise.
+            - name: cache
+              mountPath: /app/apps/router-ui/.next/cache
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

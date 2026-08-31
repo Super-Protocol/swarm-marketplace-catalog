@@ -1,0 +1,41 @@
+{{- if .Values.ingress.enabled }}
+{{- /*
+Only the paths a client outside the cluster needs — `ingress.paths` says which,
+and why each one is there. `/health` and `/docs` stay inside.
+
+Without `ingressClassName` the object is created, the cloud registers the
+hostname and writes its DNS, and nothing serves it — the controller only picks up
+what names it.
+*/ -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "confidential-router-api.fullname" . }}
+  labels:
+    {{- include "confidential-router-api.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ required "apiHostname must be set" .Values.apiHostname | quote }}
+      secretName: {{ required "ingress.tls.secretName must be set when ingress.tls.enabled is" .Values.ingress.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ required "apiHostname must be set" .Values.apiHostname | quote }}
+      http:
+        paths:
+          {{- range .Values.ingress.paths }}
+          - path: {{ . | quote }}
+            pathType: {{ $.Values.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "confidential-router-api.fullname" $ }}
+                port:
+                  number: {{ $.Values.service.port }}
+          {{- end }}
+{{- end }}

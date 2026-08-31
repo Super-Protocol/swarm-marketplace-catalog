@@ -1,0 +1,81 @@
+# Pinned by digest (marketplace spec §2.7). See `builtForApiOrigin` below: for
+# this image, which digest you run is not only a supply-chain question — the API
+# origin is compiled into it.
+image:
+  registry: ghcr.io
+  repository: super-protocol/confidential-router/router-ui
+  digest: sha256:18348ff7da19d6847393de53f01dc7dae0f43a1b7c723baa73db8ae572490701
+  tag: ""
+  pullPolicy: IfNotPresent
+  # The API origin the published image was built against. `next build` inlines
+  # the three NEXT_PUBLIC_* settings into the client bundle, so **an image is
+  # bound to one API origin**: setting them on a running container is read by the
+  # server and ignored by the browser, which is worse than not offering them.
+  #
+  # This chart therefore refuses to render a console whose image was built for a
+  # different origin than the `apiHostname` it is being pointed at. Rebuild the
+  # image with the right build args (see router-ui.dockerfile), publish it, and
+  # set `image.digest` and this value together. Emptying this value skips the
+  # check.
+  builtForApiOrigin: http://localhost:3000
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 1
+
+# Where the console answers, and where the API it calls answers.
+consoleHostname: ""
+apiHostname: ""
+publicScheme: https
+
+# Where Better Auth returns the browser after a magic-link or social sign-in.
+authCallbackUrl: /
+
+service:
+  type: ClusterIP
+  port: 3001
+  targetPort: 3001
+
+ingress:
+  enabled: true
+  className: nginx
+  path: /
+  pathType: Prefix
+  annotations:
+    # The console proxies nothing that streams today, but it shares a controller
+    # and a hostname pattern with the API and the two drifting apart is how one
+    # of them ends up with a 60-second cut-off nobody remembers configuring.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "30m"
+  tls:
+    enabled: false
+    secretName: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,7 @@
+# The same three models as api-three-models. `model_name` here and
+# `litellmModel` there are the same strings, which is the point of the pairing.
+ollamaUrl: http://ollama:11434
+models:
+  llama32_3b: true
+  qwen25_7b: true
+  phi4_14b: true

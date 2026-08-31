@@ -1,0 +1,42 @@
+{{- $modelKeys := include "confidential-router-litellm.enabledModelKeys" . | fromJsonArray -}}
+{{- /*
+`config.yaml` for the LiteLLM proxy: one entry per model the deployment has
+switched on, each pointing at the same Ollama.
+
+`ollama_chat/` rather than `ollama/`: the former forwards to Ollama's `/api/chat`
+with the model's own chat template, the latter rebuilds a prompt from the
+messages and quietly changes what the model was asked.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "confidential-router-litellm.fullname" . }}
+  labels:
+    {{- include "confidential-router-litellm.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    {{- if $modelKeys }}
+    model_list:
+      {{- range $key := $modelKeys }}
+      {{- $model := get $.Values.modelCatalog $key }}
+      {{- $name := required (printf "modelCatalog.%s.ollamaModel must be set" $key) $model.ollamaModel }}
+      - model_name: {{ $name | quote }}
+        litellm_params:
+          model: {{ printf "ollama_chat/%s" $name | quote }}
+          api_base: {{ $.Values.ollamaUrl | quote }}
+          {{- if $.Values.keepAlive }}
+          keep_alive: {{ $.Values.keepAlive | quote }}
+          {{- end }}
+      {{- end }}
+    {{- else }}
+    # Every model is switched off; the proxy starts and serves an empty catalogue.
+    model_list: []
+    {{- end }}
+
+    litellm_settings:
+      {{- toYaml .Values.litellmSettings | nindent 6 }}
+    {{- with .Values.generalSettings }}
+
+    general_settings:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}

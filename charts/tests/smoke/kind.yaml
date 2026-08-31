@@ -1,0 +1,18 @@
+# A single-node cluster with an ingress controller in front of it, so the smoke
+# reaches the deployment the way a client does — through the Ingress objects the
+# charts render, annotations and all — rather than through a port-forward that
+# would prove the pods work and the routing was never tried.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 80
+        protocol: TCP

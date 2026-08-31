@@ -1,0 +1,20 @@
+# The same server with a GPU. Both halves matter: a device request without the
+# `nvidia` runtime class, or the runtime class on a node without a device, leaves
+# the pod Pending forever rather than falling back to CPU.
+service:
+  type: ClusterIP
+ollama:
+  gpu:
+    enabled: true
+    type: nvidia
+    number: 1
+  models:
+    pull:
+      - llama3.2:3b
+    run: []
+runtimeClassName: nvidia
+persistentVolume:
+  enabled: true
+  size: 30Gi
+ingress:
+  enabled: false
