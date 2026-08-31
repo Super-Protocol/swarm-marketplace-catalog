@@ -1,0 +1,111 @@
+{{- include "confidential-router-api.validate" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "confidential-router-api.fullname" . }}
+  labels:
+    {{- include "confidential-router-api.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "confidential-router-api.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # A catalogue change is a config change, and the config is a file: without
+        # this the ConfigMap is updated and the running pods keep the old models.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "confidential-router-api.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.migrations.enabled }}
+      initContainers:
+        # `migrate` is the image's entry point for `node /app/cli/run-migrations.js`
+        # — Better Auth's four tables, then the service's ten. Idempotent, so a
+        # restart prints "No pending migrations" and exits 0. It also fails until
+        # PostgreSQL accepts connections, which is exactly the wait this pod needs
+        # and is why there is no separate wait-for-database container.
+        - name: migrate
+          image: {{ include "confidential-router-api.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["migrate"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            {{- include "confidential-router-api.env" . | nindent 12 }}
+          volumeMounts:
+            {{- include "confidential-router-api.volumeMounts" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+      {{- end }}
+      containers:
+        - name: router-api
+          image: {{ include "confidential-router-api.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+          env:
+            {{- include "confidential-router-api.env" . | nindent 12 }}
+          # `/health` does a real database round trip, so an unready pod is one
+          # that cannot serve rather than one that has merely started.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            {{- include "confidential-router-api.volumeMounts" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "confidential-router-api.fullname" . }}
+        # The root filesystem is read-only; these two are the only paths the
+        # process writes to. `data/` is the SQLite default, unused on PostgreSQL,
+        # and still has to exist.
+        - name: tmp
+          emptyDir: {}
+        - name: data
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

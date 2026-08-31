@@ -1,0 +1,5 @@
+publicScheme: http
+image:
+  registry: docker.io
+  digest: ""
+  pullPolicy: Never

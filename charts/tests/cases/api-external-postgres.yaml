@@ -1,0 +1,11 @@
+# A database of the deployment's own: no bundled server, and the DSN arrives
+# whole rather than assembled from pieces.
+apiHostname: api.confidential-router.example
+consoleHostname: console.confidential-router.example
+auth:
+  existingSecret: confidential-router-secrets
+  existingSecretKey: auth-secret
+database:
+  url: postgres://router:golden-test-password@db.internal:5432/router?sslmode=require
+postgresql:
+  enabled: false

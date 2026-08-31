@@ -1,0 +1,6 @@
+apiVersion: v2
+name: confidential-router-litellm
+description: The LiteLLM proxy that puts an OpenAI-compatible face on Ollama for the Confidential Router.
+type: application
+version: 0.1.0
+appVersion: "1.80.5"

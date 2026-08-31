@@ -1,0 +1,85 @@
+# Pinned by digest for the same reason as the router's own images: the evidence
+# bundle names what is running, and only a digest survives a moved tag
+# (marketplace spec §2.7). The tag this digest was resolved from is in
+# `appVersion` and in `image.tag`, which is used only when `digest` is emptied
+# for a local build.
+image:
+  registry: ghcr.io
+  repository: berriai/litellm
+  digest: sha256:e9711f484c7c8462c028803130afef546aa54c8d2fc11120242c01bbadc12e65
+  tag: main-v1.80.5-stable
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 1
+
+# The model server this proxy fronts. The listing deploys otwld's `ollama` chart
+# as a sibling component; this is the name of the service it creates.
+ollamaUrl: http://ollama:11434
+
+# ClusterIP and nothing else, deliberately. This proxy has no authentication
+# worth the name in front of a GPU, and it is not what a client talks to: the
+# router API is. Publishing it would hand the models to whoever found the name.
+service:
+  type: ClusterIP
+  port: 4000
+  targetPort: 4000
+
+# Optional. When set, LiteLLM demands it on every request and the router API's
+# `litellm.apiKey` has to be the same string.
+masterKey: ""
+existingSecret: ""
+existingSecretKey: master-key
+
+# The models this proxy serves: the same plain list the
+# confidential-router-api chart takes, with the same names. Give both charts the
+# same list, or the router will advertise a model this proxy cannot serve —
+# there is no catalogue here to disagree with, because the list entry *is* the
+# Ollama model name and therefore also the name LiteLLM publishes.
+models:
+  - "llama3.2:3b"
+
+# How long Ollama keeps a model in memory after answering. The default is five
+# minutes, after which the next request pays the load again — and the router
+# gives up on a request that has produced nothing within its connect timeout, so
+# an idle deployment would answer the first request of the hour with
+# `backend_unavailable`. `-1` never unloads; a duration keeps it honest on a node
+# that also has to run something else.
+keepAlive: 24h
+
+litellmSettings:
+  # An OpenAI SDK sends parameters Ollama has no equivalent for. Dropping them
+  # beats a 400 on a request the model could have answered.
+  drop_params: true
+  # Nothing here may log a prompt: the router does not store message content and
+  # a proxy that did would make that promise false.
+  turn_off_message_logging: true
+
+generalSettings: {}
+
+# LiteLLM writes its cache and temporary files under the working directory, so
+# the root filesystem stays writable; everything else is dropped.
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+
+podSecurityContext: {}
+
+podAnnotations: {}
+podLabels: {}
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    memory: 2Gi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

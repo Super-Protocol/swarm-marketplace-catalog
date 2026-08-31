@@ -1,0 +1,14 @@
+apiVersion: v2
+name: confidential-router-api
+description: The Confidential Router's OpenAI-compatible gateway and console GraphQL API, with the PostgreSQL it stores generations and sessions in.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+dependencies:
+  # The same vendored chart the analyst platform uses. Off for a deployment that
+  # brings its own database: set `postgresql.enabled: false` and point
+  # `database.*` at it.
+  - name: postgresql
+    version: 16.4.10
+    repository: "file://../vendor/postgresql"
+    condition: postgresql.enabled

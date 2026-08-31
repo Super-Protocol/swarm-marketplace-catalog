@@ -1,0 +1,413 @@
+---
+# Source: confidential-router-api/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: confidential-router-api
+  labels:
+    helm.sh/chart: confidential-router-api-0.1.0
+    app.kubernetes.io/name: confidential-router-api
+    app.kubernetes.io/instance: cr
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-router
+type: Opaque
+stringData:
+  auth-secret: "golden-test-auth-secret-not-a-real-one"
+  password: "golden-test-password"
+  postgres-password: "golden-test-password"
+  resend-api-key: "re_golden_test_not_a_real_key"
+  stripe-secret-key: "sk_test_golden_not_a_real_key"
+  stripe-webhook-secret: "whsec_golden_not_a_real_key"
+---
+# Source: confidential-router-api/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: confidential-router-api
+  labels:
+    helm.sh/chart: confidential-router-api-0.1.0
+    app.kubernetes.io/name: confidential-router-api
+    app.kubernetes.io/instance: cr
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-router
+data:
+  router.yaml: |
+    version: 1
+
+    server:
+      port: 3000
+      host: 0.0.0.0
+      publicBaseUrl: "https://api.confidential-router.example"
+      # CORS, and Better Auth's trusted origins. The console calls this API from
+      # the browser with `credentials: 'include'`, so its origin has to be here.
+      validClientOrigins:
+        - "https://console.confidential-router.example"
+
+    database:
+      type: postgres
+      url: ${ROUTER_DATABASE_URL}
+      # The init container owns the schema; replicas must not race each other.
+      migrationsRun: false
+
+    backends:
+      litellm:
+        baseUrl: "http://confidential-router-litellm:4000"
+        connectTimeout: "60s"
+        readTimeout: "300s"
+
+    endpoints:
+      - name: "confidential-router"
+        hostname: "api.confidential-router.example"
+        tee: "Intel TDX + H100 CC"
+
+    # `litellmModel` is the catalogue key, which is the Ollama model name and the
+    # name LiteLLM publishes: one string, all the way down.
+    models:
+      - id: "meta/llama-3.2-3b-instruct:tee"
+        name: "Llama 3.2 3B Instruct"
+        litellmModel: "llama3.2:3b"
+        endpoint: "confidential-router"
+        contextLength: 131072
+        capabilities: [chat, completions]
+        pricing:
+          promptPer1mMicros: 30000
+          completionPer1mMicros: 50000
+      - id: "mistral/mistral-7b-instruct:tee"
+        name: "Mistral 7B Instruct"
+        litellmModel: "mistral:7b"
+        endpoint: "confidential-router"
+        contextLength: 32768
+        capabilities: [chat, completions]
+        pricing:
+          promptPer1mMicros: 50000
+          completionPer1mMicros: 80000
+      - id: "google/gemma-2-2b-it:tee"
+        name: "Gemma 2 2B"
+        litellmModel: "gemma2:2b"
+        endpoint: "confidential-router"
+        contextLength: 8192
+        capabilities: [chat, completions]
+        pricing:
+          promptPer1mMicros: 20000
+          completionPer1mMicros: 30000
+
+    evidence:
+      pollInterval: "5m"
+      freshnessWindow: "24h"
+
+    rateLimits:
+      requestsPerMinute: 600
+      tokensPerMinute: 2000000
+
+    auth:
+      baseUrl: "https://api.confidential-router.example"
+      secret: ${ROUTER_AUTH_SECRET}
+      sessionMaxAge: "720h"
+      magicLink:
+        mailer: "resend"
+        from: "no-reply@confidential-router.example"
+        resendApiKey: ${ROUTER_RESEND_API_KEY}
+
+    billing:
+      minTopUpMicros: 5000000
+      allowOverdraftMicros: 0
+      checkoutReturnUrl: "https://console.confidential-router.example/credits"
+      autoTopUpCooldown: "1h"
+      # Present means Stripe; absent means the manual provider, which is refused
+      # under NODE_ENV=production.
+      stripe:
+        secretKey: ${ROUTER_STRIPE_SECRET_KEY}
+        webhookSecret: ${ROUTER_STRIPE_WEBHOOK_SECRET}
+        currency: "usd"
+
+    log:
+      level: "info"
+      pretty: false
+
+    graphql:
+      path: "/graphql"
+      introspection: false
+
+    gatekeeper:
+      repo: "Super-Protocol/confidential-router"
+      apiBaseUrl: "https://api.github.com"
+      cacheTtl: "15m"
+      requestTimeout: "5s"
+
+    swagger:
+      enabled: false
+      path: "docs"
+---
+# Source: confidential-router-api/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: confidential-router-api
+  labels:
+    helm.sh/chart: confidential-router-api-0.1.0
+    app.kubernetes.io/name: confidential-router-api
+    app.kubernetes.io/instance: cr
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-router
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: confidential-router-api
+    app.kubernetes.io/instance: cr
+---
+# Source: confidential-router-api/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: confidential-router-api
+  labels:
+    helm.sh/chart: confidential-router-api-0.1.0
+    app.kubernetes.io/name: confidential-router-api
+    app.kubernetes.io/instance: cr
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-router
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: confidential-router-api
+      app.kubernetes.io/instance: cr
+  template:
+    metadata:
+      annotations:
+        # A catalogue change is a config change, and the config is a file: without
+        # this the ConfigMap is updated and the running pods keep the old models.
+        checksum/config: c0625002d62c993d6b3a151a1dc7f94deb38dbaacad2ea6a82892bb7440b1808
+      labels:
+        app.kubernetes.io/name: confidential-router-api
+        app.kubernetes.io/instance: cr
+    spec:
+      securityContext:
+        runAsGroup: 1001
+        runAsNonRoot: true
+        runAsUser: 1001
+      initContainers:
+        # `migrate` is the image's entry point for `node /app/cli/run-migrations.js`
+        # — Better Auth's four tables, then the service's ten. Idempotent, so a
+        # restart prints "No pending migrations" and exits 0. It also fails until
+        # PostgreSQL accepts connections, which is exactly the wait this pod needs
+        # and is why there is no separate wait-for-database container.
+        - name: migrate
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:e46f47c286d6b978e2a28b06c868f804bc72608597647c081874d3cc4d06ea45
+          imagePullPolicy: IfNotPresent
+          args: ["migrate"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: CR_API_CONFIG_FILE
+              value: /etc/confidential-router/router.yaml
+            - name: ROUTER_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: password
+            - name: ROUTER_DATABASE_URL
+              value: "postgres://router:$(ROUTER_DATABASE_PASSWORD)@confidential-router-postgresql:5432/router?sslmode=disable"
+            - name: ROUTER_AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: auth-secret
+            - name: ROUTER_STRIPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: stripe-secret-key
+            - name: ROUTER_STRIPE_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: stripe-webhook-secret
+            - name: ROUTER_RESEND_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: resend-api-key
+          volumeMounts:
+            - name: config
+              mountPath: /etc/confidential-router
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: data
+              mountPath: /app/data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+      containers:
+        - name: router-api
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:e46f47c286d6b978e2a28b06c868f804bc72608597647c081874d3cc4d06ea45
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: CR_API_CONFIG_FILE
+              value: /etc/confidential-router/router.yaml
+            - name: ROUTER_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: password
+            - name: ROUTER_DATABASE_URL
+              value: "postgres://router:$(ROUTER_DATABASE_PASSWORD)@confidential-router-postgresql:5432/router?sslmode=disable"
+            - name: ROUTER_AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: auth-secret
+            - name: ROUTER_STRIPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: stripe-secret-key
+            - name: ROUTER_STRIPE_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: stripe-webhook-secret
+            - name: ROUTER_RESEND_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: resend-api-key
+          # `/health` does a real database round trip, so an unready pod is one
+          # that cannot serve rather than one that has merely started.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            - name: config
+              mountPath: /etc/confidential-router
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: data
+              mountPath: /app/data
+          resources:
+            limits:
+              memory: 1Gi
+            requests:
+              cpu: 250m
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: confidential-router-api
+        # The root filesystem is read-only; these two are the only paths the
+        # process writes to. `data/` is the SQLite default, unused on PostgreSQL,
+        # and still has to exist.
+        - name: tmp
+          emptyDir: {}
+        - name: data
+          emptyDir: {}
+---
+# Source: confidential-router-api/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: confidential-router-api
+  labels:
+    helm.sh/chart: confidential-router-api-0.1.0
+    app.kubernetes.io/name: confidential-router-api
+    app.kubernetes.io/instance: cr
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-router
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 30m
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: "api.confidential-router.example"
+      http:
+        paths:
+          - path: "/v1"
+            pathType: Prefix
+            backend:
+              service:
+                name: confidential-router-api
+                port:
+                  number: 3000
+          - path: "/graphql"
+            pathType: Prefix
+            backend:
+              service:
+                name: confidential-router-api
+                port:
+                  number: 3000
+          - path: "/auth"
+            pathType: Prefix
+            backend:
+              service:
+                name: confidential-router-api
+                port:
+                  number: 3000
+          - path: "/billing"
+            pathType: Prefix
+            backend:
+              service:
+                name: confidential-router-api
+                port:
+                  number: 3000
+          - path: "/activity"
+            pathType: Prefix
+            backend:
+              service:
+                name: confidential-router-api
+                port:
+                  number: 3000
+          - path: "/exports"
+            pathType: Prefix
+            backend:
+              service:
+                name: confidential-router-api
+                port:
+                  number: 3000

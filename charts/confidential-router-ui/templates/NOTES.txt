@@ -1,0 +1,14 @@
+{{ .Chart.Name }} {{ .Chart.Version }}
+
+  Console  {{ include "confidential-router-ui.consoleUrl" . }}
+  API      {{ include "confidential-router-ui.apiOrigin" . }}
+  GraphQL  {{ include "confidential-router-ui.apiOrigin" . }}/graphql
+
+This image has the API origin compiled into its client bundle. Changing
+apiHostname means rebuilding and republishing router-ui with the matching
+NEXT_PUBLIC_* build args, not restarting this deployment.
+
+The API must list {{ include "confidential-router-ui.consoleUrl" . }} in
+`server.validClientOrigins`, or the browser's sign-in call is refused before it
+reaches Better Auth. The confidential-router-api chart does that from its own
+`consoleHostname` — give both charts the same pair of hostnames.

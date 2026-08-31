@@ -1,0 +1,18 @@
+{{ .Chart.Name }} {{ .Chart.Version }}
+
+  Gateway    {{ include "confidential-router-api.apiUrl" . }}/v1
+  GraphQL    {{ include "confidential-router-api.apiUrl" . }}{{ .Values.graphql.path }}
+  Backend    {{ .Values.litellmUrl }}
+  Models     {{ include "confidential-router-api.selectedModels" . | fromJsonArray | join ", " | default "none — /v1 answers model_not_found" }}
+  Mode       NODE_ENV={{ include "confidential-router-api.nodeEnv" . }}, billing={{ .Values.billing.mode }}
+
+{{ if ne .Values.billing.mode "stripe" }}
+This deployment bills with the manual provider: a top-up is a signed link, not a
+payment, and the container runs outside production mode so the API will bind it.
+Set billing.mode=stripe with real credentials before anyone is charged.
+{{- end }}
+{{- if eq .Values.auth.magicLink.mailer "console" }}
+Sign-in links are written to the API log, not sent:
+
+  kubectl logs -n {{ .Release.Namespace }} deploy/{{ include "confidential-router-api.fullname" . }} | grep 'Magic link'
+{{- end }}

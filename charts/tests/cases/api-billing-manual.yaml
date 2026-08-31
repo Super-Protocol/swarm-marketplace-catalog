@@ -1,0 +1,16 @@
+# Three models, manual billing. Differs from api-billing-stripe on the billing
+# axis alone: no `stripe` block, the console mailer, and NODE_ENV=development —
+# which is not a preference but a requirement, since the API refuses to bind the
+# manual provider in production.
+apiHostname: api.confidential-router.example
+consoleHostname: console.confidential-router.example
+auth:
+  secret: golden-test-auth-secret-not-a-real-one
+database:
+  password: golden-test-password
+models:
+  - "llama3.2:3b"
+  - "mistral:7b"
+  - "gemma2:2b"
+billing:
+  mode: manual

@@ -1,0 +1,150 @@
+{{- include "confidential-router-api.validate" . -}}
+{{- $modelNames := include "confidential-router-api.selectedModels" . | fromJsonArray -}}
+{{- $endpointNames := include "confidential-router-api.referencedEndpoints" . | fromJsonArray -}}
+{{- /*
+`conf/router.yaml` for the router API, rendered from this chart's values.
+
+Secrets are never written here. Every one of them is a `${…}` placeholder that
+the config loader substitutes from the process environment, and the environment
+is filled from a Secret by the Deployment — so this object stays readable to
+anyone who can read the namespace without handing them the signing key.
+
+The placeholder names deliberately do not start with `CR_API_`: that prefix is
+also the environment *configuration* layer, and `CR_API_DATABASE_URL` would be
+read as a top-level `databaseUrl` key and fail the boot on a strict schema.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "confidential-router-api.fullname" . }}
+  labels:
+    {{- include "confidential-router-api.labels" . | nindent 4 }}
+data:
+  router.yaml: |
+    version: 1
+
+    server:
+      port: {{ .Values.service.targetPort | int64 }}
+      host: 0.0.0.0
+      publicBaseUrl: {{ include "confidential-router-api.apiUrl" . | quote }}
+      # CORS, and Better Auth's trusted origins. The console calls this API from
+      # the browser with `credentials: 'include'`, so its origin has to be here.
+      validClientOrigins:
+        - {{ include "confidential-router-api.consoleUrl" . | quote }}
+
+    database:
+      type: postgres
+      url: ${ROUTER_DATABASE_URL}
+      # The init container owns the schema; replicas must not race each other.
+      migrationsRun: false
+
+    backends:
+      litellm:
+        baseUrl: {{ .Values.litellmUrl | quote }}
+        {{- if or .Values.litellm.apiKey .Values.litellm.existingSecret }}
+        apiKey: ${ROUTER_LITELLM_API_KEY}
+        {{- end }}
+        connectTimeout: {{ .Values.litellm.connectTimeout | quote }}
+        readTimeout: {{ .Values.litellm.readTimeout | quote }}
+
+    {{- if $endpointNames }}
+
+    endpoints:
+      {{- range $name := $endpointNames }}
+      {{- $endpoint := get $.Values.endpoints $name }}
+      - name: {{ $name | quote }}
+        hostname: {{ $endpoint.hostname | default $.Values.apiHostname | quote }}
+        tee: {{ required (printf "endpoints.%s.tee must be set" $name) $endpoint.tee | quote }}
+        {{- if $endpoint.evidenceUrl }}
+        evidenceUrl: {{ $endpoint.evidenceUrl | quote }}
+        {{- end }}
+      {{- end }}
+    {{- else }}
+
+    # Every model is switched off, so there is nothing to attest and nothing to
+    # serve: /v1 answers model_not_found until one is turned on.
+    endpoints: []
+    {{- end }}
+
+    {{- if $modelNames }}
+
+    # `litellmModel` is the catalogue key, which is the Ollama model name and the
+    # name LiteLLM publishes: one string, all the way down.
+    models:
+      {{- range $name := $modelNames }}
+      {{- $model := get $.Values.modelCatalog $name }}
+      - id: {{ required (printf "modelCatalog.%q.id must be set" $name) $model.id | quote }}
+        name: {{ required (printf "modelCatalog.%q.name must be set" $name) $model.name | quote }}
+        litellmModel: {{ $name | quote }}
+        endpoint: {{ $model.endpoint | quote }}
+        contextLength: {{ required (printf "modelCatalog.%q.contextLength must be set" $name) $model.contextLength | int64 }}
+        capabilities: [{{ join ", " ($model.capabilities | default (list "chat" "completions")) }}]
+        pricing:
+          promptPer1mMicros: {{ $model.pricing.promptPer1mMicros | int64 }}
+          completionPer1mMicros: {{ $model.pricing.completionPer1mMicros | int64 }}
+      {{- end }}
+    {{- else }}
+
+    models: []
+    {{- end }}
+
+    evidence:
+      pollInterval: {{ .Values.evidence.pollInterval | quote }}
+      freshnessWindow: {{ .Values.evidence.freshnessWindow | quote }}
+
+    rateLimits:
+      requestsPerMinute: {{ .Values.rateLimits.requestsPerMinute | int64 }}
+      tokensPerMinute: {{ .Values.rateLimits.tokensPerMinute | int64 }}
+
+    auth:
+      baseUrl: {{ include "confidential-router-api.apiUrl" . | quote }}
+      secret: ${ROUTER_AUTH_SECRET}
+      sessionMaxAge: {{ .Values.auth.sessionMaxAge | quote }}
+      {{- if .Values.auth.github.clientId }}
+      github:
+        clientId: {{ .Values.auth.github.clientId | quote }}
+        clientSecret: ${ROUTER_GITHUB_CLIENT_SECRET}
+      {{- end }}
+      {{- if .Values.auth.google.clientId }}
+      google:
+        clientId: {{ .Values.auth.google.clientId | quote }}
+        clientSecret: ${ROUTER_GOOGLE_CLIENT_SECRET}
+      {{- end }}
+      magicLink:
+        mailer: {{ .Values.auth.magicLink.mailer | quote }}
+        from: {{ .Values.auth.magicLink.from | quote }}
+        {{- if eq .Values.auth.magicLink.mailer "resend" }}
+        resendApiKey: ${ROUTER_RESEND_API_KEY}
+        {{- end }}
+
+    billing:
+      minTopUpMicros: {{ .Values.billing.minTopUpMicros | int64 }}
+      allowOverdraftMicros: {{ .Values.billing.allowOverdraftMicros | int64 }}
+      checkoutReturnUrl: {{ printf "%s/credits" (include "confidential-router-api.consoleUrl" .) | quote }}
+      autoTopUpCooldown: {{ .Values.billing.autoTopUpCooldown | quote }}
+      {{- if eq .Values.billing.mode "stripe" }}
+      # Present means Stripe; absent means the manual provider, which is refused
+      # under NODE_ENV=production.
+      stripe:
+        secretKey: ${ROUTER_STRIPE_SECRET_KEY}
+        webhookSecret: ${ROUTER_STRIPE_WEBHOOK_SECRET}
+        currency: {{ .Values.billing.stripe.currency | quote }}
+      {{- end }}
+
+    log:
+      level: {{ .Values.log.level | quote }}
+      pretty: {{ .Values.log.pretty }}
+
+    graphql:
+      path: {{ .Values.graphql.path | quote }}
+      introspection: {{ .Values.graphql.introspection }}
+
+    gatekeeper:
+      repo: {{ .Values.gatekeeper.repo | quote }}
+      apiBaseUrl: {{ .Values.gatekeeper.apiBaseUrl | quote }}
+      cacheTtl: {{ .Values.gatekeeper.cacheTtl | quote }}
+      requestTimeout: {{ .Values.gatekeeper.requestTimeout | quote }}
+
+    swagger:
+      enabled: {{ .Values.swagger.enabled }}
+      path: {{ .Values.swagger.path | quote }}

@@ -1,0 +1,39 @@
+# Renders every chart and diffs it against the committed golden. A chart that is
+# only ever exercised by `helm package` is a chart whose templates are checked by
+# whoever deploys it next; these run before the merge that publishes it.
+#
+# The same helm version as publish-charts.yml, so a chart that renders here
+# packages there.
+name: Chart tests
+
+on:
+  pull_request:
+    paths:
+      - 'charts/**'
+      - '.github/workflows/chart-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'charts/**'
+      - '.github/workflows/chart-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  golden:
+    name: lint and goldens
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      # The GPU cases render otwld's ollama chart from its repository, which is
+      # the same reference the listing's component uses.
+      - name: Lint, render, diff
+        run: charts/tests/run.sh

@@ -1,0 +1,152 @@
+---
+# Source: confidential-router-ui/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: confidential-router-ui
+  labels:
+    helm.sh/chart: confidential-router-ui-0.1.0
+    app.kubernetes.io/name: confidential-router-ui
+    app.kubernetes.io/instance: cr
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-router
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3001
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: confidential-router-ui
+    app.kubernetes.io/instance: cr
+---
+# Source: confidential-router-ui/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: confidential-router-ui
+  labels:
+    helm.sh/chart: confidential-router-ui-0.1.0
+    app.kubernetes.io/name: confidential-router-ui
+    app.kubernetes.io/instance: cr
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-router
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: confidential-router-ui
+      app.kubernetes.io/instance: cr
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: confidential-router-ui
+        app.kubernetes.io/instance: cr
+    spec:
+      securityContext:
+        runAsGroup: 1001
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: router-ui
+          image: ghcr.io/super-protocol/confidential-router/router-ui@sha256:18348ff7da19d6847393de53f01dc7dae0f43a1b7c723baa73db8ae572490701
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          ports:
+            - name: http
+              containerPort: 3001
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3001"
+            - name: HOSTNAME
+              value: 0.0.0.0
+            # Read by the server half of Next.js only — the browser bundle
+            # already has these compiled in (see image.builtForApiOrigin). They
+            # are set anyway so a `kubectl exec env` says what this console is
+            # pointed at, and so server components resolve the same origin.
+            - name: NEXT_PUBLIC_API_ORIGIN
+              value: "https://api.confidential-router.example"
+            - name: NEXT_PUBLIC_GRAPHQL_HTTP
+              value: "https://api.confidential-router.example/graphql"
+            - name: NEXT_PUBLIC_AUTH_CALLBACK_URL
+              value: "/"
+          # `/login` rather than `/`: it is the one route the console serves
+          # without a session cookie, so a healthy pod answers 200 and not a
+          # redirect.
+          startupProbe:
+            httpGet:
+              path: /login
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /login
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /login
+              port: http
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            # Next.js writes its cache under the app directory; the root
+            # filesystem is read-only otherwise.
+            - name: cache
+              mountPath: /app/apps/router-ui/.next/cache
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            limits:
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+      volumes:
+        - name: cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+# Source: confidential-router-ui/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: confidential-router-ui
+  labels:
+    helm.sh/chart: confidential-router-ui-0.1.0
+    app.kubernetes.io/name: confidential-router-ui
+    app.kubernetes.io/instance: cr
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-router
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 30m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  # Without a class the object is created, the cloud registers the hostname and
+  # writes its DNS, and nothing serves it: the controller only picks up what
+  # names it.
+  ingressClassName: nginx
+  rules:
+    - host: "console.confidential-router.example"
+      http:
+        paths:
+          - path: "/"
+            pathType: Prefix
+            backend:
+              service:
+                name: confidential-router-ui
+                port:
+                  number: 3001

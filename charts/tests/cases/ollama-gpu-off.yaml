@@ -1,0 +1,20 @@
+# The model server as this listing deploys it without a GPU: CPU scheduling, no
+# runtime class, no ingress. ClusterIP only — an Ollama endpoint has no
+# authentication of its own.
+service:
+  type: ClusterIP
+ollama:
+  gpu:
+    enabled: false
+    type: nvidia
+    number: 0
+  models:
+    pull:
+      - llama3.2:3b
+    run: []
+runtimeClassName: ""
+persistentVolume:
+  enabled: true
+  size: 30Gi
+ingress:
+  enabled: false

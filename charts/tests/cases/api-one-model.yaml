@@ -1,0 +1,7 @@
+# The default selection: one model, manual billing, the bundled PostgreSQL.
+apiHostname: api.confidential-router.example
+consoleHostname: console.confidential-router.example
+auth:
+  secret: golden-test-auth-secret-not-a-real-one
+database:
+  password: golden-test-password
