@@ -17,6 +17,8 @@ catalog.yaml                   Listing policy: who publishes what, visibility, g
 
 `apps/`, `datasets/` and `interfaces/` are exactly the structure the specification prescribes; every file in them validates against `specs/*.schema.json` in the spec repository.
 
+`apps/tests/run.sh` is that sentence as a check: it fetches the schemas at a pinned revision and validates every `app.yaml` against them, then checks what a schema cannot — that a patch has something to patch and that a base key reaches a value the target chart declares. `charts/tests/run.sh` does the same for the charts, by rendering them and diffing against committed goldens.
+
 ## Chart repository
 
 The charts under `charts/` are packaged by CI and served from GitHub Pages:
@@ -43,6 +45,7 @@ The seeder reads `catalog.yaml`, publishes every definition it names through the
 | Listing | Kind | Notes |
 |---------|------|-------|
 | `conversational-analyst` | Application | A conversational analyst over connected datasets. Five components; the grounding component turns whatever is bound into the agent's knowledge graph and data-source registrations. |
+| `confidential-router` | Application | An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it runs, with a console for keys, credit and generations. Four components, three charts of our own, and the multi-select model parameter. |
 | `ollama-webui` | Application | Ollama with a chat UI. The simplest thing that exercises parameters, ingress and pinned images. |
 | `confluent-platform` | Application | Kafka with Confluent's Control Center. A chart of our own, because Confluent's Kubernetes path needs an operator; shows a multi-container pod and generated console credentials. |
 | `rag-agent` | Application | Data slots, including a schema-constrained one. |

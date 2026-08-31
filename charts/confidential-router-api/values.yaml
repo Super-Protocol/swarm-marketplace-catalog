@@ -6,7 +6,7 @@
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-router/router-api
-  digest: sha256:e46f47c286d6b978e2a28b06c868f804bc72608597647c081874d3cc4d06ea45
+  digest: sha256:291d1b631512ce8e1da8ac250111ed932d1d9e315c68b9fa4a11e85663f9a1b7
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -166,10 +166,10 @@ auth:
   # While it is set and no user exists, `POST /auth/bootstrap` trades this token
   # for the first account; the endpoint is a 404 the rest of the time.
   #
-  # Added by SUP-95, which is not in the pinned image yet. That is why the
-  # templates render it **only when it is set**: the router's config schema is
-  # strict, so an image without the key would refuse to boot on an empty one,
-  # and a seam that broke every existing deployment would not be a seam.
+  # Added by SUP-95 and present in the pinned image. The templates still render
+  # it **only when it is set**: the router's config schema is strict, so an
+  # older image would refuse to boot on an empty key, and a seam that broke
+  # every existing deployment would not be a seam.
   bootstrapToken: ""
   bootstrapTokenExistingSecret: ""
   bootstrapTokenExistingSecretKey: bootstrap-token

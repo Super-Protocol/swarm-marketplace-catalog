@@ -32,6 +32,8 @@ organizations:
 apps:
   - path: apps/ollama-webui
     organization: acme-corp
+  - path: apps/confidential-router
+    organization: acme-corp
   - path: apps/rag-agent
     organization: acme-corp
   - path: apps/confluent-platform

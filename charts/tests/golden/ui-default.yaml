@@ -5,7 +5,7 @@ kind: Service
 metadata:
   name: confidential-router-ui
   labels:
-    helm.sh/chart: confidential-router-ui-0.1.0
+    helm.sh/chart: confidential-router-ui-0.1.1
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.1.0"
@@ -28,7 +28,7 @@ kind: Deployment
 metadata:
   name: confidential-router-ui
   labels:
-    helm.sh/chart: confidential-router-ui-0.1.0
+    helm.sh/chart: confidential-router-ui-0.1.1
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.1.0"
@@ -52,7 +52,7 @@ spec:
         runAsUser: 1001
       containers:
         - name: router-ui
-          image: ghcr.io/super-protocol/confidential-router/router-ui@sha256:18348ff7da19d6847393de53f01dc7dae0f43a1b7c723baa73db8ae572490701
+          image: ghcr.io/super-protocol/confidential-router/router-ui@sha256:fd39819fac283cfabe81d4c9f8f3bcfc47cd9f0098ff477d5f99e5a040e8d1df
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -124,7 +124,7 @@ kind: Ingress
 metadata:
   name: confidential-router-ui
   labels:
-    helm.sh/chart: confidential-router-ui-0.1.0
+    helm.sh/chart: confidential-router-ui-0.1.1
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.1.0"
