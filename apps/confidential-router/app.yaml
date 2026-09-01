@@ -27,13 +27,12 @@ ui:
         and the API a client points its OpenAI SDK at. The API hostname is also the endpoint a
         Gatekeeper is pointed at, so it is the name that ends up in someone else's configuration.
       fields:
-        # `text`, not a hostname widget: the widget list in the specification is
-        # text / textarea / number / select / multiselect / switch / slider / password, and the
-        # pattern below is what makes this field a hostname.
+        # `hostname`, so a marketplace holding a DNS zone offers a name in it and writes the
+        # records; both are the deployment's own addresses, so both are marked.
         - parameterId: consoleHostname
-          widget: text
+          widget: hostname
         - parameterId: apiHostname
-          widget: text
+          widget: hostname
 
     - id: administrator
       title: Administrator
