@@ -26,7 +26,7 @@ output does not move with whoever ran it.
 | `api-external-postgres` | `postgresql.enabled: false` with a DSN of the deployment's own |
 | `litellm-one-model` / `litellm-three-models` | the same list on the other side, so the two charts' model names can be diffed against each other |
 | `api-bootstrap-token` | the SUP-95 auth seam: the one `CR_API_*` env var, rendered only when a token is set |
-| `ui-default` | the console's env and ingress, including the API-origin check |
+| `ui-default` | the console's env and ingress; run.sh renders it against a second hostname as well, because one pinned image has to serve any API origin |
 | `ollama-gpu-off` / `ollama-gpu-on` | the GPU switch |
 
 The GPU cases render **otwld's `ollama` chart**, not one of ours: the listing

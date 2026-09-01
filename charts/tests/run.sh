@@ -128,10 +128,6 @@ refuses() {
 
 base_api=(helm template "$RELEASE" charts/confidential-router-api --namespace "$NAMESPACE" --values charts/tests/cases/api-one-model.yaml)
 
-refuses "a console image built for another API origin" "built for" \
-  helm template "$RELEASE" charts/confidential-router-ui --namespace "$NAMESPACE" \
-    --values charts/tests/cases/ui-default.yaml --set apiHostname=somewhere.else.example
-
 refuses "stripe billing with no credentials" "billing.stripe.secretKey" \
   "${base_api[@]}" --set billing.mode=stripe
 
@@ -159,6 +155,44 @@ refuses "an auth secret too short to sign with" "at least 32 characters" \
 
 refuses "the unimplemented smtp mailer" "not implemented" \
   "${base_api[@]}" --set auth.magicLink.mailer=smtp
+
+# The console used to have its API origin compiled into its browser bundle, so
+# this chart refused to render one pointed anywhere else and the listing was
+# capped at the hostname the image was built for. The origin is resolved at run
+# time now (SUP-100), and what replaced the refusal is this: the same pinned
+# digest, rendered against two unrelated hostnames, follows each of them.
+note "one console image serves any API origin"
+console_for() {
+  helm template "$RELEASE" charts/confidential-router-ui --namespace "$NAMESPACE" \
+    --values charts/tests/cases/ui-default.yaml --set "apiHostname=$1" 2>&1
+}
+env_value() {
+  printf '%s\n' "$2" | grep -A1 -- "- name: $1\$" | tail -1 | sed 's/^ *value: //; s/^"//; s/"$//'
+}
+
+console_images=""
+for host in api.confidential-router.example somewhere.else.example; do
+  if ! rendered=$(console_for "$host"); then
+    fail "console pointed at $host (render)"
+    printf '%s\n' "$rendered" | sed 's/^/        /'
+    continue
+  fi
+  origin=$(env_value ROUTER_UI_API_ORIGIN "$rendered")
+  graphql=$(env_value ROUTER_UI_GRAPHQL_HTTP "$rendered")
+  console_images="$console_images$(printf '%s\n' "$rendered" | grep -o 'image: .*' | head -1)
+"
+  if [ "$origin" = "https://$host" ] && [ "$graphql" = "https://$host/graphql" ]; then
+    pass "console pointed at $host"
+  else
+    fail "console pointed at $host: origin [$origin], graphql [$graphql]"
+  fi
+done
+
+if [ "$(printf '%s' "$console_images" | sort -u | wc -l)" = "1" ]; then
+  pass "one image reference for both ($(printf '%s' "$console_images" | sort -u | sed 's/image: //'))"
+else
+  fail "the two renders pulled different images: $(printf '%s' "$console_images" | tr '\n' ' ')"
+fi
 
 note "Result"
 if [ "$failures" -eq 0 ]; then

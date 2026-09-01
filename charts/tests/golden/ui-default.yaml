@@ -5,7 +5,7 @@ kind: Service
 metadata:
   name: confidential-router-ui
   labels:
-    helm.sh/chart: confidential-router-ui-0.1.1
+    helm.sh/chart: confidential-router-ui-0.1.2
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.1.0"
@@ -28,7 +28,7 @@ kind: Deployment
 metadata:
   name: confidential-router-ui
   labels:
-    helm.sh/chart: confidential-router-ui-0.1.1
+    helm.sh/chart: confidential-router-ui-0.1.2
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.1.0"
@@ -52,7 +52,7 @@ spec:
         runAsUser: 1001
       containers:
         - name: router-ui
-          image: ghcr.io/super-protocol/confidential-router/router-ui@sha256:fd39819fac283cfabe81d4c9f8f3bcfc47cd9f0098ff477d5f99e5a040e8d1df
+          image: ghcr.io/super-protocol/confidential-router/router-ui@sha256:d15c9f4bd12bfc5968906d954dd81cca9e9d4e8ad9a71c5c01da7c6cbad6ad72
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -69,15 +69,17 @@ spec:
               value: "3001"
             - name: HOSTNAME
               value: 0.0.0.0
-            # Read by the server half of Next.js only — the browser bundle
-            # already has these compiled in (see image.builtForApiOrigin). They
-            # are set anyway so a `kubectl exec env` says what this console is
-            # pointed at, and so server components resolve the same origin.
-            - name: NEXT_PUBLIC_API_ORIGIN
+            # Read per request by the server and written into the document
+            # ahead of every bundle, so the browser calls the origin this
+            # deployment was given rather than one compiled into the image
+            # (SUP-100). That is what lets one pinned digest serve any hostname.
+            - name: ROUTER_UI_API_ORIGIN
               value: "https://api.confidential-router.example"
-            - name: NEXT_PUBLIC_GRAPHQL_HTTP
+            # Derived from the origin by the console itself; set here so a
+            # `kubectl exec env` says where GraphQL is without knowing that.
+            - name: ROUTER_UI_GRAPHQL_HTTP
               value: "https://api.confidential-router.example/graphql"
-            - name: NEXT_PUBLIC_AUTH_CALLBACK_URL
+            - name: ROUTER_UI_AUTH_CALLBACK_URL
               value: "/"
           # `/login` rather than `/`: it is the one route the console serves
           # without a session cookie, so a healthy pod answers 200 and not a
@@ -124,7 +126,7 @@ kind: Ingress
 metadata:
   name: confidential-router-ui
   labels:
-    helm.sh/chart: confidential-router-ui-0.1.1
+    helm.sh/chart: confidential-router-ui-0.1.2
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.1.0"

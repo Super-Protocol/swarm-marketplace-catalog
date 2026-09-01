@@ -114,23 +114,13 @@ Resend API key and a sender address are therefore part of the same choice, not e
 render refuses without them. Point a Stripe webhook at `https://<API hostname>/billing`, or a
 completed payment never becomes credit.
 
-## Known limitation: the console is bound to its build-time API origin
-
-`next build` inlines the console's `NEXT_PUBLIC_*` settings into the browser bundle, so a published
-`router-ui` image is bound to the one API origin it was built against — and the published image is
-built for `http://localhost:3000`. The chart refuses to render a console pointed anywhere else,
-with a message saying so, and this listing leaves that refusal in place: a console that deploys,
-serves every page and cannot sign anyone in would be worse.
-
-Until `router-ui` resolves its API origin at run time, the `router-ui` component of this listing
-does not deploy. Everything else does — the API, the models and the published evidence do not
-depend on it, and a client only ever talks to `/v1`.
-
 ## Reconfiguring
 
 Adding a model pulls it on the next start; removing one takes it out of the catalogue and off the
 volume. Hostnames, billing mode and storage sizes can all be changed by reconfiguring — a blank
-sensitive field means "keep what is running", not "clear it".
+sensitive field means "keep what is running", not "clear it". Changing the API hostname moves the
+console with it: it is told where the API is at start-up rather than at build time, so the pinned
+image never has to change for it.
 
 Every image is pinned by digest, so what the definition says and what the cluster pulls are the
 same thing, and the evidence a deployment publishes is computable from the listing before anything

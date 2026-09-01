@@ -1,23 +1,12 @@
-# Pinned by digest (marketplace spec §2.7). See `builtForApiOrigin` below: for
-# this image, which digest you run is not only a supply-chain question — the API
-# origin is compiled into it.
+# Pinned by digest (marketplace spec §2.7), so what this chart renders and what
+# the cluster pulls are the same thing and the deployment's evidence digest stays
+# computable from the definition that installs it.
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-router/router-ui
-  digest: sha256:fd39819fac283cfabe81d4c9f8f3bcfc47cd9f0098ff477d5f99e5a040e8d1df
+  digest: sha256:d15c9f4bd12bfc5968906d954dd81cca9e9d4e8ad9a71c5c01da7c6cbad6ad72
   tag: ""
   pullPolicy: IfNotPresent
-  # The API origin the published image was built against. `next build` inlines
-  # the three NEXT_PUBLIC_* settings into the client bundle, so **an image is
-  # bound to one API origin**: setting them on a running container is read by the
-  # server and ignored by the browser, which is worse than not offering them.
-  #
-  # This chart therefore refuses to render a console whose image was built for a
-  # different origin than the `apiHostname` it is being pointed at. Rebuild the
-  # image with the right build args (see router-ui.dockerfile), publish it, and
-  # set `image.digest` and this value together. Emptying this value skips the
-  # check.
-  builtForApiOrigin: http://localhost:3000
 
 imagePullSecrets: []
 
