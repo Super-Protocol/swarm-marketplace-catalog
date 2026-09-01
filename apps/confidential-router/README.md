@@ -95,13 +95,33 @@ Selecting several is one field, not one switch per model: the names go to the mo
 proxy and the router's catalogue as a single list, so the three cannot advertise different
 catalogues.
 
+## Configuring
+
+The form is four sections, and only the first three are on the way to Deploy:
+
+| Section | Field | Asked, or answered |
+| ------- | ----- | ------------------ |
+| Access | Console hostname, API hostname | Offered by the marketplace, inside a zone it holds; overwrite either to bring your own. |
+| Models | Models | Defaults to `llama3.2:3b`; pick more from the five below. |
+| Compute | Use a GPU, GPUs | Off, and one GPU when it is on. |
+| Advanced | Model storage, Database storage | 30 GB and 8 GB, sized for all five models and an evaluation's worth of metering. |
+| Advanced | First sign-in token | Generated, and shown once with the deployment's outputs. Set one to bring your own. |
+| Advanced | Billing, Stripe keys, Resend key, Sender address | Manual credit. The rest appear only if you switch to Stripe. |
+
+Nothing above Advanced has to be typed: a deployment reaches Deploy on the offered hostnames and
+the default model. Advanced exists for the deployment that wants a bigger volume or real payments.
+
+**No administrator email is asked for.** The console's first account is created for the address of
+the marketplace account deploying this, read from the platform (`consumer.user.email`) rather than
+retyped into a field that would drift from it.
+
 ## First sign-in
 
 This deployment has no mailbox and no OAuth application, so the first account is not invited — it
 is **claimed**. The marketplace generates a first-sign-in token, shows it once with the
-deployment's credentials, and the console trades it plus the administrator email for the first
-account. From that moment the endpoint that accepts it returns 404, and everyone after the first is
-invited from inside the console.
+deployment's outputs, and the console trades it plus your own address for the first account — the
+outputs name the exact address it was created for. From that moment the endpoint that accepts it
+returns 404, and everyone after the first is invited from inside the console.
 
 ## Billing
 
