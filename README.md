@@ -17,7 +17,7 @@ catalog.yaml                   Listing policy: who publishes what, visibility, g
 
 `apps/`, `datasets/` and `interfaces/` are exactly the structure the specification prescribes; every file in them validates against `specs/*.schema.json` in the spec repository.
 
-`apps/tests/run.sh` is that sentence as a check: it fetches the schemas at a pinned revision and validates every `app.yaml` against them, then checks what a schema cannot — that a patch has something to patch and that a base key reaches a value the target chart declares. `charts/tests/run.sh` does the same for the charts, by rendering them and diffing against committed goldens.
+`apps/tests/run.sh` is that sentence as a check: it fetches the schemas at a pinned revision and validates every `app.yaml` against them, then checks what a schema cannot — that a patch has something to patch, that a base key reaches a value the target chart declares, and that a definition whose content changed also changed its `metadata.version`. `charts/tests/run.sh` does the same for the charts, by rendering them and diffing against committed goldens.
 
 ## Chart repository
 
@@ -37,6 +37,8 @@ SWM_SEED_CATALOG=./swarm-marketplace-catalog node cli/seed.js
 ```
 
 The seeder reads `catalog.yaml`, publishes every definition it names through the ordinary publishing path, and applies the grants and reviews. It is re-runnable: a listing already published at the same version is left alone.
+
+Which is why a definition is versioned exactly like the charts it pins. Editing an `app.yaml` in place leaves every marketplace that already seeded that version on the old definition, and its seeder says nothing is wrong — so a change to what a listing publishes is a `metadata.version` bump, and `apps/tests/run.sh` fails a pull request that changes one without the other.
 
 `${VAR}` placeholders in `catalog.yaml` are substituted from the environment. Nothing in this repository is a real credential.
 

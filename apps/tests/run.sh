@@ -12,9 +12,14 @@
 # this check exists to catch — so the revision is pinned below and moved
 # deliberately.
 #
-# Schema validity is not the whole contract, so paths.py runs after it: it checks
-# what the schemas cannot, namely that a patch has something to patch and that a
-# base key reaches a value the chart actually declares.
+# Schema validity is not the whole contract, so two more checks run after it:
+#
+#   paths.py     a patch has something to patch, and a base key reaches a value
+#                the chart actually declares.
+#   versions.py  a definition whose content changed also changed its version —
+#                otherwise the change never reaches a marketplace that already
+#                seeded that version, silently (SUP-108). It compares against
+#                BASE_REF, or origin/main when that is unset.
 #
 # Only apps/ is covered. datasets/ and interfaces/ have schemas of their own and
 # no check yet; adding them is the same shape of work.
@@ -113,6 +118,14 @@ if output=$(python3 "$here/paths.py"); then
 else
   printf '%s\n' "$output"
   fail "apps/tests/paths.py"
+fi
+
+note "version bumps"
+if output=$(python3 "$here/versions.py"); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "apps/tests/versions.py"
 fi
 
 note "Result"
