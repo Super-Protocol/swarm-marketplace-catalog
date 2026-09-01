@@ -28,9 +28,8 @@ cd "$root"
 # `widget: hostname` (SUP-104), on top of `type: array` + `widget: multiselect`
 # (SUP-98).
 #
-# TODO(SUP-104): this is the head of swarm-marketplace-spec#4, not a commit on
 # main. Re-pin to the squash merge once that PR lands.
-SPEC_REF="${SPEC_REF:-f6c2bc6ee5572fe0334b1b5e104d70ef3b1e395c}"
+SPEC_REF="${SPEC_REF:-db8e2af8602098dc39a383a2a63467067f8faaa3}"
 SPEC_REPO="${SPEC_REPO:-Super-Protocol/swarm-marketplace-spec}"
 
 # Listings that predate strict validation and do not pass it (SUP-99). They are
