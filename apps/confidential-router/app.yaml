@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.1.0"
+  version: "0.1.1"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -523,14 +523,11 @@ components:
   # one, which is why the API's ingress carries /auth and /graphql: the browser
   # calls them cross-origin with credentials.
   #
-  # `image.builtForApiOrigin` is deliberately left at the chart's own value. The
-  # console's NEXT_PUBLIC_* settings are inlined by `next build`, so a published
-  # image is bound to the API origin it was built against, and the chart refuses
-  # to render one pointed somewhere else. A listing cannot know the hostname at
-  # build time, so until router-ui resolves its API origin at run time this
-  # component fails the render with that message — which is the honest outcome:
-  # the alternative is a console that deploys, serves every page and cannot sign
-  # anyone in.
+  # The console resolves its API origin at run time (SUP-100), which is what lets
+  # this component exist at all: an image reference pinned by digest and a
+  # hostname the customer chooses at deploy time used to be the same requirement
+  # pulling in opposite directions, and the chart refused to render a console
+  # pointed at anything but the origin its image was built for.
   # ---------------------------------------------------------------------------
   - name: router-ui
     dependsOn:
@@ -539,10 +536,10 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-ui
-      version: "0.1.1"
+      version: "0.1.2"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-ui
-        digest: sha256:fd39819fac283cfabe81d4c9f8f3bcfc47cd9f0098ff477d5f99e5a040e8d1df
+        digest: sha256:d15c9f4bd12bfc5968906d954dd81cca9e9d4e8ad9a71c5c01da7c6cbad6ad72
     deployment:
       values:
         base:

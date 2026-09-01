@@ -30,9 +30,9 @@ them; this script has none, so it builds both from a checkout and loads them int
 the node. `ROUTER_API_IMAGE` / `ROUTER_UI_IMAGE` skip the build if you already
 have them.
 
-The console image has to be built with `NEXT_PUBLIC_API_ORIGIN=http://$API_HOST`
-— `next build` inlines it, and the chart refuses to render a console built for a
-different origin than the one it is being deployed against.
+The console image takes no build arguments: it reads its API origin from the
+environment the chart sets, so the same image serves whatever `API_HOST` this run
+happens to use.
 
 ## Why it is not in CI
 

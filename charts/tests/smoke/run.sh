@@ -15,9 +15,7 @@
 #   CONFIDENTIAL_ROUTER=~/src/confidential-router charts/tests/smoke/run.sh
 #
 # Point ROUTER_API_IMAGE / ROUTER_UI_IMAGE at images you already have to skip the
-# build. The console image must have been built with
-# NEXT_PUBLIC_API_ORIGIN=http://$API_HOST — `next build` inlines it, and the
-# chart refuses to render a console built for a different origin.
+# build. Any console image will do: it is told its API origin at run time.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -62,9 +60,7 @@ trap cleanup EXIT
 if [ -n "$CONFIDENTIAL_ROUTER" ]; then
   step "Building the router images from $CONFIDENTIAL_ROUTER"
   docker build -f "$CONFIDENTIAL_ROUTER/router-api.dockerfile" -t "$ROUTER_API_IMAGE" "$CONFIDENTIAL_ROUTER"
-  docker build -f "$CONFIDENTIAL_ROUTER/router-ui.dockerfile" -t "$ROUTER_UI_IMAGE" \
-    --build-arg "NEXT_PUBLIC_API_ORIGIN=http://$API_HOST" \
-    --build-arg "NEXT_PUBLIC_GRAPHQL_HTTP=http://$API_HOST/graphql" "$CONFIDENTIAL_ROUTER"
+  docker build -f "$CONFIDENTIAL_ROUTER/router-ui.dockerfile" -t "$ROUTER_UI_IMAGE" "$CONFIDENTIAL_ROUTER"
   ok "built"
 fi
 docker image inspect "$ROUTER_API_IMAGE" >/dev/null 2>&1 || die "$ROUTER_API_IMAGE is not present; set CONFIDENTIAL_ROUTER to build it"
@@ -92,8 +88,7 @@ for release in litellm api ui; do
     api) chart=charts/confidential-router-api; name=confidential-router-api
          extra=(--set "image.repository=${ROUTER_API_IMAGE%%:*}" --set "image.tag=${ROUTER_API_IMAGE##*:}") ;;
     ui) chart=charts/confidential-router-ui; name=confidential-router-ui
-        extra=(--set "image.repository=${ROUTER_UI_IMAGE%%:*}" --set "image.tag=${ROUTER_UI_IMAGE##*:}"
-               --set "image.builtForApiOrigin=http://$API_HOST") ;;
+        extra=(--set "image.repository=${ROUTER_UI_IMAGE%%:*}" --set "image.tag=${ROUTER_UI_IMAGE##*:}") ;;
   esac
   helm upgrade --install "$name" "$chart" -n "$NS" -f "$here/$release.yaml" \
     --set "apiHostname=$API_HOST" --set "consoleHostname=$CONSOLE_HOST" \
