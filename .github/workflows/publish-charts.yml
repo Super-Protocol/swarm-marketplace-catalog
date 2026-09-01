@@ -50,9 +50,11 @@ jobs:
       - name: Package every chart
         run: |
           mkdir -p site/charts
+          # Not every directory under charts/ is a chart of ours: vendor/ holds vendored
+          # subcharts and tests/ the render tests. A Chart.yaml at the root is what makes
+          # a directory publishable here.
           for chart in charts/*/; do
-            name=$(basename "$chart")
-            if [ "$name" = "vendor" ]; then
+            if [ ! -f "$chart/Chart.yaml" ]; then
               continue
             fi
             helm dependency update "$chart"
