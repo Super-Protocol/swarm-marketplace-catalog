@@ -84,7 +84,9 @@ def committed(commit: str, path: str) -> str | None:
 
 def canonical(document: str) -> str:
     """What the document says, independent of how it is written down."""
-    return json.dumps(yaml.safe_load(document), sort_keys=True)
+    # `default=str` for what YAML types and JSON does not: an unquoted date or timestamp parses to
+    # a datetime, and comparing two definitions should not end in a traceback about one.
+    return json.dumps(yaml.safe_load(document), sort_keys=True, default=str)
 
 
 def version_of(document: str) -> str | None:
