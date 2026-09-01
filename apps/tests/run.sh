@@ -25,8 +25,11 @@ root="$(cd "$here/../.." && pwd)"
 cd "$root"
 
 # swarm-marketplace-spec, the revision these listings are written against:
-# `type: array` + `widget: multiselect` (SUP-98).
-SPEC_REF="${SPEC_REF:-d3f1017a78cb508f20ca903e13fed317d11c7517}"
+# `widget: hostname` (SUP-104), on top of `type: array` + `widget: multiselect`
+# (SUP-98).
+#
+# main. Re-pin to the squash merge once that PR lands.
+SPEC_REF="${SPEC_REF:-db8e2af8602098dc39a383a2a63467067f8faaa3}"
 SPEC_REPO="${SPEC_REPO:-Super-Protocol/swarm-marketplace-spec}"
 
 # Listings that predate strict validation and do not pass it (SUP-99). They are
@@ -34,17 +37,16 @@ SPEC_REPO="${SPEC_REPO:-Super-Protocol/swarm-marketplace-spec}"
 # and a definition that starts passing has to be taken off this list — which is
 # how the debt gets paid rather than forgotten.
 #
-#   confluent-platform, ollama-webui  `widget: hostname`, which the specification
-#                                     has never defined; the widget list is
-#                                     text/textarea/number/select/multiselect/
-#                                     switch/slider/password.
 #   conversational-analyst            a top-level `evidence` block, which the
 #                                     platform implements but the published
 #                                     schemas do not carry yet.
+#
+# confluent-platform and ollama-webui were here for `widget: hostname`, which the
+# specification did not define. It defines it as of the revision pinned above
+# (SUP-104), and both now validate — so they come off the list rather than stay
+# on it as debt nobody owes.
 KNOWN_INVALID=(
-  apps/confluent-platform/app.yaml
   apps/conversational-analyst/app.yaml
-  apps/ollama-webui/app.yaml
 )
 
 failures=0
