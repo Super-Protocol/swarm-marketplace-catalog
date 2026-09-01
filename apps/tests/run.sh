@@ -27,8 +27,6 @@ cd "$root"
 # swarm-marketplace-spec, the revision these listings are written against:
 # `widget: hostname` (SUP-104), on top of `type: array` + `widget: multiselect`
 # (SUP-98).
-#
-# main. Re-pin to the squash merge once that PR lands.
 SPEC_REF="${SPEC_REF:-db8e2af8602098dc39a383a2a63467067f8faaa3}"
 SPEC_REPO="${SPEC_REPO:-Super-Protocol/swarm-marketplace-spec}"
 
