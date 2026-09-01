@@ -5,6 +5,11 @@
 # The schemas come from swarm-marketplace-spec at the revision pinned in
 # apps/tests/run.sh, not from a copy in this repository: a vendored contract
 # drifts from the real one silently, and that drift is what this check is for.
+#
+# It also holds a changed definition to a changed version. A marketplace already
+# seeded at a version keeps what it published, so a definition edited in place is
+# a change nobody receives (SUP-108) — which needs the history this checkout would
+# otherwise skip, hence fetch-depth: 0 and the baseline below.
 name: App definitions
 
 on:
@@ -32,6 +37,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          # versions.py compares a definition against what it said before.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -43,5 +51,24 @@ jobs:
 
       - run: pip install --quiet pyyaml
 
+      # What this pull request (or push) changed the definitions against. A first
+      # push or a force push names a parent this checkout does not have, so fall
+      # back to the commit's own parent; an empty value leaves versions.py on its
+      # origin/main default.
+      - name: Resolve the baseline revision
+        id: baseline
+        env:
+          PULL_REQUEST_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          base="${PULL_REQUEST_BASE:-$PUSH_BEFORE}"
+          if [ -z "$base" ] || ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+            base="$(git rev-parse --verify --quiet 'HEAD^' || true)"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "comparing against ${base:-origin/main}"
+
       - name: Validate every AppDefinition
+        env:
+          BASE_REF: ${{ steps.baseline.outputs.base }}
         run: apps/tests/run.sh
