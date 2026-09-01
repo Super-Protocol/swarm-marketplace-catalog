@@ -1,8 +1,8 @@
-# The stage-2 auth seam (SUP-95): a deployment with no mail provider and no OAuth
-# app, where the first admin gets in by posting a token. The env var is the one
-# thing in this chart under the `CR_API_` prefix, because it is configuration
-# rather than a placeholder — and it is rendered only here, so the same chart
-# stays bootable on the pre-SUP-95 image pinned in values.
+# The auth path this listing deploys on (SUP-95): a deployment with no mail
+# provider and no OAuth app, where the first admin gets in by posting a token.
+# The env var is the one thing in this chart under the `CR_API_` prefix, because
+# it is configuration rather than a placeholder — and it is rendered only here,
+# so the same chart stays bootable on an image that predates the key.
 apiHostname: api.confidential-router.example
 consoleHostname: console.confidential-router.example
 auth:

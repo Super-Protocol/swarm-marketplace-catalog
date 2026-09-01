@@ -1,0 +1,47 @@
+# Validates the listings against the marketplace specification's schemas. A
+# definition that only ever meets a schema when the marketplace tries to seed it
+# is a definition whose contract is checked by whoever deploys it next.
+#
+# The schemas come from swarm-marketplace-spec at the revision pinned in
+# apps/tests/run.sh, not from a copy in this repository: a vendored contract
+# drifts from the real one silently, and that drift is what this check is for.
+name: App definitions
+
+on:
+  pull_request:
+    paths:
+      - 'apps/**'
+      # paths.py reads the charts a listing patches, so their values move this too.
+      - 'charts/**'
+      - '.github/workflows/app-definitions.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'charts/**'
+      - '.github/workflows/app-definitions.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  schema:
+    name: schema validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install --quiet pyyaml
+
+      - name: Validate every AppDefinition
+        run: apps/tests/run.sh

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Confidential Router">
+  <title>Confidential Router</title>
+  <!--
+    A shield, because what the listing offers is the enclosure; inside it, one
+    request fanning out to the models the deployment serves. Two flat colours,
+    no gradients and no text, so it survives being drawn at 16px in a catalogue
+    row and on either a light or a dark background.
+  -->
+  <path d="M32 4 56 12.5V32c0 12.9-9.6 23.6-24 28C17.6 55.6 8 44.9 8 32V12.5Z" fill="#0F172A"/>
+  <path d="M32 10 50.5 16.5V32c0 9.9-7.4 18.3-18.5 21.8C20.9 50.3 13.5 41.9 13.5 32V16.5Z"
+        fill="none" stroke="#1E3A5F" stroke-width="1.5"/>
+
+  <!-- One entry point, three routes, three served models. -->
+  <g fill="none" stroke="#38BDF8" stroke-width="2.5" stroke-linecap="round">
+    <path d="M19 32h6"/>
+    <path d="M25 32c6 0 6-9 13-9"/>
+    <path d="M25 32h13"/>
+    <path d="M25 32c6 0 6 9 13 9"/>
+  </g>
+  <g fill="#38BDF8">
+    <circle cx="17" cy="32" r="3.5"/>
+    <circle cx="42" cy="23" r="3.5"/>
+    <circle cx="42" cy="32" r="3.5"/>
+    <circle cx="42" cy="41" r="3.5"/>
+  </g>
+</svg>

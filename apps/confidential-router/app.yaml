@@ -1,0 +1,593 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: AppDefinition
+
+metadata:
+  name: confidential-router
+  title: Confidential Router
+  description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
+  version: "0.1.0"
+  category: ai-inference
+  sourceRepo: https://github.com/Super-Protocol/confidential-router
+  license: Apache-2.0
+  icon: icon.svg
+  tags:
+    - ai
+    - llm
+    - inference
+    - openai-compatible
+    - attestation
+    - confidential-computing
+
+ui:
+  sections:
+    - id: access
+      title: Access
+      description: >-
+        Two hostnames, because two different things are served: the console a person signs in to,
+        and the API a client points its OpenAI SDK at. The API hostname is also the endpoint a
+        Gatekeeper is pointed at, so it is the name that ends up in someone else's configuration.
+      fields:
+        # `text`, not a hostname widget: the widget list in the specification is
+        # text / textarea / number / select / multiselect / switch / slider / password, and the
+        # pattern below is what makes this field a hostname.
+        - parameterId: consoleHostname
+          widget: text
+        - parameterId: apiHostname
+          widget: text
+
+    - id: administrator
+      title: Administrator
+      description: >-
+        How the first person gets into the console. This deployment has no mailbox and no OAuth
+        app, so the first account is claimed with a token instead of a sign-in link.
+      fields:
+        - parameterId: adminEmail
+          widget: text
+        - parameterId: bootstrapToken
+          widget: password
+
+    - id: models
+      title: Models
+      description: >-
+        Downloaded on first start, which takes a few minutes per model, and served from then on.
+        Every one you pick is advertised by the API and listed in the console; sizes below are what
+        is pulled onto the model volume.
+      fields:
+        - parameterId: models
+          widget: multiselect
+
+    - id: compute
+      title: Compute
+      fields:
+        - parameterId: gpuEnabled
+          widget: switch
+        - parameterId: gpuCount
+          widget: number
+          visible: "params.gpuEnabled == true"
+
+    - id: storage
+      title: Storage
+      fields:
+        - parameterId: modelStorage
+          widget: select
+        - parameterId: databaseStorage
+          widget: select
+
+    - id: billing
+      title: Billing
+      description: >-
+        Manual credit is what an evaluation runs on: an administrator mints credit from the console
+        and nothing leaves the deployment. Stripe takes real payments, and switching to it moves the
+        API into production mode — where sign-in links may not be written to the log, which is why a
+        mail provider becomes part of the same choice.
+      fields:
+        - parameterId: billingMode
+          widget: select
+        - parameterId: stripeSecretKey
+          widget: password
+          visible: "params.billingMode == 'stripe'"
+        - parameterId: stripeWebhookSecret
+          widget: password
+          visible: "params.billingMode == 'stripe'"
+        - parameterId: mailFrom
+          widget: text
+          visible: "params.billingMode == 'stripe'"
+        - parameterId: resendApiKey
+          widget: password
+          visible: "params.billingMode == 'stripe'"
+
+parameters:
+  - id: consoleHostname
+    type: string
+    title: Console hostname
+    description: >-
+      Where the console is served. Take the one offered and the DNS is written for you; bring your
+      own and point it at this cloud's gateway before publishing the deployment.
+    required: true
+    validation:
+      pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+
+  - id: apiHostname
+    type: string
+    title: API hostname
+    description: >-
+      Where `/v1` is served — the base URL an OpenAI client is given, and the upstream a Gatekeeper
+      is pointed at. It has to differ from the console hostname: they are separate ingresses.
+    required: true
+    validation:
+      pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+
+  - id: adminEmail
+    type: string
+    title: Administrator email
+    description: >-
+      The address the first account is created under. Nothing is sent to it — this deployment has no
+      mailer — but it is the identity the console shows and the one an audit trail carries.
+    required: true
+    validation:
+      pattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+
+  - id: bootstrapToken
+    type: string
+    title: First sign-in token
+    description: >-
+      Claims the administrator account, once. Generated if left blank and shown below after this is
+      deployed; the endpoint that accepts it stops existing the moment an account exists.
+    sensitive: true
+    generated: true
+    validation:
+      minLength: 32
+
+  - id: models
+    type: array
+    items:
+      type: string
+    title: Models
+    description: >-
+      Pick one or more. Every model you pick is pulled onto the model volume, kept resident, and
+      advertised under its own name and price in the console — so the storage and the memory this
+      deployment needs are a function of this list.
+    required: true
+    default: ["llama3.2:3b"]
+    validation:
+      minItems: 1
+    options:
+      source:
+        type: static
+        values:
+          - value: "llama3.2:3b"
+            label: Llama 3.2 3B Instruct — 2.0 GB
+          - value: "qwen2.5:3b"
+            label: Qwen 2.5 3B Instruct — 1.9 GB
+          - value: "gemma2:2b"
+            label: Gemma 2 2B — 1.6 GB
+          - value: "phi3.5:3.8b"
+            label: Phi-3.5 Mini 3.8B — 2.2 GB
+          - value: "mistral:7b"
+            label: Mistral 7B Instruct — 4.1 GB
+
+  - id: gpuEnabled
+    type: boolean
+    title: Use a GPU
+    description: >-
+      Off by default, because a cluster space without GPUs schedules nothing at all when it is on:
+      the pod asks for a device and a runtime class that are not there, and waits forever. On CPU
+      these models answer, slowly — turn this on where the space actually has one.
+    default: false
+
+  - id: gpuCount
+    type: integer
+    title: GPUs
+    description: How many to allocate to the model server.
+    default: 1
+    validation:
+      min: 1
+      max: 8
+
+  - id: modelStorage
+    type: string
+    title: Model storage
+    description: >-
+      Holds the downloaded weights. All five models together are under 12 GB, so the default has
+      room for every one of them.
+    required: true
+    default: "30Gi"
+    options:
+      source:
+        type: static
+        values:
+          - value: "20Gi"
+            label: 20 GB
+          - value: "30Gi"
+            label: 30 GB
+          - value: "50Gi"
+            label: 50 GB
+          - value: "100Gi"
+            label: 100 GB
+
+  - id: databaseStorage
+    type: string
+    title: Database storage
+    description: >-
+      Holds accounts, API keys, credit and one metering row per generation. Prompts and completions
+      are never stored, so this grows with how often the endpoint is called rather than with how
+      much is said to it.
+    required: true
+    default: "8Gi"
+    options:
+      source:
+        type: static
+        values:
+          - value: "8Gi"
+            label: 8 GB
+          - value: "20Gi"
+            label: 20 GB
+          - value: "50Gi"
+            label: 50 GB
+
+  - id: billingMode
+    type: string
+    title: Billing
+    description: >-
+      `Manual credit` mints credit from a signed link an administrator issues, and is what a demo or
+      an evaluation runs on. `Stripe` takes real payments and needs the two keys below.
+    required: true
+    default: "manual"
+    options:
+      source:
+        type: static
+        values:
+          - value: "manual"
+            label: Manual credit
+          - value: "stripe"
+            label: Stripe
+
+  - id: stripeSecretKey
+    type: string
+    title: Stripe secret key
+    description: The `sk_live_…` or `sk_test_…` key this deployment charges with.
+    sensitive: true
+
+  - id: stripeWebhookSecret
+    type: string
+    title: Stripe webhook signing secret
+    description: >-
+      The `whsec_…` secret for a webhook endpoint pointed at `https://<API hostname>/billing`.
+      Without it a completed payment never becomes credit.
+    sensitive: true
+
+  - id: mailFrom
+    type: string
+    title: Sender address
+    description: >-
+      Where sign-in links come from. Only used with Stripe billing, and it has to be on a domain
+      verified with Resend, or the mail is refused.
+    default: "no-reply@confidential-router.local"
+
+  - id: resendApiKey
+    type: string
+    title: Resend API key
+    description: >-
+      Needed with Stripe billing and nothing else. Stripe puts the API into production mode, and in
+      production a sign-in link written to the container log would be a sign-in link anyone with
+      log access could use — so a real mail provider becomes mandatory at the same moment.
+    sensitive: true
+
+  # ---------------------------------------------------------------------------
+  # Internal credentials. No UI section names them: they are shared between this
+  # application's own components and nobody outside the deployment ever needs to
+  # see one, so the platform generates them and they stay sealed.
+  # ---------------------------------------------------------------------------
+  - id: authSecret
+    type: string
+    title: Session signing secret
+    description: >-
+      Signs session cookies and first-sign-in tokens. Rotating it signs everyone out. Generated.
+    sensitive: true
+    generated: true
+    validation:
+      minLength: 32
+
+  - id: databasePassword
+    type: string
+    title: Database password
+    description: >-
+      Both what the bundled PostgreSQL is created with and what the API connects with. Generated.
+    sensitive: true
+    generated: true
+    validation:
+      minLength: 32
+
+  - id: litellmKey
+    type: string
+    title: Model proxy key
+    description: >-
+      Demanded by the model proxy on every request and presented by the API. The proxy is only
+      reachable inside the cluster space; this is what keeps a neighbouring pod from using it.
+    sensitive: true
+    generated: true
+    validation:
+      minLength: 32
+
+resources:
+  # A cluster space is created with this quota, so it has to cover every container at once —
+  # including the model server, which has no limit of its own and grows with the number of models
+  # kept resident.
+  min:
+    cpu: "4"
+    memory: "12Gi"
+    storage: "40Gi"
+  recommended:
+    cpu: "8"
+    memory: "24Gi"
+    storage: "70Gi"
+  gpu:
+    required: false
+    minCount: 1
+    minVram: "16Gi"
+    types:
+      - nvidia-h100
+      - nvidia-a100
+      - nvidia-l40s
+      - nvidia-rtx-4090
+
+components:
+  # ---------------------------------------------------------------------------
+  # The model server. Reachable inside the cluster space and nowhere else: an
+  # Ollama endpoint has no authentication of its own, and publishing one would
+  # hand the deployment's GPU and models to whoever found the name. Everything
+  # that reaches it goes through the proxy and then the router, which is where
+  # keys, credit and metering live.
+  # ---------------------------------------------------------------------------
+  - name: ollama
+    source:
+      type: helm
+      repoUrl: https://otwld.github.io/ollama-helm/
+      chart: ollama
+      version: "1.12.0"
+    # This chart references `ollama/ollama` by tag and its init container by
+    # bare name, and an unpinned reference makes the deployment's evidence
+    # digest uncomputable (specification 2.7). Declaring them here rewrites both
+    # to a digest before the manifests are sent.
+    images:
+      - name: ollama/ollama
+        digest: sha256:de0786b654561830021475310d61df8073797e917d006a8c6372c8548efc639b
+      - name: busybox
+        digest: sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
+    deployment:
+      values:
+        base:
+          service:
+            type: ClusterIP
+          ollama:
+            gpu:
+              enabled: false
+              type: nvidia
+              number: 0
+            models:
+              pull: []
+              run: []
+          runtimeClassName: ""
+          persistentVolume:
+            enabled: true
+            size: 30Gi
+          ingress:
+            enabled: false
+        patches:
+          # The whole selection, as a list: a value that is exactly one
+          # placeholder is interpolated in its native type, so this reaches the
+          # chart as a YAML sequence rather than as one string naming five
+          # models.
+          - op: replace
+            path: ollama.models.pull
+            value: "{{ params.models }}"
+
+          - op: replace
+            path: ollama.gpu.enabled
+            value: true
+            when: "params.gpuEnabled == true"
+
+          - op: replace
+            path: ollama.gpu.number
+            value: "{{ params.gpuCount }}"
+            when: "params.gpuEnabled == true"
+
+          # A device request without the runtime class leaves the pod Pending
+          # forever rather than falling back to CPU, so the two move together.
+          - op: replace
+            path: runtimeClassName
+            value: nvidia
+            when: "params.gpuEnabled == true"
+
+          - op: replace
+            path: persistentVolume.size
+            value: "{{ params.modelStorage }}"
+
+  # ---------------------------------------------------------------------------
+  # The OpenAI-compatible face on Ollama. It publishes one model name per
+  # selected model — the same strings the router advertises, because the Ollama
+  # name *is* the catalogue key on both sides.
+  # ---------------------------------------------------------------------------
+  - name: litellm
+    dependsOn:
+      - ollama
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: confidential-router-litellm
+      version: "0.1.0"
+    images:
+      - name: ghcr.io/berriai/litellm
+        digest: sha256:e9711f484c7c8462c028803130afef546aa54c8d2fc11120242c01bbadc12e65
+    deployment:
+      values:
+        base:
+          ollamaUrl: "http://{{ components.ollama.release }}:11434"
+          models: "{{ params.models }}"
+          masterKey: "{{ params.litellmKey }}"
+          service:
+            type: ClusterIP
+
+  # ---------------------------------------------------------------------------
+  # The router itself: `/v1` for clients, `/graphql` and `/auth` for the console,
+  # and the PostgreSQL it stores accounts, keys, credit and metering in. Prompts
+  # and completions are not among those — the console shows token counts, not
+  # what was said.
+  # ---------------------------------------------------------------------------
+  - name: router-api
+    dependsOn:
+      - litellm
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: confidential-router-api
+      version: "0.1.1"
+    images:
+      - name: ghcr.io/super-protocol/confidential-router/router-api
+        digest: sha256:291d1b631512ce8e1da8ac250111ed932d1d9e315c68b9fa4a11e85663f9a1b7
+      - name: docker.io/bitnamilegacy/postgresql
+        digest: sha256:51db17ce1aa19e1b4ba65bf4ff45f0afcde6b59e44623d0005142703b91f4a1e
+    deployment:
+      values:
+        base:
+          apiHostname: "{{ params.apiHostname }}"
+          consoleHostname: "{{ params.consoleHostname }}"
+          publicScheme: https
+          # The proxy's service name, which its chart derives from the chart name
+          # rather than from the release: our three charts have to find each
+          # other by DNS, and a name that moved with the release would make every
+          # one of those defaults wrong.
+          litellmUrl: http://confidential-router-litellm:4000
+          litellm:
+            apiKey: "{{ params.litellmKey }}"
+          models: "{{ params.models }}"
+          database:
+            password: "{{ params.databasePassword }}"
+          auth:
+            secret: "{{ params.authSecret }}"
+            magicLink:
+              mailer: console
+            # The first-sign-in path for a deployment with no mailbox and no
+            # OAuth app: while this is set and no user exists, posting it to
+            # /auth/bootstrap creates the administrator. The endpoint is a 404
+            # from then on.
+            bootstrapToken: "{{ params.bootstrapToken }}"
+            bootstrapEmail: "{{ params.adminEmail }}"
+          billing:
+            mode: manual
+          postgresql:
+            primary:
+              persistence:
+                size: "{{ params.databaseStorage }}"
+        patches:
+          # `add` rather than `replace` wherever the base above does not already
+          # carry the key: `replace` requires the path to exist in the resolved
+          # values, and the base deliberately does not name a Stripe key it has
+          # no value for.
+          - op: replace
+            path: billing.mode
+            value: stripe
+            when: "params.billingMode == 'stripe'"
+
+          - op: add
+            path: billing.stripe.secretKey
+            value: "{{ params.stripeSecretKey }}"
+            when: "params.billingMode == 'stripe'"
+
+          - op: add
+            path: billing.stripe.webhookSecret
+            value: "{{ params.stripeWebhookSecret }}"
+            when: "params.billingMode == 'stripe'"
+
+          # Stripe puts the API into production mode, and the console mailer is
+          # refused there — a sign-in link in the container log is a sign-in link
+          # for anyone who can read logs. These three are the same decision as
+          # the one above, not extras.
+          - op: replace
+            path: auth.magicLink.mailer
+            value: resend
+            when: "params.billingMode == 'stripe'"
+
+          - op: add
+            path: auth.magicLink.from
+            value: "{{ params.mailFrom }}"
+            when: "params.billingMode == 'stripe'"
+
+          - op: add
+            path: auth.magicLink.resendApiKey
+            value: "{{ params.resendApiKey }}"
+            when: "params.billingMode == 'stripe'"
+
+  # ---------------------------------------------------------------------------
+  # The console. Served on its own hostname and talking to the API on the other
+  # one, which is why the API's ingress carries /auth and /graphql: the browser
+  # calls them cross-origin with credentials.
+  #
+  # `image.builtForApiOrigin` is deliberately left at the chart's own value. The
+  # console's NEXT_PUBLIC_* settings are inlined by `next build`, so a published
+  # image is bound to the API origin it was built against, and the chart refuses
+  # to render one pointed somewhere else. A listing cannot know the hostname at
+  # build time, so until router-ui resolves its API origin at run time this
+  # component fails the render with that message — which is the honest outcome:
+  # the alternative is a console that deploys, serves every page and cannot sign
+  # anyone in.
+  # ---------------------------------------------------------------------------
+  - name: router-ui
+    dependsOn:
+      - router-api
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: confidential-router-ui
+      version: "0.1.1"
+    images:
+      - name: ghcr.io/super-protocol/confidential-router/router-ui
+        digest: sha256:fd39819fac283cfabe81d4c9f8f3bcfc47cd9f0098ff477d5f99e5a040e8d1df
+    deployment:
+      values:
+        base:
+          consoleHostname: "{{ params.consoleHostname }}"
+          apiHostname: "{{ params.apiHostname }}"
+          publicScheme: https
+
+outputs:
+  - id: consoleUrl
+    title: Console
+    type: url
+    value: "https://{{ params.consoleHostname }}"
+
+  - id: apiBaseUrl
+    title: OpenAI base URL
+    type: url
+    value: "https://{{ params.apiHostname }}/v1"
+
+  - id: firstSignIn
+    title: First sign-in
+    type: string
+    value: "Open the console, choose \"Use a first-sign-in token\", and enter the token below together with the administrator email. That claims the account and the token stops working: everyone after the first is invited from the console."
+
+  - id: bootstrapToken
+    title: First sign-in token
+    type: secret
+    value: "{{ params.bootstrapToken }}"
+
+  - id: gatekeeperSetup
+    title: Point a Gatekeeper at this endpoint
+    type: string
+    value: "gatekeeper endpoint add router --listen 127.0.0.1:8443 --upstream https://{{ params.apiHostname }} && gatekeeper endpoint discover router && gatekeeper endpoint trust add router --from-upstream && gatekeeper run"
+
+  - id: gatekeeperBaseUrl
+    title: OpenAI base URL, through a Gatekeeper
+    type: url
+    value: "http://127.0.0.1:8443/v1"
+
+  - id: evidenceBundle
+    title: Published evidence
+    type: url
+    value: "https://{{ params.apiHostname }}/.well-known/swarm-evidence"
+
+  - id: billingNote
+    title: Credit
+    type: string
+    when: "params.billingMode == 'manual'"
+    value: "Billing runs on manual credit: an administrator mints it from the console's Billing screen and no payment leaves this deployment. Switch to Stripe by reconfiguring."

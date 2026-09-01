@@ -2,5 +2,5 @@ apiVersion: v2
 name: confidential-router-ui
 description: The Confidential Router console — the Next.js app served on the deployment's console hostname.
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "0.1.0"
