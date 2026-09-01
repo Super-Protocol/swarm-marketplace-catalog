@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.1.1"
+  version: "0.2.0"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -20,6 +20,9 @@ metadata:
 
 ui:
   sections:
+    # Ordered so that a deployment can be reached from the top of the form: the two
+    # hostnames arrive filled in, the models have a default and the GPU is off, which
+    # leaves nothing above Advanced that has to be typed before Deploy.
     - id: access
       title: Access
       description: >-
@@ -33,17 +36,6 @@ ui:
           widget: hostname
         - parameterId: apiHostname
           widget: hostname
-
-    - id: administrator
-      title: Administrator
-      description: >-
-        How the first person gets into the console. This deployment has no mailbox and no OAuth
-        app, so the first account is claimed with a token instead of a sign-in link.
-      fields:
-        - parameterId: adminEmail
-          widget: text
-        - parameterId: bootstrapToken
-          widget: password
 
     - id: models
       title: Models
@@ -64,22 +56,23 @@ ui:
           widget: number
           visible: "params.gpuEnabled == true"
 
-    - id: storage
-      title: Storage
+    # There is no collapsed-section or group concept in the specification, so "advanced"
+    # is expressed the only way the form can express it: one section, last, holding every
+    # field that already has an answer. Nothing in here has to be opened to deploy.
+    - id: advanced
+      title: Advanced
+      description: >-
+        Every field below is already answered — the volumes are sized for the models above, billing
+        starts on manual credit, and the first sign-in token is generated and shown with the
+        deployment's outputs. Open this to size a volume differently, to take real payments, or to
+        bring your own token; skip it otherwise.
       fields:
         - parameterId: modelStorage
           widget: select
         - parameterId: databaseStorage
           widget: select
-
-    - id: billing
-      title: Billing
-      description: >-
-        Manual credit is what an evaluation runs on: an administrator mints credit from the console
-        and nothing leaves the deployment. Stripe takes real payments, and switching to it moves the
-        API into production mode — where sign-in links may not be written to the log, which is why a
-        mail provider becomes part of the same choice.
-      fields:
+        - parameterId: bootstrapToken
+          widget: password
         - parameterId: billingMode
           widget: select
         - parameterId: stripeSecretKey
@@ -116,21 +109,12 @@ parameters:
     validation:
       pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
 
-  - id: adminEmail
-    type: string
-    title: Administrator email
-    description: >-
-      The address the first account is created under. Nothing is sent to it — this deployment has no
-      mailer — but it is the identity the console shows and the one an audit trail carries.
-    required: true
-    validation:
-      pattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
-
   - id: bootstrapToken
     type: string
     title: First sign-in token
     description: >-
-      Claims the administrator account, once. Generated if left blank and shown below after this is
+      Claims the administrator account, once, for the address of the marketplace account deploying
+      this — nobody is asked to retype it. Generated if left blank and shown below after this is
       deployed; the endpoint that accepts it stops existing the moment an account exists.
     sensitive: true
     generated: true
@@ -188,8 +172,8 @@ parameters:
     title: Model storage
     description: >-
       Holds the downloaded weights. All five models together are under 12 GB, so the default has
-      room for every one of them.
-    required: true
+      room for every one of them — which is why this is not asked for, only offered.
+    required: false
     default: "30Gi"
     options:
       source:
@@ -210,8 +194,8 @@ parameters:
     description: >-
       Holds accounts, API keys, credit and one metering row per generation. Prompts and completions
       are never stored, so this grows with how often the endpoint is called rather than with how
-      much is said to it.
-    required: true
+      much is said to it — slowly enough that the default is the right answer for an evaluation.
+    required: false
     default: "8Gi"
     options:
       source:
@@ -229,8 +213,9 @@ parameters:
     title: Billing
     description: >-
       `Manual credit` mints credit from a signed link an administrator issues, and is what a demo or
-      an evaluation runs on. `Stripe` takes real payments and needs the two keys below.
-    required: true
+      an evaluation runs on — so it is what this deploys as unless it is changed here. `Stripe`
+      takes real payments and needs the two keys below.
+    required: false
     default: "manual"
     options:
       source:
@@ -471,7 +456,11 @@ components:
             # /auth/bootstrap creates the administrator. The endpoint is a 404
             # from then on.
             bootstrapToken: "{{ params.bootstrapToken }}"
-            bootstrapEmail: "{{ params.adminEmail }}"
+            # Whoever is deploying, read from the marketplace account rather than
+            # asked for: the console's first administrator is that person, and a
+            # parameter here would only be a second copy of an address the
+            # marketplace already holds — one that drifts the moment either changes.
+            bootstrapEmail: "{{ consumer.user.email }}"
           billing:
             mode: manual
           postgresql:
@@ -560,7 +549,7 @@ outputs:
   - id: firstSignIn
     title: First sign-in
     type: string
-    value: "Open the console, choose \"Use a first-sign-in token\", and enter the token below together with the administrator email. That claims the account and the token stops working: everyone after the first is invited from the console."
+    value: "Open the console, choose \"Use a first-sign-in token\", and enter the token below together with {{ consumer.user.email }} — the account is created for that address. That claims it and the token stops working: everyone after the first is invited from the console."
 
   - id: bootstrapToken
     title: First sign-in token
