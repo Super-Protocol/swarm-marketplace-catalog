@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.3.0"
+  version: "0.3.1"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -439,10 +439,10 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-api
-      version: "0.2.0"
+      version: "0.2.1"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
-        digest: sha256:c09d40f68dd32866d79a1340f0cdfcaa9c6ffacd01ac1da18792b119d26a80c5
+        digest: sha256:878e146f5946cd3dc05cc627fbfa4bc536122fb984dccd99549f0bed35169f1e
       - name: docker.io/bitnamilegacy/postgresql
         digest: sha256:51db17ce1aa19e1b4ba65bf4ff45f0afcde6b59e44623d0005142703b91f4a1e
     deployment:
@@ -562,10 +562,10 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-ui
-      version: "0.1.3"
+      version: "0.1.4"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-ui
-        digest: sha256:f910ff6346f215ed3e4351a56f448120aafbb1e821012ced33dc1efdc6782f9c
+        digest: sha256:960369da2cc397fdc2a4fdcbe02761abcec770005a9ff358f8b6c5af13299c93
     deployment:
       values:
         base:

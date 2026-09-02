@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.2.0
+    helm.sh/chart: confidential-router-api-0.2.1
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.1.0"
@@ -23,7 +23,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.2.0
+    helm.sh/chart: confidential-router-api-0.2.1
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.1.0"
@@ -112,7 +112,7 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.2.0
+    helm.sh/chart: confidential-router-api-0.2.1
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.1.0"
@@ -135,7 +135,7 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.2.0
+    helm.sh/chart: confidential-router-api-0.2.1
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.1.0"
@@ -152,7 +152,7 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: 991e7aeb2664fa496bf1c1d41856a1cdf5fc34afa71d439e3b5b7aab066c209c
+        checksum/config: 39daa802310c5d8a9c771145d4663b8a80b1a822ada6adc1ebed2650d01e4847
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr
@@ -168,7 +168,7 @@ spec:
         # PostgreSQL accepts connections, which is exactly the wait this pod needs
         # and is why there is no separate wait-for-database container.
         - name: migrate
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:c09d40f68dd32866d79a1340f0cdfcaa9c6ffacd01ac1da18792b119d26a80c5
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:878e146f5946cd3dc05cc627fbfa4bc536122fb984dccd99549f0bed35169f1e
           imagePullPolicy: IfNotPresent
           args: ["migrate"]
           securityContext:
@@ -208,7 +208,7 @@ spec:
               memory: 128Mi
       containers:
         - name: router-api
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:c09d40f68dd32866d79a1340f0cdfcaa9c6ffacd01ac1da18792b119d26a80c5
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:878e146f5946cd3dc05cc627fbfa4bc536122fb984dccd99549f0bed35169f1e
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -288,7 +288,7 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.2.0
+    helm.sh/chart: confidential-router-api-0.2.1
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.1.0"
