@@ -6,12 +6,13 @@
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-router/router-api
-  digest: sha256:291d1b631512ce8e1da8ac250111ed932d1d9e315c68b9fa4a11e85663f9a1b7
+  digest: sha256:c09d40f68dd32866d79a1340f0cdfcaa9c6ffacd01ac1da18792b119d26a80c5
   tag: ""
   pullPolicy: IfNotPresent
 
-# The published images live in a private package of the Super-Protocol org, so a
-# cluster needs a pull secret naming a token with `read:packages`.
+# The published images are a public package now, so a cluster that can reach
+# ghcr.io needs nothing here. It stays for a deployment that mirrors them into a
+# registry of its own.
 imagePullSecrets: []
 
 nameOverride: ""
@@ -147,14 +148,38 @@ auth:
   existingSecretKey: auth-secret
   sessionMaxAge: 720h
   magicLink:
-    # `console` writes the sign-in link to the log — fine for an evaluation,
-    # refused under NODE_ENV=production. `resend` is the only implemented mailer
-    # that sends anything; `smtp` is in the config schema but not implemented.
+    # `none` switches magic-link sign-in off altogether, which is the honest
+    # setting for a deployment with nowhere to send mail: the console then stops
+    # offering a link it cannot deliver. `console` writes the link to the log —
+    # fine for an evaluation, refused under NODE_ENV=production. `resend` is the
+    # only implemented mailer that sends anything; `smtp` is in the config schema
+    # but not implemented.
     mailer: console
     from: no-reply@confidential-router.local
     resendApiKey: ""
     resendApiKeyExistingSecret: ""
     resendApiKeyExistingSecretKey: resend-api-key
+  # Email and password — the one sign-in path that needs nothing outside the
+  # cluster (SUP-112). On by default, because that is what makes a deployment
+  # with no mail provider usable by anyone but its first administrator: the
+  # bootstrap token below creates exactly one account, and before this everyone
+  # after that was offered a magic link nobody could deliver.
+  #
+  # There is no email verification and no password reset: both are a mail round
+  # trip, and a deployment that has a mailer would be signing in with the link
+  # instead. Rendered **only when it is enabled**, so the same chart still boots
+  # an image that predates the key — the same rule `bootstrapToken` follows.
+  #
+  # Anyone who can reach the console can create an account while this is on. The
+  # account arrives with its own empty workspace, no credit and no access to
+  # anyone else's keys, but it is a row in the database: turn this off on a
+  # deployment whose console is reachable by people it is not for.
+  password:
+    enabled: true
+    # Better Auth hashes with scrypt, so length is the rule worth having;
+    # composition rules buy less than the characters they cost. 8–128; the
+    # console reads it back from the API and enforces the same number.
+    minLength: 12
   github:
     clientId: ""
     clientSecret: ""

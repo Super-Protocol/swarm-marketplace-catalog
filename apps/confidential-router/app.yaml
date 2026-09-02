@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.2.0"
+  version: "0.3.0"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -73,6 +73,8 @@ ui:
           widget: select
         - parameterId: bootstrapToken
           widget: password
+        - parameterId: passwordSignup
+          widget: switch
         - parameterId: billingMode
           widget: select
         - parameterId: stripeSecretKey
@@ -120,6 +122,18 @@ parameters:
     generated: true
     validation:
       minLength: 32
+
+  - id: passwordSignup
+    type: boolean
+    title: Allow sign-up with a password
+    description: >-
+      On, because the token above claims exactly one account and this deployment has no mailbox to
+      send an invitation from: without it nobody but the first administrator can ever sign in.
+      Each account that signs up gets its own empty workspace and no credit, and can read nobody
+      else's keys — but anyone who can reach the console can create one, so turn this off where the
+      console is reachable by people this deployment is not for. There is no password reset either
+      way; that would need the mail delivery this deployment does without.
+    default: true
 
   - id: models
     type: array
@@ -425,10 +439,10 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-api
-      version: "0.1.1"
+      version: "0.2.0"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
-        digest: sha256:291d1b631512ce8e1da8ac250111ed932d1d9e315c68b9fa4a11e85663f9a1b7
+        digest: sha256:c09d40f68dd32866d79a1340f0cdfcaa9c6ffacd01ac1da18792b119d26a80c5
       - name: docker.io/bitnamilegacy/postgresql
         digest: sha256:51db17ce1aa19e1b4ba65bf4ff45f0afcde6b59e44623d0005142703b91f4a1e
     deployment:
@@ -450,7 +464,15 @@ components:
           auth:
             secret: "{{ params.authSecret }}"
             magicLink:
-              mailer: console
+              # Nothing here can deliver mail, so the console does not offer a
+              # link it would only write to the pod log. Stripe billing brings a
+              # Resend key with it and the patch below turns the mailer back on.
+              mailer: none
+            # The sign-in path that needs nothing outside the cluster (SUP-112).
+            # It is what makes this deployment usable by a second person: the
+            # token below claims exactly one account and then stops existing.
+            password:
+              enabled: true
             # The first-sign-in path for a deployment with no mailbox and no
             # OAuth app: while this is set and no user exists, posting it to
             # /auth/bootstrap creates the administrator. The endpoint is a 404
@@ -468,6 +490,22 @@ components:
               persistence:
                 size: "{{ params.databaseStorage }}"
         patches:
+          - op: replace
+            path: auth.password.enabled
+            value: false
+            when: "params.passwordSignup == false"
+
+          # Switching sign-up off has to leave *some* way back in, or the chart
+          # refuses to render: the bootstrap token is spent on the first account
+          # and mail goes nowhere. So the mailer returns to `console` — the link
+          # lands in the API log, which an administrator can read and nobody
+          # outside the cluster can. Stripe billing replaces it with Resend
+          # further down, which is why this patch comes first.
+          - op: replace
+            path: auth.magicLink.mailer
+            value: console
+            when: "params.passwordSignup == false"
+
           # `add` rather than `replace` wherever the base above does not already
           # carry the key: `replace` requires the path to exist in the resolved
           # values, and the base deliberately does not name a Stripe key it has
@@ -524,10 +562,10 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-ui
-      version: "0.1.2"
+      version: "0.1.3"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-ui
-        digest: sha256:d15c9f4bd12bfc5968906d954dd81cca9e9d4e8ad9a71c5c01da7c6cbad6ad72
+        digest: sha256:f910ff6346f215ed3e4351a56f448120aafbb1e821012ced33dc1efdc6782f9c
     deployment:
       values:
         base:
@@ -549,7 +587,13 @@ outputs:
   - id: firstSignIn
     title: First sign-in
     type: string
-    value: "Open the console, choose \"Use a first-sign-in token\", and enter the token below together with {{ consumer.user.email }} — the account is created for that address. That claims it and the token stops working: everyone after the first is invited from the console."
+    value: "Open the console, choose \"Use a first-sign-in token\", and enter the token below together with {{ consumer.user.email }} — the account is created for that address. That claims it and the token stops working — it is spent by the first account, whoever creates it, so claim the deployment before its hostname is handed out."
+
+  - id: signUp
+    title: Everyone else
+    type: string
+    when: "params.passwordSignup == true"
+    value: "https://{{ params.consoleHostname }}/signup — an email address and a password, with nothing to deliver and nothing to verify. Each account arrives with its own empty workspace and no credit: anyone who can reach the console can create one, so turn \"Allow sign-up with a password\" off by reconfiguring if this console is reachable by people it is not for. There is no password reset — it would need the mail delivery this deployment does without."
 
   - id: bootstrapToken
     title: First sign-in token

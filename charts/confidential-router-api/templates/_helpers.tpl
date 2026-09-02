@@ -160,8 +160,23 @@ Configuration checks that are cheaper to fail here than in a crash loop.
 {{- if eq .Values.auth.magicLink.mailer "smtp" -}}
 {{- fail "auth.magicLink.mailer \"smtp\" is in the config schema but not implemented: use \"resend\", or \"console\" outside production" -}}
 {{- end -}}
-{{- if not (has .Values.auth.magicLink.mailer (list "console" "resend")) -}}
-{{- fail (printf "auth.magicLink.mailer must be console or resend, not %q" .Values.auth.magicLink.mailer) -}}
+{{- if not (has .Values.auth.magicLink.mailer (list "none" "console" "resend")) -}}
+{{- fail (printf "auth.magicLink.mailer must be none, console or resend, not %q" .Values.auth.magicLink.mailer) -}}
+{{- end -}}
+{{- if .Values.auth.password.enabled -}}
+{{- $minLength := .Values.auth.password.minLength | int -}}
+{{- if or (lt $minLength 8) (gt $minLength 128) -}}
+{{- fail (printf "auth.password.minLength must be between 8 and 128, not %d" $minLength) -}}
+{{- end -}}
+{{- end -}}
+{{/*
+Every sign-in path off at once deploys cleanly and answers nothing but 404: the
+bootstrap token lets exactly one account in and then stops existing, so a
+deployment that has no mailer, no OAuth app and no password has no second way in
+even for the administrator who claimed it.
+*/}}
+{{- if not (or .Values.auth.password.enabled .Values.auth.github.clientId .Values.auth.google.clientId (ne .Values.auth.magicLink.mailer "none")) -}}
+{{- fail "no sign-in path is configured: auth.magicLink.mailer is none, auth.password.enabled is false and neither auth.github nor auth.google is set. The bootstrap token creates one account and then stops existing, so nobody could sign in afterwards" -}}
 {{- end -}}
 {{- if eq (include "confidential-router-api.nodeEnv" .) "production" -}}
 {{- if eq .Values.auth.magicLink.mailer "console" -}}

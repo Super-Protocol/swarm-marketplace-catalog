@@ -116,6 +116,14 @@ data:
         {{- if eq .Values.auth.magicLink.mailer "resend" }}
         resendApiKey: ${ROUTER_RESEND_API_KEY}
         {{- end }}
+      {{- if .Values.auth.password.enabled }}
+      # Rendered only while it is on, for the same reason `bootstrapToken` is:
+      # the router's config schema is strict, so an image that predates SUP-112
+      # would refuse to boot on the key rather than ignore it.
+      password:
+        enabled: true
+        minLength: {{ .Values.auth.password.minLength | int64 }}
+      {{- end }}
 
     billing:
       minTopUpMicros: {{ .Values.billing.minTopUpMicros | int64 }}
