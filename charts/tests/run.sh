@@ -156,6 +156,15 @@ refuses "an auth secret too short to sign with" "at least 32 characters" \
 refuses "the unimplemented smtp mailer" "not implemented" \
   "${base_api[@]}" --set auth.magicLink.mailer=smtp
 
+refuses "a password floor the router's schema would reject" "between 8 and 128" \
+  "${base_api[@]}" --set auth.password.minLength=6
+
+# The bootstrap token creates exactly one account and then stops existing, so a
+# deployment with nothing else configured strands even the administrator who
+# claimed it — behind a console whose sign-in screen offers nothing.
+refuses "every sign-in path switched off at once" "no sign-in path is configured" \
+  "${base_api[@]}" --set auth.magicLink.mailer=none --set auth.password.enabled=false
+
 # The console used to have its API origin compiled into its browser bundle, so
 # this chart refused to render one pointed anywhere else and the listing was
 # capped at the hostname the image was built for. The origin is resolved at run

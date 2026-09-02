@@ -16,3 +16,8 @@ Sign-in links are written to the API log, not sent:
 
   kubectl logs -n {{ .Release.Namespace }} deploy/{{ include "confidential-router-api.fullname" . }} | grep 'Magic link'
 {{- end }}
+{{- if .Values.auth.password.enabled }}
+Email and password sign-in is on: anyone who can reach the console can create an
+account there, with its own empty workspace and no credit. There is no password
+reset — it would need the mail delivery this path exists to do without.
+{{- end }}

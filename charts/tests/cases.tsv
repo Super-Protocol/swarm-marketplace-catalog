@@ -9,6 +9,8 @@ api-billing-stripe	confidential-router-api
 api-no-models	confidential-router-api		
 api-external-postgres	confidential-router-api		
 api-bootstrap-token	confidential-router-api		
+api-password-no-mailer	confidential-router-api		
+api-password-off	confidential-router-api		
 litellm-one-model	confidential-router-litellm		
 litellm-three-models	confidential-router-litellm		
 ui-default	confidential-router-ui		

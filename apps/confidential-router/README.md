@@ -68,7 +68,8 @@ is why the console can show you a generation history and not a transcript.
   worth choosing deliberately.
 - **An ingress controller** in the cluster space. Both ingresses name the `nginx` class; without a
   controller that serves it, the hostnames resolve and answer nothing.
-- **A pull secret** for `ghcr.io/super-protocol/confidential-router/*`, which is a private package.
+- **Nothing to authenticate against a registry.** `ghcr.io/super-protocol/confidential-router/*` is
+  a public package; a cluster that can reach ghcr.io can pull it.
 - **Quota** as declared: 4 CPU / 12 GB / 40 GB at minimum, 8 CPU / 24 GB / 70 GB recommended. The
   model server has no memory limit of its own and grows with the number of models kept resident.
   The declared storage covers the default volumes (30 GB of models, 8 GB of database); choosing
@@ -106,6 +107,7 @@ The form is four sections, and only the first three are on the way to Deploy:
 | Compute | Use a GPU, GPUs | Off, and one GPU when it is on. |
 | Advanced | Model storage, Database storage | 30 GB and 8 GB, sized for all five models and an evaluation's worth of metering. |
 | Advanced | First sign-in token | Generated, and shown once with the deployment's outputs. Set one to bring your own. |
+| Advanced | Allow sign-up with a password | On. It is what lets a second person in, since this deployment cannot send an invitation. |
 | Advanced | Billing, Stripe keys, Resend key, Sender address | Manual credit. The rest appear only if you switch to Stripe. |
 
 Nothing above Advanced has to be typed: a deployment reaches Deploy on the offered hostnames and
@@ -115,13 +117,30 @@ the default model. Advanced exists for the deployment that wants a bigger volume
 the marketplace account deploying this, read from the platform (`consumer.user.email`) rather than
 retyped into a field that would drift from it.
 
-## First sign-in
+## Signing in
 
-This deployment has no mailbox and no OAuth application, so the first account is not invited — it
-is **claimed**. The marketplace generates a first-sign-in token, shows it once with the
-deployment's outputs, and the console trades it plus your own address for the first account — the
-outputs name the exact address it was created for. From that moment the endpoint that accepts it
-returns 404, and everyone after the first is invited from inside the console.
+This deployment has no mailbox and no OAuth application, so nobody here is ever *invited*. Two
+paths replace that, and both work with nothing but the cluster:
+
+**The first account is claimed.** The marketplace generates a first-sign-in token, shows it once
+with the deployment's outputs, and the console trades it plus your own address for the
+administrator account — the outputs name the exact address it was created for. From that moment
+the endpoint that accepts it returns 404. Claim the deployment before you publish its hostname:
+the token is spent by the *first* account, whoever creates it.
+
+**Everyone after that signs up.** `https://<console hostname>/signup` takes an email address and a
+password, and answers with a session — there is nothing to deliver and nothing to verify. Each
+account arrives with its own empty workspace and no credit; it can read nobody else's keys,
+generations or balance. What it does mean is that **anyone who can reach the console can create an
+account**, so switch *Allow sign-up with a password* off in Advanced where that is not what you
+want. Switching it off leaves the administrator's own way back in as a magic link written to the
+API log, which is where sign-in links went before this existed — or as real mail, on a Stripe
+deployment, since that one configures Resend.
+
+**There is no password reset**, either way round. Sending one is the mail delivery this deployment
+exists without; an administrator can create a fresh account, and a lost one is a lost workspace.
+Magic-link and OAuth sign-in are still there for a deployment that configures a Resend key or a
+GitHub/Google application — but neither is needed to use this one.
 
 ## Billing
 
