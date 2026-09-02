@@ -1,0 +1,36 @@
+{{- /*
+Who the broker knows about. Rendered as a Secret so the passwords are lifted out of the manifests
+and sealed for the target — nothing here reaches the bundle, the evidence snapshot, or a log.
+
+`user_<name>` entries are the accounts the broker accepts; the `username`/`password` pair at the top
+is the identity the broker uses for its own inter-broker connections.
+*/}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "cp.fullname" . }}-sasl
+type: Opaque
+stringData:
+  kafka.jaas: |
+    KafkaServer {
+      org.apache.kafka.common.security.plain.PlainLoginModule required
+      username="admin"
+      password="{{ required "sasl.adminPassword is required" .Values.sasl.adminPassword }}"
+      user_admin="{{ .Values.sasl.adminPassword }}"
+      {{- range .Values.sasl.accounts }}
+      user_{{ .name }}="{{ required (printf "sasl.accounts.%s.password is required" .name) .password }}"
+      {{- end }}
+      ;
+    };
+  {{- /*
+  The same credential in the form the platform's own components take it: a one-line JAAS string in
+  an environment variable. Kept beside the file rather than derived from it because Schema Registry,
+  Control Center and ksqlDB each want it inline.
+  */}}
+  admin.sasl.jaas.config: |-
+    org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="{{ .Values.sasl.adminPassword }}";
+  admin.password: {{ .Values.sasl.adminPassword | quote }}
+  {{- range .Values.sasl.accounts }}
+  {{ .name }}.sasl.jaas.config: |-
+    org.apache.kafka.common.security.plain.PlainLoginModule required username="{{ .name }}" password="{{ .password }}";
+  {{- end }}

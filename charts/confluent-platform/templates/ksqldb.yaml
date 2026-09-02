@@ -1,0 +1,152 @@
+{{- if .Values.ksqldb.enabled }}
+{{- $name := printf "%s-ksqldb" (include "cp.fullname" .) -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/name: ksqldb
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8088
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: ksqldb
+    app.kubernetes.io/instance: {{ .Release.Name }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/name: ksqldb
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ksqldb
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ksqldb
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: ksqldb
+          image: {{ .Values.images.ksqldb | quote }}
+          ports:
+            - name: http
+              containerPort: 8088
+          env:
+            - name: KSQL_BOOTSTRAP_SERVERS
+              value: {{ include "cp.bootstrap" . | quote }}
+            - name: KSQL_LISTENERS
+              value: "http://0.0.0.0:8088"
+            - name: KSQL_HOST_NAME
+              value: {{ $name | quote }}
+            {{- /* Names every internal topic this engine owns; changing it orphans its state. */}}
+            - name: KSQL_KSQL_SERVICE_ID
+              value: {{ .Values.ksqldb.serviceId | quote }}
+            - name: KSQL_KSQL_INTERNAL_TOPIC_REPLICAS
+              value: "1"
+            - name: KSQL_KSQL_STREAMS_REPLICATION_FACTOR
+              value: "1"
+            - name: KSQL_KSQL_LOGGING_PROCESSING_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            {{- if .Values.schemaRegistry.enabled }}
+            - name: KSQL_KSQL_SCHEMA_REGISTRY_URL
+              value: "http://{{ include "cp.schemaRegistry.name" . }}:8081"
+            {{- end }}
+            {{- /* It runs as the admin account: its queries read and write topics across the
+            cluster, which is the one thing no per-party account is allowed to do. */}}
+            - name: KSQL_SECURITY_PROTOCOL
+              value: "SASL_PLAINTEXT"
+            - name: KSQL_SASL_MECHANISM
+              value: "PLAIN"
+            - name: KSQL_SASL_JAAS_CONFIG
+              {{- include "cp.adminJaasRef" . | nindent 14 }}
+          readinessProbe:
+            httpGet:
+              path: /info
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 30
+          resources:
+            {{- toYaml .Values.ksqldb.resources | nindent 12 }}
+{{- if .Values.ksqldb.statements }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-statements
+data:
+  statements.sql: |
+{{ .Values.ksqldb.statements | indent 4 }}
+---
+{{- /*
+The queries, submitted once the engine answers. Separate from the engine because a query is content
+and the engine is infrastructure: re-running this changes what is computed without restarting what
+computes it.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}-statements
+spec:
+  backoffLimit: 20
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: submit
+          image: {{ .Values.images.ksqldb | quote }}
+          {{- /*
+          The image defaults to starting a server, so the entrypoint is overridden. There is no curl
+          in it either; bash's own /dev/tcp is what waits for the engine to accept connections.
+          */}}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              until (echo > /dev/tcp/{{ $name }}/8088) 2>/dev/null; do
+                echo "waiting for ksqlDB"; sleep 5
+              done
+              ksql --file /statements/statements.sql http://{{ $name }}:8088
+              {{- if .Values.ksqldb.verify }}
+
+              echo "checking what the engine actually has"
+              streams=$(ksql --execute "SHOW STREAMS;" http://{{ $name }}:8088 2>/dev/null)
+              missing=0
+              {{- range .Values.ksqldb.verify }}
+              if ! echo "$streams" | grep -q "{{ . | upper }}"; then
+                echo "MISSING: {{ . | upper }} was not created"
+                missing=1
+              fi
+              {{- end }}
+              if [ "$missing" -ne 0 ]; then
+                echo "$streams"
+                exit 1
+              fi
+              echo "the pipeline is in place"
+              {{- end }}
+          volumeMounts:
+            - name: statements
+              mountPath: /statements
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: statements
+          configMap:
+            name: {{ $name }}-statements
+{{- end }}
+{{- end }}

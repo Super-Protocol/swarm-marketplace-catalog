@@ -1,0 +1,47 @@
+{{- $name := include "feed.fullname" . -}}
+{{- range $party := list "payer" "hospital" }}
+{{- $cfg := index $.Values $party }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-{{ $party }}
+  labels:
+    app.kubernetes.io/name: {{ $party }}-feed
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $party }}-feed
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ $party }}-feed
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+    spec:
+      containers:
+        - name: feed
+          image: {{ $.Values.image | quote }}
+          command: ["bash", "/scripts/{{ $party }}.sh"]
+          env:
+            # Each message is sent by a fresh console producer, and a JVM that sizes its heap from
+            # the machine rather than the container limit is killed long before the demo is over.
+            - name: KAFKA_HEAP_OPTS
+              value: "-Xmx128m"
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+            - name: clients
+              mountPath: /clients
+          resources:
+            {{- toYaml $.Values.resources | nindent 12 }}
+      volumes:
+        - name: scripts
+          configMap:
+            name: {{ $name }}-scripts
+        - name: clients
+          secret:
+            secretName: {{ $name }}-clients
+{{- end }}

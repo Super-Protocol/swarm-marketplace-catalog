@@ -19,20 +19,23 @@ collide and nothing inside the chart has to guess what the other half is called.
 {{- end -}}
 
 {{/*
-The Kafka cluster id: a base64 UUID, which is 22 characters from the base64 alphabet decoding to
-16 bytes. A hex digest satisfies that alphabet, and deriving it from namespace and release makes it
-both unique per deployment and identical on every re-render — which matters because the log
-directory is formatted with it and will not open under another.
+The Kafka cluster id: 22 characters from the base64 alphabet, decoding to the 16 bytes Kafka wants.
+Constant rather than derived — see the note in values.yaml: it is what keeps two deployments of this
+listing byte-identical, and therefore attestable against one published digest.
 */}}
 {{- define "cp.clusterId" -}}
-{{- if .Values.kafka.clusterId -}}
-{{ .Values.kafka.clusterId }}
-{{- else -}}
-{{ printf "%s/%s" .Release.Namespace .Release.Name | sha256sum | trunc 22 }}
-{{- end -}}
+{{ required "kafka.clusterId is required" .Values.kafka.clusterId }}
 {{- end -}}
 
 {{/* Where clients inside the namespace reach the broker. */}}
 {{- define "cp.bootstrap" -}}
 {{ include "cp.kafka.name" . }}:9092
+{{- end -}}
+
+{{/* The admin credential, in the one-line form every platform component takes it. */}}
+{{- define "cp.adminJaasRef" -}}
+valueFrom:
+  secretKeyRef:
+    name: {{ include "cp.fullname" . }}-sasl
+    key: admin.sasl.jaas.config
 {{- end -}}

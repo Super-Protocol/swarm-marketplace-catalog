@@ -1,0 +1,89 @@
+{{- if or .Values.topics .Values.sasl.accounts }}
+{{- $name := include "cp.fullname" . -}}
+{{- /*
+Topics and grants, applied once the broker answers.
+
+A Job rather than an init container: an init container runs before the broker in the same pod and
+would have nothing to talk to. It is deliberately idempotent — creating a topic that exists and
+adding an ACL that exists are both no-ops — because the cloud may apply it more than once.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-provision
+data:
+  provision.sh: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    cat > /tmp/admin.properties <<EOF
+    security.protocol=SASL_PLAINTEXT
+    sasl.mechanism=PLAIN
+    sasl.jaas.config=${ADMIN_JAAS}
+    EOF
+
+    BOOTSTRAP="{{ include "cp.bootstrap" . }}"
+
+    echo "waiting for ${BOOTSTRAP}"
+    until kafka-broker-api-versions --bootstrap-server "${BOOTSTRAP}" \
+          --command-config /tmp/admin.properties >/dev/null 2>&1; do
+      sleep 5
+    done
+    echo "broker is up"
+
+    {{- range .Values.topics }}
+    kafka-topics --bootstrap-server "${BOOTSTRAP}" --command-config /tmp/admin.properties \
+      --create --if-not-exists --topic {{ .name | quote }} \
+      --partitions {{ .partitions | default 1 }} --replication-factor 1
+    {{- end }}
+
+    {{- range $account := .Values.sasl.accounts }}
+    {{- range $topic := $account.produce }}
+    kafka-acls --bootstrap-server "${BOOTSTRAP}" --command-config /tmp/admin.properties --add \
+      --allow-principal User:{{ $account.name }} --operation Write --operation Describe --topic {{ $topic | quote }}
+    {{- end }}
+    {{- range $topic := $account.consume }}
+    kafka-acls --bootstrap-server "${BOOTSTRAP}" --command-config /tmp/admin.properties --add \
+      --allow-principal User:{{ $account.name }} --operation Read --operation Describe --topic {{ $topic | quote }}
+    {{- end }}
+    {{- range $group := $account.groups }}
+    kafka-acls --bootstrap-server "${BOOTSTRAP}" --command-config /tmp/admin.properties --add \
+      --allow-principal User:{{ $account.name }} --operation Read --group {{ $group | quote }}
+    {{- end }}
+    {{- end }}
+
+    echo "topics and grants are in place"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}-provision
+spec:
+  backoffLimit: 20
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: provision
+          image: {{ .Values.images.server | quote }}
+          command: ["bash", "/scripts/provision.sh"]
+          env:
+            - name: ADMIN_JAAS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}-sasl
+                  key: admin.sasl.jaas.config
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: scripts
+          configMap:
+            name: {{ $name }}-provision
+{{- end }}

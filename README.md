@@ -49,6 +49,7 @@ Which is why a definition is versioned exactly like the charts it pins. Editing 
 | `conversational-analyst` | Application | A conversational analyst over connected datasets. Five components; the grounding component turns whatever is bound into the agent's knowledge graph and data-source registrations. |
 | `confidential-router` | Application | An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it runs, with a console for keys, credit and generations. Four components, three charts of our own, and the multi-select model parameter. |
 | `ollama-webui` | Application | Ollama with a chat UI. The simplest thing that exercises parameters, ingress and pinned images. |
+| `confidential-claims-fraud` | Application | A payer and a hospital publishing into one bus neither operates, with a ksqlDB query finding the claims that contradict the clinical record. Composes the Confluent chart with per-party SASL accounts. |
 | `confluent-platform` | Application | Kafka with Confluent's Control Center. A chart of our own, because Confluent's Kubernetes path needs an operator; shows a multi-container pod and generated console credentials. |
 | `rag-agent` | Application | Data slots, including a schema-constrained one. |
 | `roczen-metabolic-programme` | Dataset | De-identified longitudinal metabolic-programme records, 10 tables. |

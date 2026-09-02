@@ -161,6 +161,18 @@ spec:
                   name: {{ include "cp.fullname" . }}-license
                   key: license
             {{- end }}
+            - name: CONTROL_CENTER_STREAMS_SECURITY_PROTOCOL
+              value: "SASL_PLAINTEXT"
+            - name: CONTROL_CENTER_STREAMS_SASL_MECHANISM
+              value: "PLAIN"
+            - name: CONTROL_CENTER_STREAMS_SASL_JAAS_CONFIG
+              {{- include "cp.adminJaasRef" . | nindent 14 }}
+            {{- if .Values.ksqldb.enabled }}
+            - name: CONTROL_CENTER_KSQL_KSQLDB_URL
+              value: "http://{{ include "cp.fullname" . }}-ksqldb:8088"
+            - name: CONTROL_CENTER_KSQL_KSQLDB_ADVERTISED_URL
+              value: "http://{{ include "cp.fullname" . }}-ksqldb:8088"
+            {{- end }}
             - name: CONTROL_CENTER_HEAP_OPTS
               value: {{ .Values.controlCenter.controlCenter.heapOpts | quote }}
           volumeMounts:

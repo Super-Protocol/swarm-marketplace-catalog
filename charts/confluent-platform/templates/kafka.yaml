@@ -17,29 +17,6 @@ spec:
     app.kubernetes.io/name: kafka
     app.kubernetes.io/instance: {{ .Release.Name }}
 ---
-{{- /*
-A headless service as well, because the controller quorum is addressed by the pod's own stable DNS
-name rather than through a load-balanced service: a voter has to name itself, and a ClusterIP that
-happens to resolve to the same pod today is not that name.
-*/}}
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ $name }}-headless
-  labels:
-    app.kubernetes.io/name: kafka
-    app.kubernetes.io/instance: {{ .Release.Name }}
-spec:
-  clusterIP: None
-  publishNotReadyAddresses: true
-  ports:
-    - name: controller
-      port: 29093
-      targetPort: controller
-  selector:
-    app.kubernetes.io/name: kafka
-    app.kubernetes.io/instance: {{ .Release.Name }}
----
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -48,7 +25,7 @@ metadata:
     app.kubernetes.io/name: kafka
     app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
-  serviceName: {{ $name }}-headless
+  serviceName: {{ $name }}
   # One broker, deliberately: see the licensing note in values.yaml.
   replicas: 1
   selector:
@@ -71,8 +48,6 @@ spec:
           ports:
             - name: kafka
               containerPort: 9092
-            - name: controller
-              containerPort: 29093
           env:
             - name: CLUSTER_ID
               value: {{ include "cp.clusterId" . | quote }}
@@ -80,21 +55,46 @@ spec:
               value: "1"
             - name: KAFKA_PROCESS_ROLES
               value: "broker,controller"
+            {{- /*
+            The controller listens on loopback and nothing else. This cluster is one broker — the
+            licence sees to that — so the quorum only ever talks to itself, and a controller port
+            reachable from the namespace would be a second door into the cluster's metadata with a
+            different (and weaker) notion of who is calling.
+            */}}
             - name: KAFKA_CONTROLLER_QUORUM_VOTERS
-              value: "1@{{ $name }}-0.{{ $name }}-headless.{{ .Release.Namespace }}.svc.cluster.local:29093"
+              value: "1@127.0.0.1:29093"
             - name: KAFKA_LISTENERS
-              value: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093"
+              value: "CLIENT://0.0.0.0:9092,CONTROLLER://127.0.0.1:29093"
             {{- /*
             Advertised as the service name, which is how everything else in the namespace reaches
             it. Nothing outside the namespace does: the broker speaks a raw TCP protocol with no
             authentication here, and the only thing this deployment publishes is the console.
             */}}
             - name: KAFKA_ADVERTISED_LISTENERS
-              value: "PLAINTEXT://{{ $name }}:9092"
+              value: "CLIENT://{{ $name }}:9092"
             - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
-              value: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+              value: "CONTROLLER:PLAINTEXT,CLIENT:SASL_PLAINTEXT"
             - name: KAFKA_INTER_BROKER_LISTENER_NAME
-              value: "PLAINTEXT"
+              value: "CLIENT"
+            - name: KAFKA_SASL_ENABLED_MECHANISMS
+              value: "PLAIN"
+            - name: KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL
+              value: "PLAIN"
+            - name: KAFKA_AUTHORIZER_CLASS_NAME
+              value: "org.apache.kafka.metadata.authorizer.StandardAuthorizer"
+            {{- /*
+            ANONYMOUS is the principal the broker presents to its own controller over the loopback
+            listener, which has no authentication to present anything better. It is a superuser
+            because the controller refuses CONTROLLER_REGISTRATION otherwise and the broker never
+            finishes starting; it is safe only because that listener is bound to 127.0.0.1 and
+            nothing outside this container can reach it.
+            */}}
+            - name: KAFKA_SUPER_USERS
+              value: "User:admin;User:ANONYMOUS"
+            - name: KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND
+              value: "false"
+            - name: KAFKA_OPTS
+              value: "-Djava.security.auth.login.config=/etc/kafka/jaas/kafka.jaas"
             - name: KAFKA_CONTROLLER_LISTENER_NAMES
               value: "CONTROLLER"
             - name: KAFKA_LOG_DIRS
@@ -164,6 +164,8 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/kafka/data
+            - name: jaas
+              mountPath: /etc/kafka/jaas
           readinessProbe:
             tcpSocket:
               port: kafka
@@ -176,6 +178,13 @@ spec:
             periodSeconds: 30
           resources:
             {{- toYaml .Values.kafka.resources | nindent 12 }}
+      volumes:
+        - name: jaas
+          secret:
+            secretName: {{ include "cp.fullname" . }}-sasl
+            items:
+              - key: kafka.jaas
+                path: kafka.jaas
   volumeClaimTemplates:
     - metadata:
         name: data
