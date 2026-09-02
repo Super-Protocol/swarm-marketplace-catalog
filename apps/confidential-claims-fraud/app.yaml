@@ -1,0 +1,321 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: AppDefinition
+
+metadata:
+  name: confidential-claims-fraud
+  title: Confidential Claims Fraud Detection
+  description: >-
+    A payer and a hospital publish into one confidential event bus that neither of them operates,
+    and a continuous SQL query finds the claims that contradict the clinical record.
+  version: "1.0.0"
+  category: data-streaming
+  sourceRepo: https://github.com/Super-Protocol/swarm-marketplace-catalog/tree/main/charts/claims-fraud-feed
+  license: LicenseRef-Confluent-Enterprise
+  tags:
+    - kafka
+    - streaming
+    - fraud-detection
+    - healthcare
+    - confidential-computing
+
+ui:
+  sections:
+    - id: access
+      title: Access
+      description: Where Control Center is served — the window onto the running pipeline.
+      fields:
+        - parameterId: consoleHostname
+          widget: hostname
+        - parameterId: adminPassword
+          widget: password
+        - parameterId: viewerPassword
+          widget: password
+
+    - id: feed
+      title: Event feed
+      description: >-
+        How fast the two parties publish, and how often a claim contradicts the clinical record.
+        The defaults produce an alert roughly every forty seconds — often enough to demonstrate,
+        rare enough that the alert still reads as an exception.
+      fields:
+        - parameterId: intervalSeconds
+          widget: number
+        - parameterId: conflictEvery
+          widget: number
+
+    - id: storage
+      title: Storage
+      fields:
+        - parameterId: kafkaStorage
+          widget: select
+
+parameters:
+  - id: consoleHostname
+    type: string
+    title: Console hostname
+    description: >-
+      Where Control Center is served. Take the one offered and the DNS is written for you.
+    required: true
+    validation:
+      pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+
+  - id: adminPassword
+    type: string
+    title: "Console administrator password (user: admin)"
+    description: Full access to the console. Generated if left blank.
+    sensitive: true
+    generated: true
+
+  - id: viewerPassword
+    type: string
+    title: "Console read-only password (user: viewer)"
+    description: Watch the pipeline without being able to change the cluster. Generated if left blank.
+    sensitive: true
+    generated: true
+
+  - id: intervalSeconds
+    type: integer
+    title: Seconds between events
+    description: Each party publishes one event per interval, both about the same patient.
+    default: 10
+    validation:
+      min: 2
+      max: 120
+
+  - id: conflictEvery
+    type: integer
+    title: One conflicting claim in every
+    description: >-
+      How many claims pass before the payer bills for a procedure at a site the patient was not
+      admitted to. Set to 1 and every claim is fraudulent, which is a worse demonstration.
+    default: 4
+    validation:
+      min: 2
+      max: 50
+
+  - id: kafkaStorage
+    type: string
+    title: Log storage
+    default: "20Gi"
+    options:
+      source:
+        type: static
+        values:
+          - value: "20Gi"
+            label: 20 GB
+          - value: "50Gi"
+            label: 50 GB
+
+  # Neither party's credential is ever shown: the point of the demonstration is that the two
+  # identities are separate and enforced, not that an operator can borrow them.
+  - id: payerPassword
+    type: string
+    title: Payer credential
+    description: The identity the payer's feed authenticates with. Generated.
+    sensitive: true
+    generated: true
+
+  - id: hospitalPassword
+    type: string
+    title: Hospital credential
+    description: The identity the hospital's feed authenticates with. Generated.
+    sensitive: true
+    generated: true
+
+  - id: analystPassword
+    type: string
+    title: Fraud analyst credential
+    description: >-
+      Reads the alert stream and nothing else — not the claims it was derived from, and not the
+      clinical events. Generated.
+    sensitive: true
+    generated: true
+
+resources:
+  min:
+    cpu: "3"
+    memory: "14Gi"
+    storage: "30Gi"
+  recommended:
+    cpu: "4"
+    memory: "16Gi"
+    storage: "60Gi"
+
+components:
+  # ---------------------------------------------------------------------------
+  # The bus. The same chart the Confluent Platform listing deploys, given three
+  # accounts instead of one: two parties that may only write their own topic,
+  # and an analyst who may only read what the query concluded.
+  # ---------------------------------------------------------------------------
+  - name: platform
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: confluent-platform
+      version: "0.2.0"
+    images:
+      - name: confluentinc/cp-server
+        digest: sha256:62e3b04c4c88d03fbb484b9976e6145f751c2e908310f3f8b2db5ae7fcd3608f
+      - name: confluentinc/cp-schema-registry
+        digest: sha256:f0cfd047a839c1ace54d93b92e3459f0d03dc3b5c9db1192a2246fd79b4f44c4
+      - name: confluentinc/cp-enterprise-control-center-next-gen
+        digest: sha256:10d81f0c7082ad3c7eed1efe4ebb702d9cdb092ba297c15b97b7fd8f89df097f
+      - name: confluentinc/cp-enterprise-prometheus
+        digest: sha256:19fa37215dc599ee81aeaf6c64efab2501b79048a3fad105eaecede5c95329a9
+      - name: confluentinc/cp-enterprise-alertmanager
+        digest: sha256:787c71440e0a17f5755854701b886b3878979d7cb62eac6897850c99ae7cd844
+      - name: confluentinc/cp-ksqldb-server
+        digest: sha256:213f8b8368fb417f75aca1c057bbde866cd8c8e802e2d0e28d1d430a34bb94bf
+    deployment:
+      values:
+        base:
+          consoleHostname: "{{ params.consoleHostname }}"
+          auth:
+            enabled: true
+            adminUser: admin
+            adminPassword: "{{ params.adminPassword }}"
+            viewerUser: viewer
+            viewerPassword: "{{ params.viewerPassword }}"
+          kafka:
+            storage: "{{ params.kafkaStorage }}"
+          schemaRegistry:
+            enabled: true
+          sasl:
+            adminPassword: "{{ params.adminPassword }}"
+            accounts:
+              - name: payer
+                password: "{{ params.payerPassword }}"
+                produce: ["claims"]
+              - name: hospital
+                password: "{{ params.hospitalPassword }}"
+                produce: ["clinical.events"]
+              - name: analyst
+                password: "{{ params.analystPassword }}"
+                consume: ["fraud.alerts"]
+                groups: ["fraud-analyst"]
+          topics:
+            - name: claims
+              partitions: 1
+            - name: clinical.events
+              partitions: 1
+          ksqldb:
+            enabled: true
+            serviceId: "claims_fraud_"
+            # The whole of the detection logic. Both sources are re-keyed by patient so they can be
+            # joined at all — a stream-stream join in Kafka is a join of co-partitioned topics, and
+            # the parties key their own events by their own identifiers, not by the patient.
+            #
+            # The rule itself is deliberately one a person can check: a claim naming a provider the
+            # patient demonstrably was not at, while admitted somewhere else. No model, no
+            # threshold — so what the confidential deployment is protecting is visibly the data and
+            # the join, not a secret algorithm.
+            # What must exist afterwards, because the ksql CLI reports success either way.
+            verify:
+              - FRAUD_ALERTS
+              - CLAIMS_BY_PATIENT
+              - EVENTS_BY_PATIENT
+            statements: |
+              CREATE STREAM IF NOT EXISTS claims (
+                claim_id VARCHAR KEY, patient_id VARCHAR, provider_id VARCHAR,
+                procedure VARCHAR, amount DOUBLE
+              ) WITH (kafka_topic='claims', value_format='JSON', partitions=1, replicas=1);
+
+              CREATE STREAM IF NOT EXISTS clinical_events (
+                event_id VARCHAR KEY, patient_id VARCHAR, hospital_id VARCHAR, status VARCHAR
+              ) WITH (kafka_topic='clinical.events', value_format='JSON', partitions=1, replicas=1);
+
+              CREATE STREAM IF NOT EXISTS claims_by_patient AS
+                SELECT * FROM claims PARTITION BY patient_id EMIT CHANGES;
+
+              CREATE STREAM IF NOT EXISTS events_by_patient AS
+                SELECT * FROM clinical_events PARTITION BY patient_id EMIT CHANGES;
+
+              CREATE STREAM IF NOT EXISTS fraud_alerts
+                WITH (kafka_topic='fraud.alerts', value_format='JSON') AS
+                SELECT c.patient_id AS patient_id, c.claim_id AS claim_id,
+                       c.provider_id AS billed_by, e.hospital_id AS admitted_at,
+                       c.amount AS amount, c.procedure AS procedure
+                FROM claims_by_patient c
+                INNER JOIN events_by_patient e WITHIN 10 MINUTES ON c.patient_id = e.patient_id
+                WHERE e.status = 'INPATIENT' AND c.provider_id <> e.hospital_id
+                EMIT CHANGES;
+
+  # ---------------------------------------------------------------------------
+  # The two parties. Separate workloads with separate credentials, because what
+  # is being shown is that neither can touch the other's stream.
+  # ---------------------------------------------------------------------------
+  - name: feed
+    dependsOn:
+      - platform
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: claims-fraud-feed
+      version: "0.1.0"
+    images:
+      - name: confluentinc/cp-server
+        digest: sha256:62e3b04c4c88d03fbb484b9976e6145f751c2e908310f3f8b2db5ae7fcd3608f
+    deployment:
+      values:
+        base:
+          bootstrapServers: "{{ components.platform.release }}-kafka:9092"
+          intervalSeconds: "{{ params.intervalSeconds }}"
+          conflictEvery: "{{ params.conflictEvery }}"
+          payer:
+            username: payer
+            password: "{{ params.payerPassword }}"
+            topic: claims
+            providerId: HOSP-B
+          hospital:
+            username: hospital
+            password: "{{ params.hospitalPassword }}"
+            topic: clinical.events
+            hospitalId: HOSP-B
+
+outputs:
+  - id: consoleUrl
+    title: Control Center
+    type: url
+    value: "https://{{ params.consoleHostname }}"
+
+  - id: signIn
+    title: Sign in to the console
+    type: string
+    value: "Two accounts: admin, which may change the cluster, and viewer, which may only watch it."
+
+  - id: adminPassword
+    title: Password for admin
+    type: secret
+    value: "{{ params.adminPassword }}"
+
+  - id: viewerPassword
+    title: Password for viewer
+    type: secret
+    value: "{{ params.viewerPassword }}"
+
+  - id: whatToWatch
+    title: What to watch
+    type: string
+    value: "Topics → claims and clinical.events fill from two different identities; fraud.alerts holds only the contradictions. ksqlDB → the query that finds them."
+
+  - id: analystCredential
+    title: Fraud analyst credential
+    type: secret
+    value: "{{ params.analystPassword }}"
+
+  - id: analystNote
+    title: What the analyst account can reach
+    type: string
+    value: "User \"analyst\" over SASL/PLAIN may read fraud.alerts and nothing else — a consumer presenting it against claims or clinical.events is refused by the broker."
+
+# Evidence exclusions are deliberately absent, and it is worth writing down why.
+#
+# What this listing would declare is settled and short: the namespace it was given, and the
+# hostname it was asked to serve. Nothing else varies between two deployments — the Kafka cluster
+# id is fixed in the chart precisely so that it does not — and passwords never appear, because they
+# are sealed into Secrets that the canonical rules strip.
+#
+# It cannot be written down yet. `evidence` is not in the published specification these listings are
+# validated against (the same gap that keeps conversational-analyst on the known-invalid list,
+# SUP-99), and a digest can only be declared after a real deployment has been measured anyway. The
+# order is: land the block in the spec, deploy, measure, declare.

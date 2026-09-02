@@ -5,7 +5,7 @@ metadata:
   name: confluent-platform
   title: Confluent Platform
   description: Apache Kafka with Confluent's Control Center — topics, schemas, consumer lag and message inspection from a browser.
-  version: "1.0.1"
+  version: "1.1.0"
   category: data-streaming
   # The chart this listing deploys, which is where the wiring can be read; Confluent Platform
   # itself is not open source.
@@ -46,6 +46,8 @@ ui:
       title: Components
       fields:
         - parameterId: schemaRegistry
+          widget: switch
+        - parameterId: ksqlDb
           widget: switch
 
     - id: storage
@@ -103,6 +105,24 @@ parameters:
       section work. Reachable inside the cluster space only.
     default: true
 
+  - id: ksqlDb
+    type: boolean
+    title: Stream processing (ksqlDB)
+    description: >-
+      Continuous SQL over the topics — joins, aggregations and derived streams that keep running as
+      events arrive. Adds a pod and about a gigabyte of memory. Confluent Platform for Apache Flink
+      is the other option and is licensed separately; ksqlDB is under the Community licence.
+    default: false
+
+  - id: clientPassword
+    type: string
+    title: "Client password (user: app)"
+    description: >-
+      Every connection to this cluster authenticates. Applications in the cluster space connect as
+      `app`, which may read and write any topic. Generated if left blank.
+    sensitive: true
+    generated: true
+
   - id: kafkaStorage
     type: string
     title: Log storage
@@ -142,7 +162,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confluent-platform
-      version: "0.1.0"
+      version: "0.2.0"
     # Pinned by digest, and the render fails if the chart ever references an image not listed here.
     # Confluent ships Control Center, its Prometheus and its Alertmanager as one matched set, so
     # the three carry the same version and are raised together.
@@ -157,10 +177,23 @@ components:
         digest: sha256:19fa37215dc599ee81aeaf6c64efab2501b79048a3fad105eaecede5c95329a9
       - name: confluentinc/cp-enterprise-alertmanager
         digest: sha256:787c71440e0a17f5755854701b886b3878979d7cb62eac6897850c99ae7cd844
+      - name: confluentinc/cp-ksqldb-server
+        digest: sha256:213f8b8368fb417f75aca1c057bbde866cd8c8e802e2d0e28d1d430a34bb94bf
     deployment:
       values:
         base:
           consoleHostname: "{{ params.consoleHostname }}"
+          sasl:
+            adminPassword: "{{ params.adminPassword }}"
+            # One account for the applications sharing this cluster. A deployment that has to keep
+            # two parties apart declares an account each, with its own topics — see the
+            # confidential-claims-fraud listing, which composes this same chart that way.
+            accounts:
+              - name: app
+                password: "{{ params.clientPassword }}"
+                produce: ["*"]
+                consume: ["*"]
+                groups: ["*"]
           license: "{{ params.licenseKey }}"
           auth:
             enabled: true
@@ -172,11 +205,20 @@ components:
             storage: "{{ params.kafkaStorage }}"
           schemaRegistry:
             enabled: true
+          # Off in the base so the switch below has something to replace, and so a deployment that
+          # does not want stream processing does not carry the pod.
+          ksqldb:
+            enabled: false
         patches:
           - op: replace
             path: schemaRegistry.enabled
             value: false
             when: "params.schemaRegistry == false"
+
+          - op: replace
+            path: ksqldb.enabled
+            value: true
+            when: "params.ksqlDb == true"
 
 outputs:
   - id: consoleUrl
@@ -202,7 +244,12 @@ outputs:
   - id: bootstrapServers
     title: Kafka, inside the cluster space
     type: string
-    value: "{{ components.platform.release }}-kafka.{{ namespace }}.svc.cluster.local:9092"
+    value: "{{ components.platform.release }}-kafka.{{ namespace }}.svc.cluster.local:9092 (SASL_PLAINTEXT / PLAIN, user \"app\")"
+
+  - id: clientPassword
+    title: Password for the app account
+    type: secret
+    value: "{{ params.clientPassword }}"
 
   - id: schemaRegistryUrl
     title: Schema Registry, inside the cluster space
@@ -215,3 +262,15 @@ outputs:
     type: string
     when: "params.licenseKey == ''"
     value: "Developer licence: one broker, every commercial feature, no expiry. An Enterprise key can be added later in Control Center under Administration → About → Licence."
+
+# Evidence exclusions are deliberately absent, and it is worth writing down why.
+#
+# What this listing would declare is settled and short: the namespace it was given, and the
+# hostname it was asked to serve. Nothing else varies between two deployments — the Kafka cluster
+# id is fixed in the chart precisely so that it does not — and passwords never appear, because they
+# are sealed into Secrets that the canonical rules strip.
+#
+# It cannot be written down yet. `evidence` is not in the published specification these listings are
+# validated against (the same gap that keeps conversational-analyst on the known-invalid list,
+# SUP-99), and a digest can only be declared after a real deployment has been measured anyway. The
+# order is: land the block in the spec, deploy, measure, declare.

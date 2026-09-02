@@ -38,6 +38,8 @@ apps:
     organization: acme-corp
   - path: apps/confluent-platform
     organization: platform-team
+  - path: apps/confidential-claims-fraud
+    organization: platform-team
   - path: apps/conversational-analyst
     organization: aivo
     secrets:

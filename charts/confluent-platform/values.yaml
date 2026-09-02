@@ -14,6 +14,28 @@
 
 consoleHostname: ""
 
+# Every client authenticates. The broker speaks SASL/PLAIN and runs the KRaft authorizer, so an
+# account reaches exactly the topics it was granted and nothing else — which is what makes it
+# possible for two parties who do not trust each other to publish into the same cluster.
+#
+# The wire inside the cluster space is not additionally encrypted: the whole space runs inside the
+# confidential boundary, and TLS between two pods of one attested deployment would protect against
+# an attacker who is already inside it. What SASL adds here is *identity*, and identity is what the
+# ACLs are written against.
+sasl:
+  adminPassword: ""
+  # Application accounts. Each is granted exactly what it declares and nothing more:
+  #   - name: payer
+  #     password: ""            # sealed by the marketplace
+  #     produce: [claims]       # Write + Describe on these topics
+  #     consume: [fraud.alerts] # Read + Describe on these topics
+  #     groups: [fraud-console] # consumer groups it may join
+  accounts: []
+
+# Topics created before anything is granted on them, so a producer does not race the first write
+# against topic auto-creation (which the authorizer would refuse anyway).
+topics: []
+
 # Enterprise license key, for a deployment that has outgrown the single-broker developer licence.
 # Empty is the normal case. It can also be pasted into Control Center after the fact — it writes
 # the key to the shared _confluent-command topic, from where the broker picks it up without a
@@ -34,10 +56,13 @@ auth:
   viewerPassword: ""
 
 kafka:
-  # Left empty, the cluster id is derived from the namespace and release, which are stable for the
-  # life of a deployment: the storage is formatted with it on first start and refuses to open under
-  # a different one, so it must not be regenerated on a reconfigure.
-  clusterId: ""
+  # Fixed on purpose, and not derived from the namespace. The log directory is formatted with this
+  # id and will not open under another, so it has to be stable for the life of a deployment; making
+  # it constant across deployments as well is what lets every deployment of this listing render
+  # byte-identical manifests, and therefore attest to one digest the publisher can declare in
+  # advance. Two deployments sharing an id costs nothing here: each has its own storage and its own
+  # Prometheus, and they never speak to one another.
+  clusterId: "c3VwZXItY29uZmx1ZW50LTAx"
   storage: 20Gi
   storageClass: ""
   heapOpts: "-Xms512m -Xmx1g"
@@ -89,6 +114,27 @@ controlCenter:
       limits:
         memory: 256Mi
 
+# Stream processing, as SQL over the topics. Confluent Platform for Apache Flink is the other
+# option and is licensed separately; ksqlDB ships under the Community licence, deploys as an
+# ordinary workload, and is attested exactly like everything else here.
+ksqldb:
+  enabled: false
+  serviceId: "swarm_"
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      memory: 2Gi
+  # Statements applied once the server is up. Written as one SQL script; re-running it is safe
+  # because every statement uses IF NOT EXISTS or CREATE OR REPLACE.
+  statements: ""
+  # Streams that must exist once the script has run. The ksql CLI exits 0 whatever the server made
+  # of the statements — a rejected query and a successful one are indistinguishable from its exit
+  # code — so the only way to know the pipeline is really there is to look for it afterwards.
+  # Names are matched as ksqlDB reports them, in upper case.
+  verify: []
+
 ingress:
   className: nginx
   annotations:
@@ -104,6 +150,10 @@ images:
   controlCenter: confluentinc/cp-enterprise-control-center-next-gen:2.5.0
   prometheus: confluentinc/cp-enterprise-prometheus:2.5.0
   alertmanager: confluentinc/cp-enterprise-alertmanager:2.5.0
+  # The server image carries the ksql CLI as well, so submitting the statements needs no second
+  # image — and no version skew, which is what a separate CLI image would bring: Confluent has not
+  # published cp-ksqldb-cli beyond 8.0.7.
+  ksqldb: confluentinc/cp-ksqldb-server:8.3.1
 
 # Which broker metrics reach Prometheus. Verbatim from Confluent's cp-all-in-one 8.3.1 compose:
 # Control Center's dashboards query exactly these series, and a shorter list renders as a console

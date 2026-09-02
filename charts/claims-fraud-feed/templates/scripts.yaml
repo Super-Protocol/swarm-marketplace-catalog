@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "feed.fullname" . }}-scripts
+data:
+  payer.sh: |
+    #!/usr/bin/env bash
+    # A payer's claim feed. Bills for a knee arthroplasty; every {{ .Values.conflictEvery }}th claim
+    # names a different provider than the site the patient is actually admitted to, which is the
+    # conflict the stream processor is looking for.
+    set -uo pipefail
+    B="{{ .Values.bootstrapServers }}"
+    until kafka-broker-api-versions --bootstrap-server "$B" --command-config /clients/payer.properties >/dev/null 2>&1; do
+      echo "waiting for the bus"; sleep 5
+    done
+    echo "payer feed started"
+    while true; do
+      # Both feeds wake on the same multiple of the interval and only then decide which patient
+      # this round is about. Without that they drift apart within a minute — each round spends a
+      # few seconds starting a JVM to send one message — the two sides stop naming the same
+      # patient, and a join that never matches looks exactly like a rule that found nothing.
+      now=$(date +%s)
+      sleep $(( {{ .Values.intervalSeconds }} - now % {{ .Values.intervalSeconds }} ))
+      bucket=$(( $(date +%s) / {{ .Values.intervalSeconds }} ))
+      patient="P-${bucket}"
+      claim="CLM-${bucket}"
+      if [ $(( bucket % {{ .Values.conflictEvery }} )) -eq 0 ]; then
+        provider="PROV-778"; amount="8450.00"
+      else
+        provider="{{ .Values.payer.providerId }}"; amount="240.00"
+      fi
+      echo "${claim}:{\"patient_id\":\"${patient}\",\"provider_id\":\"${provider}\",\"procedure\":\"27447-KNEE-ARTHROPLASTY\",\"amount\":${amount}}" \
+        | kafka-console-producer --bootstrap-server "$B" --command-config /clients/payer.properties \
+          --topic {{ .Values.payer.topic }} --property parse.key=true --property key.separator=: 2>/dev/null
+    done
+  hospital.sh: |
+    #!/usr/bin/env bash
+    # A hospital's admission feed. It knows nothing about claims, and could not read them if it did.
+    set -uo pipefail
+    B="{{ .Values.bootstrapServers }}"
+    until kafka-broker-api-versions --bootstrap-server "$B" --command-config /clients/hospital.properties >/dev/null 2>&1; do
+      echo "waiting for the bus"; sleep 5
+    done
+    echo "hospital feed started"
+    while true; do
+      now=$(date +%s)
+      sleep $(( {{ .Values.intervalSeconds }} - now % {{ .Values.intervalSeconds }} ))
+      bucket=$(( $(date +%s) / {{ .Values.intervalSeconds }} ))
+      patient="P-${bucket}"
+      echo "EVT-${bucket}:{\"patient_id\":\"${patient}\",\"hospital_id\":\"{{ .Values.hospital.hospitalId }}\",\"status\":\"INPATIENT\"}" \
+        | kafka-console-producer --bootstrap-server "$B" --command-config /clients/hospital.properties \
+          --topic {{ .Values.hospital.topic }} --property parse.key=true --property key.separator=: 2>/dev/null
+    done

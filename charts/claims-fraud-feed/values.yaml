@@ -1,0 +1,35 @@
+# The two producers of the claims-fraud demo, deliberately deployed as separate workloads with
+# separate credentials: the point being demonstrated is that neither can read or write the other's
+# topic, and that would not be shown by one process writing both.
+#
+# They coordinate without talking to each other. Every ten seconds both derive the same patient id
+# from the clock, so a claim and an admission for the same patient land inside the join window; the
+# payer alone decides whether that pair conflicts. Nothing is shared but the wall clock.
+
+bootstrapServers: ""
+
+payer:
+  username: payer
+  password: ""
+  topic: claims
+  # The provider the payer bills as when it is *not* impersonating another site.
+  providerId: HOSP-B
+
+hospital:
+  username: hospital
+  password: ""
+  topic: clinical.events
+  hospitalId: HOSP-B
+
+# One pair every this many seconds, and every Nth pair conflicts.
+intervalSeconds: 10
+conflictEvery: 4
+
+image: confluentinc/cp-server:8.3.1
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 384Mi
+  limits:
+    memory: 768Mi

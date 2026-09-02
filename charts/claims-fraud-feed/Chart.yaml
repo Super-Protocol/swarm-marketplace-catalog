@@ -1,0 +1,6 @@
+apiVersion: v2
+name: claims-fraud-feed
+description: Two independent parties publishing into a shared confidential bus — a payer's claims and a hospital's admissions.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
