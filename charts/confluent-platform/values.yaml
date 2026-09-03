@@ -48,6 +48,18 @@ license: ""
 # passwords. Turning it off leaves Kafka administration open to anyone who finds the name.
 auth:
   enabled: true
+  # Challenge at the Ingress as well as in Control Center.
+  #
+  # Control Center only protects its API: the page itself is served to anyone, and the first
+  # password prompt a browser sees comes from an XHR deep inside the loaded application. That is the
+  # fragile path — the console polls, every poll that is refused asks again, and credentials typed
+  # into one of those prompts do not reliably reach the rest.
+  #
+  # With this on, the very first request — the document — is challenged, the browser learns the
+  # credentials for the origin before the application starts, and every later call carries them.
+  # nginx forwards the header upstream after validating it, so Control Center still sees the user
+  # and still applies its own roles: admin may change the cluster, viewer may only watch it.
+  atIngress: true
   adminUser: admin
   adminPassword: ""
   # A second account that can read the cluster but not change it — Control Center's own notion of

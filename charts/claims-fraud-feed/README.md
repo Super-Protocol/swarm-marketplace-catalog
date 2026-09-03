@@ -248,6 +248,17 @@ In Control Center:
    confidentiality point: this is what the operator of an ordinary bus can read at will.
 3. **ksqlDB** → the join, running continuously rather than on a button.
 
+### Signing in
+
+The browser is challenged at the **Ingress**, before the console's own code runs, and the
+credentials it collects are forwarded to Control Center — so one prompt covers the whole session and
+`admin` and `viewer` still get their different rights inside the console.
+
+That indirection exists for a reason. Control Center protects only its API: the page itself is
+served to anyone, so the first prompt used to arrive from a request the loaded application made,
+which the browser answers less reliably — the console polls, every refused poll asks again, and the
+password typed into one of those prompts does not reach the rest.
+
 ### Showing the refusal
 
 This is the part that proves the grants are load-bearing, and it is also the part the console cannot
