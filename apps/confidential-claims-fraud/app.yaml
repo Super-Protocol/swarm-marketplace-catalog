@@ -7,7 +7,7 @@ metadata:
   description: >-
     A payer and a hospital publish into one confidential event bus that neither of them operates,
     and a continuous SQL query finds the claims that contradict the clinical record.
-  version: "1.1.0"
+  version: "1.2.0"
   category: data-streaming
   sourceRepo: https://github.com/Super-Protocol/swarm-marketplace-catalog/tree/main/charts/claims-fraud-feed
   license: LicenseRef-Confluent-Enterprise
@@ -152,7 +152,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confluent-platform
-      version: "0.3.0"
+      version: "0.4.0"
     images:
       - name: confluentinc/cp-server
         digest: sha256:62e3b04c4c88d03fbb484b9976e6145f751c2e908310f3f8b2db5ae7fcd3608f
@@ -164,6 +164,10 @@ components:
         digest: sha256:19fa37215dc599ee81aeaf6c64efab2501b79048a3fad105eaecede5c95329a9
       - name: confluentinc/cp-enterprise-alertmanager
         digest: sha256:787c71440e0a17f5755854701b886b3878979d7cb62eac6897850c99ae7cd844
+      # The authenticating proxy in front of the console. Unprivileged, because the pod runs as a
+      # non-root user and a root nginx would be refused.
+      - name: nginxinc/nginx-unprivileged
+        digest: sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
       - name: confluentinc/cp-ksqldb-server
         digest: sha256:213f8b8368fb417f75aca1c057bbde866cd8c8e802e2d0e28d1d430a34bb94bf
     deployment:
