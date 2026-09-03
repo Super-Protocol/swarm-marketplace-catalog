@@ -7,7 +7,7 @@ metadata:
   description: >-
     A payer and a hospital publish into one confidential event bus that neither of them operates,
     and a continuous SQL query finds the claims that contradict the clinical record.
-  version: "1.3.0"
+  version: "1.4.0"
   category: data-streaming
   sourceRepo: https://github.com/Super-Protocol/swarm-marketplace-catalog/tree/main/charts/claims-fraud-feed
   license: LicenseRef-Confluent-Enterprise
@@ -93,6 +93,22 @@ parameters:
       min: 2
       max: 50
 
+  - id: consoleInternalPassword
+    type: string
+    title: Console internal credential
+    description: >-
+      What the sign-in proxy authenticates to Control Center with once it knows who signed in.
+      Never shown and never typed; it exists so the console can still tell admin from viewer.
+    sensitive: true
+    generated: true
+
+  - id: consoleCookieSecret
+    type: string
+    title: Console session key
+    description: Signs the console's session cookie. Changing it signs everyone out.
+    sensitive: true
+    generated: true
+
   - id: kafkaStorage
     type: string
     title: Log storage
@@ -152,7 +168,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confluent-platform
-      version: "0.5.0"
+      version: "0.6.0"
     images:
       - name: confluentinc/cp-server
         digest: sha256:62e3b04c4c88d03fbb484b9976e6145f751c2e908310f3f8b2db5ae7fcd3608f
@@ -164,10 +180,10 @@ components:
         digest: sha256:19fa37215dc599ee81aeaf6c64efab2501b79048a3fad105eaecede5c95329a9
       - name: confluentinc/cp-enterprise-alertmanager
         digest: sha256:787c71440e0a17f5755854701b886b3878979d7cb62eac6897850c99ae7cd844
-      # The authenticating proxy in front of the console. Unprivileged, because the pod runs as a
-      # non-root user and a root nginx would be refused.
-      - name: nginxinc/nginx-unprivileged
-        digest: sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
+      # Collects the password with a form and carries it afterwards in a session cookie, then
+      # presents the signed-in user to Control Center so the console still applies its roles.
+      - name: quay.io/oauth2-proxy/oauth2-proxy
+        digest: sha256:56e3daedf765c7a1eea6e366fbe684be7d3084830ade14b6174570d3c7960954
       - name: confluentinc/cp-ksqldb-server
         digest: sha256:213f8b8368fb417f75aca1c057bbde866cd8c8e802e2d0e28d1d430a34bb94bf
     deployment:
@@ -180,6 +196,8 @@ components:
             adminPassword: "{{ params.adminPassword }}"
             viewerUser: viewer
             viewerPassword: "{{ params.viewerPassword }}"
+            internalPassword: "{{ params.consoleInternalPassword }}"
+            cookieSecret: "{{ params.consoleCookieSecret }}"
           kafka:
             storage: "{{ params.kafkaStorage }}"
           schemaRegistry:
@@ -285,7 +303,7 @@ outputs:
   - id: signIn
     title: Sign in to the console
     type: string
-    value: "Two accounts: admin, which may change the cluster, and viewer, which may only watch it."
+    value: "A form asks for a user and password. Two accounts: admin, which may change the cluster, and viewer, which may only watch it."
 
   - id: adminPassword
     title: Password for admin

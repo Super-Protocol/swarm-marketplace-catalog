@@ -250,26 +250,27 @@ In Control Center:
 
 ### Signing in
 
-The browser is challenged by a small proxy in front of the console, before any of the console's own
-code runs, and the credentials it collects are passed through to Control Center — so one prompt
-covers the whole session and `admin` and `viewer` still get their different rights inside it.
+A form asks for a user and password, and a session cookie carries it from there. Two accounts:
+`admin`, which may change the cluster, and `viewer`, which may only watch it.
 
-Two things about that proxy are easy to get wrong, and both were:
+That is not the obvious choice — Control Center supports HTTP Basic — and it is worth writing down
+why the obvious choice does not survive a browser. Control Center protects its API but serves its
+page to anyone, so the first password prompt arrives from a request the *loaded application* makes.
+Answering that prompt does not cover the rest: the console issues many requests at once, and some
+of them — a web app manifest, an icon — are fetched in a mode where the browser cannot attach
+credentials at all. Each refusal asks again. Typing the credentials into the address bar works
+precisely because the browser then attaches them to everything itself.
 
-**It cannot live at the Ingress.** ingress-nginx deliberately sets `proxy_set_header Authorization ""`
-when it performs basic auth, so the console would authenticate nobody and refuse every call.
+Two intermediate attempts are recorded here because they look reasonable and are not:
 
-**It must not challenge the web app manifest.** A manifest is fetched in "omit credentials" mode
-unless its link carries `crossorigin="use-credentials"`, which Control Center's does not — so a
-password prompt for it is unanswerable: the browser cannot attach credentials to a request made that
-way, asks, retries anonymously, and asks again. That is the endless prompt, and it is why the
-correct password appears not to work. The manifest, the icons it lists and the favicon are therefore
-served without a challenge; they are branding Control Center hands to anyone regardless.
+- **Basic auth at the Ingress.** ingress-nginx sets `proxy_set_header Authorization ""` when it
+  performs basic auth, so the console authenticates nobody and refuses every call.
+- **Basic auth in a proxy beside the console.** Better — the header does reach the console — but a
+  challenge still lands on the manifest, which no browser can answer.
 
-That indirection exists for a reason. Control Center protects only its API: the page itself is
-served to anyone, so the first prompt used to arrive from a request the loaded application made,
-which the browser answers less reliably — the console polls, every refused poll asks again, and the
-password typed into one of those prompts does not reach the rest.
+What works is collecting the credential once, in a form, and carrying it in a cookie afterwards.
+The proxy then presents the signed-in user to Control Center over an internal password nobody
+types, which is what keeps `admin` and `viewer` distinct inside the console.
 
 ### Showing the refusal
 
