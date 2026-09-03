@@ -30,9 +30,9 @@ root="$(cd "$here/../.." && pwd)"
 cd "$root"
 
 # swarm-marketplace-spec, the revision these listings are written against:
-# `widget: hostname` (SUP-104), on top of `type: array` + `widget: multiselect`
-# (SUP-98).
-SPEC_REF="${SPEC_REF:-db8e2af8602098dc39a383a2a63467067f8faaa3}"
+# the `evidence` block, on top of `widget: hostname` (SUP-104) and `type: array` +
+# `widget: multiselect` (SUP-98).
+SPEC_REF="${SPEC_REF:-e9d72595b4785dcfa9e86d7d1e517ad8f2f41ebf}"
 SPEC_REPO="${SPEC_REPO:-Super-Protocol/swarm-marketplace-spec}"
 
 # Listings that predate strict validation and do not pass it (SUP-99). They are

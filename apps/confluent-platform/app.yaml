@@ -5,7 +5,7 @@ metadata:
   name: confluent-platform
   title: Confluent Platform
   description: Apache Kafka with Confluent's Control Center — topics, schemas, consumer lag and message inspection from a browser.
-  version: "1.5.0"
+  version: "1.6.0"
   category: data-streaming
   # The chart this listing deploys, which is where the wiring can be read; Confluent Platform
   # itself is not open source.
@@ -178,7 +178,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confluent-platform
-      version: "0.6.0"
+      version: "0.7.0"
     # Pinned by digest, and the render fails if the chart ever references an image not listed here.
     # Confluent ships Control Center, its Prometheus and its Alertmanager as one matched set, so
     # the three carry the same version and are raised together.
@@ -285,14 +285,15 @@ outputs:
     when: "params.licenseKey == ''"
     value: "Developer licence: one broker, every commercial feature, no expiry. An Enterprise key can be added later in Control Center under Administration → About → Licence."
 
-# Evidence exclusions are deliberately absent, and it is worth writing down why.
+# What this version attests to.
 #
-# What this listing would declare is settled and short: the namespace it was given, and the
-# hostname it was asked to serve. Nothing else varies between two deployments — the Kafka cluster
-# id is fixed in the chart precisely so that it does not — and passwords never appear, because they
-# are sealed into Secrets that the canonical rules strip.
+# The one field that legitimately differs between two deployments — the hostname the operator chose
+# — is excluded by the chart, on the Ingress it belongs to, which is the mechanism the specification
+# defines and the one to prefer when the chart is yours. The namespace and the platform's own
+# deployment label are already stripped by the canonical rules, and every generated password lives
+# in a Secret, which is lifted out of the manifests before they are digested.
 #
-# It cannot be written down yet. `evidence` is not in the published specification these listings are
-# validated against (the same gap that keeps conversational-analyst on the known-invalid list,
-# SUP-99), and a digest can only be declared after a real deployment has been measured anyway. The
-# order is: land the block in the spec, deploy, measure, declare.
+# With that in place two deployments of this version render an identical snapshot — measured, not
+# assumed. What is still missing is `expectedDigest`: it cannot be derived from the charts, because
+# a cluster defaults fields no template writes, so it has to be read from a deployment that has
+# actually run and declared here afterwards.

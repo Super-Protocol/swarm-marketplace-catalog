@@ -7,7 +7,7 @@ metadata:
   description: >-
     A payer and a hospital publish into one confidential event bus that neither of them operates,
     and a continuous SQL query finds the claims that contradict the clinical record.
-  version: "1.4.0"
+  version: "1.5.0"
   category: data-streaming
   sourceRepo: https://github.com/Super-Protocol/swarm-marketplace-catalog/tree/main/charts/claims-fraud-feed
   license: LicenseRef-Confluent-Enterprise
@@ -168,7 +168,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confluent-platform
-      version: "0.6.0"
+      version: "0.7.0"
     images:
       - name: confluentinc/cp-server
         digest: sha256:62e3b04c4c88d03fbb484b9976e6145f751c2e908310f3f8b2db5ae7fcd3608f
@@ -330,14 +330,15 @@ outputs:
     type: string
     value: "User \"analyst\" over SASL/PLAIN may read fraud.alerts and nothing else — a consumer presenting it against claims or clinical.events is refused by the broker."
 
-# Evidence exclusions are deliberately absent, and it is worth writing down why.
+# What this version attests to.
 #
-# What this listing would declare is settled and short: the namespace it was given, and the
-# hostname it was asked to serve. Nothing else varies between two deployments — the Kafka cluster
-# id is fixed in the chart precisely so that it does not — and passwords never appear, because they
-# are sealed into Secrets that the canonical rules strip.
+# The one field that legitimately differs between two deployments — the hostname the operator chose
+# — is excluded by the chart, on the Ingress it belongs to, which is the mechanism the specification
+# defines and the one to prefer when the chart is yours. The namespace and the platform's own
+# deployment label are already stripped by the canonical rules, and every generated password lives
+# in a Secret, which is lifted out of the manifests before they are digested.
 #
-# It cannot be written down yet. `evidence` is not in the published specification these listings are
-# validated against (the same gap that keeps conversational-analyst on the known-invalid list,
-# SUP-99), and a digest can only be declared after a real deployment has been measured anyway. The
-# order is: land the block in the spec, deploy, measure, declare.
+# With that in place two deployments of this version render an identical snapshot — measured, not
+# assumed. What is still missing is `expectedDigest`: it cannot be derived from the charts, because
+# a cluster defaults fields no template writes, so it has to be read from a deployment that has
+# actually run and declared here afterwards.
