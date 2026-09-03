@@ -11,7 +11,8 @@ kind: ConfigMap
 metadata:
   name: {{ $name }}-seed
 data:
-{{ (.Files.Glob "files/*").AsConfig | indent 2 }}
+{{- /* Only the seed configuration; files/ also holds the proxy's sign-in page. */}}
+{{ (.Files.Glob "files/*.yml").AsConfig | indent 2 }}
 ---
 {{- if .Values.auth.enabled }}
 apiVersion: v1
@@ -39,10 +40,16 @@ stringData:
   `user: password,role` per line. Administrators may change the cluster; Restricted is Control
   Center's read-only role, which cannot create or delete topics.
   */}}
+  {{- /*
+  The console's own accounts. Both carry the *internal* password, because a person never presents
+  a credential to Control Center directly — the proxy in front does, on their behalf, once it has
+  established who they are. What Control Center still decides is the role, and it decides it from
+  the user name.
+  */}}
   password.properties: |
-    {{ .Values.auth.adminUser }}: {{ required "auth.adminPassword is required when auth is enabled" .Values.auth.adminPassword }},Administrators
+    {{ .Values.auth.adminUser }}: {{ required "auth.internalPassword is required" .Values.auth.internalPassword }},Administrators
     {{- if .Values.auth.viewerPassword }}
-    {{ .Values.auth.viewerUser }}: {{ .Values.auth.viewerPassword }},Restricted
+    {{ .Values.auth.viewerUser }}: {{ .Values.auth.internalPassword }},Restricted
     {{- end }}
 {{- if .Values.auth.proxy }}
 ---
@@ -58,11 +65,14 @@ metadata:
   name: {{ $name }}-htpasswd
 type: Opaque
 stringData:
-  auth: |
-    {{ htpasswd .Values.auth.adminUser .Values.auth.adminPassword }}
+  {{- /* The passwords a person types, hashed the way the proxy checks them. */}}
+  htpasswd: |
+    {{ htpasswd .Values.auth.adminUser (required "auth.adminPassword is required" .Values.auth.adminPassword) }}
     {{- if .Values.auth.viewerPassword }}
     {{ htpasswd .Values.auth.viewerUser .Values.auth.viewerPassword }}
     {{- end }}
+  cookieSecret: {{ required "auth.cookieSecret is required" .Values.auth.cookieSecret | quote }}
+  internalPassword: {{ .Values.auth.internalPassword | quote }}
 {{- end }}
 ---
 {{- end }}
@@ -225,26 +235,65 @@ spec:
         {{- if .Values.auth.proxy }}
         - name: console-proxy
           image: {{ .Values.images.consoleProxy | quote }}
+          args:
+            - --http-address=0.0.0.0:4180
+            - --upstream=http://127.0.0.1:9021
+            - --htpasswd-file=/etc/console-proxy/htpasswd
+            - --display-htpasswd-form=true
+            - --custom-templates-dir=/etc/console-proxy/templates
+            {{- /* The gateway terminates TLS, so the scheme has to come from its headers. */}}
+            - --reverse-proxy=true
+            - --cookie-secure=true
+            - --email-domain=*
+            {{- /* Nothing federates here; the accounts are the htpasswd file. These are required
+            configuration all the same, and are never used. */}}
+            - --provider=google
+            - --client-id=unused
+            - --client-secret=unused
+            {{- /* What Control Center is told about the caller. */}}
+            - --pass-basic-auth=true
+            - --pass-user-headers=true
+            {{- /*
+            Fetched by the browser in a mode that carries neither credentials nor cookies, so a
+            challenge here is a question it cannot answer — it asks, retries anonymously and asks
+            again. They are the application's own branding, which Control Center serves to anyone.
+            */}}
+            - --skip-auth-route=GET=^/dist/manifest\.webmanifest$
+            - --skip-auth-route=GET=^/dist/yandex-browser-manifest\.json$
+            - --skip-auth-route=GET=^/dist/.+\.(png|ico|svg|webp)$
+            - --skip-auth-route=GET=^/favicon\.ico$
+          env:
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}-htpasswd
+                  key: cookieSecret
+            - name: OAUTH2_PROXY_BASIC_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}-htpasswd
+                  key: internalPassword
           ports:
             - name: proxy
-              containerPort: 8080
+              containerPort: 4180
           volumeMounts:
-            - name: proxy-config
-              mountPath: /etc/nginx/conf.d
             - name: proxy-auth
-              mountPath: /etc/nginx/auth
+              mountPath: /etc/console-proxy
+            - name: proxy-templates
+              mountPath: /etc/console-proxy/templates
           readinessProbe:
             httpGet:
-              path: /healthz
+              {{- /* Served without a session by the proxy itself. */}}
+              path: /ping
               port: proxy
             initialDelaySeconds: 5
             periodSeconds: 10
           resources:
             requests:
               cpu: 20m
-              memory: 32Mi
+              memory: 48Mi
             limits:
-              memory: 64Mi
+              memory: 128Mi
         {{- end }}
         - name: prometheus
           image: {{ .Values.images.prometheus | quote }}
@@ -286,12 +335,12 @@ spec:
             {{- toYaml .Values.controlCenter.alertmanager.resources | nindent 12 }}
       volumes:
         {{- if .Values.auth.proxy }}
-        - name: proxy-config
-          configMap:
-            name: {{ $name }}-proxy
         - name: proxy-auth
           secret:
             secretName: {{ $name }}-htpasswd
+        - name: proxy-templates
+          configMap:
+            name: {{ $name }}-signin
         {{- end }}
         - name: seed
           configMap:

@@ -48,20 +48,18 @@ license: ""
 # passwords. Turning it off leaves Kafka administration open to anyone who finds the name.
 auth:
   enabled: true
-  # An authenticating proxy in front of the console.
+  # A sign-in form in front of the console, and why it is not HTTP Basic.
   #
-  # Control Center protects its API and serves its page to anyone, so the first password prompt a
-  # browser sees comes from a request the loaded application makes rather than from the navigation.
-  # That is the fragile path: the console polls, every refused poll asks again, and a password typed
-  # into one of those prompts does not reliably reach the rest.
+  # Control Center protects its API but serves its page to anyone, so a browser's first password
+  # prompt arrives from a request the loaded application makes. Answering that prompt does not
+  # reliably cover the rest: the console issues many requests at once, some of them — a web app
+  # manifest, an icon — in a mode where the browser cannot attach credentials at all, and each
+  # refusal asks again. Typing the password into the address bar works precisely because the
+  # browser then attaches it to everything itself.
   #
-  # A small nginx in the same pod challenges the document itself and passes the credentials through,
-  # so the browser learns them before any console code runs and Control Center still sees who is
-  # calling — which is what keeps admin and viewer different.
-  #
-  # Doing this at the Ingress instead does not work: ingress-nginx deliberately sets
-  # `proxy_set_header Authorization ""` when it performs basic auth, so the console would then
-  # authenticate nobody and refuse every call.
+  # So the credential is collected once, by a form, and carried afterwards by a session cookie.
+  # The proxy then presents the signed-in user to Control Center over its own internal password,
+  # which is what keeps admin and viewer distinct inside the console.
   proxy: true
   adminUser: admin
   adminPassword: ""
@@ -69,6 +67,11 @@ auth:
   # a restricted role, useful for handing the console out more widely than its administration.
   viewerUser: viewer
   viewerPassword: ""
+  # Never shown to anyone and never typed: what the proxy authenticates to Control Center with
+  # once it knows who signed in.
+  internalPassword: ""
+  # Signs the session cookie. Changing it signs everyone out.
+  cookieSecret: ""
 
 kafka:
   # Fixed on purpose, and not derived from the namespace. The log directory is formatted with this
@@ -165,7 +168,7 @@ images:
   controlCenter: confluentinc/cp-enterprise-control-center-next-gen:2.5.0
   prometheus: confluentinc/cp-enterprise-prometheus:2.5.0
   alertmanager: confluentinc/cp-enterprise-alertmanager:2.5.0
-  consoleProxy: nginxinc/nginx-unprivileged:1.29-alpine
+  consoleProxy: quay.io/oauth2-proxy/oauth2-proxy:v7.13.0
   # The server image carries the ksql CLI as well, so submitting the statements needs no second
   # image — and no version skew, which is what a separate CLI image would bring: Confluent has not
   # published cp-ksqldb-cli beyond 8.0.7.

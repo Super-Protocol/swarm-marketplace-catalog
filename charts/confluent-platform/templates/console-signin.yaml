@@ -1,0 +1,16 @@
+{{- if .Values.auth.proxy }}
+{{- /*
+The sign-in page, read verbatim from files/ because it is a Go template of the proxy's own and its
+{{ }} must survive this one untouched.
+
+The proxy's built-in page offers a provider button beside the form. Nothing federates here, so that
+button would lead nowhere; this page is the form alone.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cp.console.name" . }}-signin
+data:
+  sign_in.html: |
+{{ .Files.Get "files/sign_in.html" | indent 4 }}
+{{- end }}
