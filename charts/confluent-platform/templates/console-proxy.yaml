@@ -36,6 +36,38 @@ data:
         return 200 "ok\n";
       }
 
+      {{- /*
+      What a browser fetches anonymously, and therefore must not be challenged.
+
+      A web app manifest is requested in "omit credentials" mode unless its link carries
+      crossorigin="use-credentials" — Control Center's does not — and the icons it lists are
+      fetched the same way. A password prompt for one of those is unanswerable: the browser cannot
+      attach credentials to a request made in that mode, so it asks, retries anonymously, and asks
+      again. That is the loop, and it is why the right password appears not to work.
+
+      Nothing is given away by leaving them open. They are the application's own branding, and
+      Control Center serves them to anyone with or without this proxy.
+      */}}
+      location = /dist/manifest.webmanifest {
+        auth_basic off;
+        proxy_pass http://127.0.0.1:9021;
+      }
+
+      location = /dist/yandex-browser-manifest.json {
+        auth_basic off;
+        proxy_pass http://127.0.0.1:9021;
+      }
+
+      location = /favicon.ico {
+        auth_basic off;
+        proxy_pass http://127.0.0.1:9021;
+      }
+
+      location ~* ^/dist/.+\.(png|ico|svg|webp)$ {
+        auth_basic off;
+        proxy_pass http://127.0.0.1:9021;
+      }
+
       location / {
         proxy_pass http://127.0.0.1:9021;
         proxy_http_version 1.1;

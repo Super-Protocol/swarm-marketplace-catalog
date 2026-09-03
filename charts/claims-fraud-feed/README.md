@@ -254,9 +254,17 @@ The browser is challenged by a small proxy in front of the console, before any o
 code runs, and the credentials it collects are passed through to Control Center — so one prompt
 covers the whole session and `admin` and `viewer` still get their different rights inside it.
 
-Doing that at the Ingress instead does not work, which is worth knowing before anyone tries:
-ingress-nginx deliberately sets `proxy_set_header Authorization ""` when it performs basic auth, so
-the console would authenticate nobody and refuse every call it was asked to make.
+Two things about that proxy are easy to get wrong, and both were:
+
+**It cannot live at the Ingress.** ingress-nginx deliberately sets `proxy_set_header Authorization ""`
+when it performs basic auth, so the console would authenticate nobody and refuse every call.
+
+**It must not challenge the web app manifest.** A manifest is fetched in "omit credentials" mode
+unless its link carries `crossorigin="use-credentials"`, which Control Center's does not — so a
+password prompt for it is unanswerable: the browser cannot attach credentials to a request made that
+way, asks, retries anonymously, and asks again. That is the endless prompt, and it is why the
+correct password appears not to work. The manifest, the icons it lists and the favicon are therefore
+served without a challenge; they are branding Control Center hands to anyone regardless.
 
 That indirection exists for a reason. Control Center protects only its API: the page itself is
 served to anyone, so the first prompt used to arrive from a request the loaded application made,
