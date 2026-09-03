@@ -44,6 +44,26 @@ stringData:
     {{- if .Values.auth.viewerPassword }}
     {{ .Values.auth.viewerUser }}: {{ .Values.auth.viewerPassword }},Restricted
     {{- end }}
+{{- if .Values.auth.atIngress }}
+---
+{{- /*
+The same two accounts, in the form nginx checks them against at the Ingress. Hashed with bcrypt and
+a fresh salt on every render, which is why it belongs in a Secret: a Secret is lifted out of the
+manifests and sealed, and its contents are stripped from the evidence snapshot, so the salt cannot
+make two deployments attest differently.
+*/}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}-htpasswd
+type: Opaque
+stringData:
+  auth: |
+    {{ htpasswd .Values.auth.adminUser .Values.auth.adminPassword }}
+    {{- if .Values.auth.viewerPassword }}
+    {{ htpasswd .Values.auth.viewerUser .Values.auth.viewerPassword }}
+    {{- end }}
+{{- end }}
 ---
 {{- end }}
 apiVersion: v1
