@@ -12,6 +12,17 @@ metadata:
   name: {{ include "cp.console.name" . }}
   annotations:
     {{- toYaml .Values.ingress.annotations | nindent 4 }}
+    {{- /*
+    The hostname is the operator's choice, not a property of the software, so it is kept out of the
+    deployment evidence — which is what makes the digest a fact about this version rather than about
+    one deployment of it. It is the only such field: the namespace and the platform's own deployment
+    label are already stripped by the canonical rules.
+
+    Declared here, on the object it applies to, because that is the mechanism the specification
+    defines. The exclusion itself stays inside the digest, so it cannot be widened after publication
+    without changing what was published.
+    */}}
+    swarm.io/exclude-evidence-fields: "/spec/rules/0/host"
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   rules:
