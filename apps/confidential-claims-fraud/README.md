@@ -7,6 +7,9 @@ Everything runs in one cluster space: the bus, the stream processing, and both p
 makes it a demonstration rather than a diagram is that the isolation is enforced by the broker
 rather than asserted by a slide.
 
+> **How it works, with diagrams:** [`charts/claims-fraud-feed/README.md`](../../charts/claims-fraud-feed)
+> — the topology, who may read what, the join, and why the two feeds watch the clock.
+
 ## Why this needs a confidential bus
 
 The signal only exists across parties. A claim naming a provider is unremarkable; a claim naming a
