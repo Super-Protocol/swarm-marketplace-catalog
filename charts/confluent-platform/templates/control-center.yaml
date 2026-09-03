@@ -44,7 +44,7 @@ stringData:
     {{- if .Values.auth.viewerPassword }}
     {{ .Values.auth.viewerUser }}: {{ .Values.auth.viewerPassword }},Restricted
     {{- end }}
-{{- if .Values.auth.atIngress }}
+{{- if .Values.auth.proxy }}
 ---
 {{- /*
 The same two accounts, in the form nginx checks them against at the Ingress. Hashed with bcrypt and
@@ -78,7 +78,11 @@ spec:
   ports:
     - name: http
       port: 9021
+      {{- if .Values.auth.proxy }}
+      targetPort: proxy
+      {{- else }}
       targetPort: http
+      {{- end }}
     {{- /* The broker pushes its metrics here; nothing outside the namespace reaches it. */}}
     - name: otlp
       port: 9090
@@ -218,6 +222,30 @@ spec:
             failureThreshold: 20
           resources:
             {{- toYaml .Values.controlCenter.controlCenter.resources | nindent 12 }}
+        {{- if .Values.auth.proxy }}
+        - name: console-proxy
+          image: {{ .Values.images.consoleProxy | quote }}
+          ports:
+            - name: proxy
+              containerPort: 8080
+          volumeMounts:
+            - name: proxy-config
+              mountPath: /etc/nginx/conf.d
+            - name: proxy-auth
+              mountPath: /etc/nginx/auth
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: proxy
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+        {{- end }}
         - name: prometheus
           image: {{ .Values.images.prometheus | quote }}
           ports:
@@ -257,6 +285,14 @@ spec:
           resources:
             {{- toYaml .Values.controlCenter.alertmanager.resources | nindent 12 }}
       volumes:
+        {{- if .Values.auth.proxy }}
+        - name: proxy-config
+          configMap:
+            name: {{ $name }}-proxy
+        - name: proxy-auth
+          secret:
+            secretName: {{ $name }}-htpasswd
+        {{- end }}
         - name: seed
           configMap:
             name: {{ $name }}-seed

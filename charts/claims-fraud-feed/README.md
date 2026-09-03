@@ -250,9 +250,13 @@ In Control Center:
 
 ### Signing in
 
-The browser is challenged at the **Ingress**, before the console's own code runs, and the
-credentials it collects are forwarded to Control Center — so one prompt covers the whole session and
-`admin` and `viewer` still get their different rights inside the console.
+The browser is challenged by a small proxy in front of the console, before any of the console's own
+code runs, and the credentials it collects are passed through to Control Center — so one prompt
+covers the whole session and `admin` and `viewer` still get their different rights inside it.
+
+Doing that at the Ingress instead does not work, which is worth knowing before anyone tries:
+ingress-nginx deliberately sets `proxy_set_header Authorization ""` when it performs basic auth, so
+the console would authenticate nobody and refuse every call it was asked to make.
 
 That indirection exists for a reason. Control Center protects only its API: the page itself is
 served to anyone, so the first prompt used to arrive from a request the loaded application made,

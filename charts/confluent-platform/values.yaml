@@ -48,18 +48,21 @@ license: ""
 # passwords. Turning it off leaves Kafka administration open to anyone who finds the name.
 auth:
   enabled: true
-  # Challenge at the Ingress as well as in Control Center.
+  # An authenticating proxy in front of the console.
   #
-  # Control Center only protects its API: the page itself is served to anyone, and the first
-  # password prompt a browser sees comes from an XHR deep inside the loaded application. That is the
-  # fragile path — the console polls, every poll that is refused asks again, and credentials typed
-  # into one of those prompts do not reliably reach the rest.
+  # Control Center protects its API and serves its page to anyone, so the first password prompt a
+  # browser sees comes from a request the loaded application makes rather than from the navigation.
+  # That is the fragile path: the console polls, every refused poll asks again, and a password typed
+  # into one of those prompts does not reliably reach the rest.
   #
-  # With this on, the very first request — the document — is challenged, the browser learns the
-  # credentials for the origin before the application starts, and every later call carries them.
-  # nginx forwards the header upstream after validating it, so Control Center still sees the user
-  # and still applies its own roles: admin may change the cluster, viewer may only watch it.
-  atIngress: true
+  # A small nginx in the same pod challenges the document itself and passes the credentials through,
+  # so the browser learns them before any console code runs and Control Center still sees who is
+  # calling — which is what keeps admin and viewer different.
+  #
+  # Doing this at the Ingress instead does not work: ingress-nginx deliberately sets
+  # `proxy_set_header Authorization ""` when it performs basic auth, so the console would then
+  # authenticate nobody and refuse every call.
+  proxy: true
   adminUser: admin
   adminPassword: ""
   # A second account that can read the cluster but not change it — Control Center's own notion of
@@ -162,6 +165,7 @@ images:
   controlCenter: confluentinc/cp-enterprise-control-center-next-gen:2.5.0
   prometheus: confluentinc/cp-enterprise-prometheus:2.5.0
   alertmanager: confluentinc/cp-enterprise-alertmanager:2.5.0
+  consoleProxy: nginxinc/nginx-unprivileged:1.29-alpine
   # The server image carries the ksql CLI as well, so submitting the statements needs no second
   # image — and no version skew, which is what a separate CLI image would bring: Confluent has not
   # published cp-ksqldb-cli beyond 8.0.7.

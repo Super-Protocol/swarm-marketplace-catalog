@@ -12,13 +12,6 @@ metadata:
   name: {{ include "cp.console.name" . }}
   annotations:
     {{- toYaml .Values.ingress.annotations | nindent 4 }}
-    {{- if and .Values.auth.enabled .Values.auth.atIngress }}
-    nginx.ingress.kubernetes.io/auth-type: basic
-    nginx.ingress.kubernetes.io/auth-secret: {{ include "cp.console.name" . }}-htpasswd
-    {{- /* The same realm Control Center uses, so a browser holds one credential for this origin
-    rather than one per challenger. */}}
-    nginx.ingress.kubernetes.io/auth-realm: "c3"
-    {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   rules:
