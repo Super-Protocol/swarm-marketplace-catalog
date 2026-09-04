@@ -7,7 +7,7 @@ metadata:
   description: >-
     A payer and a hospital publish into one confidential event bus that neither of them operates,
     and a continuous SQL query finds the claims that contradict the clinical record.
-  version: "1.5.0"
+  version: "1.6.0"
   category: data-streaming
   sourceRepo: https://github.com/Super-Protocol/swarm-marketplace-catalog/tree/main/charts/claims-fraud-feed
   license: LicenseRef-Confluent-Enterprise
@@ -332,13 +332,24 @@ outputs:
 
 # What this version attests to.
 #
-# The one field that legitimately differs between two deployments — the hostname the operator chose
-# — is excluded by the chart, on the Ingress it belongs to, which is the mechanism the specification
-# defines and the one to prefer when the chart is yours. The namespace and the platform's own
-# deployment label are already stripped by the canonical rules, and every generated password lives
-# in a Secret, which is lifted out of the manifests before they are digested.
+# Measured, not assumed: this is the digest the cloud published and signed for a deployment of
+# 1.5.0, read back from its evidence. It cannot be derived from the charts — a cluster defaults
+# fields no template writes — and declaring it changes nothing that is sent, so a value measured on
+# the version before this one holds for this one.
 #
-# With that in place two deployments of this version render an identical snapshot — measured, not
-# assumed. What is still missing is `expectedDigest`: it cannot be derived from the charts, because
-# a cluster defaults fields no template writes, so it has to be read from a deployment that has
-# actually run and declared here afterwards.
+# The exclusion is the hostname the operator chose, which is the only field that legitimately
+# differs between two deployments: the namespace and the platform's own deployment label are
+# already stripped by the canonical rules, and every generated password lives in a Secret, which is
+# lifted out of the manifests before they are digested.
+#
+# It is stated twice on purpose. The chart annotates its own Ingress, which is the mechanism the
+# specification prefers when the chart is yours; the block below is what the marketplace reads to
+# show the exclusion on the listing, and a digest presented with "no exclusions" beside it would be
+# a misleading answer to the only question that matters about it. Both routes stamp the same
+# annotation, so the manifests — and the digest — are identical either way.
+evidence:
+  expectedDigest: "a6e39b9f5263cb6309432dede82268e501359c2224d25f221f517aafc01f58cb"
+  exclude:
+    - match: { kind: Ingress, name: confidential-claims-fraud-platform-control-center }
+      fields:
+        - "/spec/rules/0/host"
