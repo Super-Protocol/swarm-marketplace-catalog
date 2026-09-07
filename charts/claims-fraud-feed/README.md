@@ -38,26 +38,34 @@ flowchart LR
   PF["Payer<br/>claim feed"]
   HF["Hospital<br/>admission feed"]
 
-  subgraph space["Cluster space — one confidential boundary"]
+  subgraph space["Confidential cluster space"]
     direction LR
-    CT["topic: claims"]
-    ET["topic: clinical.events"]
-    KSQL["ksqlDB<br/>continuous join"]
-    AT["topic: fraud.alerts"]
-    CT --> KSQL
-    ET --> KSQL
-    KSQL --> AT
+    subgraph cp["Confluent Platform"]
+      direction LR
+      CT["Kafka topic<br/>claims"]
+      ET["Kafka topic<br/>clinical.events"]
+      KSQL["ksqlDB<br/>continuous join"]
+      AT["Kafka topic<br/>fraud.alerts"]
+      C3["Control Center<br/>the console, over every topic"]
+      CT --> KSQL
+      ET --> KSQL
+      KSQL --> AT
+    end
   end
 
   PF -->|"user: payer"| CT
   HF -->|"user: hospital"| ET
   AT -->|"user: analyst"| AN["Fraud analyst<br/>or an agent"]
-  C3["Control Center<br/>console, HTTP Basic"] -.->|"sees every topic"| space
 ```
 
-Everything inside the box is one deployment in one namespace. The parties are drawn outside it
-because that is what they represent — in this demonstration they run inside it too, since the point
-being made is about who can *read* what, not about network topology.
+The inner box is stock Confluent Platform — one Kafka broker, ksqlDB for the continuous query, and
+Control Center as the console — and the outer one is a single cluster space, which is to say one
+deployment in one namespace inside the confidential boundary. Nothing about Confluent is modified;
+what changes is where it runs and who can reach into it.
+
+The two parties are drawn outside because that is what they represent. In this demonstration they
+run inside the same space, since the point being made is about who can *read* what, not about
+network topology.
 
 ---
 
