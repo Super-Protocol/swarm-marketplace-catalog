@@ -44,7 +44,7 @@ somewhere. They need network the first time, to pull the chart.
 
 ## Beyond lint and goldens
 
-Five checks in `run.sh` are not a golden diff, and each exists because a golden diff
+Six checks in `run.sh` are not a golden diff, and each exists because a golden diff
 cannot answer the question:
 
 - **Every object, parsed as a cluster parses it** (`inventory.py`). A template that loses a
@@ -59,6 +59,13 @@ cannot answer the question:
   chart itself would pull. A listing overrides the defaults too, which leaves an empty or
   placeholder default invisible until somebody runs `helm install` with no `--set`, or until a
   chart is published to an append-only repository carrying a digest nobody can pull.
+- **No consumer value in an attested manifest** (`consumer_fields.py`). The two-consumer render
+  below cannot see this one: it renders the chart with fixed values, while `consumer.*` is
+  resolved by the marketplace when it turns a definition into values — so the gap is the seam
+  between the listing and the chart. confidential-s3 0.1.0 passed `consumer.user.email` and
+  `consumer.organization.name` straight into the control plane's environment; it rendered,
+  deployed and worked, and made the evidence digest a property of who deployed it. A real
+  deployment is what found it.
 - **Two consumers, one version.** The confidential-s3 chart is rendered twice, under two
   hostnames in two namespaces, and every field that differs has to be a declared exclusion.
   This is `cli/evidence-preview.js` done on the chart, and it is the only check that catches

@@ -76,8 +76,18 @@ two Ingress hostnames, and the console's `S3_PUBLIC_ENDPOINT` — which carries 
 because that is what the console prints for a service account. The chart annotates the same three
 on the objects that hold them.
 
-`expectedDigest` is not declared yet, and the reason is no longer the images: those are final and
-pinned by digest. It cannot be derived from the charts at all — a cluster defaults fields no
-template writes — so the value has to come from two real deployments of exactly these digests,
-compared against each other. Adding it later does not change what is rendered, so a digest measured
-on this version stays valid for the version that declares it.
+`expectedDigest` is still not declared, and 0.1.0 is the reason it could not be. Two deployments of
+0.1.0 could never have agreed: the control plane's environment carried the consumer's address and
+organization name as literals, so the digest was a property of who deployed it rather than of the
+version. That was measured rather than suspected — `cli/evidence-preview.js` named both fields, and
+a real deployment's signed snapshot showed them.
+
+0.1.1 removes the cause instead of excluding the symptom: the admin address reaches the container
+from the Secret, which the platform lifts out of the bundle and keeps out of the snapshot, and the
+workspace name is no longer read from the consumer at all — it is a display name an administrator
+can change in the console, which was not worth a second consumer-varying field.
+
+What is left is the ordinary procedure: deploy this version twice as two different consumers, read
+each published evidence, confirm the two digests agree, and declare that value. Adding the field
+changes nothing that is rendered, so a digest measured on this version stays valid for the version
+that declares it.
