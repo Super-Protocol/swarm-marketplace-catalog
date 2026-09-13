@@ -760,9 +760,20 @@ spec:
                 secretKeyRef:
                   name: confidential-s3
                   key: garage-admin-token
-          # `/health` on the admin port needs no token and reports a node that
-          # has its layout — which is what "can store a byte" means here, and is
-          # false until the bootstrap Job has run.
+          # `/health` answers 200 as soon as the process is serving — including
+          # before any layout exists, where it says "Garage is fully operational"
+          # over an engine that cannot store a byte. Verified against a real
+          # v1.0.1 with `roles: []`.
+          #
+          # Do not "fix" that. It is the ordering bootstrap depends on: this pod
+          # has to become Ready so the Service gets an endpoint, because the
+          # bootstrap Job reaches the admin API *through that Service* to apply
+          # the layout. A probe that waited for the layout would never pass, and
+          # the Job that would have created it could never connect.
+          #
+          # `/v1/health` answers the other question (`storageNodesOk`,
+          # `partitionsQuorum`) and takes the admin token. That one belongs in a
+          # monitor, not in a probe that gates this Service.
           startupProbe:
             httpGet: { path: /health, port: admin }
             periodSeconds: 5
