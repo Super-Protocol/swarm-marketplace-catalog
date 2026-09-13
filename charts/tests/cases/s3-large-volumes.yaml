@@ -1,0 +1,44 @@
+consoleHostname: console.confidential-s3.example
+s3Hostname: s3.confidential-s3.example
+masterKey:
+  seed: golden-test-master-key-seed-not-a-real-one
+engine:
+  seed: golden-test-engine-seed-not-a-real-one
+bootstrapToken:
+  value: golden-test-bootstrap-token-not-a-real-one
+database:
+  password: golden-test-password
+gateway:
+  image:
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+api:
+  image:
+    digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
+  bootstrap:
+    adminEmail: admin@confidential-s3.example
+console:
+  image:
+    digest: sha256:3333333333333333333333333333333333333333333333333333333333333333
+garage:
+  image:
+    digest: sha256:4444444444444444444444444444444444444444444444444444444444444444
+
+# The large end of the form: a 500 GB object volume, a 50 GB database, and the
+# 16 MB chunk that suits whole-object reads. The engine's layout capacity is
+# derived from the volume rather than set beside it, so this case is what proves
+# the two cannot drift apart.
+garage:
+  image:
+    digest: sha256:4444444444444444444444444444444444444444444444444444444444444444
+  persistence:
+    data:
+      size: 500Gi
+  chunkSize: 16777216
+gateway:
+  image:
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+  chunkSize: 16777216
+postgresql:
+  primary:
+    persistence:
+      size: 50Gi

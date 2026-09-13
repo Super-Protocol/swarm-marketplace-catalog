@@ -1,0 +1,163 @@
+{{- include "confidential-s3.validate" . -}}
+{{- $component := "garage" -}}
+{{- $name := include "confidential-s3.componentName" (dict "root" . "component" $component) -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "confidential-s3.componentLabels" (dict "root" . "component" $component) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: s3
+      port: {{ .Values.garage.service.s3Port }}
+      targetPort: s3
+      protocol: TCP
+    # Published on the Service because the bootstrap Job runs in a pod of its own
+    # and has to reach it. The upstream chart leaves this port off, which is one
+    # of the two reasons this chart does not use it.
+    - name: admin
+      port: {{ .Values.garage.service.adminPort }}
+      targetPort: admin
+      protocol: TCP
+  selector:
+    {{- include "confidential-s3.selectorLabels" (dict "root" . "component" $component) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "confidential-s3.componentLabels" (dict "root" . "component" $component) | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ $name }}
+  selector:
+    matchLabels:
+      {{- include "confidential-s3.selectorLabels" (dict "root" . "component" $component) | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-garage.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "confidential-s3.selectorLabels" (dict "root" . "component" $component) | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: garage
+          image: {{ include "confidential-s3.image" (dict "image" .Values.garage.image "name" "garage") }}
+          imagePullPolicy: {{ .Values.garage.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: s3
+              containerPort: {{ .Values.garage.service.s3Port }}
+            - name: admin
+              containerPort: {{ .Values.garage.service.adminPort }}
+            - name: rpc
+              containerPort: {{ .Values.garage.service.rpcPort }}
+          env:
+            - name: GARAGE_RPC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.engine.existingSecret | default (include "confidential-s3.secretName" .) }}
+                  key: garage-rpc-secret
+            - name: GARAGE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.engine.existingSecret | default (include "confidential-s3.secretName" .) }}
+                  key: garage-admin-token
+          # `/health` answers 200 as soon as the process is serving — including
+          # before any layout exists, where it says "Garage is fully operational"
+          # over an engine that cannot store a byte. Verified against a real
+          # v1.0.1 with `roles: []`.
+          #
+          # Do not "fix" that. It is the ordering bootstrap depends on: this pod
+          # has to become Ready so the Service gets an endpoint, because the
+          # bootstrap Job reaches the admin API *through that Service* to apply
+          # the layout. A probe that waited for the layout would never pass, and
+          # the Job that would have created it could never connect.
+          #
+          # `/v1/health` answers the other question (`storageNodesOk`,
+          # `partitionsQuorum`) and takes the admin token. That one belongs in a
+          # monitor, not in a probe that gates this Service.
+          startupProbe:
+            httpGet: { path: /health, port: admin }
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            tcpSocket: { port: s3 }
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            - name: config
+              mountPath: /etc/garage.toml
+              subPath: garage.toml
+              readOnly: true
+            - name: meta
+              mountPath: /var/lib/garage/meta
+            - name: data
+              mountPath: /var/lib/garage/data
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.garage.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $name }}
+        - name: tmp
+          emptyDir: {}
+        {{- if not .Values.garage.persistence.enabled }}
+        - name: meta
+          emptyDir: {}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.garage.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: meta
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.garage.persistence.meta.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.garage.persistence.meta.size | quote }}
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.garage.persistence.data.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.garage.persistence.data.size | quote }}
+  {{- end }}

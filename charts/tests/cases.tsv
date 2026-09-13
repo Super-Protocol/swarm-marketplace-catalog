@@ -14,5 +14,10 @@ api-password-off	confidential-router-api
 litellm-one-model	confidential-router-litellm		
 litellm-three-models	confidential-router-litellm		
 ui-default	confidential-router-ui		
+s3-default	confidential-s3		
+s3-virtual-host	confidential-s3		
+s3-external-postgres	confidential-s3		
+s3-explicit-credentials	confidential-s3		
+s3-large-volumes	confidential-s3		
 ollama-gpu-off	ollama	https://otwld.github.io/ollama-helm/	1.12.0
 ollama-gpu-on	ollama	https://otwld.github.io/ollama-helm/	1.12.0

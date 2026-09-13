@@ -1,5 +1,34 @@
 # Smoke
 
+Two scripts, one per listing: `run.sh` for confidential-router, `confidential-s3.sh` for
+confidential-s3. Both build the images from a checkout of the application's repository,
+install the chart into a throwaway kind cluster with an ingress controller in front of it,
+and then ask the deployment for the things it exists to do — through the Ingress objects the
+chart renders, not through a port-forward that would prove the pods work and leave the
+routing untried.
+
+## confidential-s3
+
+```bash
+CONFIDENTIAL_S3=~/src/confidential-s3 charts/tests/smoke/confidential-s3.sh
+KEEP=1 CONFIDENTIAL_S3=~/src/confidential-s3 charts/tests/smoke/confidential-s3.sh
+```
+
+- every workload becomes ready, and the bootstrap Job completes — a started Garage accepts no
+  writes until it has one;
+- only the console and the S3 endpoint have a hostname: the control plane has a Service and
+  no Ingress, and the engine has neither;
+- the console serves `/login` through its own Ingress;
+- the first-sign-in token redeems for the administrator the parameters seeded, and a bucket
+  and a service account are created the way the console creates them;
+- an object is put and read back **byte for byte** through the published S3 endpoint with a
+  signed request, and an unsigned one is refused;
+- the bootstrap Job completes **a second time** against an engine that is already
+  bootstrapped. The platform deletes and re-creates Jobs on every reconfigure, so that is not
+  a hypothetical: a Job that failed the second time would take every reconfigure with it.
+
+## confidential-router
+
 `run.sh` installs the three charts into a throwaway kind cluster — with the
 `ollama` chart the listing deploys alongside them and the PostgreSQL the API
 chart brings — and then asks the deployment for the things it exists to do:

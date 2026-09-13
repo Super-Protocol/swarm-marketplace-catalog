@@ -1,0 +1,972 @@
+---
+# Source: confidential-s3/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: confidential-s3
+  labels:
+    helm.sh/chart: confidential-s3-0.1.0
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-s3
+type: Opaque
+stringData:
+  bootstrap-token: "golden-test-bootstrap-token-not-a-real-one"
+  database-url: "postgres://confidential_s3:elsewhere@db.example:5432/confidential_s3?sslmode=require"
+  engine-access-key: "GK193c4949c05424bfb352da1f"
+  engine-secret-key: "0fd61a16de34166d783b037802f062422a0a7a0bc9b537442fbba79914e77ade"
+  garage-admin-token: "c39474326e8a094df925338191f0d38293197f2042a2bd914365711485144b1a"
+  garage-rpc-secret: "d136af407411e6c1ea187a33aeea2715f951c2b3152365772a86cfe04b48a741"
+  master-key: "2ee6dd28308d7eaf05c8d5b0d8fc3380cff5d3dfb4e53fcb5d4e9e1f27ca84aa"
+---
+# Source: confidential-s3/templates/bootstrap-job.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: confidential-s3-bootstrap
+  labels:
+    helm.sh/chart: confidential-s3-0.1.0
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-s3
+    app.kubernetes.io/component: bootstrap
+data:
+  garage-bootstrap.mjs: |
+    #!/usr/bin/env node
+    /**
+     * Brings a fresh Garage to the state the gateway needs, and does nothing to one
+     * that is already there.
+     *
+     * A Garage that has just started accepts no writes: it has no storage layout, and
+     * the gateway's credential does not exist. Both are one-time cluster decisions
+     * rather than configuration, so they cannot live in `garage.toml` — which is why
+     * this exists at all.
+     *
+     * It runs as a Kubernetes Job in the marketplace deployment (the chart mounts it
+     * from a ConfigMap) and as a step in `tests/images/run.sh`. A Job's
+     * `spec.template` is immutable, so the platform deletes and re-creates it on every
+     * reconfigure: **every step below has to be safe to repeat**, and each one is.
+     *
+     *   1. wait for the admin API;
+     *   2. assign this node a role and apply the layout — skipped once any role exists;
+     *   3. import the gateway's access key — a 409 means it is already imported, which
+     *      is success, not a conflict to resolve;
+     *   4. allow it to create buckets, which is how an internal bucket comes into
+     *      being on the first request that touches it.
+     *
+     * The credential is *imported*, never generated here. Garage would hand back a
+     * random pair, and a Job that mints a secret has nowhere to put it: a published
+     * cluster space is frozen and the gateway reads the credential from a Secret that
+     * was sealed before any of this ran. The chart derives both halves from one
+     * generated parameter instead, so the two sides agree without anybody writing
+     * anything down. Garage's format is not negotiable — `GK` plus 24 hex characters,
+     * and 64 hex characters — and it rejects anything else with a 400.
+     *
+     * Environment:
+     *   GARAGE_ADMIN_URL     http://<service>:3903
+     *   GARAGE_ADMIN_TOKEN   the admin token from garage.toml
+     *   ENGINE_ACCESS_KEY    GK + 24 hex
+     *   ENGINE_SECRET_KEY    64 hex
+     *   GARAGE_ZONE          layout zone name           (default: swarm)
+     *   GARAGE_CAPACITY      layout capacity, in bytes  (default: 10 GiB)
+     *   WAIT_TIMEOUT_SECONDS how long to wait for the admin API (default: 300)
+     */
+    
+    const adminUrl = (process.env.GARAGE_ADMIN_URL ?? 'http://127.0.0.1:3903').replace(/\/+$/, '');
+    const adminToken = required('GARAGE_ADMIN_TOKEN');
+    const accessKey = required('ENGINE_ACCESS_KEY');
+    const secretKey = required('ENGINE_SECRET_KEY');
+    const zone = process.env.GARAGE_ZONE?.trim() || 'swarm';
+    const capacity = Number(process.env.GARAGE_CAPACITY ?? 10 * 1024 ** 3);
+    const waitTimeoutMs = Number(process.env.WAIT_TIMEOUT_SECONDS ?? 300) * 1000;
+    
+    function required(name) {
+      const value = process.env[name]?.trim();
+      if (!value) {
+        console.error(`${name} is required`);
+        process.exit(2);
+      }
+      return value;
+    }
+    
+    function log(message) {
+      console.log(`[garage-bootstrap] ${message}`);
+    }
+    
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    
+    async function admin(method, path, body) {
+      const response = await fetch(`${adminUrl}${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${adminToken}`,
+          ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      const text = await response.text();
+      let parsed;
+      try {
+        parsed = text ? JSON.parse(text) : null;
+      } catch {
+        parsed = text;
+      }
+      return { status: response.status, ok: response.ok, body: parsed, text };
+    }
+    
+    async function waitForAdminApi() {
+      const deadline = Date.now() + waitTimeoutMs;
+      for (;;) {
+        try {
+          const status = await admin('GET', '/v1/status');
+          if (status.ok) return status.body;
+        } catch {
+          // Not up yet. A connection refused here is the normal first second.
+        }
+        if (Date.now() > deadline) {
+          throw new Error(`the admin API at ${adminUrl} did not answer within ${waitTimeoutMs / 1000}s`);
+        }
+        await sleep(2000);
+      }
+    }
+    
+    async function ensureLayout() {
+      const layout = await admin('GET', '/v1/layout');
+      if (!layout.ok) throw new Error(`GET /v1/layout: ${layout.status} ${layout.text}`);
+    
+      if (layout.body.roles?.length) {
+        log(`layout version ${layout.body.version} already has ${layout.body.roles.length} role(s)`);
+        return;
+      }
+    
+      const status = await admin('GET', '/v1/status');
+      if (!status.ok) throw new Error(`GET /v1/status: ${status.status} ${status.text}`);
+      const nodeId = status.body.node;
+    
+      const staged = await admin('POST', '/v1/layout', [{ id: nodeId, zone, capacity, tags: [] }]);
+      if (!staged.ok) throw new Error(`POST /v1/layout: ${staged.status} ${staged.text}`);
+    
+      // Applying a version that is not exactly the next one is refused, which is what
+      // makes "read the current version, add one" the only correct form here.
+      const applied = await admin('POST', '/v1/layout/apply', { version: layout.body.version + 1 });
+      if (!applied.ok) throw new Error(`POST /v1/layout/apply: ${applied.status} ${applied.text}`);
+      log(`assigned ${nodeId.slice(0, 16)} to zone ${zone} with ${capacity} bytes`);
+    }
+    
+    async function ensureKey() {
+      const imported = await admin('POST', '/v1/key/import', {
+        accessKeyId: accessKey,
+        secretAccessKey: secretKey,
+        name: 'gateway',
+      });
+      if (imported.ok) {
+        log(`imported ${accessKey}`);
+      } else if (imported.status === 409) {
+        log(`${accessKey} is already imported`);
+      } else {
+        throw new Error(`POST /v1/key/import: ${imported.status} ${imported.text}`);
+      }
+    
+      const allowed = await admin('POST', `/v1/key?id=${encodeURIComponent(accessKey)}`, {
+        allow: { createBucket: true },
+      });
+      if (!allowed.ok) throw new Error(`POST /v1/key: ${allowed.status} ${allowed.text}`);
+      log('the gateway may create buckets');
+    }
+    
+    const status = await waitForAdminApi();
+    log(`garage ${status.garageVersion} answered`);
+    await ensureLayout();
+    await ensureKey();
+    log('done');
+---
+# Source: confidential-s3/templates/configmap-garage.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: confidential-s3-garage
+  labels:
+    helm.sh/chart: confidential-s3-0.1.0
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-s3
+    app.kubernetes.io/component: garage
+data:
+  garage.toml: |
+    metadata_dir = "/var/lib/garage/meta"
+    data_dir = "/var/lib/garage/data"
+
+    db_engine = "sqlite"
+
+    replication_factor = 1
+
+    rpc_bind_addr = "[::]:3901"
+    # One node talking to itself. A pod address would be a second thing to keep
+    # true across a reschedule, for a cluster that has no peer to announce to.
+    rpc_public_addr = "127.0.0.1:3901"
+
+    [s3_api]
+    s3_region = "garage"
+    api_bind_addr = "[::]:3900"
+
+    [admin]
+    api_bind_addr = "[::]:3903"
+---
+# Source: confidential-s3/templates/configmap-gateway.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: confidential-s3-gateway
+  labels:
+    helm.sh/chart: confidential-s3-0.1.0
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-s3
+    app.kubernetes.io/component: gateway
+data:
+  gateway.yaml: |
+    server:
+      host: "0.0.0.0"
+      port: 9100
+      # Path style only. An unlisted domain must never have its first host label
+      # read as a bucket name, and the wildcard record virtual-host addressing
+      # needs is not one the marketplace writes.
+      s3_domains: []
+
+    database:
+      max_connections: 16
+      connect_timeout_seconds: 10
+      # Also how long a console change takes to reach the data plane: there is no
+      # invalidation channel between the two.
+      cache_ttl_seconds: 5
+      cache_max_entries: 10000
+
+    internal_engine:
+      endpoint: "http://confidential-s3-garage:3900"
+      region: garage
+      provision_ttl_seconds: 3600
+      provision_max_entries: 10000
+
+    evidence:
+      ttl_seconds: 300
+      max_entries: 10000
+      timeout_seconds: 5
+
+    encryption:
+      chunk_size: 4194304
+---
+# Source: confidential-s3/templates/api.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: confidential-s3-api
+  labels:
+    helm.sh/chart: confidential-s3-0.1.0
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-s3
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/component: api
+---
+# Source: confidential-s3/templates/console.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: confidential-s3-console
+  labels:
+    helm.sh/chart: confidential-s3-0.1.0
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-s3
+    app.kubernetes.io/component: console
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 4300
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/component: console
+---
+# Source: confidential-s3/templates/garage.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: confidential-s3-garage
+  labels:
+    helm.sh/chart: confidential-s3-0.1.0
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-s3
+    app.kubernetes.io/component: garage
+spec:
+  type: ClusterIP
+  ports:
+    - name: s3
+      port: 3900
+      targetPort: s3
+      protocol: TCP
+    # Published on the Service because the bootstrap Job runs in a pod of its own
+    # and has to reach it. The upstream chart leaves this port off, which is one
+    # of the two reasons this chart does not use it.
+    - name: admin
+      port: 3903
+      targetPort: admin
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/component: garage
+---
+# Source: confidential-s3/templates/gateway.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: confidential-s3-gateway
+  labels:
+    helm.sh/chart: confidential-s3-0.1.0
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-s3
+    app.kubernetes.io/component: gateway
+spec:
+  type: ClusterIP
+  ports:
+    - name: s3
+      port: 9100
+      targetPort: s3
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/component: gateway
+---
+# Source: confidential-s3/templates/api.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: confidential-s3-api
+  labels:
+    helm.sh/chart: confidential-s3-0.1.0
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-s3
+    app.kubernetes.io/component: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: confidential-s3
+      app.kubernetes.io/instance: cs3
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: confidential-s3
+        app.kubernetes.io/instance: cs3
+        app.kubernetes.io/component: api
+    spec:
+      securityContext:
+        fsGroup: 1001
+        runAsGroup: 1001
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: api
+          image: ghcr.io/super-protocol/confidential-s3/api@sha256:2222222222222222222222222222222222222222222222222222222222222222
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3000"
+            
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-s3
+                  key: database-url
+            - name: MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-s3
+                  key: master-key
+            - name: BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-s3
+                  key: bootstrap-token
+            - name: BOOTSTRAP_ADMIN_EMAIL
+              value: "admin@confidential-s3.example"
+            - name: BOOTSTRAP_WORKSPACE_NAME
+              value: "Default"
+            - name: BOOTSTRAP_TOKEN_TTL_HOURS
+              value: "720"
+            - name: INVITE_TOKEN_TTL_HOURS
+              value: "168"
+            - name: SESSION_TTL_HOURS
+              value: "12"
+            # The console's file browser reads and writes objects through the
+            # gateway rather than around it, and the control plane is what signs
+            # those requests. Without this the console still manages buckets,
+            # keys and users, and browsing answers 503.
+            - name: GATEWAY_S3_ENDPOINT
+              value: "http://confidential-s3-gateway:9100"
+          # `/readyz` does a real database round trip, so an unready pod is one
+          # that cannot serve rather than one that has merely started. The
+          # startup budget covers the migrations, which run before the first
+          # answer on a fresh database.
+          startupProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            limits:
+              memory: 1Gi
+            requests:
+              cpu: 250m
+              memory: 512Mi
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# Source: confidential-s3/templates/console.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: confidential-s3-console
+  labels:
+    helm.sh/chart: confidential-s3-0.1.0
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-s3
+    app.kubernetes.io/component: console
+  annotations:
+    # The one place outside an Ingress where the operator's chosen hostname
+    # reaches a manifest: the console prints this endpoint for a service account,
+    # so it is the public S3 address rather than the one this pod dials. Without
+    # the exclusion every deployment of this version would attest a different
+    # digest — which is not a render failure, and so is exactly the kind of thing
+    # that is found once and then guarded. `charts/tests/run.sh` renders the
+    # chart as two consumers and fails if anything but the declared exclusions
+    # differs.
+    #
+    # The index is deterministic because this template writes the list: PORT,
+    # HOSTNAME, API_BASE_URL, S3_PUBLIC_ENDPOINT.
+    swarm.io/exclude-evidence-fields: "/spec/template/spec/containers/0/env/3/value"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: confidential-s3
+      app.kubernetes.io/instance: cs3
+      app.kubernetes.io/component: console
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: confidential-s3
+        app.kubernetes.io/instance: cs3
+        app.kubernetes.io/component: console
+    spec:
+      securityContext:
+        fsGroup: 1001
+        runAsGroup: 1001
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: console
+          image: ghcr.io/super-protocol/confidential-s3/console@sha256:3333333333333333333333333333333333333333333333333333333333333333
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          ports:
+            - name: http
+              containerPort: 4300
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "4300"
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            - name: API_BASE_URL
+              value: "http://confidential-s3-api:3000/api"
+            # The endpoint the console prints for a service account: the address
+            # an S3 client outside the cluster is pointed at, not the one this
+            # pod reaches the gateway on.
+            - name: S3_PUBLIC_ENDPOINT
+              value: "https://s3.confidential-s3.example"
+          # `/login` is the one route served without a session cookie, so a
+          # healthy console answers it with a 200 rather than a redirect.
+          startupProbe:
+            httpGet: { path: /login, port: http }
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /login, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /login, port: http }
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            # Next writes its image cache and its build traces under `.next`, and
+            # the root filesystem is read-only.
+            - name: next-cache
+              mountPath: /app/apps/console/.next/cache
+          resources:
+            limits:
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: next-cache
+          emptyDir: {}
+---
+# Source: confidential-s3/templates/gateway.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: confidential-s3-gateway
+  labels:
+    helm.sh/chart: confidential-s3-0.1.0
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-s3
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: confidential-s3
+      app.kubernetes.io/instance: cs3
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      annotations:
+        # The configuration is a file, so without this a values change updates
+        # the ConfigMap and the running pod keeps serving the old settings.
+        checksum/config: 532d7ae2597270e8584bc2a8f1b45332f1c6a38f94046b17a38143e52e0c9568
+      labels:
+        app.kubernetes.io/name: confidential-s3
+        app.kubernetes.io/instance: cs3
+        app.kubernetes.io/component: gateway
+    spec:
+      securityContext:
+        fsGroup: 1001
+        runAsGroup: 1001
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: gateway
+          image: ghcr.io/super-protocol/confidential-s3/gateway@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          args: ["/etc/confidential-s3/gateway.yaml"]
+          ports:
+            - name: s3
+              containerPort: 9100
+              protocol: TCP
+          env:
+            - name: RUST_LOG
+              value: "info"
+            
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-s3
+                  key: database-url
+            - name: MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-s3
+                  key: master-key
+            - name: INTERNAL_ENGINE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-s3
+                  key: engine-access-key
+            - name: INTERNAL_ENGINE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-s3
+                  key: engine-secret-key
+          # `/readyz` reaches the database and the engine; `/healthz` only reports
+          # the process. The startup budget is generous because the gateway comes
+          # up before the bootstrap Job has necessarily finished with Garage.
+          startupProbe:
+            httpGet: { path: /readyz, port: s3 }
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /readyz, port: s3 }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: s3 }
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            - name: config
+              mountPath: /etc/confidential-s3
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            limits:
+              memory: 512Mi
+            requests:
+              cpu: 250m
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: confidential-s3-gateway
+        # The root filesystem is read-only; this is the only path the process
+        # writes to.
+        - name: tmp
+          emptyDir: {}
+---
+# Source: confidential-s3/templates/garage.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: confidential-s3-garage
+  labels:
+    helm.sh/chart: confidential-s3-0.1.0
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-s3
+    app.kubernetes.io/component: garage
+spec:
+  replicas: 1
+  serviceName: confidential-s3-garage
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: confidential-s3
+      app.kubernetes.io/instance: cs3
+      app.kubernetes.io/component: garage
+  template:
+    metadata:
+      annotations:
+        checksum/config: 2807083e7e6b551830e13cabe636e480be2712dceff01a146a1872ccdde26ab9
+      labels:
+        app.kubernetes.io/name: confidential-s3
+        app.kubernetes.io/instance: cs3
+        app.kubernetes.io/component: garage
+    spec:
+      securityContext:
+        fsGroup: 1001
+        runAsGroup: 1001
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: garage
+          image: docker.io/dxflrs/garage@sha256:4444444444444444444444444444444444444444444444444444444444444444
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          ports:
+            - name: s3
+              containerPort: 3900
+            - name: admin
+              containerPort: 3903
+            - name: rpc
+              containerPort: 3901
+          env:
+            - name: GARAGE_RPC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-s3
+                  key: garage-rpc-secret
+            - name: GARAGE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-s3
+                  key: garage-admin-token
+          # `/health` answers 200 as soon as the process is serving — including
+          # before any layout exists, where it says "Garage is fully operational"
+          # over an engine that cannot store a byte. Verified against a real
+          # v1.0.1 with `roles: []`.
+          #
+          # Do not "fix" that. It is the ordering bootstrap depends on: this pod
+          # has to become Ready so the Service gets an endpoint, because the
+          # bootstrap Job reaches the admin API *through that Service* to apply
+          # the layout. A probe that waited for the layout would never pass, and
+          # the Job that would have created it could never connect.
+          #
+          # `/v1/health` answers the other question (`storageNodesOk`,
+          # `partitionsQuorum`) and takes the admin token. That one belongs in a
+          # monitor, not in a probe that gates this Service.
+          startupProbe:
+            httpGet: { path: /health, port: admin }
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            tcpSocket: { port: s3 }
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            - name: config
+              mountPath: /etc/garage.toml
+              subPath: garage.toml
+              readOnly: true
+            - name: meta
+              mountPath: /var/lib/garage/meta
+            - name: data
+              mountPath: /var/lib/garage/data
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            limits:
+              memory: 2Gi
+            requests:
+              cpu: 250m
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: confidential-s3-garage
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: meta
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: "2Gi"
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: "20Gi"
+---
+# Source: confidential-s3/templates/bootstrap-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: confidential-s3-bootstrap
+  labels:
+    helm.sh/chart: confidential-s3-0.1.0
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-s3
+    app.kubernetes.io/component: bootstrap
+spec:
+  backoffLimit: 12
+  template:
+    metadata:
+      annotations:
+        checksum/script: d9eb2171c254f4100be686b25e59c9cf1de4774e2970b32fc31566d757220da9
+      labels:
+        app.kubernetes.io/name: confidential-s3
+        app.kubernetes.io/instance: cs3
+        app.kubernetes.io/component: bootstrap
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        fsGroup: 1001
+        runAsGroup: 1001
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: bootstrap
+          image: ghcr.io/super-protocol/confidential-s3/api@sha256:2222222222222222222222222222222222222222222222222222222222222222
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          command: ["node", "/scripts/garage-bootstrap.mjs"]
+          env:
+            - name: GARAGE_ADMIN_URL
+              value: "http://confidential-s3-garage:3903"
+            - name: GARAGE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-s3
+                  key: garage-admin-token
+            - name: ENGINE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-s3
+                  key: engine-access-key
+            - name: ENGINE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-s3
+                  key: engine-secret-key
+            - name: GARAGE_ZONE
+              value: "swarm"
+            - name: GARAGE_CAPACITY
+              value: "21474836480"
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            limits:
+              memory: 256Mi
+            requests:
+              cpu: 50m
+              memory: 128Mi
+      volumes:
+        - name: scripts
+          configMap:
+            name: confidential-s3-bootstrap
+        - name: tmp
+          emptyDir: {}
+---
+# Source: confidential-s3/templates/console.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: confidential-s3-console
+  labels:
+    helm.sh/chart: confidential-s3-0.1.0
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-s3
+    app.kubernetes.io/component: console
+  annotations:
+    # The hostname is the one thing that differs between two deployments of this
+    # version. Declared in the listing's `evidence.exclude` as well — that is what
+    # the marketplace reads to show the exclusion beside the digest.
+    swarm.io/exclude-evidence-fields: "/spec/rules/0/host"
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: "console.confidential-s3.example"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: confidential-s3-console
+                port:
+                  number: 4300
+---
+# Source: confidential-s3/templates/gateway.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: confidential-s3-gateway
+  labels:
+    helm.sh/chart: confidential-s3-0.1.0
+    app.kubernetes.io/name: confidential-s3
+    app.kubernetes.io/instance: cs3
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-s3
+    app.kubernetes.io/component: gateway
+  annotations:
+    # The hostname is the one thing that differs between two deployments of this
+    # version, and a digest that varied with it would be a digest nobody else
+    # could ever match. Declared in the listing's `evidence.exclude` as well —
+    # that is what the marketplace reads to show the exclusion beside the digest.
+    swarm.io/exclude-evidence-fields: "/spec/rules/0/host"
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: "s3.confidential-s3.example"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: confidential-s3-gateway
+                port:
+                  number: 9100

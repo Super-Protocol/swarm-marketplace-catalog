@@ -128,6 +128,21 @@ else
   fail "apps/tests/versions.py"
 fi
 
+# A digest of all zeros is a placeholder somebody left in, not a pin. The schema
+# cannot tell the difference — it is a well-formed sha256 reference — and a
+# listing that carries one renders, validates, publishes, and then fails to pull
+# a single image on the first deployment. Cheaper to say so here.
+note "every declared image digest is a real one"
+placeholder='sha256:0000000000000000000000000000000000000000000000000000000000000000'
+for definition in apps/*/app.yaml; do
+  if grep -qF "$placeholder" "$definition"; then
+    fail "$definition still declares a placeholder digest"
+    grep -nB1 -F "$placeholder" "$definition" | sed 's/^/        /'
+  else
+    pass "$definition"
+  fi
+done
+
 note "Result"
 if [ "$failures" -eq 0 ]; then
   printf '  everything passed\n\n'

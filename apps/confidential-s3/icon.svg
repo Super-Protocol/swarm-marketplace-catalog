@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Confidential S3">
+  <title>Confidential S3</title>
+  <!--
+    The same shield as the router's listing, because it is the same promise —
+    the enclosure is what is on offer. Inside it, a stack of buckets rather than
+    a fan-out. Two flat colours, no gradients and no text, so it survives being
+    drawn at 16px in a catalogue row on either a light or a dark background.
+  -->
+  <path d="M32 4 56 12.5V32c0 12.9-9.6 23.6-24 28C17.6 55.6 8 44.9 8 32V12.5Z" fill="#0F172A"/>
+  <path d="M32 10 50.5 16.5V32c0 9.9-7.4 18.3-18.5 21.8C20.9 50.3 13.5 41.9 13.5 32V16.5Z"
+        fill="none" stroke="#1E3A5F" stroke-width="1.5"/>
+
+  <!-- Three stacked objects: the top one open, the two under it sealed. -->
+  <g fill="none" stroke="#38BDF8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <ellipse cx="32" cy="23" rx="11" ry="4.5"/>
+    <path d="M21 23v8c0 2.5 4.9 4.5 11 4.5s11-2 11-4.5v-8"/>
+    <path d="M21 31v8c0 2.5 4.9 4.5 11 4.5s11-2 11-4.5v-8"/>
+  </g>
+  <circle cx="32" cy="23" r="2.5" fill="#38BDF8"/>
+</svg>

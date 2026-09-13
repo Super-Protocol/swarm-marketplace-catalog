@@ -33,6 +33,15 @@ jobs:
         with:
           version: v3.16.2
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # For the evidence-drift check, which reads the rendered objects rather
+      # than grepping them: an exclusion is a JSON pointer, and whether it still
+      # lands on the field it names is not a question `grep` can answer.
+      - run: pip install --quiet pyyaml
+
       # The GPU cases render otwld's ollama chart from its repository, which is
       # the same reference the listing's component uses.
       - name: Lint, render, diff

@@ -1,0 +1,26 @@
+apiVersion: v2
+name: confidential-s3
+description: Confidential S3 — the S3 data plane, the control plane, the console, the object engine they store into, and the PostgreSQL that holds the control-plane schema.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/Super-Protocol/confidential-s3
+sources:
+  - https://github.com/Super-Protocol/confidential-s3
+dependencies:
+  # The same vendored chart the router and the analyst platform use. Off for a
+  # deployment that brings its own database: set `postgresql.enabled: false` and
+  # point `database.*` at it.
+  #
+  # Garage is *not* a dependency, deliberately. Its upstream chart creates a
+  # ClusterRole and a ClusterRoleBinding unconditionally, for a Kubernetes
+  # discovery mechanism a single node does not need — cluster-scoped objects a
+  # cluster space cannot create — and its Service publishes no admin port, which
+  # is the one the bootstrap Job has to reach. What is left after removing both
+  # is smaller than the templates in `templates/garage-*.yaml`, and vendoring an
+  # upstream chart in order to rewrite half of it is a fork wearing a version
+  # number. See `charts/confidential-s3/README.md`.
+  - name: postgresql
+    version: 16.4.10
+    repository: "file://../vendor/postgresql"
+    condition: postgresql.enabled
