@@ -5,7 +5,7 @@ metadata:
   name: confidential-s3
   title: Confidential S3
   description: S3-compatible object storage that runs in a confidential environment, with a console for buckets, keys and access. Objects can be kept in the deployment's own engine, passed through to a storage you already have, or encrypted so that only this deployment can read them.
-  version: "0.1.0"
+  version: "0.1.1"
   category: storage
   sourceRepo: https://github.com/Super-Protocol/confidential-s3
   license: Apache-2.0
@@ -252,7 +252,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-s3
-      version: "0.1.0"
+      version: "0.1.1"
     # Published from `develop` at cbc0674 — the commit that closed both SUP-125
     # (the gateway's final bytes) and SUP-124 — by release run 34767249561, also
     # tagged `build4` and `develop-cbc0674`. Each digest below is the one that
@@ -305,8 +305,17 @@ components:
               # and a parameter here would only be a second copy of an address
               # the marketplace already holds — one that drifts the moment either
               # changes.
+              #
+              # The chart puts this in its Secret rather than in the control
+              # plane's environment. It is the only value a deployment carries
+              # that names its consumer, and an attested manifest that names its
+              # consumer has an evidence digest nobody else can match — measured
+              # on a real deployment before this was changed. The workspace name
+              # used to come from `consumer.organization.name` for the same
+              # reason and no longer does: it is a display name an administrator
+              # can change in the console, which is not worth a second
+              # consumer-varying field.
               adminEmail: "{{ consumer.user.email }}"
-              workspaceName: "{{ consumer.organization.name }}"
           garage:
             persistence:
               data:
@@ -348,13 +357,18 @@ outputs:
     value: "A service account's secret key is shown once, when it is issued. Only its salt is stored, so there is no screen that can show it again — rotate the key if it is lost."
 
 evidence:
-  # `expectedDigest` is not declared yet, and the reason is no longer the images
-  # — those are final and pinned above. It cannot be derived from the charts at
-  # all: a cluster defaults fields no template writes, so the value has to come
-  # from two real deployments of exactly these digests, compared against each
-  # other. Adding the block later does not change the rendered manifests, so a
-  # digest measured on this version stays valid for the version that declares
-  # it, and declaring it is a `metadata.version` bump and nothing else.
+  # `expectedDigest` is still not declared, and 0.1.0 is why it could not be.
+  # Two deployments of 0.1.0 could never have agreed: the control plane's
+  # environment carried the consumer's address and organization name as literals,
+  # so the digest was a property of who deployed it. Measured, not suspected —
+  # `cli/evidence-preview.js` named both fields, and the signed snapshot of a real
+  # deployment showed them at env indices 5 and 6.
+  #
+  # This version removes the cause rather than excluding the symptom. What is left
+  # to do is the ordinary procedure: deploy 0.1.1 twice as two different
+  # consumers, read each published evidence, confirm the two digests agree, and
+  # declare that value. Adding the field changes nothing that is rendered, so the
+  # digest measured on this version stays valid for the version that declares it.
   #
   # The exclusions are declared now because they are a property of the chart
   # rather than of a measurement: the two hostnames are the only fields that

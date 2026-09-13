@@ -116,13 +116,21 @@ api:
   # it, and by nothing else: publishing it would put an authenticated API on a
   # public hostname for no reader that does not already have the console.
   bootstrap:
-    # The first workspace, created on boot from the marketplace consumer.
+    # The first workspace's display name. Renameable from the console afterwards.
     workspaceName: "Default"
     # How long the first-sign-in token stays redeemable.
     tokenTtlHours: 720
-    # The address the administrator account is created under. The listing fills
-    # it from `consumer.user.email`.
+    # The address the administrator account is created under, and the only value
+    # this deployment carries that names its consumer. The listing fills it from
+    # `consumer.user.email`; the chart puts it in the Secret rather than in the
+    # container's environment, so it does not vary the evidence digest.
     adminEmail: ""
+    adminEmailExistingSecret: ""
+    adminEmailExistingSecretKey: bootstrap-admin-email
+    # Deliberately NOT taken from `consumer.organization.name`. It is a display
+    # name an administrator can change in the console's settings, and reading it
+    # from the consumer bought one word of polish at the price of a second
+    # consumer-varying field in an attested manifest.
   inviteTokenTtlHours: 168
   sessionTtlHours: 12
   resources:

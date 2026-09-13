@@ -286,6 +286,20 @@ else
   fail "charts/tests/inventory.py"
 fi
 
+# The seam between the listing and the chart, which the two-consumer render below
+# cannot see: it renders the chart with fixed values, while `consumer.*` is
+# resolved by the marketplace when it turns a definition into values. A consumer
+# address that lands in an attested manifest as a literal renders, deploys and
+# works — and makes the evidence digest a property of who deployed it. That is
+# what 0.1.0 did, and a real deployment is what found it.
+note "no attested object carries a consumer value as a literal"
+if output=$(python3 charts/tests/consumer_fields.py confidential-s3 charts/tests/cases/s3-default.yaml); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/consumer_fields.py"
+fi
+
 # What `cli/evidence-preview.js` does on the marketplace side, done here on the
 # chart: render the same version as two consumers, under two hostnames, in two
 # namespaces, and fail on any field that differs and is not declared.

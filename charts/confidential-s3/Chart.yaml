@@ -2,7 +2,7 @@ apiVersion: v2
 name: confidential-s3
 description: Confidential S3 — the S3 data plane, the control plane, the console, the object engine they store into, and the PostgreSQL that holds the control-plane schema.
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: "0.1.0"
 home: https://github.com/Super-Protocol/confidential-s3
 sources:

@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-s3
   labels:
-    helm.sh/chart: confidential-s3-0.1.0
+    helm.sh/chart: confidential-s3-0.1.1
     app.kubernetes.io/name: confidential-s3
     app.kubernetes.io/instance: cs3
     app.kubernetes.io/version: "0.1.0"
@@ -13,6 +13,7 @@ metadata:
     app.kubernetes.io/part-of: confidential-s3
 type: Opaque
 stringData:
+  bootstrap-admin-email: "admin@confidential-s3.example"
   bootstrap-token: "golden-test-bootstrap-token-not-a-real-one"
   database-url: "postgres://confidential_s3:elsewhere@db.example:5432/confidential_s3?sslmode=require"
   engine-access-key: "GK193c4949c05424bfb352da1f"
@@ -27,7 +28,7 @@ kind: ConfigMap
 metadata:
   name: confidential-s3-bootstrap
   labels:
-    helm.sh/chart: confidential-s3-0.1.0
+    helm.sh/chart: confidential-s3-0.1.1
     app.kubernetes.io/name: confidential-s3
     app.kubernetes.io/instance: cs3
     app.kubernetes.io/version: "0.1.0"
@@ -190,7 +191,7 @@ kind: ConfigMap
 metadata:
   name: confidential-s3-garage
   labels:
-    helm.sh/chart: confidential-s3-0.1.0
+    helm.sh/chart: confidential-s3-0.1.1
     app.kubernetes.io/name: confidential-s3
     app.kubernetes.io/instance: cs3
     app.kubernetes.io/version: "0.1.0"
@@ -224,7 +225,7 @@ kind: ConfigMap
 metadata:
   name: confidential-s3-gateway
   labels:
-    helm.sh/chart: confidential-s3-0.1.0
+    helm.sh/chart: confidential-s3-0.1.1
     app.kubernetes.io/name: confidential-s3
     app.kubernetes.io/instance: cs3
     app.kubernetes.io/version: "0.1.0"
@@ -269,7 +270,7 @@ kind: Service
 metadata:
   name: confidential-s3-api
   labels:
-    helm.sh/chart: confidential-s3-0.1.0
+    helm.sh/chart: confidential-s3-0.1.1
     app.kubernetes.io/name: confidential-s3
     app.kubernetes.io/instance: cs3
     app.kubernetes.io/version: "0.1.0"
@@ -294,7 +295,7 @@ kind: Service
 metadata:
   name: confidential-s3-console
   labels:
-    helm.sh/chart: confidential-s3-0.1.0
+    helm.sh/chart: confidential-s3-0.1.1
     app.kubernetes.io/name: confidential-s3
     app.kubernetes.io/instance: cs3
     app.kubernetes.io/version: "0.1.0"
@@ -319,7 +320,7 @@ kind: Service
 metadata:
   name: confidential-s3-garage
   labels:
-    helm.sh/chart: confidential-s3-0.1.0
+    helm.sh/chart: confidential-s3-0.1.1
     app.kubernetes.io/name: confidential-s3
     app.kubernetes.io/instance: cs3
     app.kubernetes.io/version: "0.1.0"
@@ -351,7 +352,7 @@ kind: Service
 metadata:
   name: confidential-s3-gateway
   labels:
-    helm.sh/chart: confidential-s3-0.1.0
+    helm.sh/chart: confidential-s3-0.1.1
     app.kubernetes.io/name: confidential-s3
     app.kubernetes.io/instance: cs3
     app.kubernetes.io/version: "0.1.0"
@@ -376,7 +377,7 @@ kind: Deployment
 metadata:
   name: confidential-s3-api
   labels:
-    helm.sh/chart: confidential-s3-0.1.0
+    helm.sh/chart: confidential-s3-0.1.1
     app.kubernetes.io/name: confidential-s3
     app.kubernetes.io/instance: cs3
     app.kubernetes.io/version: "0.1.0"
@@ -435,8 +436,14 @@ spec:
                 secretKeyRef:
                   name: confidential-s3
                   key: bootstrap-token
+            # From the Secret, not as a literal: it names the consumer, and a
+            # consumer-varying string in an attested manifest makes the evidence
+            # digest a property of who deployed this rather than of the version.
             - name: BOOTSTRAP_ADMIN_EMAIL
-              value: "admin@confidential-s3.example"
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-s3
+                  key: bootstrap-admin-email
             - name: BOOTSTRAP_WORKSPACE_NAME
               value: "Default"
             - name: BOOTSTRAP_TOKEN_TTL_HOURS
@@ -485,7 +492,7 @@ kind: Deployment
 metadata:
   name: confidential-s3-console
   labels:
-    helm.sh/chart: confidential-s3-0.1.0
+    helm.sh/chart: confidential-s3-0.1.1
     app.kubernetes.io/name: confidential-s3
     app.kubernetes.io/instance: cs3
     app.kubernetes.io/version: "0.1.0"
@@ -588,7 +595,7 @@ kind: Deployment
 metadata:
   name: confidential-s3-gateway
   labels:
-    helm.sh/chart: confidential-s3-0.1.0
+    helm.sh/chart: confidential-s3-0.1.1
     app.kubernetes.io/name: confidential-s3
     app.kubernetes.io/instance: cs3
     app.kubernetes.io/version: "0.1.0"
@@ -607,7 +614,7 @@ spec:
       annotations:
         # The configuration is a file, so without this a values change updates
         # the ConfigMap and the running pod keeps serving the old settings.
-        checksum/config: 532d7ae2597270e8584bc2a8f1b45332f1c6a38f94046b17a38143e52e0c9568
+        checksum/config: e6f11a59f20f1aec0ceb46bbf8e0c780c87101be8768ae8c995ea8aacaadb307
       labels:
         app.kubernetes.io/name: confidential-s3
         app.kubernetes.io/instance: cs3
@@ -698,7 +705,7 @@ kind: StatefulSet
 metadata:
   name: confidential-s3-garage
   labels:
-    helm.sh/chart: confidential-s3-0.1.0
+    helm.sh/chart: confidential-s3-0.1.1
     app.kubernetes.io/name: confidential-s3
     app.kubernetes.io/instance: cs3
     app.kubernetes.io/version: "0.1.0"
@@ -716,7 +723,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: 2807083e7e6b551830e13cabe636e480be2712dceff01a146a1872ccdde26ab9
+        checksum/config: c836d48b5e6d1d39ab8a8571b31bbfc92125628698017f5a0a425358ae926274
       labels:
         app.kubernetes.io/name: confidential-s3
         app.kubernetes.io/instance: cs3
@@ -822,7 +829,7 @@ kind: Job
 metadata:
   name: confidential-s3-bootstrap
   labels:
-    helm.sh/chart: confidential-s3-0.1.0
+    helm.sh/chart: confidential-s3-0.1.1
     app.kubernetes.io/name: confidential-s3
     app.kubernetes.io/instance: cs3
     app.kubernetes.io/version: "0.1.0"
@@ -904,7 +911,7 @@ kind: Ingress
 metadata:
   name: confidential-s3-console
   labels:
-    helm.sh/chart: confidential-s3-0.1.0
+    helm.sh/chart: confidential-s3-0.1.1
     app.kubernetes.io/name: confidential-s3
     app.kubernetes.io/instance: cs3
     app.kubernetes.io/version: "0.1.0"
@@ -940,7 +947,7 @@ kind: Ingress
 metadata:
   name: confidential-s3-gateway
   labels:
-    helm.sh/chart: confidential-s3-0.1.0
+    helm.sh/chart: confidential-s3-0.1.1
     app.kubernetes.io/name: confidential-s3
     app.kubernetes.io/instance: cs3
     app.kubernetes.io/version: "0.1.0"

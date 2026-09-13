@@ -60,8 +60,14 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.bootstrapToken.existingSecret | default (include "confidential-s3.secretName" .) }}
                   key: {{ if .Values.bootstrapToken.existingSecret }}{{ .Values.bootstrapToken.existingSecretKey }}{{ else }}bootstrap-token{{ end }}
+            # From the Secret, not as a literal: it names the consumer, and a
+            # consumer-varying string in an attested manifest makes the evidence
+            # digest a property of who deployed this rather than of the version.
             - name: BOOTSTRAP_ADMIN_EMAIL
-              value: {{ .Values.api.bootstrap.adminEmail | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.api.bootstrap.adminEmailExistingSecret | default (include "confidential-s3.secretName" .) }}
+                  key: {{ .Values.api.bootstrap.adminEmailExistingSecretKey | default "bootstrap-admin-email" }}
             - name: BOOTSTRAP_WORKSPACE_NAME
               value: {{ .Values.api.bootstrap.workspaceName | quote }}
             - name: BOOTSTRAP_TOKEN_TTL_HOURS
