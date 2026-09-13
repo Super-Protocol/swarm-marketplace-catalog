@@ -1,0 +1,156 @@
+{{- include "confidential-s3.validate" . -}}
+{{- $component := "gateway" -}}
+{{- $name := include "confidential-s3.componentName" (dict "root" . "component" $component) -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "confidential-s3.componentLabels" (dict "root" . "component" $component) | nindent 4 }}
+spec:
+  replicas: {{ .Values.gateway.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "confidential-s3.selectorLabels" (dict "root" . "component" $component) | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # The configuration is a file, so without this a values change updates
+        # the ConfigMap and the running pod keeps serving the old settings.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-gateway.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "confidential-s3.selectorLabels" (dict "root" . "component" $component) | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: gateway
+          image: {{ include "confidential-s3.image" (dict "image" .Values.gateway.image "name" "gateway") }}
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args: ["/etc/confidential-s3/gateway.yaml"]
+          ports:
+            - name: s3
+              containerPort: {{ .Values.gateway.service.port }}
+              protocol: TCP
+          env:
+            - name: RUST_LOG
+              value: {{ .Values.log.gatewayLevel | quote }}
+            {{- include "confidential-s3.databaseEnv" . | nindent 12 }}
+            {{- include "confidential-s3.masterKeyEnv" . | nindent 12 }}
+            {{- include "confidential-s3.engineCredentialEnv" . | nindent 12 }}
+          # `/readyz` reaches the database and the engine; `/healthz` only reports
+          # the process. The startup budget is generous because the gateway comes
+          # up before the bootstrap Job has necessarily finished with Garage.
+          startupProbe:
+            httpGet: { path: /readyz, port: s3 }
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /readyz, port: s3 }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: s3 }
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            - name: config
+              mountPath: /etc/confidential-s3
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "confidential-s3.componentName" (dict "root" . "component" "gateway") }}
+        # The root filesystem is read-only; this is the only path the process
+        # writes to.
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "confidential-s3.componentLabels" (dict "root" . "component" $component) | nindent 4 }}
+spec:
+  type: {{ .Values.gateway.service.type }}
+  ports:
+    - name: s3
+      port: {{ .Values.gateway.service.port }}
+      targetPort: s3
+      protocol: TCP
+  selector:
+    {{- include "confidential-s3.selectorLabels" (dict "root" . "component" $component) | nindent 4 }}
+{{- if .Values.gateway.ingress.enabled }}
+---
+{{/*
+The S3 endpoint. Everything under `/` is S3: a bucket is a path segment, so there
+is no narrower path list to publish, and the gateway refuses an unsigned request
+itself rather than relying on something in front of it.
+
+Without `ingressClassName` this object is created, the cloud registers the
+hostname and writes its DNS, and nothing serves it — the controller only picks up
+what names it.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "confidential-s3.componentLabels" (dict "root" . "component" $component) | nindent 4 }}
+  annotations:
+    # The hostname is the one thing that differs between two deployments of this
+    # version, and a digest that varied with it would be a digest nobody else
+    # could ever match. Declared in the listing's `evidence.exclude` as well —
+    # that is what the marketplace reads to show the exclusion beside the digest.
+    swarm.io/exclude-evidence-fields: "/spec/rules/0/host"
+    {{- with .Values.gateway.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.gateway.ingress.className }}
+  {{- if .Values.gateway.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.s3Hostname | quote }}
+      secretName: {{ required "gateway.ingress.tls.secretName must be set when gateway.ingress.tls.enabled is" .Values.gateway.ingress.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.s3Hostname | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  number: {{ .Values.gateway.service.port }}
+{{- end }}

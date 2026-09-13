@@ -1,0 +1,56 @@
+{{- include "confidential-s3.validate" . -}}
+{{- /*
+`gateway.yaml`, rendered from this chart's values.
+
+No secret is written here. The database URL, the master key and the engine
+credential are all left out of the file and supplied through the process
+environment from a Secret — which is what the gateway's own configuration loader
+is built for, and what keeps this object readable to anyone who can read the
+namespace without handing them the key that opens every encrypted bucket.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "confidential-s3.componentName" (dict "root" . "component" "gateway") }}
+  labels:
+    {{- include "confidential-s3.componentLabels" (dict "root" . "component" "gateway") | nindent 4 }}
+data:
+  gateway.yaml: |
+    server:
+      host: "0.0.0.0"
+      port: {{ .Values.gateway.service.port | int64 }}
+      {{- if .Values.virtualHostStyle }}
+      # Virtual-host addressing, which needs a wildcard record under this name.
+      s3_domains:
+        - {{ .Values.s3Hostname | quote }}
+      {{- else }}
+      # Path style only. An unlisted domain must never have its first host label
+      # read as a bucket name, and the wildcard record virtual-host addressing
+      # needs is not one the marketplace writes.
+      s3_domains: []
+      {{- end }}
+
+    database:
+      max_connections: 16
+      connect_timeout_seconds: 10
+      # Also how long a console change takes to reach the data plane: there is no
+      # invalidation channel between the two.
+      cache_ttl_seconds: {{ .Values.gateway.cacheTtlSeconds | int64 }}
+      cache_max_entries: 10000
+
+    internal_engine:
+      endpoint: {{ printf "http://%s:%v" (include "confidential-s3.componentName" (dict "root" . "component" "garage")) .Values.garage.service.s3Port | quote }}
+      region: garage
+      provision_ttl_seconds: 3600
+      provision_max_entries: 10000
+
+    evidence:
+      {{- if .Values.gateway.evidence.defaultUrl }}
+      default_url: {{ .Values.gateway.evidence.defaultUrl | quote }}
+      {{- end }}
+      ttl_seconds: {{ .Values.gateway.evidence.ttlSeconds | int64 }}
+      max_entries: 10000
+      timeout_seconds: {{ .Values.gateway.evidence.timeoutSeconds | int64 }}
+
+    encryption:
+      chunk_size: {{ .Values.gateway.chunkSize | int64 }}

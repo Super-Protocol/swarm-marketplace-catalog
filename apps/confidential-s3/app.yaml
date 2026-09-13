@@ -1,0 +1,371 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: AppDefinition
+
+metadata:
+  name: confidential-s3
+  title: Confidential S3
+  description: S3-compatible object storage that runs in a confidential environment, with a console for buckets, keys and access. Objects can be kept in the deployment's own engine, passed through to a storage you already have, or encrypted so that only this deployment can read them.
+  version: "0.1.0"
+  category: storage
+  sourceRepo: https://github.com/Super-Protocol/confidential-s3
+  license: Apache-2.0
+  icon: icon.svg
+  tags:
+    - s3
+    - object-storage
+    - encryption
+    - attestation
+    - confidential-computing
+
+ui:
+  sections:
+    # Ordered so that a deployment can be reached from the top of the form: the
+    # two hostnames arrive filled in and everything below them already has an
+    # answer, which leaves nothing above Advanced that has to be typed.
+    - id: access
+      title: Access
+      description: >-
+        Two hostnames, because two different things are served: the console a person signs in to,
+        and the S3 endpoint a client points its SDK at. The S3 hostname is the one that ends up in
+        somebody else's configuration.
+      fields:
+        # `hostname`, so a marketplace holding a DNS zone offers a name in it and
+        # writes the records. Both are addresses this deployment answers on.
+        - parameterId: consoleHostname
+          widget: hostname
+        - parameterId: s3Hostname
+          widget: hostname
+
+    - id: storage
+      title: Storage
+      description: >-
+        How much room the deployment's own object engine has. Buckets that pass through to a
+        storage you already have, or that encrypt into one, do not use it — only `internal` buckets
+        are stored here.
+      fields:
+        - parameterId: objectStorage
+          widget: select
+
+    - id: advanced
+      title: Advanced
+      description: >-
+        Every field below is already answered. Open this to size the database, to bring your own
+        first-sign-in token, or to turn on virtual-host addressing where you control the DNS; skip
+        it otherwise.
+      fields:
+        - parameterId: databaseStorage
+          widget: select
+        - parameterId: bootstrapToken
+          widget: password
+        - parameterId: virtualHostStyle
+          widget: switch
+        - parameterId: encryptionChunkSize
+          widget: select
+
+parameters:
+  - id: consoleHostname
+    type: string
+    title: Console hostname
+    description: >-
+      Where the console is served. Take the one offered and the DNS is written for you; bring your
+      own and point it at this cloud's gateway before publishing the deployment.
+    required: true
+    validation:
+      pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+
+  - id: s3Hostname
+    type: string
+    title: S3 endpoint hostname
+    description: >-
+      The `--endpoint-url` an S3 client is given. It has to differ from the console hostname: they
+      are separate ingresses, in front of separate services.
+    required: true
+    validation:
+      pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+
+  - id: objectStorage
+    type: string
+    title: Object storage
+    description: >-
+      The volume the deployment's own engine stores `internal` buckets on, and the capacity it
+      advertises to itself. External and external-encrypted buckets live in the storage you
+      registered and take none of it.
+    required: false
+    default: "50Gi"
+    options:
+      source:
+        type: static
+        values:
+          - value: "20Gi"
+            label: 20 GB
+          - value: "50Gi"
+            label: 50 GB
+          - value: "100Gi"
+            label: 100 GB
+          - value: "500Gi"
+            label: 500 GB
+
+  - id: databaseStorage
+    type: string
+    title: Database storage
+    description: >-
+      Holds workspaces, users, buckets, service accounts and — for an encrypted bucket — one row per
+      object, with its wrapped key. Object *contents* are never here, so this grows with how many
+      objects there are rather than with how large they are.
+    required: false
+    default: "8Gi"
+    options:
+      source:
+        type: static
+        values:
+          - value: "8Gi"
+            label: 8 GB
+          - value: "20Gi"
+            label: 20 GB
+          - value: "50Gi"
+            label: 50 GB
+
+  - id: bootstrapToken
+    type: string
+    title: First sign-in token
+    description: >-
+      Claims the administrator account, once, for the address of the marketplace account deploying
+      this — nobody is asked to retype it. Generated if left blank and shown below after this is
+      deployed. It is re-armed on every restart until it is spent, and never re-armed over a live
+      account.
+    sensitive: true
+    generated: true
+    validation:
+      minLength: 32
+
+  - id: virtualHostStyle
+    type: boolean
+    title: Virtual-host addressing
+    description: >-
+      Off, because it needs a wildcard DNS record under the S3 hostname and the marketplace writes
+      one record, for one name. With it off the endpoint is path style, which an SDK has to be told
+      (`forcePathStyle`, or `AWS_S3_ADDRESSING_STYLE=path`). Turn it on only where you control the
+      zone and have added `*.<S3 hostname>` yourself — an SDK addressing a bucket as a host label
+      resolves nothing otherwise.
+    default: false
+
+  - id: encryptionChunkSize
+    type: string
+    title: Encryption chunk size
+    description: >-
+      For external-encrypted buckets, the plaintext bytes sealed under one AES-256-GCM chunk. The
+      size an object was written with is recorded with it, so changing this never makes what is
+      already stored unreadable. Smaller means a small range GET drags less ciphertext over the
+      wire and costs one more 16-byte tag per chunk; larger is cheaper for whole-object reads.
+    required: false
+    default: "4194304"
+    options:
+      source:
+        type: static
+        values:
+          - value: "1048576"
+            label: 1 MB — range reads
+          - value: "4194304"
+            label: 4 MB — balanced
+          - value: "16777216"
+            label: 16 MB — whole-object reads
+
+  # ---------------------------------------------------------------------------
+  # Internal credentials. No UI section names them: they are shared between this
+  # deployment's own parts and nobody outside it ever needs to see one, so the
+  # platform generates them and they stay sealed.
+  #
+  # Two of the three are seeds rather than the credential itself. Garage imports
+  # an access key of exactly one shape and the control plane loads a master key
+  # of exactly one length, and a generated parameter is a random string with no
+  # shape at all — so the chart derives the shapes from these with SHA-256. That
+  # is what lets one generated value produce a credential both halves of the
+  # deployment compute identically, without anybody writing a key down.
+  # ---------------------------------------------------------------------------
+  - id: masterKeySeed
+    type: string
+    title: Master key
+    description: >-
+      The 32-byte key is derived from this. It wraps every encrypted bucket's key and seals the
+      credentials of every registered back storage, so rotating it makes both unreadable — there is
+      no re-wrap. Generated, and never shown.
+    sensitive: true
+    generated: true
+    immutable: true
+    validation:
+      minLength: 32
+
+  - id: engineSeed
+    type: string
+    title: Object engine credential
+    description: >-
+      The credential the data plane holds on the deployment's own engine, together with that
+      engine's RPC secret and admin token, all derived from this. Nothing outside the cluster space
+      can reach the engine. Generated.
+    sensitive: true
+    generated: true
+    immutable: true
+    validation:
+      minLength: 32
+
+  - id: databasePassword
+    type: string
+    title: Database password
+    description: >-
+      Both what the bundled PostgreSQL is created with and what the control plane and the data
+      plane connect with. Generated.
+    sensitive: true
+    generated: true
+    validation:
+      minLength: 32
+
+resources:
+  # A cluster space is created with this quota, so it has to cover every
+  # container at once: the data plane, the control plane, the console, the object
+  # engine, PostgreSQL and the bootstrap Job.
+  #
+  # Storage covers the defaults above — a 50 GB object volume, an 8 GB database
+  # and the engine's 2 GB metadata volume. Choosing a larger volume in the form
+  # means asking for a larger space.
+  min:
+    cpu: "2"
+    memory: "8Gi"
+    storage: "64Gi"
+  recommended:
+    cpu: "4"
+    memory: "12Gi"
+    storage: "128Gi"
+
+components:
+  # ---------------------------------------------------------------------------
+  # One chart, five workloads. They share a database, a master key and a private
+  # network, and two of them are only correct if they were rendered from the same
+  # values — the engine credential the Job imports has to be the one the data
+  # plane holds. Splitting that across components would make agreement a thing
+  # somebody has to arrange rather than a thing the chart cannot get wrong.
+  # ---------------------------------------------------------------------------
+  - name: confidential-s3
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: confidential-s3
+      version: "0.1.0"
+    # PLACEHOLDERS — the three digests below are zeros, and `apps/tests/run.sh`
+    # fails on them deliberately. They exist only once Super-Protocol/confidential-s3#10
+    # merges and its release workflow publishes from `develop`; each run prints
+    # the digest it pushed in its summary. Pinning a tag instead is not the
+    # smaller step: a moving tag leaves the manifests — and the attested digest —
+    # unchanged while the software behind them is replaced, which is the one
+    # thing the evidence exists to make impossible.
+    images:
+      - name: ghcr.io/super-protocol/confidential-s3/gateway
+        digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+      - name: ghcr.io/super-protocol/confidential-s3/api
+        digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+      - name: ghcr.io/super-protocol/confidential-s3/console
+        digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+      - name: dxflrs/garage
+        digest: sha256:a5706cf1f3d7b349ac5133ec59ad8181b709270b75e5f2fa7b3e1a5c07d67137
+      - name: docker.io/bitnamilegacy/postgresql
+        digest: sha256:51db17ce1aa19e1b4ba65bf4ff45f0afcde6b59e44623d0005142703b91f4a1e
+    deployment:
+      values:
+        base:
+          consoleHostname: "{{ params.consoleHostname }}"
+          s3Hostname: "{{ params.s3Hostname }}"
+          publicScheme: https
+          # A value that is exactly one placeholder is interpolated in its native
+          # type, so the boolean reaches the chart as a boolean and the chunk
+          # size as the string its option list is made of — which is what the
+          # chart reads it as (`int64` takes either).
+          virtualHostStyle: "{{ params.virtualHostStyle }}"
+          gateway:
+            chunkSize: "{{ params.encryptionChunkSize }}"
+          masterKey:
+            seed: "{{ params.masterKeySeed }}"
+          engine:
+            seed: "{{ params.engineSeed }}"
+          bootstrapToken:
+            value: "{{ params.bootstrapToken }}"
+          database:
+            password: "{{ params.databasePassword }}"
+          api:
+            bootstrap:
+              # Whoever is deploying, read from the marketplace account rather
+              # than asked for: the console's first administrator is that person,
+              # and a parameter here would only be a second copy of an address
+              # the marketplace already holds — one that drifts the moment either
+              # changes.
+              adminEmail: "{{ consumer.user.email }}"
+              workspaceName: "{{ consumer.organization.name }}"
+          garage:
+            persistence:
+              data:
+                size: "{{ params.objectStorage }}"
+          postgresql:
+            primary:
+              persistence:
+                size: "{{ params.databaseStorage }}"
+
+outputs:
+  - id: consoleUrl
+    title: Console
+    type: url
+    value: "https://{{ params.consoleHostname }}"
+
+  - id: s3Endpoint
+    title: S3 endpoint
+    type: url
+    value: "https://{{ params.s3Hostname }}"
+
+  - id: firstSignIn
+    title: First sign-in
+    type: string
+    value: "Open the console and sign in with {{ consumer.user.email }} and the token below — it claims the administrator account and sets its password. It is spent by the first account, whoever creates it, so claim the deployment before its hostname is handed out."
+
+  - id: bootstrapToken
+    title: First sign-in token
+    type: secret
+    value: "{{ params.bootstrapToken }}"
+
+  - id: clientSetup
+    title: Point an S3 client at it
+    type: string
+    value: "aws --endpoint-url https://{{ params.s3Hostname }} s3 ls — with AWS_S3_ADDRESSING_STYLE=path, or forcePathStyle: true in an SDK client. Virtual-host addressing is off unless you turned it on: it needs a wildcard record for *.{{ params.s3Hostname }}, which is not a record the marketplace writes."
+
+  - id: keysNote
+    title: Keys
+    type: string
+    value: "A service account's secret key is shown once, when it is issued. Only its salt is stored, so there is no screen that can show it again — rotate the key if it is lost."
+
+evidence:
+  # Not declared yet. `expectedDigest` cannot be derived from the charts — a
+  # cluster defaults fields no template writes — so it takes two real
+  # deployments of the images this version pins, and those images are not final
+  # while SUP-125 is in flight. Adding the block later does not change the
+  # rendered manifests, so a digest measured on this version is valid for the
+  # version that declares it.
+  #
+  # The exclusions are declared now because they are a property of the chart
+  # rather than of a measurement: the two hostnames are the only fields that
+  # differ between two deployments of this version. The charts carry the same
+  # exclusion as a `swarm.io/exclude-evidence-fields` annotation; it is repeated
+  # here because this is what the marketplace reads to show it beside the digest,
+  # and a digest displayed next to "no exclusions" answers the only question that
+  # matters about it wrongly.
+  exclude:
+    - match: { kind: Ingress, name: confidential-s3-console }
+      fields:
+        - "/spec/rules/0/host"
+    - match: { kind: Ingress, name: confidential-s3-gateway }
+      fields:
+        - "/spec/rules/0/host"
+    # The one place outside an Ingress where the chosen hostname reaches a
+    # manifest: the console prints the S3 endpoint for a service account, so it
+    # carries the public address rather than the one it dials. Found by rendering
+    # the chart as two consumers and diffing, which is what
+    # `charts/tests/run.sh` now does on every change; the env list is written by
+    # the chart, so the index is a property of the template rather than a guess.
+    - match: { kind: Deployment, name: confidential-s3-console }
+      fields:
+        - "/spec/template/spec/containers/0/env/3/value"

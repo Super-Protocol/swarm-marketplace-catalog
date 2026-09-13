@@ -1,0 +1,350 @@
+# Confidential S3 — one chart, five workloads.
+#
+#   gateway   the S3 data plane. The only thing that speaks S3, and the only
+#             thing that speaks to the engine.
+#   api       the control plane. Owns the schema; the gateway reads three views
+#             of it and writes nothing.
+#   console   the browser console. A back-end-for-front-end: the browser talks to
+#             it, it talks to the control plane, and the control plane is never
+#             published on a hostname of its own.
+#   garage    the object engine behind every internal bucket. Its S3 port is
+#             reachable by the gateway and by nothing else (ADR-001 §4).
+#   postgres  the vendored Bitnami chart, on by default.
+#
+# Two hostnames are published: the console, and the S3 endpoint. Everything else
+# stays inside the cluster space.
+
+# ---------------------------------------------------------------------------
+# Addresses
+# ---------------------------------------------------------------------------
+
+# Where the console is served. A hostname, not a URL: `publicScheme` decides the
+# rest.
+consoleHostname: ""
+
+# Where S3 clients point. This is the endpoint URL a service account is used
+# against, so it is the string that ends up in somebody else's configuration.
+s3Hostname: ""
+
+publicScheme: https
+
+# Virtual-host addressing — `bucket.s3.example.com`, which is what the AWS SDKs
+# use unless they are told otherwise. Off, because it needs a wildcard DNS record
+# under the S3 hostname, and the marketplace writes one record, for one name. A
+# deployment that owns its zone can turn this on and add `*.<s3Hostname>` itself.
+#
+# With it off the endpoint is path-style only, and a client has to say so:
+# `--endpoint-url` plus `forcePathStyle` / `AWS_S3_ADDRESSING_STYLE=path`. An
+# unlisted domain must never have its first host label read as a bucket name, so
+# this is a decision rather than a default the gateway could guess.
+virtualHostStyle: false
+
+nameOverride: ""
+# The names below ignore the release name on purpose. Five workloads have to find
+# each other by DNS inside one namespace, and a deployment's evidence digest is
+# computed over the objects it rendered — names that moved with the release would
+# make the digest a property of the release name rather than of the version.
+fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# Images
+#
+# Every one is pinned by digest. A moving tag leaves the manifests — and so the
+# attested digest — unchanged while the software behind them is replaced, which
+# is exactly what the evidence exists to make impossible (marketplace spec §2.7).
+# `tag` exists for a development build and is ignored whenever `digest` is set.
+# ---------------------------------------------------------------------------
+gateway:
+  image:
+    registry: ghcr.io
+    repository: super-protocol/confidential-s3/gateway
+    digest: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 9100
+  # How long a control-plane read stays cached, negative answers included — and
+  # so how long a console change takes to reach the data plane, because there is
+  # no invalidation channel. Five seconds is the gateway's own default.
+  cacheTtlSeconds: 5
+  # Plaintext bytes per AES-256-GCM chunk in an external-encrypted bucket. The
+  # size an object was sealed with is recorded with it, so changing this never
+  # makes what is already stored unreadable.
+  chunkSize: 4194304
+  evidence:
+    # How long a dereferenced attestation document stays usable, which is what
+    # bounds revocation for a confined service account.
+    ttlSeconds: 300
+    timeoutSeconds: 5
+    # A fallback evidence service, used only when a caller's access key names
+    # none of its own. Empty is the documented default: where evidence comes
+    # from is the caller's problem by design (ADR-001 §8).
+    defaultUrl: ""
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      # A large object arrives in one request unless the client chose multipart.
+      nginx.ingress.kubernetes.io/proxy-body-size: "0"
+      nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+      nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    tls:
+      enabled: false
+      secretName: ""
+
+api:
+  image:
+    registry: ghcr.io
+    repository: super-protocol/confidential-s3/api
+    digest: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 3000
+  # No ingress. The control plane is reached by the console, which runs beside
+  # it, and by nothing else: publishing it would put an authenticated API on a
+  # public hostname for no reader that does not already have the console.
+  bootstrap:
+    # The first workspace, created on boot from the marketplace consumer.
+    workspaceName: "Default"
+    # How long the first-sign-in token stays redeemable.
+    tokenTtlHours: 720
+    # The address the administrator account is created under. The listing fills
+    # it from `consumer.user.email`.
+    adminEmail: ""
+  inviteTokenTtlHours: 168
+  sessionTtlHours: 12
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+console:
+  image:
+    registry: ghcr.io
+    repository: super-protocol/confidential-s3/console
+    digest: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 4300
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      # The file browser streams an object through the console, so an upload is
+      # bounded by the same thing the gateway's ingress is.
+      nginx.ingress.kubernetes.io/proxy-body-size: "0"
+      nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+      nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    tls:
+      enabled: false
+      secretName: ""
+
+# ---------------------------------------------------------------------------
+# The object engine
+#
+# One node, one replica. Garage replicates across nodes and this deployment has
+# one, so durability here is the volume's, which is what a cluster space provides
+# anyway.
+# ---------------------------------------------------------------------------
+garage:
+  image:
+    registry: docker.io
+    repository: dxflrs/garage
+    # The multi-platform index for v1.0.1. A digest wins over the tag beside it;
+    # the tag stays because it is what says *which* release this is.
+    digest: sha256:a5706cf1f3d7b349ac5133ec59ad8181b709270b75e5f2fa7b3e1a5c07d67137
+    tag: v1.0.1
+    pullPolicy: IfNotPresent
+  service:
+    s3Port: 3900
+    adminPort: 3903
+    rpcPort: 3901
+  # `sqlite` rather than `lmdb`: one node, and a metadata volume that has to
+  # survive a restart rather than be fast.
+  dbEngine: sqlite
+  # The layout Garage is given on first start. Capacity is what the node
+  # advertises, so it belongs with the data volume's size rather than apart
+  # from it — the Job derives one from the other.
+  zone: swarm
+  persistence:
+    enabled: true
+    meta:
+      size: 2Gi
+      storageClass: ""
+    data:
+      size: 20Gi
+      storageClass: ""
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+
+# The one-shot that turns a started Garage into one that accepts writes: the
+# storage layout, and the gateway's credential. Both are cluster decisions rather
+# than configuration, which is why neither can live in `garage.toml`.
+#
+# Jobs are applied here as ordinary objects, and a Job's `spec.template` is
+# immutable — so the platform deletes and re-creates this one on every
+# reconfigure. Every step it takes is safe to repeat.
+bootstrapJob:
+  enabled: true
+  # Runs the control plane's image: it already carries Node, which is all the
+  # script needs, and an image the deployment does not otherwise pull would be a
+  # fourth digest to declare and keep current.
+  backoffLimit: 12
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+# ---------------------------------------------------------------------------
+# Secrets
+#
+# Every value here ends up in the one Secret this chart creates, and nowhere
+# else. Three of the four are *seeds* rather than the credential itself: Garage
+# will import an access key of exactly one shape, the control plane will accept a
+# master key of exactly one length, and a marketplace `generated` parameter is a
+# random string with no shape at all. Deriving the credential from the seed with
+# SHA-256 is what lets one generated parameter produce a value both halves of the
+# deployment agree on, without anybody writing a key down.
+# ---------------------------------------------------------------------------
+
+masterKey:
+  # Any string of 32 characters or more. `sha256(seed)` is the 32-byte key the
+  # control plane and the gateway both load — the same key on both sides, or an
+  # external bucket is unreadable and an encrypted one is lost.
+  seed: ""
+  # An escape hatch for an operator who already has a key: 64 hex characters or
+  # 44 base64. Wins over `seed`.
+  value: ""
+  existingSecret: ""
+  existingSecretKey: master-key
+
+# First sign-in. While the administrator account is unclaimed, this redeems it
+# once, for the address in `api.bootstrap.adminEmail`. Re-armed on every boot
+# until it is spent, and never re-armed over a live account.
+bootstrapToken:
+  value: ""
+  existingSecret: ""
+  existingSecretKey: bootstrap-token
+
+# The gateway's credential on the engine, and the engine's own two tokens.
+# `sha256` of this seed, domain-separated, produces all four: an access key of
+# `GK` + 24 hex, a secret key of 64 hex, an RPC secret of 64 hex and an admin
+# token. Garage refuses anything else with a 400, which is a deployment that
+# comes up and cannot store a byte.
+engine:
+  seed: ""
+  # Explicit overrides, for a deployment that brings an engine credential of its
+  # own. Both or neither.
+  accessKey: ""
+  secretKey: ""
+  existingSecret: ""
+
+# ---------------------------------------------------------------------------
+# The database
+# ---------------------------------------------------------------------------
+database:
+  # `url` overrides the pieces. Use it when the password contains characters that
+  # would have to be percent-encoded, which the pieces do not encode for you.
+  url: ""
+  host: ""
+  port: 5432
+  name: confidential_s3
+  user: confidential_s3
+  password: ""
+  existingSecret: ""
+  existingSecretKey: password
+  sslmode: disable
+
+# The bundled database. `postgresql.auth.existingSecret` names the Secret this
+# chart creates, so the password lives in exactly one place.
+postgresql:
+  enabled: true
+  fullnameOverride: confidential-s3-postgresql
+  auth:
+    username: confidential_s3
+    database: confidential_s3
+    existingSecret: confidential-s3
+    secretKeys:
+      adminPasswordKey: postgres-password
+      userPasswordKey: password
+  global:
+    security:
+      allowInsecureImages: true
+  image:
+    registry: docker.io
+    # public.ecr.aws/bitnami is gone; the legacy mirror is what still serves
+    # these tags.
+    repository: bitnamilegacy/postgresql
+    tag: 17.3.0-debian-12-r1
+  rbac:
+    create: false
+  serviceAccount:
+    create: true
+  networkPolicy:
+    enabled: false
+  primary:
+    resourcesPreset: none
+    persistence:
+      size: 8Gi
+    # A cluster space isolates the namespace already, and a deployment that ships
+    # its own network policy is refused.
+    networkPolicy:
+      enabled: false
+
+# ---------------------------------------------------------------------------
+# Pod-level settings, shared by the three workloads this repository builds.
+# ---------------------------------------------------------------------------
+imagePullSecrets: []
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  fsGroup: 1001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+log:
+  # `RUST_LOG` for the gateway.
+  gatewayLevel: info

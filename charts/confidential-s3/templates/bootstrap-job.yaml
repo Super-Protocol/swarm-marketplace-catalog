@@ -1,0 +1,119 @@
+{{- include "confidential-s3.validate" . -}}
+{{- if .Values.bootstrapJob.enabled }}
+{{- $component := "bootstrap" -}}
+{{- $name := include "confidential-s3.componentName" (dict "root" . "component" $component) -}}
+{{- /*
+The one-shot that turns a started Garage into one that accepts writes: a storage
+layout, and the gateway's credential imported into the engine. Both are cluster
+decisions rather than configuration, which is why neither can live in
+`garage.toml` and why this exists at all.
+
+Jobs are applied here as ordinary objects — there is no Helm release lifecycle,
+so an install hook would be a plain manifest anyway — and a Job's `spec.template`
+is immutable, so the platform deletes and re-creates this one on every
+reconfigure. Every step the script takes is therefore written to be safe to
+repeat, and it is: the layout is skipped once any role exists, and a key that is
+already imported answers 409, which the script reads as success.
+
+It runs the control plane's image because that image already carries Node, which
+is all the script needs. A fourth image would be a fourth digest for the listing
+to declare and keep current, for a container that runs for four seconds.
+
+`files/garage-bootstrap.mjs` is a copy of `deploy/garage-bootstrap.mjs` in
+Super-Protocol/confidential-s3, which is where it is developed and tested (the
+repository's own image smoke test runs the same file).
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "confidential-s3.componentLabels" (dict "root" . "component" $component) | nindent 4 }}
+data:
+  garage-bootstrap.mjs: |
+{{ .Files.Get "files/garage-bootstrap.mjs" | indent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "confidential-s3.componentLabels" (dict "root" . "component" $component) | nindent 4 }}
+spec:
+  backoffLimit: {{ .Values.bootstrapJob.backoffLimit }}
+  template:
+    metadata:
+      annotations:
+        checksum/script: {{ .Files.Get "files/garage-bootstrap.mjs" | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "confidential-s3.selectorLabels" (dict "root" . "component" $component) | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: bootstrap
+          image: {{ include "confidential-s3.image" (dict "image" .Values.api.image "name" "api") }}
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          command: ["node", "/scripts/garage-bootstrap.mjs"]
+          env:
+            - name: GARAGE_ADMIN_URL
+              value: {{ printf "http://%s:%v" (include "confidential-s3.componentName" (dict "root" . "component" "garage")) .Values.garage.service.adminPort | quote }}
+            - name: GARAGE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.engine.existingSecret | default (include "confidential-s3.secretName" .) }}
+                  key: garage-admin-token
+            - name: ENGINE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.engine.existingSecret | default (include "confidential-s3.secretName" .) }}
+                  key: engine-access-key
+            - name: ENGINE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.engine.existingSecret | default (include "confidential-s3.secretName" .) }}
+                  key: engine-secret-key
+            - name: GARAGE_ZONE
+              value: {{ .Values.garage.zone | quote }}
+            - name: GARAGE_CAPACITY
+              value: {{ include "confidential-s3.garageCapacityBytes" . | quote }}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.bootstrapJob.resources | nindent 12 }}
+      volumes:
+        - name: scripts
+          configMap:
+            name: {{ $name }}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

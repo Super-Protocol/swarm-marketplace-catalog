@@ -1,0 +1,169 @@
+{{- include "confidential-s3.validate" . -}}
+{{- $component := "console" -}}
+{{- $name := include "confidential-s3.componentName" (dict "root" . "component" $component) -}}
+{{- /*
+The console. A back-end-for-front-end: the browser talks to this server and to
+nothing else, and this server talks to the control plane over the cluster
+network. There is no cross-origin call to arrange and no second hostname for the
+API, which is why the API has no Ingress.
+
+The image takes no build configuration — it reads both settings below from its
+environment on every request — so one published digest serves any hostname. That
+is what lets the listing pin it by digest and still let the customer choose their
+own address at deploy time.
+*/ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "confidential-s3.componentLabels" (dict "root" . "component" $component) | nindent 4 }}
+  annotations:
+    # The one place outside an Ingress where the operator's chosen hostname
+    # reaches a manifest: the console prints this endpoint for a service account,
+    # so it is the public S3 address rather than the one this pod dials. Without
+    # the exclusion every deployment of this version would attest a different
+    # digest — which is not a render failure, and so is exactly the kind of thing
+    # that is found once and then guarded. `charts/tests/run.sh` renders the
+    # chart as two consumers and fails if anything but the declared exclusions
+    # differs.
+    #
+    # The index is deterministic because this template writes the list: PORT,
+    # HOSTNAME, API_BASE_URL, S3_PUBLIC_ENDPOINT.
+    swarm.io/exclude-evidence-fields: "/spec/template/spec/containers/0/env/3/value"
+spec:
+  replicas: {{ .Values.console.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "confidential-s3.selectorLabels" (dict "root" . "component" $component) | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "confidential-s3.selectorLabels" (dict "root" . "component" $component) | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: console
+          image: {{ include "confidential-s3.image" (dict "image" .Values.console.image "name" "console") }}
+          imagePullPolicy: {{ .Values.console.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.console.service.port }}
+              protocol: TCP
+          env:
+            - name: PORT
+              value: {{ .Values.console.service.port | quote }}
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            - name: API_BASE_URL
+              value: {{ printf "http://%s:%v/api" (include "confidential-s3.componentName" (dict "root" . "component" "api")) .Values.api.service.port | quote }}
+            # The endpoint the console prints for a service account: the address
+            # an S3 client outside the cluster is pointed at, not the one this
+            # pod reaches the gateway on.
+            - name: S3_PUBLIC_ENDPOINT
+              value: {{ include "confidential-s3.s3Url" . | quote }}
+          # `/login` is the one route served without a session cookie, so a
+          # healthy console answers it with a 200 rather than a redirect.
+          startupProbe:
+            httpGet: { path: /login, port: http }
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /login, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /login, port: http }
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            # Next writes its image cache and its build traces under `.next`, and
+            # the root filesystem is read-only.
+            - name: next-cache
+              mountPath: /app/apps/console/.next/cache
+          resources:
+            {{- toYaml .Values.console.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: next-cache
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "confidential-s3.componentLabels" (dict "root" . "component" $component) | nindent 4 }}
+spec:
+  type: {{ .Values.console.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.console.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "confidential-s3.selectorLabels" (dict "root" . "component" $component) | nindent 4 }}
+{{- if .Values.console.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "confidential-s3.componentLabels" (dict "root" . "component" $component) | nindent 4 }}
+  annotations:
+    # The hostname is the one thing that differs between two deployments of this
+    # version. Declared in the listing's `evidence.exclude` as well — that is what
+    # the marketplace reads to show the exclusion beside the digest.
+    swarm.io/exclude-evidence-fields: "/spec/rules/0/host"
+    {{- with .Values.console.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.console.ingress.className }}
+  {{- if .Values.console.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.consoleHostname | quote }}
+      secretName: {{ required "console.ingress.tls.secretName must be set when console.ingress.tls.enabled is" .Values.console.ingress.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.consoleHostname | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  number: {{ .Values.console.service.port }}
+{{- end }}

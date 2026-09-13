@@ -1,0 +1,47 @@
+{{- include "confidential-s3.validate" . -}}
+{{- $component := "garage" -}}
+{{- $name := include "confidential-s3.componentName" (dict "root" . "component" $component) -}}
+{{- /*
+The object engine behind every internal bucket.
+
+One node, one replica: Garage replicates across nodes, this deployment has one,
+and durability here is the volume's — which is what a cluster space provides
+anyway. `replication_factor = 1` is the honest way to say that; a 3 that cannot
+be met is a cluster that refuses writes.
+
+The two tokens are *not* in this file. `garage.toml` is a ConfigMap, and a
+ConfigMap is neither sealed for the target nor lifted out of the evidence
+snapshot, so the RPC secret and the admin token arrive through the environment
+from the Secret instead.
+
+Nothing reaches this Service from outside the cluster space, and the chart
+publishes no Ingress for it: an S3 engine with a credential that can create
+buckets is exactly the unauthenticated-enough interface a public hostname should
+never carry.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "confidential-s3.componentLabels" (dict "root" . "component" $component) | nindent 4 }}
+data:
+  garage.toml: |
+    metadata_dir = "/var/lib/garage/meta"
+    data_dir = "/var/lib/garage/data"
+
+    db_engine = {{ .Values.garage.dbEngine | quote }}
+
+    replication_factor = 1
+
+    rpc_bind_addr = "[::]:{{ .Values.garage.service.rpcPort }}"
+    # One node talking to itself. A pod address would be a second thing to keep
+    # true across a reschedule, for a cluster that has no peer to announce to.
+    rpc_public_addr = "127.0.0.1:{{ .Values.garage.service.rpcPort }}"
+
+    [s3_api]
+    s3_region = "garage"
+    api_bind_addr = "[::]:{{ .Values.garage.service.s3Port }}"
+
+    [admin]
+    api_bind_addr = "[::]:{{ .Values.garage.service.adminPort }}"

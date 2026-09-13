@@ -1,0 +1,33 @@
+consoleHostname: console.confidential-s3.example
+s3Hostname: s3.confidential-s3.example
+masterKey:
+  seed: golden-test-master-key-seed-not-a-real-one
+engine:
+  seed: golden-test-engine-seed-not-a-real-one
+bootstrapToken:
+  value: golden-test-bootstrap-token-not-a-real-one
+database:
+  password: golden-test-password
+gateway:
+  image:
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+api:
+  image:
+    digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
+  bootstrap:
+    adminEmail: admin@confidential-s3.example
+console:
+  image:
+    digest: sha256:3333333333333333333333333333333333333333333333333333333333333333
+garage:
+  image:
+    digest: sha256:4444444444444444444444444444444444444444444444444444444444444444
+
+# A database of somebody else's. The bundled server is off, so the chart writes
+# no `postgres-password` key and both workloads read the DSN from the Secret
+# rather than assembling one.
+postgresql:
+  enabled: false
+database:
+  url: postgres://confidential_s3:elsewhere@db.example:5432/confidential_s3?sslmode=require
+  password: ""

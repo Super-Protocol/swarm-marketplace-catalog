@@ -1,0 +1,25 @@
+Confidential S3 is deploying.
+
+  Console      {{ include "confidential-s3.consoleUrl" . }}
+  S3 endpoint  {{ include "confidential-s3.s3Url" . }}
+
+First sign-in claims the administrator account once, for {{ .Values.api.bootstrap.adminEmail }},
+with the token this deployment was given. The account is created on the first
+boot and the token is redeemed on the sign-in screen; it stops working the moment
+it is spent, so claim the deployment before its hostname is handed out.
+
+Buckets, service accounts and their keys are made in the console. A key is shown
+exactly once, when it is issued — only its salt is stored, so there is no screen
+that can show it again.
+
+{{ if not .Values.virtualHostStyle -}}
+The endpoint is path style. AWS SDKs address a bucket as a host label unless they
+are told otherwise, which under this name would resolve to nothing:
+
+  aws --endpoint-url {{ include "confidential-s3.s3Url" . }} s3 ls
+  AWS_S3_ADDRESSING_STYLE=path, or forcePathStyle: true in an SDK client.
+{{- else -}}
+Virtual-host addressing is on, which needs a wildcard record for
+*.{{ .Values.s3Hostname }} pointing at the same gateway. Without it every SDK
+that addresses a bucket as a host label fails to resolve.
+{{- end }}
