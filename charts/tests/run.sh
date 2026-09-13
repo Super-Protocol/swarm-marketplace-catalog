@@ -259,6 +259,18 @@ else
   fail "published hostnames are [$hosts]"
 fi
 
+# The chart's own default image references. A listing overrides all of them, so an
+# empty or placeholder default is invisible to every check above — and only shows
+# up as a `helm install` that refuses to render, or worse, as a chart published to
+# an append-only repository with a digest nobody can pull.
+note "confidential-s3 pins every image it ships by a real digest"
+if output=$(python3 charts/tests/digests.py confidential-s3); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/digests.py"
+fi
+
 # What the chart rendered, as a list of objects, parsed the way a cluster parses
 # it. A golden diff cannot answer this: a template that loses a `---` glues two
 # objects into one document, the golden is regenerated from the same broken

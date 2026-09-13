@@ -44,7 +44,7 @@ somewhere. They need network the first time, to pull the chart.
 
 ## Beyond lint and goldens
 
-Four checks in `run.sh` are not a golden diff, and each exists because a golden diff
+Five checks in `run.sh` are not a golden diff, and each exists because a golden diff
 cannot answer the question:
 
 - **Every object, parsed as a cluster parses it** (`inventory.py`). A template that loses a
@@ -54,6 +54,11 @@ cannot answer the question:
   here, to the confidential-s3 gateway's Service, and it presented as an S3 endpoint answering
   503 through an Ingress pointing at nothing.
 
+- **Every image pinned by a real digest** (`digests.py`). The cases set their image digests
+  explicitly, so the goldens stay stable across an image bump — and say nothing about what the
+  chart itself would pull. A listing overrides the defaults too, which leaves an empty or
+  placeholder default invisible until somebody runs `helm install` with no `--set`, or until a
+  chart is published to an append-only repository carrying a digest nobody can pull.
 - **Two consumers, one version.** The confidential-s3 chart is rendered twice, under two
   hostnames in two namespaces, and every field that differs has to be a declared exclusion.
   This is `cli/evidence-preview.js` done on the chart, and it is the only check that catches

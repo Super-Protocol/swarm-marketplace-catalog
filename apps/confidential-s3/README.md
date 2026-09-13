@@ -71,8 +71,13 @@ asking for a larger cluster space at the same time.
 
 ## Evidence
 
-`evidence.exclude` names the two Ingress hostnames, which are the only fields that differ between
-two deployments of this version. `expectedDigest` is not declared yet: it cannot be derived from
-the charts — a cluster defaults fields no template writes — so it takes two real deployments of the
-images this version pins, and those images are not final. Adding it later does not change what is
-rendered, so a digest measured on this version stays valid for the version that declares it.
+`evidence.exclude` names the three fields that differ between two deployments of this version: the
+two Ingress hostnames, and the console's `S3_PUBLIC_ENDPOINT` — which carries the public S3 address
+because that is what the console prints for a service account. The chart annotates the same three
+on the objects that hold them.
+
+`expectedDigest` is not declared yet, and the reason is no longer the images: those are final and
+pinned by digest. It cannot be derived from the charts at all — a cluster defaults fields no
+template writes — so the value has to come from two real deployments of exactly these digests,
+compared against each other. Adding it later does not change what is rendered, so a digest measured
+on this version stays valid for the version that declares it.

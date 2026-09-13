@@ -253,20 +253,26 @@ components:
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-s3
       version: "0.1.0"
-    # PLACEHOLDERS — the three digests below are zeros, and `apps/tests/run.sh`
-    # fails on them deliberately. They exist only once Super-Protocol/confidential-s3#10
-    # merges and its release workflow publishes from `develop`; each run prints
-    # the digest it pushed in its summary. Pinning a tag instead is not the
-    # smaller step: a moving tag leaves the manifests — and the attested digest —
-    # unchanged while the software behind them is replaced, which is the one
-    # thing the evidence exists to make impossible.
+    # Published from `develop` at cbc0674 — the commit that closed both SUP-125
+    # (the gateway's final bytes) and SUP-124 — by release run 34767249561, also
+    # tagged `build4` and `develop-cbc0674`. Each digest below is the one that
+    # run printed in its summary, cross-checked against the build-provenance
+    # attestation it pushed with it:
+    #
+    #   gh attestation verify oci://ghcr.io/super-protocol/confidential-s3/<name>@<digest> \
+    #     --repo Super-Protocol/confidential-s3
+    #
+    # Pinned by digest rather than by the `develop` tag, and not as a shortcut:
+    # a moving tag leaves the manifests — and the attested digest — unchanged
+    # while the software behind them is replaced, which is the one thing the
+    # evidence exists to make impossible.
     images:
       - name: ghcr.io/super-protocol/confidential-s3/gateway
-        digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+        digest: sha256:63149695e3e69bc041e319e72f4c198d0cf14b18a56c8d6a4d8eb5a320f47509
       - name: ghcr.io/super-protocol/confidential-s3/api
-        digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+        digest: sha256:192a6d74ab493720ad817ba8e424307b1149c40a036e95eebc8791f2975894a2
       - name: ghcr.io/super-protocol/confidential-s3/console
-        digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+        digest: sha256:63af03a01c7a79ff93f25b83d072016579e12a122834b66d502c69ad671b2870
       - name: dxflrs/garage
         digest: sha256:a5706cf1f3d7b349ac5133ec59ad8181b709270b75e5f2fa7b3e1a5c07d67137
       - name: docker.io/bitnamilegacy/postgresql
@@ -342,12 +348,13 @@ outputs:
     value: "A service account's secret key is shown once, when it is issued. Only its salt is stored, so there is no screen that can show it again — rotate the key if it is lost."
 
 evidence:
-  # Not declared yet. `expectedDigest` cannot be derived from the charts — a
-  # cluster defaults fields no template writes — so it takes two real
-  # deployments of the images this version pins, and those images are not final
-  # while SUP-125 is in flight. Adding the block later does not change the
-  # rendered manifests, so a digest measured on this version is valid for the
-  # version that declares it.
+  # `expectedDigest` is not declared yet, and the reason is no longer the images
+  # — those are final and pinned above. It cannot be derived from the charts at
+  # all: a cluster defaults fields no template writes, so the value has to come
+  # from two real deployments of exactly these digests, compared against each
+  # other. Adding the block later does not change the rendered manifests, so a
+  # digest measured on this version stays valid for the version that declares
+  # it, and declaring it is a `metadata.version` bump and nothing else.
   #
   # The exclusions are declared now because they are a property of the chart
   # rather than of a measurement: the two hostnames are the only fields that
