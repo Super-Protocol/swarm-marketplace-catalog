@@ -213,9 +213,12 @@ parameters:
     title: Database password
     description: >-
       Both what the bundled PostgreSQL is created with and what the control plane and the data
-      plane connect with. Generated.
+      plane connect with. Generated, and fixed for the life of the deployment: the bundled server
+      takes its password when the data directory is created and never again, so a new one on
+      reconfigure would leave both halves unable to connect to their own database.
     sensitive: true
     generated: true
+    immutable: true
     validation:
       minLength: 32
 
