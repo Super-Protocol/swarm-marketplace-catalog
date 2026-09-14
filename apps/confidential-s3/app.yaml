@@ -5,7 +5,7 @@ metadata:
   name: confidential-s3
   title: Confidential S3
   description: S3-compatible object storage that runs in a confidential environment, with a console for buckets, keys and access. Objects can be kept in the deployment's own engine, passed through to a storage you already have, or encrypted so that only this deployment can read them.
-  version: "0.1.1"
+  version: "0.1.2"
   category: storage
   sourceRepo: https://github.com/Super-Protocol/confidential-s3
   license: Apache-2.0
@@ -357,24 +357,31 @@ outputs:
     value: "A service account's secret key is shown once, when it is issued. Only its salt is stored, so there is no screen that can show it again — rotate the key if it is lost."
 
 evidence:
-  # `expectedDigest` is still not declared, and 0.1.0 is why it could not be.
-  # Two deployments of 0.1.0 could never have agreed: the control plane's
-  # environment carried the consumer's address and organization name as literals,
-  # so the digest was a property of who deployed it. Measured, not suspected —
-  # `cli/evidence-preview.js` named both fields, and the signed snapshot of a real
-  # deployment showed them at env indices 5 and 6.
+  # Measured, on the demo stand, from two real deployments of 0.1.1 — which
+  # renders exactly what this version renders, because 0.1.2 changes only this
+  # block and `metadata.version`, and neither reaches a manifest:
   #
-  # This version removes the cause rather than excluding the symptom. What is left
-  # to do is the ordinary procedure: deploy 0.1.1 twice as two different
-  # consumers, read each published evidence, confirm the two digests agree, and
-  # declare that value. Adding the field changes nothing that is rendered, so the
-  # digest measured on this version stays valid for the version that declares it.
+  #   08f6744f-4b4f-4d10-8dbd-3192c54e2f86  sup124-a@local.test, namespace user-7329f978…
+  #   bf5c7b30-dc66-4710-9064-1d208cf4ef5f  sup124-b@local.test, namespace user-47918ced…
   #
-  # The exclusions are declared now because they are a property of the chart
-  # rather than of a measurement: the two hostnames are the only fields that
-  # differ between two deployments of this version. The charts carry the same
-  # exclusion as a `swarm.io/exclude-evidence-fields` annotation; it is repeated
-  # here because this is what the marketplace reads to show it beside the digest,
+  # Two different consumers, two namespaces, two pairs of hostnames, one cloud —
+  # and the cloud published the same digest for both. Their attested snapshots are
+  # byte-identical, which is the stronger statement: not "the digests happened to
+  # collide" but "there was nothing left to differ".
+  #
+  # 0.1.0 could not have had this value at all. Its control plane carried the
+  # consumer's address and organization name as literals in an attested
+  # environment, so the digest was a property of who deployed it; 0.1.1 moved the
+  # address into the Secret the platform lifts out and stopped reading the
+  # organization name. This line is what that change was for.
+  expectedDigest: "97791a22bade4aff17c072f218a238cf997bb165843002f068c78e8bb3ef91c1"
+  #
+  # The exclusions below are a property of the chart rather than of a
+  # measurement: they name the three fields that carry the hostname the operator
+  # chose, which is the only thing left that differs between two deployments.
+  # The chart carries each of them as a `swarm.io/exclude-evidence-fields`
+  # annotation on the object that holds it; they are repeated here because this
+  # is what the marketplace reads to show them beside the digest,
   # and a digest displayed next to "no exclusions" answers the only question that
   # matters about it wrongly.
   exclude:

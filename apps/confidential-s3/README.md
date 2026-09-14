@@ -76,18 +76,13 @@ two Ingress hostnames, and the console's `S3_PUBLIC_ENDPOINT` — which carries 
 because that is what the console prints for a service account. The chart annotates the same three
 on the objects that hold them.
 
-`expectedDigest` is still not declared, and 0.1.0 is the reason it could not be. Two deployments of
-0.1.0 could never have agreed: the control plane's environment carried the consumer's address and
-organization name as literals, so the digest was a property of who deployed it rather than of the
-version. That was measured rather than suspected — `cli/evidence-preview.js` named both fields, and
-a real deployment's signed snapshot showed them.
+`expectedDigest` is declared, and was measured rather than derived: two deployments of 0.1.1 on the
+demo stand, as two different consumers in two namespaces under two pairs of hostnames, and the cloud
+published the same digest for both. Their attested snapshots are byte-identical — the stronger
+statement, because it says there was nothing left to differ rather than that two digests happened to
+collide.
 
-0.1.1 removes the cause instead of excluding the symptom: the admin address reaches the container
-from the Secret, which the platform lifts out of the bundle and keeps out of the snapshot, and the
-workspace name is no longer read from the consumer at all — it is a display name an administrator
-can change in the console, which was not worth a second consumer-varying field.
-
-What is left is the ordinary procedure: deploy this version twice as two different consumers, read
-each published evidence, confirm the two digests agree, and declare that value. Adding the field
-changes nothing that is rendered, so a digest measured on this version stays valid for the version
-that declares it.
+0.1.0 could not have had the value at all: its control plane carried the consumer's address and
+organization name as literals in an attested environment, so the digest was a property of who
+deployed it. 0.1.1 moved the address into the Secret the platform lifts out of the snapshot and
+stopped reading the organization name.
