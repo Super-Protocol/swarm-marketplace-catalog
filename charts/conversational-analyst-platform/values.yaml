@@ -18,6 +18,13 @@ neo4j:
     initial: 1G
     max: 2G
   pagecache: 1G
+  resources:
+    requests:
+      cpu: 500m
+      memory: 4Gi
+    limits:
+      cpu: 500m
+      memory: 4Gi
 
 postgresql:
   fullnameOverride: analyst-postgresql
@@ -37,6 +44,13 @@ postgresql:
     enabled: false
   primary:
     resourcesPreset: none
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 250m
+        memory: 512Mi
     persistence:
       size: 8Gi
     # Network policy belongs to the cluster space, which already isolates the namespace; a
@@ -63,11 +77,26 @@ redis:
     enabled: false
   master:
     resourcesPreset: none
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
     persistence:
       size: 8Gi
 
 nats:
   fullnameOverride: analyst-nats
+  container:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
   config:
     monitor:
       enabled: true
@@ -85,6 +114,13 @@ minio:
   fullnameOverride: analyst-minio
   mode: standalone
   replicas: 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      cpu: 250m
+      memory: 1Gi
   persistence:
     size: 20Gi
   rootUser: root

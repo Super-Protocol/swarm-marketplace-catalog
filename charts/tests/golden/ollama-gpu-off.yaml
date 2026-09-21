@@ -103,8 +103,12 @@ spec:
           envFrom:
           args:
           resources:
-            limits: {}
-            requests: {}
+            limits:
+              cpu: "2"
+              memory: 4Gi
+            requests:
+              cpu: "2"
+              memory: 4Gi
           volumeMounts:
             - name: ollama-data
               mountPath: /root/.ollama

@@ -5,7 +5,7 @@ metadata:
   name: rag-agent
   title: RAG Agent
   description: Retrieval-augmented AI agent that answers questions over connected datasets.
-  version: "1.2.0"
+  version: "1.2.1"
   category: ai-inference
   license: Apache-2.0
   tags:
@@ -98,6 +98,13 @@ components:
             apiKey: ""
           datasources:
             corpusJson: ""
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 500m
+              memory: 1Gi
         patches:
           - op: replace
             path: model

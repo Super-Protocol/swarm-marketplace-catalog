@@ -5,7 +5,7 @@ metadata:
   name: confluent-platform
   title: Confluent Platform
   description: Apache Kafka with Confluent's Control Center — topics, schemas, consumer lag and message inspection from a browser.
-  version: "1.7.0"
+  version: "1.7.1"
   category: data-streaming
   # The chart this listing deploys, which is where the wiring can be read; Confluent Platform
   # itself is not open source.
@@ -225,12 +225,58 @@ components:
             cookieSecret: "{{ params.consoleCookieSecret }}"
           kafka:
             storage: "{{ params.kafkaStorage }}"
+            resources:
+              requests:
+                cpu: 500m
+                memory: 3Gi
+              limits:
+                cpu: 500m
+                memory: 3Gi
           schemaRegistry:
             enabled: true
+            resources:
+              requests:
+                cpu: 100m
+                memory: 1Gi
+              limits:
+                cpu: 100m
+                memory: 1Gi
+          controlCenter:
+            controlCenter:
+              resources:
+                requests:
+                  cpu: 500m
+                  memory: 3Gi
+                limits:
+                  cpu: 500m
+                  memory: 3Gi
+            prometheus:
+              resources:
+                requests:
+                  cpu: 200m
+                  memory: 2Gi
+                limits:
+                  cpu: 200m
+                  memory: 2Gi
+            alertmanager:
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 256Mi
+                limits:
+                  cpu: 50m
+                  memory: 256Mi
           # Off in the base so the switch below has something to replace, and so a deployment that
           # does not want stream processing does not carry the pod.
           ksqldb:
             enabled: false
+            resources:
+              requests:
+                cpu: 250m
+                memory: 2Gi
+              limits:
+                cpu: 250m
+                memory: 2Gi
         patches:
           - op: replace
             path: schemaRegistry.enabled

@@ -218,6 +218,9 @@ spec:
             - name: data
               mountPath: /app/data
           resources:
+            limits:
+              cpu: 50m
+              memory: 128Mi
             requests:
               cpu: 50m
               memory: 128Mi
@@ -281,10 +284,11 @@ spec:
               mountPath: /app/data
           resources:
             limits:
+              cpu: 250m
               memory: 1Gi
             requests:
               cpu: 250m
-              memory: 512Mi
+              memory: 1Gi
       volumes:
         - name: config
           configMap:

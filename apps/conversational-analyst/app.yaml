@@ -9,7 +9,7 @@ metadata:
     plain language: the agent finds the relevant tables, writes the SQL, runs it inside the
     confidential cluster space and answers with figures and charts. Raw records never leave the
     space and never reach the model — only aggregates do.
-  version: "3.0.6"
+  version: "3.0.7"
   category: ai-agents
   license: Proprietary
   tags:
@@ -159,12 +159,52 @@ components:
               username: retail_ai_user
               password: ""
               database: retail_ai
+            primary:
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 512Mi
+                limits:
+                  cpu: 250m
+                  memory: 512Mi
           redis:
             global:
               redis:
                 password: ""
+            master:
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 100m
+                  memory: 256Mi
           minio:
             rootPassword: ""
+            resources:
+              requests:
+                cpu: 250m
+                memory: 1Gi
+              limits:
+                cpu: 250m
+                memory: 1Gi
+          nats:
+            container:
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 100m
+                  memory: 256Mi
+          neo4j:
+            resources:
+              requests:
+                cpu: 500m
+                memory: 4Gi
+              limits:
+                cpu: 500m
+                memory: 4Gi
         patches:
           - op: replace
             path: internalSecret
@@ -215,6 +255,13 @@ components:
           keycloak:
             auth:
               adminPassword: ""
+            resources:
+              requests:
+                cpu: 500m
+                memory: 1Gi
+              limits:
+                cpu: 500m
+                memory: 1Gi
             externalDatabase:
               password: ""
             extraEnvVars:
@@ -289,6 +336,13 @@ components:
         base:
           aivo:
             config:
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 100m
+                  memory: 256Mi
               config:
                 services:
                   identityService:
@@ -323,6 +377,38 @@ components:
                     brand:
                       name: ""
                       title: ""
+            identity:
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 100m
+                  memory: 256Mi
+            service-discovery:
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 100m
+                  memory: 256Mi
+            instance:
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 100m
+                  memory: 256Mi
+            retail-ai:
+              resources:
+                requests:
+                  cpu: 500m
+                  memory: 1Gi
+                limits:
+                  cpu: 500m
+                  memory: 1Gi
         patches:
           - op: replace
             path: aivo.config.config.services.identityService.clientSecret
@@ -390,6 +476,13 @@ components:
         base:
           appHostname: ""
           oauth2-proxy:
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                cpu: 50m
+                memory: 64Mi
             config:
               clientID: analyst
               clientSecret: ""
@@ -501,6 +594,13 @@ components:
             model: text-embedding-3-small
             dimensions: 1536
             apiKey: ""
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 250m
+              memory: 512Mi
         patches:
           - op: replace
             path: internalSecret

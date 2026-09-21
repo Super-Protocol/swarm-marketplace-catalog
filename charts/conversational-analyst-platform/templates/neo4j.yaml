@@ -48,6 +48,8 @@ spec:
               containerPort: 7474
             - name: bolt
               containerPort: 7687
+          resources:
+            {{- toYaml .Values.neo4j.resources | nindent 12 }}
           env:
             - name: NEO4J_AUTH
               value: "neo4j/{{ include "platform.internalSecret" . }}"

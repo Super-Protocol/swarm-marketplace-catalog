@@ -40,6 +40,13 @@ keycloak:
   proxyHeaders: xforwarded
   httpRelativePath: "/auth/"
   resourcesPreset: none
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 500m
+      memory: 1Gi
   rbac:
     create: false
   serviceAccount:

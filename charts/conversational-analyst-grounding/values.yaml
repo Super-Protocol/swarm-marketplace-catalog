@@ -31,3 +31,11 @@ keycloak:
   url: http://analyst-keycloak/auth
   realm: master
   clientId: identity
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 250m
+    memory: 512Mi

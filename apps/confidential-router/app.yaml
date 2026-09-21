@@ -385,10 +385,10 @@ resources:
     minCount: 1
     minVram: "16Gi"
     types:
-      - nvidia-h100
-      - nvidia-a100
-      - nvidia-l40s
-      - nvidia-rtx-4090
+      - NVIDIA H100 80GB HBM3
+      - NVIDIA A100-SXM4-40GB
+      - NVIDIA L40S
+      - NVIDIA GeForce RTX 4090
 
 components:
   # ---------------------------------------------------------------------------
@@ -432,6 +432,13 @@ components:
             size: 30Gi
           ingress:
             enabled: false
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
         patches:
           # The whole selection, as a list: a value that is exactly one
           # placeholder is interpolated in its native type, so this reaches the
@@ -456,6 +463,19 @@ components:
           - op: replace
             path: runtimeClassName
             value: nvidia
+            when: "params.gpuEnabled == true"
+
+          - op: replace
+            path: resources
+            value:
+              requests:
+                cpu: "2"
+                memory: 4Gi
+                nvidia.com/gpu: "{{ params.gpuCount }}"
+              limits:
+                cpu: "2"
+                memory: 4Gi
+                nvidia.com/gpu: "{{ params.gpuCount }}"
             when: "params.gpuEnabled == true"
 
           - op: replace
@@ -486,6 +506,13 @@ components:
           masterKey: "{{ params.litellmKey }}"
           service:
             type: ClusterIP
+          resources:
+            requests:
+              cpu: 250m
+              memory: 2Gi
+            limits:
+              cpu: 250m
+              memory: 2Gi
 
   # ---------------------------------------------------------------------------
   # The router itself: `/v1` for clients, `/graphql` and `/auth` for the console,
@@ -564,6 +591,28 @@ components:
             primary:
               persistence:
                 size: "{{ params.databaseStorage }}"
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 512Mi
+                limits:
+                  cpu: 250m
+                  memory: 512Mi
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              cpu: 250m
+              memory: 1Gi
+          migrations:
+            resources:
+              requests:
+                cpu: 50m
+                memory: 128Mi
+              limits:
+                cpu: 50m
+                memory: 128Mi
         patches:
           - op: replace
             path: auth.password.enabled
@@ -683,6 +732,13 @@ components:
           consoleHostname: "{{ params.consoleHostname }}"
           apiHostname: "{{ params.apiHostname }}"
           publicScheme: https
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: 100m
+              memory: 512Mi
 
 outputs:
   - id: consoleUrl

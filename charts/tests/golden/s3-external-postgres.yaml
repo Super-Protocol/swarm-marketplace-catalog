@@ -478,10 +478,11 @@ spec:
               mountPath: /tmp
           resources:
             limits:
+              cpu: 250m
               memory: 1Gi
             requests:
               cpu: 250m
-              memory: 512Mi
+              memory: 1Gi
       volumes:
         - name: tmp
           emptyDir: {}
@@ -579,10 +580,11 @@ spec:
               mountPath: /app/apps/console/.next/cache
           resources:
             limits:
+              cpu: 100m
               memory: 512Mi
             requests:
               cpu: 100m
-              memory: 256Mi
+              memory: 512Mi
       volumes:
         - name: tmp
           emptyDir: {}
@@ -686,10 +688,11 @@ spec:
               mountPath: /tmp
           resources:
             limits:
+              cpu: 250m
               memory: 512Mi
             requests:
               cpu: 250m
-              memory: 256Mi
+              memory: 512Mi
       volumes:
         - name: config
           configMap:
@@ -797,10 +800,11 @@ spec:
               mountPath: /tmp
           resources:
             limits:
+              cpu: 250m
               memory: 2Gi
             requests:
               cpu: 250m
-              memory: 512Mi
+              memory: 2Gi
       volumes:
         - name: config
           configMap:
@@ -894,10 +898,11 @@ spec:
               mountPath: /tmp
           resources:
             limits:
+              cpu: 50m
               memory: 256Mi
             requests:
               cpu: 50m
-              memory: 128Mi
+              memory: 256Mi
       volumes:
         - name: scripts
           configMap:
