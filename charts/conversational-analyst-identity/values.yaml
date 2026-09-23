@@ -20,6 +20,13 @@ demoUser:
 bootstrap:
   # Keycloak's own image carries kcadm.sh and curl, so the bootstrap needs no image of its own.
   enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 100m
+      memory: 256Mi
 
 keycloak:
   fullnameOverride: analyst-keycloak

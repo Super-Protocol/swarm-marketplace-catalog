@@ -5,7 +5,7 @@
 #   /opt/swarm-marketplace-catalog/scripts/seed-marketplace.sh
 #
 # From a laptop (rsync + remote seed):
-#   MARKETPLACE_SSH=ubuntu@20.9.53.24 ./scripts/seed-marketplace.sh
+#   MARKETPLACE_SSH=ubuntu@HOST ./scripts/seed-marketplace.sh
 #
 # Override compose dir / catalog with MARKETPLACE_COMPOSE_DIR and SWM_SEED_CATALOG.
 

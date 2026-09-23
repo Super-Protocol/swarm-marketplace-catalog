@@ -5,7 +5,7 @@ metadata:
   name: ollama-webui
   title: Ollama + Open WebUI
   description: Run large language models with a chat interface powered by Open WebUI.
-  version: "1.0.6"
+  version: "1.0.3"
   category: ai-inference
   sourceRepo: https://github.com/swarm-cloud/marketplace-apps
   license: MIT
@@ -133,6 +133,9 @@ resources:
     required: false
     minCount: 1
     minVram: "8Gi"
+    # nvidia-smi product names, which hw-measurement writes to device.swarm.io/gpu-product.
+    # Placement matches the family (a100, l40s, rtx4090), not the exact string, so an A100
+    # 80GB or PCIe node still matches A100-SXM4-40GB.
     types:
       - NVIDIA A100-SXM4-40GB
       - NVIDIA L40S
@@ -197,6 +200,9 @@ components:
             value: nvidia
             when: "params.gpuEnabled == true"
 
+          # `nvidia.com/gpu` is not a dotted path, so the count cannot be set beside the
+          # CPU and memory above. The whole resources object is replaced, and those two
+          # are repeated.
           - op: replace
             path: resources
             value:

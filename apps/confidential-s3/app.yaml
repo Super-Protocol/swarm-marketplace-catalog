@@ -252,7 +252,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-s3
-      version: "0.1.1"
+      version: "0.1.2"
     # Published from `develop` at cbc0674 — the commit that closed both SUP-125
     # (the gateway's final bytes) and SUP-124 — by release run 34767249561, also
     # tagged `build4` and `develop-cbc0674`. Each digest below is the one that
@@ -290,13 +290,6 @@ components:
           virtualHostStyle: "{{ params.virtualHostStyle }}"
           gateway:
             chunkSize: "{{ params.encryptionChunkSize }}"
-            resources:
-              requests:
-                cpu: 250m
-                memory: 512Mi
-              limits:
-                cpu: 250m
-                memory: 512Mi
           masterKey:
             seed: "{{ params.masterKeySeed }}"
           engine:
@@ -323,51 +316,14 @@ components:
               # can change in the console, which is not worth a second
               # consumer-varying field.
               adminEmail: "{{ consumer.user.email }}"
-            resources:
-              requests:
-                cpu: 250m
-                memory: 1Gi
-              limits:
-                cpu: 250m
-                memory: 1Gi
-          console:
-            resources:
-              requests:
-                cpu: 100m
-                memory: 512Mi
-              limits:
-                cpu: 100m
-                memory: 512Mi
           garage:
             persistence:
               data:
                 size: "{{ params.objectStorage }}"
-            resources:
-              requests:
-                cpu: 250m
-                memory: 2Gi
-              limits:
-                cpu: 250m
-                memory: 2Gi
-          bootstrapJob:
-            resources:
-              requests:
-                cpu: 50m
-                memory: 256Mi
-              limits:
-                cpu: 50m
-                memory: 256Mi
           postgresql:
             primary:
               persistence:
                 size: "{{ params.databaseStorage }}"
-              resources:
-                requests:
-                  cpu: 250m
-                  memory: 512Mi
-                limits:
-                  cpu: 250m
-                  memory: 512Mi
 
 outputs:
   - id: consoleUrl

@@ -4,6 +4,17 @@
 # separate secrets would buy appearance rather than isolation.
 internalSecret: ""
 
+# One-shot that creates the databases and roles the agent expects. Same LimitRange rule as
+# every other container: request equals limit.
+postgresBootstrap:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 100m
+      memory: 256Mi
+
 # Container registry credentials for the agent's private images. The secret this creates is
 # named `regcred` and is referenced by the identity and agent components.
 imagePullSecret:
@@ -97,6 +108,28 @@ nats:
       limits:
         cpu: 100m
         memory: 256Mi
+  # The reloader container has no resources field of its own; `merge` is how this chart
+  # adds one. Without it LimitRange fills a default limit above the request and the pod
+  # is rejected (maxLimitRequestRatio is 1).
+  reloader:
+    merge:
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 10m
+          memory: 32Mi
+  # Debug toolbox. Its chart renders `resources: {}`, which LimitRange then rejects.
+  natsBox:
+    container:
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 10m
+          memory: 32Mi
   config:
     monitor:
       enabled: true
@@ -121,6 +154,26 @@ minio:
     limits:
       cpu: 250m
       memory: 1Gi
+  # The bucket Job only sets a memory request upstream. A missing CPU request and missing
+  # limits are filled by LimitRange and then rejected.
+  makeBucketJob:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 50m
+        memory: 128Mi
+  # Upstream ships a default console user, so this container is created too, and its
+  # chart only sets a memory request.
+  makeUserJob:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 50m
+        memory: 128Mi
   persistence:
     size: 20Gi
   rootUser: root

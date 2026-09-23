@@ -144,7 +144,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-platform
-      version: "0.3.0"
+      version: "0.3.1"
     deployment:
       values:
         base:
@@ -159,52 +159,12 @@ components:
               username: retail_ai_user
               password: ""
               database: retail_ai
-            primary:
-              resources:
-                requests:
-                  cpu: 250m
-                  memory: 512Mi
-                limits:
-                  cpu: 250m
-                  memory: 512Mi
           redis:
             global:
               redis:
                 password: ""
-            master:
-              resources:
-                requests:
-                  cpu: 100m
-                  memory: 256Mi
-                limits:
-                  cpu: 100m
-                  memory: 256Mi
           minio:
             rootPassword: ""
-            resources:
-              requests:
-                cpu: 250m
-                memory: 1Gi
-              limits:
-                cpu: 250m
-                memory: 1Gi
-          nats:
-            container:
-              resources:
-                requests:
-                  cpu: 100m
-                  memory: 256Mi
-                limits:
-                  cpu: 100m
-                  memory: 256Mi
-          neo4j:
-            resources:
-              requests:
-                cpu: 500m
-                memory: 4Gi
-              limits:
-                cpu: 500m
-                memory: 4Gi
         patches:
           - op: replace
             path: internalSecret
@@ -238,7 +198,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-identity
-      version: "0.5.1"
+      version: "0.5.2"
     deployment:
       values:
         base:
@@ -255,13 +215,6 @@ components:
           keycloak:
             auth:
               adminPassword: ""
-            resources:
-              requests:
-                cpu: 500m
-                memory: 1Gi
-              limits:
-                cpu: 500m
-                memory: 1Gi
             externalDatabase:
               password: ""
             extraEnvVars:
@@ -330,19 +283,12 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-agent
-      version: "0.4.0"
+      version: "0.4.1"
     deployment:
       values:
         base:
           aivo:
             config:
-              resources:
-                requests:
-                  cpu: 100m
-                  memory: 256Mi
-                limits:
-                  cpu: 100m
-                  memory: 256Mi
               config:
                 services:
                   identityService:
@@ -377,38 +323,6 @@ components:
                     brand:
                       name: ""
                       title: ""
-            identity:
-              resources:
-                requests:
-                  cpu: 100m
-                  memory: 256Mi
-                limits:
-                  cpu: 100m
-                  memory: 256Mi
-            service-discovery:
-              resources:
-                requests:
-                  cpu: 100m
-                  memory: 256Mi
-                limits:
-                  cpu: 100m
-                  memory: 256Mi
-            instance:
-              resources:
-                requests:
-                  cpu: 100m
-                  memory: 256Mi
-                limits:
-                  cpu: 100m
-                  memory: 256Mi
-            retail-ai:
-              resources:
-                requests:
-                  cpu: 500m
-                  memory: 1Gi
-                limits:
-                  cpu: 500m
-                  memory: 1Gi
         patches:
           - op: replace
             path: aivo.config.config.services.identityService.clientSecret
@@ -470,19 +384,12 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-gateway
-      version: "0.3.0"
+      version: "0.3.1"
     deployment:
       values:
         base:
           appHostname: ""
           oauth2-proxy:
-            resources:
-              requests:
-                cpu: 50m
-                memory: 64Mi
-              limits:
-                cpu: 50m
-                memory: 64Mi
             config:
               clientID: analyst
               clientSecret: ""
@@ -580,7 +487,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-grounding
-      version: "0.3.0"
+      version: "0.3.1"
     deployment:
       values:
         base:
@@ -594,13 +501,6 @@ components:
             model: text-embedding-3-small
             dimensions: 1536
             apiKey: ""
-          resources:
-            requests:
-              cpu: 250m
-              memory: 512Mi
-            limits:
-              cpu: 250m
-              memory: 512Mi
         patches:
           - op: replace
             path: internalSecret

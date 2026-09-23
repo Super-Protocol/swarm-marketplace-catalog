@@ -14,75 +14,59 @@ import argparse
 import re
 from pathlib import Path
 
+import yaml
+
 ENV_REF = re.compile(r"\$\{\w+\}")
-LIST_ITEM = re.compile(r"^  - ")
 
 
-def split_list_items(section: str) -> list[str]:
-    lines = section.splitlines(keepends=True)
-    items: list[list[str]] = []
-    buf: list[str] = []
-    preamble: list[str] = []
-    started = False
-    for line in lines:
-        if LIST_ITEM.match(line):
-            started = True
-            if buf:
-                items.append(buf)
-            buf = [line]
-            continue
-        if started:
-            buf.append(line)
-        else:
-            preamble.append(line)
-    if buf:
-        items.append(buf)
-    # Preamble (the "apps:\n" header) is returned as a fake first piece by the caller.
-    return ["".join(preamble)] + ["".join(block) for block in items]
-
-
-def field(item: str, name: str) -> str | None:
-    match = re.search(rf"^(?:  - |\s+){name}:\s*(.+?)\s*$", item, re.MULTILINE)
-    if not match:
-        return None
-    return match.group(1).strip().strip("\"'")
+def contains_env(value: object) -> bool:
+    if isinstance(value, str):
+        return ENV_REF.search(value) is not None
+    if isinstance(value, dict):
+        return any(contains_env(item) for item in value.values())
+    if isinstance(value, list):
+        return any(contains_env(item) for item in value)
+    return False
 
 
 def metadata_name(document: Path) -> str | None:
     if not document.is_file():
         return None
-    match = re.search(r"^  name:\s*(.+)\s*$", document.read_text(), re.MULTILINE)
-    if not match:
+    parsed = yaml.safe_load(document.read_text()) or {}
+    if not isinstance(parsed, dict):
         return None
-    return match.group(1).strip().strip("\"'")
+    name = (parsed.get("metadata") or {}).get("name")
+    return name if isinstance(name, str) and name else None
 
 
 def app_declares_secrets(app_yaml: Path) -> bool:
     if not app_yaml.is_file():
         return False
-    return bool(re.search(r"^secrets:\s*$", app_yaml.read_text(), re.MULTILINE))
+    parsed = yaml.safe_load(app_yaml.read_text()) or {}
+    return isinstance(parsed, dict) and "secrets" in parsed
 
 
-def keep_app(root: Path, item: str) -> bool:
-    if ENV_REF.search(item):
+def keep_app(root: Path, item: dict) -> bool:
+    if contains_env(item):
         return False
-    path = field(item, "path")
-    if not path:
+    path = item.get("path")
+    if not isinstance(path, str) or not path:
         return False
     if app_declares_secrets(root / path / "app.yaml"):
         return False
     return True
 
 
-def keep_dataset(item: str) -> bool:
-    return ENV_REF.search(item) is None and field(item, "path") is not None
+def keep_dataset(item: dict) -> bool:
+    path = item.get("path")
+    return isinstance(path, str) and bool(path) and not contains_env(item)
 
 
-def listing_names(root: Path, items: list[str], filename: str) -> set[str]:
+def listing_names(root: Path, items: list[dict], filename: str) -> set[str]:
     names: set[str] = set()
     for item in items:
-        path = field(item, "path")
-        if not path:
+        path = item.get("path")
+        if not isinstance(path, str):
             continue
         name = metadata_name(root / path / filename)
         if name:
@@ -90,43 +74,17 @@ def listing_names(root: Path, items: list[str], filename: str) -> set[str]:
     return names
 
 
-def keep_grant(item: str, apps: set[str], datasets: set[str]) -> bool:
-    dataset = field(item, "dataset")
-    if dataset not in datasets:
+def keep_grant(item: dict, apps: set[str], datasets: set[str]) -> bool:
+    if item.get("dataset") not in datasets:
         return False
-    apps_line = re.search(r"apps:\s*\[([^\]]+)\]", item)
-    if apps_line:
-        app_names = [part.strip() for part in apps_line.group(1).split(",") if part.strip()]
-        if any(name not in apps for name in app_names):
-            return False
+    named = item.get("apps") or []
+    if isinstance(named, list) and any(name not in apps for name in named):
+        return False
     return True
 
 
-def keep_review(item: str, apps: set[str]) -> bool:
-    app = field(item, "app")
-    return app in apps
-
-
-def rebuild_section(header_and_items: list[str]) -> str:
-    header, *items = header_and_items
-    return header + "".join(items)
-
-
-def split_sections(text: str) -> dict[str, str]:
-    keys = ("organizations", "apps", "datasets", "grants", "reviews")
-    positions: list[tuple[str, int]] = []
-    for key in keys:
-        match = re.search(rf"^{key}:\s*$", text, re.MULTILINE)
-        if match:
-            positions.append((key, match.start()))
-    positions.sort(key=lambda pair: pair[1])
-    sections: dict[str, str] = {}
-    prefix_end = positions[0][1] if positions else len(text)
-    sections["_prefix"] = text[:prefix_end]
-    for index, (key, start) in enumerate(positions):
-        end = positions[index + 1][1] if index + 1 < len(positions) else len(text)
-        sections[key] = text[start:end]
-    return sections
+def keep_review(item: dict, apps: set[str]) -> bool:
+    return item.get("app") in apps
 
 
 def main() -> None:
@@ -140,44 +98,36 @@ def main() -> None:
     )
     args = parser.parse_args()
     root = args.catalog_dir.resolve()
-    source = (root / "catalog.yaml").read_text()
-    sections = split_sections(source)
+    document = yaml.safe_load((root / "catalog.yaml").read_text()) or {}
 
-    app_parts = split_list_items(sections["apps"])
-    kept_app_items = [item for item in app_parts[1:] if keep_app(root, item)]
-    dataset_parts = split_list_items(sections["datasets"])
-    kept_dataset_items = [item for item in dataset_parts[1:] if keep_dataset(item)]
+    apps_in = [item for item in document.get("apps") or [] if isinstance(item, dict)]
+    datasets_in = [item for item in document.get("datasets") or [] if isinstance(item, dict)]
+    kept_apps = [item for item in apps_in if keep_app(root, item)]
+    kept_datasets = [item for item in datasets_in if keep_dataset(item)]
 
-    apps = listing_names(root, kept_app_items, "app.yaml")
-    datasets = listing_names(root, kept_dataset_items, "data.yaml")
+    app_names = listing_names(root, kept_apps, "app.yaml")
+    dataset_names = listing_names(root, kept_datasets, "data.yaml")
 
-    grant_parts = split_list_items(sections.get("grants", "grants:\n"))
-    kept_grants = [item for item in grant_parts[1:] if keep_grant(item, apps, datasets)]
+    grants_in = [item for item in document.get("grants") or [] if isinstance(item, dict)]
+    reviews_in = [item for item in document.get("reviews") or [] if isinstance(item, dict)]
+    document["apps"] = kept_apps
+    document["datasets"] = kept_datasets
+    if "grants" in document:
+        document["grants"] = [item for item in grants_in if keep_grant(item, app_names, dataset_names)]
+    if "reviews" in document:
+        document["reviews"] = [item for item in reviews_in if keep_review(item, app_names)]
 
-    review_parts = split_list_items(sections.get("reviews", "reviews:\n"))
-    kept_reviews = [item for item in review_parts[1:] if keep_review(item, apps)]
-
-    out = "".join(
-        [
-            sections["_prefix"],
-            sections["organizations"],
-            rebuild_section([app_parts[0], *kept_app_items]),
-            rebuild_section([dataset_parts[0], *kept_dataset_items]),
-            rebuild_section([grant_parts[0], *kept_grants]) if "grants" in sections else "",
-            rebuild_section([review_parts[0], *kept_reviews]) if "reviews" in sections else "",
-        ]
-    )
     dest = args.output or (root / "catalog.yaml")
-    dest.write_text(out)
-    skipped_apps = len(app_parts) - 1 - len(kept_app_items)
-    skipped_datasets = len(dataset_parts) - 1 - len(kept_dataset_items)
+    dest.write_text(yaml.safe_dump(document, sort_keys=False, allow_unicode=True))
+    skipped_apps = len(apps_in) - len(kept_apps)
+    skipped_datasets = len(datasets_in) - len(kept_datasets)
     print(
-        f"[filter] kept {len(kept_app_items)} app(s), {len(kept_dataset_items)} dataset(s); "
+        f"[filter] kept {len(kept_apps)} app(s), {len(kept_datasets)} dataset(s); "
         f"skipped {skipped_apps} app(s), {skipped_datasets} dataset(s) that need extra env/secrets",
         flush=True,
     )
-    for item in kept_app_items:
-        print(f"[filter] app {field(item, 'path')}", flush=True)
+    for item in kept_apps:
+        print(f"[filter] app {item.get('path')}", flush=True)
 
 
 if __name__ == "__main__":

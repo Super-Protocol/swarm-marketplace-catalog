@@ -168,7 +168,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confluent-platform
-      version: "0.7.0"
+      version: "0.7.1"
     images:
       - name: confluentinc/cp-server
         digest: sha256:62e3b04c4c88d03fbb484b9976e6145f751c2e908310f3f8b2db5ae7fcd3608f
@@ -200,47 +200,8 @@ components:
             cookieSecret: "{{ params.consoleCookieSecret }}"
           kafka:
             storage: "{{ params.kafkaStorage }}"
-            resources:
-              requests:
-                cpu: 500m
-                memory: 3Gi
-              limits:
-                cpu: 500m
-                memory: 3Gi
           schemaRegistry:
             enabled: true
-            resources:
-              requests:
-                cpu: 100m
-                memory: 1Gi
-              limits:
-                cpu: 100m
-                memory: 1Gi
-          controlCenter:
-            controlCenter:
-              resources:
-                requests:
-                  cpu: 500m
-                  memory: 3Gi
-                limits:
-                  cpu: 500m
-                  memory: 3Gi
-            prometheus:
-              resources:
-                requests:
-                  cpu: 200m
-                  memory: 2Gi
-                limits:
-                  cpu: 200m
-                  memory: 2Gi
-            alertmanager:
-              resources:
-                requests:
-                  cpu: 50m
-                  memory: 256Mi
-                limits:
-                  cpu: 50m
-                  memory: 256Mi
           sasl:
             adminPassword: "{{ params.adminPassword }}"
             accounts:
@@ -262,13 +223,6 @@ components:
           ksqldb:
             enabled: true
             serviceId: "claims_fraud_"
-            resources:
-              requests:
-                cpu: 250m
-                memory: 2Gi
-              limits:
-                cpu: 250m
-                memory: 2Gi
             # The whole of the detection logic. Both sources are re-keyed by patient so they can be
             # joined at all — a stream-stream join in Kafka is a join of co-partitioned topics, and
             # the parties key their own events by their own identifiers, not by the patient.
@@ -319,7 +273,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: claims-fraud-feed
-      version: "0.1.0"
+      version: "0.1.1"
     images:
       - name: confluentinc/cp-server
         digest: sha256:62e3b04c4c88d03fbb484b9976e6145f751c2e908310f3f8b2db5ae7fcd3608f
@@ -339,13 +293,6 @@ components:
             password: "{{ params.hospitalPassword }}"
             topic: clinical.events
             hospitalId: HOSP-B
-          resources:
-            requests:
-              cpu: 50m
-              memory: 768Mi
-            limits:
-              cpu: 50m
-              memory: 768Mi
 
 outputs:
   - id: consoleUrl

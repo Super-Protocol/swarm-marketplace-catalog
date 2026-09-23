@@ -178,7 +178,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confluent-platform
-      version: "0.7.0"
+      version: "0.7.1"
     # Pinned by digest, and the render fails if the chart ever references an image not listed here.
     # Confluent ships Control Center, its Prometheus and its Alertmanager as one matched set, so
     # the three carry the same version and are raised together.
@@ -225,58 +225,12 @@ components:
             cookieSecret: "{{ params.consoleCookieSecret }}"
           kafka:
             storage: "{{ params.kafkaStorage }}"
-            resources:
-              requests:
-                cpu: 500m
-                memory: 3Gi
-              limits:
-                cpu: 500m
-                memory: 3Gi
           schemaRegistry:
             enabled: true
-            resources:
-              requests:
-                cpu: 100m
-                memory: 1Gi
-              limits:
-                cpu: 100m
-                memory: 1Gi
-          controlCenter:
-            controlCenter:
-              resources:
-                requests:
-                  cpu: 500m
-                  memory: 3Gi
-                limits:
-                  cpu: 500m
-                  memory: 3Gi
-            prometheus:
-              resources:
-                requests:
-                  cpu: 200m
-                  memory: 2Gi
-                limits:
-                  cpu: 200m
-                  memory: 2Gi
-            alertmanager:
-              resources:
-                requests:
-                  cpu: 50m
-                  memory: 256Mi
-                limits:
-                  cpu: 50m
-                  memory: 256Mi
           # Off in the base so the switch below has something to replace, and so a deployment that
           # does not want stream processing does not carry the pod.
           ksqldb:
             enabled: false
-            resources:
-              requests:
-                cpu: 250m
-                memory: 2Gi
-              limits:
-                cpu: 250m
-                memory: 2Gi
         patches:
           - op: replace
             path: schemaRegistry.enabled
