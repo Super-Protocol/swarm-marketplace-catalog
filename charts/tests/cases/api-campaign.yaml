@@ -1,0 +1,23 @@
+# A deployment running an invitation campaign — the three settings a launch needs
+# and a plain evaluation does not (SUP-154). The landing page lives on a third
+# hostname this chart does not serve; it reaches the API from the browser, so its
+# origin joins the console's in `validClientOrigins`, and it is also the origin the
+# generated invitation URLs point at.
+#
+# The other two are deliberately absent from the rendered `router.yaml` and present
+# in the Secret instead: that ConfigMap is attested and readable inside the
+# deployment's published evidence bundle.
+apiHostname: api.confidential-router.example
+consoleHostname: console.confidential-router.example
+auth:
+  secret: golden-test-auth-secret-not-a-real-one
+  adminEmails:
+    - operator@confidential-router.example
+    - second.operator@confidential-router.example
+database:
+  password: golden-test-password
+invites:
+  landingHostname: landing.confidential-router.example
+analytics:
+  posthog:
+    projectKey: phc_golden_test_project_key

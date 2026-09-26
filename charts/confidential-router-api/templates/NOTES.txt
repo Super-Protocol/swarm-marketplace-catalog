@@ -21,3 +21,17 @@ Email and password sign-in is on: anyone who can reach the console can create an
 account there, with its own empty workspace and no credit. There is no password
 reset — it would need the mail delivery this path exists to do without.
 {{- end }}
+{{- if .Values.invites.landingHostname }}
+Invitation codes are handed out at {{ include "confidential-router-api.landingUrl" . }}, which is the
+one origin besides the console allowed to look a code up from the browser.
+{{- if not (or .Values.auth.adminEmails .Values.auth.adminEmailsExistingSecret) }}
+Nobody can read how that campaign converts: auth.adminEmails is empty, so the
+console's operator-only queries refuse everyone — and on a published cluster
+space there is no exec to run `invites stats` through instead.
+{{- end }}
+{{- end }}
+{{- if not (or .Values.analytics.posthog.projectKey .Values.analytics.posthog.existingSecret) }}
+Product analytics is off: the console's events are accepted with 202 and dropped,
+and so are the ones captured here. Set analytics.posthog.projectKey to record
+them.
+{{- end }}

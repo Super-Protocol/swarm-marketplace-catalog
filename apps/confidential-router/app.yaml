@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.4.0"
+  version: "0.5.0"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -55,6 +55,21 @@ ui:
         - parameterId: gpuCount
           widget: number
           visible: "params.gpuEnabled == true"
+
+    # A campaign is a different thing from a deployment, and the two fields only a
+    # campaign wants belong together rather than among the answered ones below: both
+    # are empty by default and nothing else depends on either.
+    - id: campaign
+      title: Campaign
+      description: >-
+        Invitation codes grant credit on sign-up, and the funnel is measured across both surfaces.
+        Neither field is needed to deploy — leave them empty and this is an endpoint with a console,
+        which is what an evaluation wants.
+      fields:
+        - parameterId: landingHostname
+          widget: text
+        - parameterId: posthogProjectKey
+          widget: password
 
     # There is no collapsed-section or group concept in the specification, so "advanced"
     # is expressed the only way the form can express it: one section, last, holding every
@@ -162,6 +177,32 @@ parameters:
             label: Phi-3.5 Mini 3.8B — 2.2 GB
           - value: "mistral:7b"
             label: Mistral 7B Instruct — 4.1 GB
+
+  - id: landingHostname
+    type: string
+    title: Campaign landing page
+    description: >-
+      Where invitation codes are handed out — a page hosted elsewhere, not by this deployment. Its
+      origin is the only one besides the console allowed to look a code up from the browser, which
+      is how the page can tell a visitor the credit is already theirs before they have signed up;
+      it is also the origin the generated invitation URLs point at. Empty runs no campaign.
+    required: false
+    # The same hostname pattern as the two above, widened by an empty alternative:
+    # this field is optional, and a pattern that rejected "" would make it required
+    # in the only way that matters.
+    validation:
+      pattern: "^$|^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+
+  - id: posthogProjectKey
+    type: string
+    title: PostHog project key
+    description: >-
+      The `phc_…` key of the project this deployment's funnel is recorded in. Without it every
+      event is accepted and dropped, and sign-up, redemption and first request exist only as rows
+      in this deployment's own database. A write-only ingest key — it can add events and read
+      nothing back.
+    required: false
+    sensitive: true
 
   - id: gpuEnabled
     type: boolean
@@ -439,7 +480,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-api
-      version: "0.2.3"
+      version: "0.3.0"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
         digest: sha256:21de82b68fa19e61bdabe915647c2d1cc4891dbb4759c33e3162d0aeb32951f7
@@ -483,6 +524,17 @@ components:
             # parameter here would only be a second copy of an address the
             # marketplace already holds — one that drifts the moment either changes.
             bootstrapEmail: "{{ consumer.user.email }}"
+            # Who may read the campaign's own numbers — issued, redeemed,
+            # activated, granted, and the fraud-watch queries behind them. Read
+            # from the marketplace account for the same reason as the address
+            # above: the console's first administrator is the person deploying
+            # this, and a parameter here would only be a second copy of an
+            # address that drifts the moment either changes. An empty list
+            # refuses everyone, and a published cluster space has no exec to run
+            # `invites stats` through instead — so a campaign deployed without
+            # this is a campaign nobody can see converting.
+            adminEmails:
+              - "{{ consumer.user.email }}"
           billing:
             mode: manual
           postgresql:
@@ -543,6 +595,21 @@ components:
             path: auth.magicLink.resendApiKey
             value: "{{ params.resendApiKey }}"
             when: "params.billingMode == 'stripe'"
+
+          # The campaign, when there is one. `add` for both, and nothing in the
+          # base: a deployment running no campaign has to render no landing
+          # origin and no analytics key at all, because the router's config
+          # schema is strict about keys it does not know and an empty one is
+          # still a key.
+          - op: add
+            path: invites.landingHostname
+            value: "{{ params.landingHostname }}"
+            when: 'params.landingHostname != ""'
+
+          - op: add
+            path: analytics.posthog.projectKey
+            value: "{{ params.posthogProjectKey }}"
+            when: 'params.posthogProjectKey != ""'
 
   # ---------------------------------------------------------------------------
   # The console. Served on its own hostname and talking to the API on the other
