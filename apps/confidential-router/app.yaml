@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.4.0"
+  version: "0.4.1"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -439,7 +439,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-api
-      version: "0.2.3"
+      version: "0.2.4"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
         digest: sha256:21de82b68fa19e61bdabe915647c2d1cc4891dbb4759c33e3162d0aeb32951f7
@@ -483,6 +483,17 @@ components:
             # parameter here would only be a second copy of an address the
             # marketplace already holds — one that drifts the moment either changes.
             bootstrapEmail: "{{ consumer.user.email }}"
+            # The same person, for the operator-only parts of the console: the
+            # invitation campaign aggregates, and the kill switch that withdraws
+            # a code that has leaked (SUP-159). An empty list refuses everyone,
+            # and on a published cluster that is final — there is no shell to run
+            # the CLI in, so a deployment naming nobody could not retract an
+            # invitation it had already mailed.
+            #
+            # Whoever deployed is the right answer and needs no parameter: they
+            # already own the first account this same address bootstraps.
+            adminEmails:
+              - "{{ consumer.user.email }}"
           billing:
             mode: manual
           postgresql:

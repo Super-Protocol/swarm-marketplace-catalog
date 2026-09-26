@@ -1,0 +1,15 @@
+# Operators named. `auth.adminEmails` reaches the rendered config, which is what
+# makes the invitation kill switch usable on a deployment with no shell: the
+# mutations that withdraw a code sit behind that list, and an empty one refuses
+# everybody (SUP-159).
+#
+# The counterpart of api-password-off: absent when empty, present when named.
+apiHostname: api.confidential-router.example
+consoleHostname: console.confidential-router.example
+auth:
+  secret: golden-test-auth-secret-not-a-real-one
+  adminEmails:
+    - ops@confidential-router.example
+    - second-operator@confidential-router.example
+database:
+  password: golden-test-password

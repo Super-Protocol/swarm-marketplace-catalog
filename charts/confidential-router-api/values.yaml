@@ -201,6 +201,20 @@ auth:
   # The address the bootstrapped account is created under. Only rendered
   # alongside a token — on its own it configures nothing.
   bootstrapEmail: ""
+  # Who may use the operator-only parts of the console schema: the invitation
+  # campaign aggregates, and the kill switch that withdraws a leaked code
+  # (SUP-159). Addresses rather than a role, because the `user` table belongs to
+  # Better Auth and the API may not add a column to it.
+  #
+  # Empty refuses everyone, which is the safe direction for a gate — but on a
+  # published cluster it is also *final*: there is no `kubectl exec` to run the
+  # CLI with, so a deployment that names nobody has no way to retract an
+  # invitation it has mailed. Name whoever operates the deployment.
+  #
+  # Rendered **only when the list is non-empty**, so the same chart still boots
+  # an image that predates the key — the rule `password` and `bootstrapToken`
+  # follow.
+  adminEmails: []
 
 # Which models this deployment serves: a plain list of Ollama model names. This
 # is the array the listing's multiselect parameter hands over (spec extension
