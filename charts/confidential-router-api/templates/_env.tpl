@@ -78,6 +78,40 @@ only from SUP-95 onwards — hence the condition around it.
   value: {{ .Values.auth.bootstrapEmail | quote }}
 {{- end }}
 {{- end }}
+{{- if or .Values.auth.adminEmails .Values.auth.adminEmailsExistingSecret }}
+{{- /*
+`CR_API_AUTH__ADMIN_EMAILS` — the environment layer reads it as
+`auth.adminEmails`, and the router's schema splits a comma-separated value into
+the list. A `CR_API_*` variable rather than a `${…}` placeholder in the config
+file for the same reason as the bootstrap token: the value is configuration that
+has to stay out of an attested, published ConfigMap, not a credential the file
+refers to.
+*/}}
+- name: CR_API_AUTH__ADMIN_EMAILS
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.auth.adminEmailsExistingSecret | default (include "confidential-router-api.secretName" .) }}
+      key: {{ if .Values.auth.adminEmailsExistingSecret }}{{ .Values.auth.adminEmailsExistingSecretKey }}{{ else }}admin-emails{{ end }}
+{{- end }}
+{{- if or .Values.analytics.posthog.projectKey .Values.analytics.posthog.existingSecret }}
+{{- /*
+`POSTHOG_PROJECT_KEY` and `POSTHOG_HOST`, not `CR_API_ANALYTICS__*`: the two names
+were fixed for every surface of this product before any of them was written
+(SUP-143), and the router maps them into `analytics.posthog` as its
+lowest-precedence layer. Being outside the prefix is also what makes them safe on
+an older image: an unknown `CR_API_*` variable fails a strict schema, while these
+two are simply not read.
+*/}}
+- name: POSTHOG_PROJECT_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.analytics.posthog.existingSecret | default (include "confidential-router-api.secretName" .) }}
+      key: {{ if .Values.analytics.posthog.existingSecret }}{{ .Values.analytics.posthog.existingSecretKey }}{{ else }}posthog-project-key{{ end }}
+{{- if .Values.analytics.posthog.host }}
+- name: POSTHOG_HOST
+  value: {{ .Values.analytics.posthog.host | quote }}
+{{- end }}
+{{- end }}
 {{- if .Values.auth.github.clientId }}
 - name: ROUTER_GITHUB_CLIENT_SECRET
   valueFrom:

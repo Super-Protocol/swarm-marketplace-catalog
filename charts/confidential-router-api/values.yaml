@@ -201,6 +201,25 @@ auth:
   # The address the bootstrapped account is created under. Only rendered
   # alongside a token — on its own it configures nothing.
   bootstrapEmail: ""
+  # Who may read the operator-only console queries — today the invitation-campaign
+  # aggregates and the fraud-watch numbers behind them. Empty means nobody, which
+  # is the right default for a deployment that has not named its operators and the
+  # wrong one for a deployment running a campaign: there is no second way in, because
+  # `invites stats` is a CLI that needs the database and a published cluster space
+  # has no exec.
+  #
+  # An address list rather than a role, because the `user` table belongs to Better
+  # Auth and nothing may add a column to it (ADR-004 §2). Matched
+  # case-insensitively against the address the caller is signed in as.
+  #
+  # Delivered to the pod as CR_API_AUTH__ADMIN_EMAILS out of the Secret below
+  # rather than written into the rendered `router.yaml`: that ConfigMap is attested
+  # and readable inside the deployment's published evidence bundle, so an operator
+  # address there would both be public and make the evidence digest a property of
+  # who deployed it (SUP-124).
+  adminEmails: []
+  adminEmailsExistingSecret: ""
+  adminEmailsExistingSecretKey: admin-emails
 
 # Which models this deployment serves: a plain list of Ollama model names. This
 # is the array the listing's multiselect parameter hands over (spec extension
@@ -291,6 +310,47 @@ evidence:
 rateLimits:
   requestsPerMinute: 600
   tokensPerMinute: 2000000
+
+# Invitation codes that grant credit on sign-up. The codes themselves are minted
+# by `invites generate` against the database; what a deployment configures is the
+# campaign landing page that hands them out, which is a site somewhere else
+# entirely. Empty means this deployment runs no campaign and none of it is
+# rendered.
+invites:
+  # Hostname only, no scheme — `publicScheme` decides that. Two settings follow
+  # from it, and they are why this is one value rather than two that can drift:
+  #
+  #   * the origin joins `server.validClientOrigins`, because the landing page
+  #     calls `GET /v1/invites/<code>` from the browser to tell a visitor the
+  #     credit is already theirs. Without it the API answers without
+  #     `Access-Control-Allow-Origin`, the browser drops the answer, and the page
+  #     silently shows its generic line instead (SUP-154).
+  #   * `invites.landingBaseUrl` is the origin `invites generate` writes into the
+  #     URLs it mints — where a mailing actually sends people.
+  landingHostname: ""
+  # Per-source-address budget on the public lookup. Low on purpose: the landing
+  # makes one call per visit, and a code is 59 bits, so anything higher only helps
+  # someone enumerating a campaign.
+  lookupsPerMinute: 30
+
+# Product analytics (ADR-006). The console makes no third-party request of its
+# own — its browser events are posted to this API, which captures them alongside
+# the ones the database already knows. Without a project key the sink is disabled
+# and every event is dropped, so the server half of a funnel is recorded nowhere
+# until this is set.
+analytics:
+  posthog:
+    # The `phc_…` project key. A write-only ingest key rather than a secret — it
+    # can add events and read nothing back — but it still arrives as
+    # POSTHOG_PROJECT_KEY out of the Secret rather than in the rendered
+    # `router.yaml`, because that ConfigMap is readable inside the published
+    # evidence bundle and a key anyone can read is a project anyone can write to.
+    projectKey: ""
+    existingSecret: ""
+    existingSecretKey: posthog-project-key
+    # Empty means the router's own default, PostHog's EU cloud. Set it for a
+    # self-hosted project.
+    host: ""
 
 log:
   level: info

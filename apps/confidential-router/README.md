@@ -98,13 +98,14 @@ catalogues.
 
 ## Configuring
 
-The form is four sections, and only the first three are on the way to Deploy:
+The form is five sections, and only the first three are on the way to Deploy:
 
 | Section | Field | Asked, or answered |
 | ------- | ----- | ------------------ |
 | Access | Console hostname, API hostname | Offered by the marketplace, inside a zone it holds; overwrite either to bring your own. |
 | Models | Models | Defaults to `llama3.2:3b`; pick more from the five below. |
 | Compute | Use a GPU, GPUs | Off, and one GPU when it is on. |
+| Campaign | Campaign landing page, PostHog project key | Both empty. A deployment that hands out no invitation codes and measures no funnel needs neither. |
 | Advanced | Model storage, Database storage | 30 GB and 8 GB, sized for all five models and an evaluation's worth of metering. |
 | Advanced | First sign-in token | Generated, and shown once with the deployment's outputs. Set one to bring your own. |
 | Advanced | Allow sign-up with a password | On. It is what lets a second person in, since this deployment cannot send an invitation. |
@@ -116,6 +117,34 @@ the default model. Advanced exists for the deployment that wants a bigger volume
 **No administrator email is asked for.** The console's first account is created for the address of
 the marketplace account deploying this, read from the platform (`consumer.user.email`) rather than
 retyped into a field that would drift from it.
+
+## Running a campaign
+
+Invitation codes grant $100 of credit inside sign-up, so a visitor never types one: a mailing links
+to the landing page with the code in the URL, the page carries it to the console, and the grant is
+applied once, atomically, as the account is created. The codes themselves are minted against the
+database; the two fields in *Campaign* are what a deployment configures.
+
+**Campaign landing page** is the hostname of that page — a site hosted elsewhere, not by this
+deployment. Naming it does two things, which is why it is one field rather than two that can drift:
+its origin becomes the one origin besides the console allowed to call `GET /v1/invites/<code>` from
+the browser, which is how the page can tell a visitor the credit is already theirs before they have
+signed up; and it becomes the origin the generated invitation URLs point at. Leave it empty and no
+invitation URL this deployment mints will point anywhere useful — and a page that does look a code
+up gets an answer the browser throws away, with nothing in the page to say so.
+
+**PostHog project key** is the project the funnel is recorded in. Without it every event is accepted
+and dropped: sign-up, redemption and first request then exist only as rows in this deployment's own
+database. It is a write-only ingest key — it can add events and read nothing back — and it is
+delivered as a sealed value rather than written into the deployment's configuration, which is
+published inside the evidence bundle and readable by anyone.
+
+**Who can read how it converts** is not asked for either. The console's operator-only queries — a
+campaign's issued, redeemed, activated and granted totals — answer for the address of the
+marketplace account deploying this, the same address the first administrator account is created
+for. Nobody else: the list is empty on a deployment that does not name anyone, and a published
+cluster space has no exec to run the `invites stats` CLI through instead. If the numbers have to be
+readable by more than one person, they read them through that account.
 
 ## Signing in
 
@@ -156,8 +185,8 @@ completed payment never becomes credit.
 ## Reconfiguring
 
 Adding a model pulls it on the next start; removing one takes it out of the catalogue and off the
-volume. Hostnames, billing mode and storage sizes can all be changed by reconfiguring — a blank
-sensitive field means "keep what is running", not "clear it". Changing the API hostname moves the
+volume. Hostnames, billing mode, storage sizes and both campaign fields can all be changed by
+reconfiguring — a blank sensitive field means "keep what is running", not "clear it". Changing the API hostname moves the
 console with it: it is told where the API is at start-up rather than at build time, so the pinned
 image never has to change for it.
 

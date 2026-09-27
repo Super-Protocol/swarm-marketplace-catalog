@@ -28,9 +28,13 @@ data:
       host: 0.0.0.0
       publicBaseUrl: {{ include "confidential-router-api.apiUrl" . | quote }}
       # CORS, and Better Auth's trusted origins. The console calls this API from
-      # the browser with `credentials: 'include'`, so its origin has to be here.
+      # the browser with `credentials: 'include'`, so its origin has to be here —
+      # and so does the campaign landing page's, which looks an invitation code up
+      # from the browser before anyone has signed in at all.
       validClientOrigins:
-        - {{ include "confidential-router-api.consoleUrl" . | quote }}
+        {{- range $origin := (include "confidential-router-api.clientOrigins" . | fromJsonArray) }}
+        - {{ $origin | quote }}
+        {{- end }}
 
     database:
       type: postgres
@@ -138,6 +142,18 @@ data:
         webhookSecret: ${ROUTER_STRIPE_WEBHOOK_SECRET}
         currency: {{ .Values.billing.stripe.currency | quote }}
       {{- end }}
+
+    {{- if .Values.invites.landingHostname }}
+
+    # Where the codes are handed out: the origin the generated invitation URLs
+    # point at, and — through `validClientOrigins` above — the one page allowed to
+    # look a code up. Rendered only when a landing page was named, so an image
+    # that predates the feature still boots on this chart rather than refusing a
+    # key its schema has never heard of.
+    invites:
+      landingBaseUrl: {{ include "confidential-router-api.landingUrl" . | quote }}
+      lookupsPerMinute: {{ .Values.invites.lookupsPerMinute | int64 }}
+    {{- end }}
 
     log:
       level: {{ .Values.log.level | quote }}

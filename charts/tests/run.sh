@@ -175,6 +175,19 @@ refuses "a password floor the router's schema would reject" "between 8 and 128" 
 refuses "every sign-in path switched off at once" "no sign-in path is configured" \
   "${base_api[@]}" --set auth.magicLink.mailer=none --set auth.password.enabled=false
 
+# A URL where a hostname belongs renders `https://https://…` into the CORS list,
+# which no browser origin matches: the landing page loads and quietly does
+# nothing. The other two are addresses that reach the pod as one comma-separated
+# variable and would match nobody once it is split.
+refuses "a landing URL where a hostname belongs" "must be a hostname, not a URL" \
+  "${base_api[@]}" --set invites.landingHostname=https://landing.confidential-router.example
+
+refuses "an operator name where an address belongs" "not an email address" \
+  "${base_api[@]}" --set 'auth.adminEmails[0]=operator'
+
+refuses "two operator addresses in one list entry" "one address per list entry" \
+  "${base_api[@]}" --set 'auth.adminEmails[0]=a@example.com\,b@example.com'
+
 # The console used to have its API origin compiled into its browser bundle, so
 # this chart refused to render one pointed anywhere else and the listing was
 # capped at the hostname the image was built for. The origin is resolved at run
@@ -212,6 +225,78 @@ if [ "$(printf '%s' "$console_images" | sort -u | wc -l)" = "1" ]; then
 else
   fail "the two renders pulled different images: $(printf '%s' "$console_images" | tr '\n' ' ')"
 fi
+
+# The three settings a launch needs, each of which was missing from a real
+# deployment and broke something the campaign depended on (SUP-154). A golden diff
+# would catch a change to any of them, but not the property that matters: which
+# object each one lands in. The rendered config is attested and readable inside the
+# published evidence bundle, so an operator address or an ingest key that drifted
+# into it would be public — and the address would make the evidence digest a
+# property of who deployed it (SUP-124).
+note "a campaign deployment renders its three settings, each in the right object"
+campaign=charts/tests/golden/api-campaign.yaml
+config=$(sed -n '/^  router.yaml: |/,/^---$/p' "$campaign")
+
+for origin in \
+  https://console.confidential-router.example \
+  https://landing.confidential-router.example
+do
+  if printf '%s\n' "$config" | grep -q -- "- \"$origin\""; then
+    pass "validClientOrigins carries $origin"
+  else
+    fail "validClientOrigins does not carry $origin"
+  fi
+done
+
+if printf '%s\n' "$config" | grep -q 'landingBaseUrl: "https://landing.confidential-router.example"'; then
+  pass "invites.landingBaseUrl points at the landing page, not the schema default"
+else
+  fail "the rendered config has no invites.landingBaseUrl"
+fi
+
+for leak in operator@confidential-router.example phc_golden_test_project_key; do
+  if printf '%s\n' "$config" | grep -q -- "$leak"; then
+    fail "the rendered router.yaml carries $leak, which the evidence bundle publishes"
+  else
+    pass "$leak is not in the rendered router.yaml"
+  fi
+done
+
+# Both addresses in one variable, in the order they were given: the router splits
+# a comma-separated value back into the list.
+if grep -q 'admin-emails: "operator@confidential-router.example,second.operator@confidential-router.example"' "$campaign"; then
+  pass "both operator addresses reach the Secret as one comma-separated value"
+else
+  fail "the Secret does not carry both operator addresses"
+fi
+if grep -q 'posthog-project-key: "phc_golden_test_project_key"' "$campaign"; then
+  pass "the ingest key reaches the Secret"
+else
+  fail "the Secret does not carry the PostHog project key"
+fi
+
+# And the pod has to actually read them from there. A Secret nothing references is
+# a deployment where all three settings are configured and none of them is applied.
+for variable in CR_API_AUTH__ADMIN_EMAILS POSTHOG_PROJECT_KEY; do
+  if [ "$(grep -c -- "- name: $variable\$" "$campaign")" = "2" ]; then
+    pass "$variable is read from the Secret by both the server and the migration container"
+  else
+    fail "$variable is read $(grep -c -- "- name: $variable\$" "$campaign") time(s), expected 2"
+  fi
+done
+
+# Nothing of the three is rendered for a deployment that asked for none of them:
+# the router's config schema is strict, so a key an older image has never heard of
+# is a boot it refuses rather than a value it ignores.
+note "a deployment with no campaign renders none of it"
+plain=charts/tests/golden/api-one-model.yaml
+for absent in 'invites:' CR_API_AUTH__ADMIN_EMAILS POSTHOG_PROJECT_KEY admin-emails posthog-project-key; do
+  if grep -q -- "$absent" "$plain"; then
+    fail "api-one-model renders $absent"
+  else
+    pass "no $absent"
+  fi
+done
 
 # The engine's credential is derived in one place and read in two: the data plane
 # holds it, and the Job imports exactly it into Garage. Nothing at deploy time

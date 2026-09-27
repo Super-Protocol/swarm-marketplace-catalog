@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.2.3
+    helm.sh/chart: confidential-router-api-0.3.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.0"
@@ -23,7 +23,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.2.3
+    helm.sh/chart: confidential-router-api-0.3.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.0"
@@ -38,7 +38,9 @@ data:
       host: 0.0.0.0
       publicBaseUrl: "https://api.confidential-router.example"
       # CORS, and Better Auth's trusted origins. The console calls this API from
-      # the browser with `credentials: 'include'`, so its origin has to be here.
+      # the browser with `credentials: 'include'`, so its origin has to be here —
+      # and so does the campaign landing page's, which looks an invitation code up
+      # from the browser before anyone has signed in at all.
       validClientOrigins:
         - "https://console.confidential-router.example"
 
@@ -142,7 +144,7 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.2.3
+    helm.sh/chart: confidential-router-api-0.3.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.0"
@@ -165,7 +167,7 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.2.3
+    helm.sh/chart: confidential-router-api-0.3.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.0"
@@ -182,7 +184,7 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: d2dec642cb2d01ec047143d00d1b273fbf92112422aa8a975ec8865fba7ac0ad
+        checksum/config: 0018bdd28ec0a6744e47b0cf462dffd30f586e3142e09f517cff37b131213bb8
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr
@@ -318,7 +320,7 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.2.3
+    helm.sh/chart: confidential-router-api-0.3.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.0"

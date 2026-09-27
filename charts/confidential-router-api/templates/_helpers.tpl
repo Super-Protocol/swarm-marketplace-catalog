@@ -72,6 +72,26 @@ development
 {{- printf "%s://%s" .Values.publicScheme (required "consoleHostname must be set" .Values.consoleHostname) -}}
 {{- end -}}
 
+{{- define "confidential-router-api.landingUrl" -}}
+{{- printf "%s://%s" .Values.publicScheme .Values.invites.landingHostname -}}
+{{- end -}}
+
+{{/*
+Every origin that calls this API from a browser, as a JSON array: the console
+always, and the campaign landing page when there is one. It is both the CORS
+allow-list and Better Auth's trusted origins, so an origin missing from it is a
+page whose fetch the browser throws away — and one listed twice is no error, only
+noise in a file operators read, which is why the same origin twice collapses to
+one entry.
+*/}}
+{{- define "confidential-router-api.clientOrigins" -}}
+{{- $origins := list (include "confidential-router-api.consoleUrl" .) -}}
+{{- if .Values.invites.landingHostname -}}
+{{- $origins = append $origins (include "confidential-router-api.landingUrl" .) -}}
+{{- end -}}
+{{- $origins | uniq | toJson -}}
+{{- end -}}
+
 {{/* The bundled database's service, unless an external host was given. */}}
 {{- define "confidential-router-api.databaseHost" -}}
 {{- if .Values.database.host -}}
@@ -189,6 +209,30 @@ even for the administrator who claimed it.
 {{- if eq .Values.auth.magicLink.mailer "resend" -}}
 {{- if not (or .Values.auth.magicLink.resendApiKey .Values.auth.magicLink.resendApiKeyExistingSecret) -}}
 {{- fail "auth.magicLink.mailer is resend: set auth.magicLink.resendApiKey or auth.magicLink.resendApiKeyExistingSecret" -}}
+{{- end -}}
+{{- end -}}
+{{/*
+A hostname, like the two above it. Given a URL it would render
+`https://https://router.example` into the CORS list, which no browser origin ever
+matches — and the symptom is a page that loads and quietly does nothing.
+*/}}
+{{- if .Values.invites.landingHostname -}}
+{{- if contains "/" .Values.invites.landingHostname -}}
+{{- fail (printf "invites.landingHostname must be a hostname, not a URL: %q" .Values.invites.landingHostname) -}}
+{{- end -}}
+{{- end -}}
+{{/*
+The addresses travel to the pod as one comma-separated variable, so a comma
+inside one of them would split it into two addresses that match nobody. An entry
+without an `@` is a name where an address was meant, which the guard compares
+against a signed-in email and always refuses.
+*/}}
+{{- range $email := .Values.auth.adminEmails -}}
+{{- if not (contains "@" $email) -}}
+{{- fail (printf "auth.adminEmails contains %q, which is not an email address" $email) -}}
+{{- end -}}
+{{- if contains "," $email -}}
+{{- fail (printf "auth.adminEmails contains %q: one address per list entry, commas separate them" $email) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
