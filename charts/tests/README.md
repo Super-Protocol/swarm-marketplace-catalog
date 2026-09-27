@@ -21,7 +21,7 @@ The release name and namespace are fixed per listing (`cr` / `confidential-route
 | Case | Axis it pins |
 | --- | --- |
 | `api-one-model` / `api-three-models` | the `models` list: `models[]` and `endpoints[]` in the rendered `router.yaml` are built from it |
-| `api-billing-manual` / `api-billing-stripe` | the billing mode, and the `NODE_ENV` that follows from it — the manual provider is refused in production |
+| `api-billing-disabled` / `api-billing-stripe` | the billing mode: no purchases at all, versus real card payments. The third provider, `manual`, mints credit from a signed link and the chart refuses it (SUP-167) |
 | `api-no-models` | an empty selection: an empty catalogue renders, rather than a chart that cannot be installed |
 | `api-external-postgres` | `postgresql.enabled: false` with a DSN of the deployment's own |
 | `litellm-one-model` / `litellm-three-models` | the same list on the other side, so the two charts' model names can be diffed against each other |

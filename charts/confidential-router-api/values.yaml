@@ -119,13 +119,22 @@ migrations:
       cpu: 50m
       memory: 128Mi
 
-# `manual` mints credit from a signed link and is what a demo or an evaluation
-# runs on; `stripe` takes real payments. The API refuses to boot the manual
-# provider under NODE_ENV=production (ADR-005 §4), so `mode: manual` runs the
-# container outside production mode — see `nodeEnv` below.
+# `disabled` sells no credit at all: checkout is refused outright and the console
+# hides its buy panel, which is the honest shape for a deployment whose credit
+# arrives from invitation codes and grants. `stripe` takes real payments.
+#
+# `manual` is the third provider the API implements and this chart refuses it: it
+# mints credit from a signed link, so the API will only bind it on a loopback
+# publicBaseUrl, and every hostname this chart renders is a public one. A router
+# deployment that shipped it published a free-credit button to every account
+# holder (SUP-167). Use `docker/docker-compose.yml` in the router repository for a
+# stack that can mint.
 billing:
-  mode: manual
+  mode: disabled
   minTopUpMicros: 5000000
+  # Ceiling on one checkout. Not a business rule but a blast radius: whatever the
+  # console's mutation accepts is what a single call can ask a provider for.
+  maxTopUpMicros: 10000000000
   allowOverdraftMicros: 0
   autoTopUpCooldown: 1h
   stripe:
@@ -150,11 +159,14 @@ auth:
   magicLink:
     # `none` switches magic-link sign-in off altogether, which is the honest
     # setting for a deployment with nowhere to send mail: the console then stops
-    # offering a link it cannot deliver. `console` writes the link to the log —
-    # fine for an evaluation, refused under NODE_ENV=production. `resend` is the
-    # only implemented mailer that sends anything; `smtp` is in the config schema
-    # but not implemented.
-    mailer: console
+    # offering a link it cannot deliver. It is the default because the container
+    # runs in production mode and `password.enabled` below already gives everyone
+    # a way in. `console` writes the link to the API log, where anyone with log
+    # access can use it, so it is refused in production — deliberate readers of
+    # the pod log set `nodeEnv: development` as well. `resend` is the only
+    # implemented mailer that sends anything; `smtp` is in the config schema but
+    # not implemented.
+    mailer: none
     from: no-reply@confidential-router.local
     resendApiKey: ""
     resendApiKeyExistingSecret: ""
@@ -371,11 +383,14 @@ gatekeeper:
   cacheTtl: 15m
   requestTimeout: 5s
 
-# Empty means "production when billing runs on Stripe, development otherwise".
-# The manual payment provider is refused under NODE_ENV=production because it
-# creates credit out of nothing, so a `mode: manual` deployment has to run
-# outside production mode — which also turns on the console mailer and pretty
-# logs. Set this explicitly only if you know which half you want.
+# Empty means `production`, which is what a cluster deployment is. It used to mean
+# "development unless billing runs on Stripe", and that is how the credit-minting
+# manual provider came to be live on a public router (SUP-167) — so the provider
+# no longer follows from this value in either direction.
+#
+# The one reason to set `development` here is a deployment that deliberately reads
+# its sign-in links out of the pod log (`auth.magicLink.mailer: console`), which
+# production mode refuses.
 nodeEnv: ""
 
 resources:

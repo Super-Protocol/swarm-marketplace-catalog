@@ -49,19 +49,22 @@ uncomputable (marketplace spec §2.7).
 {{- end -}}
 
 {{/*
-NODE_ENV. The manual payment provider mints credit from a signed link, so the
-API refuses to bind it under production (ADR-005 §4) — `billing.mode: manual`
-therefore has to run outside production mode, and says so here rather than
-crash-looping in the cluster.
+NODE_ENV — `production`, and nothing this chart is given changes that.
+
+It used to be derived: `development` unless billing ran on Stripe, because the
+API refuses to bind the credit-minting manual provider in production. A
+deployment of the router therefore published `NODE_ENV: development`, which is
+how that provider ended up live on a public hostname handing every account holder
+an unbounded free-credit button (SUP-167). The chart only ever deploys to a
+cluster, so production is the only honest value and `billing.mode: manual` is
+refused instead.
+
+`nodeEnv` is still overridable, for the one combination that needs the console
+mailer — but it no longer decides whether credit can be minted: the API checks
+`server.publicBaseUrl` for that, and this chart never renders a loopback one.
 */}}
 {{- define "confidential-router-api.nodeEnv" -}}
-{{- if .Values.nodeEnv -}}
-{{- .Values.nodeEnv -}}
-{{- else if eq .Values.billing.mode "stripe" -}}
-production
-{{- else -}}
-development
-{{- end -}}
+{{- .Values.nodeEnv | default "production" -}}
 {{- end -}}
 
 {{- define "confidential-router-api.apiUrl" -}}
@@ -169,8 +172,8 @@ Configuration checks that are cheaper to fail here than in a crash loop.
 {{- if and .Values.postgresql.enabled (ne .Values.postgresql.auth.existingSecret (include "confidential-router-api.fullname" .)) -}}
 {{- fail (printf "postgresql.auth.existingSecret must be %q — the secret this chart creates — or the server and the API will disagree on the password" (include "confidential-router-api.fullname" .)) -}}
 {{- end -}}
-{{- if not (has .Values.billing.mode (list "manual" "stripe")) -}}
-{{- fail (printf "billing.mode must be manual or stripe, not %q" .Values.billing.mode) -}}
+{{- if not (has .Values.billing.mode (list "disabled" "manual" "stripe")) -}}
+{{- fail (printf "billing.mode must be disabled or stripe, not %q" .Values.billing.mode) -}}
 {{- end -}}
 {{- if eq .Values.billing.mode "stripe" -}}
 {{- if not (or .Values.billing.stripe.existingSecret (and .Values.billing.stripe.secretKey .Values.billing.stripe.webhookSecret)) -}}
@@ -198,13 +201,22 @@ even for the administrator who claimed it.
 {{- if not (or .Values.auth.password.enabled .Values.auth.github.clientId .Values.auth.google.clientId (ne .Values.auth.magicLink.mailer "none")) -}}
 {{- fail "no sign-in path is configured: auth.magicLink.mailer is none, auth.password.enabled is false and neither auth.github nor auth.google is set. The bootstrap token creates one account and then stops existing, so nobody could sign in afterwards" -}}
 {{- end -}}
+{{/*
+The manual provider mints credit from a signed link. It exists for a laptop, and
+the API refuses to bind it in production or on a publicBaseUrl anyone else can
+reach — which is every hostname this chart renders. A deployment that sells
+nothing is `mode: disabled`, which refuses checkout instead of minting.
+*/}}
+{{- if eq .Values.billing.mode "manual" -}}
+{{- fail "billing.mode is manual: that provider mints credit from a signed link and the API refuses to bind it on a public hostname. Use disabled to sell nothing, or stripe to take payments" -}}
+{{- end -}}
 {{- if eq (include "confidential-router-api.nodeEnv" .) "production" -}}
 {{- if eq .Values.auth.magicLink.mailer "console" -}}
-{{- fail "auth.magicLink.mailer is console under NODE_ENV=production: sign-in links would be written to the log instead of sent. Configure the resend mailer" -}}
+{{- fail "auth.magicLink.mailer is console under NODE_ENV=production: sign-in links would be written to the log instead of sent. Configure the resend mailer, or set nodeEnv: development if reading them out of the pod log is the deliberate choice" -}}
 {{- end -}}
-{{- if ne .Values.billing.mode "stripe" -}}
-{{- fail "nodeEnv is production but billing.mode is not stripe: the manual payment provider mints credit from a signed link and the API refuses to bind it in production" -}}
 {{- end -}}
+{{- if and (eq .Values.billing.mode "stripe") (ne (include "confidential-router-api.nodeEnv" .) "production") -}}
+{{- fail "billing.mode is stripe but nodeEnv is not production: real card payments must not run in a mode that relaxes the checks around them" -}}
 {{- end -}}
 {{- if eq .Values.auth.magicLink.mailer "resend" -}}
 {{- if not (or .Values.auth.magicLink.resendApiKey .Values.auth.magicLink.resendApiKeyExistingSecret) -}}

@@ -1,0 +1,17 @@
+# Three models, no purchases. Differs from api-billing-stripe on the billing axis
+# alone: no `stripe` block, `billing.provider: disabled` in the rendered config,
+# and no mailer — which is what lets it run in production mode, the only mode this
+# chart renders. The third provider the API implements, `manual`, mints credit from
+# a signed link and this chart refuses it; `run.sh` pins that refusal.
+apiHostname: api.confidential-router.example
+consoleHostname: console.confidential-router.example
+auth:
+  secret: golden-test-auth-secret-not-a-real-one
+database:
+  password: golden-test-password
+models:
+  - "llama3.2:3b"
+  - "mistral:7b"
+  - "gemma2:2b"
+billing:
+  mode: disabled

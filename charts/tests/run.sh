@@ -141,8 +141,26 @@ base_api=(helm template "$RELEASE" charts/confidential-router-api --namespace "$
 refuses "stripe billing with no credentials" "billing.stripe.secretKey" \
   "${base_api[@]}" --set billing.mode=stripe
 
-refuses "production with the console mailer" "written to the log" \
-  "${base_api[@]}" --set nodeEnv=production
+# A sign-in link in the pod log is a sign-in link for anyone who can read logs, so
+# production mode — which is every deployment of this chart unless `nodeEnv` says
+# otherwise — refuses the console mailer.
+refuses "the console mailer, whose links land in the pod log" "written to the log" \
+  "${base_api[@]}" --set auth.magicLink.mailer=console
+
+# The launch blocker this pair of refusals exists for (SUP-167). `mode: manual`
+# mints credit from a signed link; the chart used to deploy it by default and hand
+# the container NODE_ENV=development so the API would bind it.
+refuses "manual billing, which mints credit from a signed link" "mints credit" \
+  "${base_api[@]}" --set billing.mode=manual
+
+refuses "manual billing even with nodeEnv forced back to development" "mints credit" \
+  "${base_api[@]}" --set billing.mode=manual --set nodeEnv=development
+
+refuses "Stripe billing outside production mode" "must not run in a mode" \
+  "${base_api[@]}" --set billing.mode=stripe \
+  --set billing.stripe.secretKey=sk_test_x --set billing.stripe.webhookSecret=whsec_x \
+  --set auth.magicLink.mailer=resend --set auth.magicLink.resendApiKey=re_x \
+  --set nodeEnv=development
 
 refuses "a model name the catalogue has no entry for" "modelCatalog has no entry" \
   "${base_api[@]}" --set 'models[0]=llama3.2:4b'

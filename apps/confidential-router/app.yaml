@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.5.1"
+  version: "0.6.0"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -77,8 +77,8 @@ ui:
     - id: advanced
       title: Advanced
       description: >-
-        Every field below is already answered — the volumes are sized for the models above, billing
-        starts on manual credit, and the first sign-in token is generated and shown with the
+        Every field below is already answered — the volumes are sized for the models above, the
+        deployment sells no credit, and the first sign-in token is generated and shown with the
         deployment's outputs. Open this to size a volume differently, to take real payments, or to
         bring your own token; skip it otherwise.
       fields:
@@ -267,17 +267,23 @@ parameters:
     type: string
     title: Billing
     description: >-
-      `Manual credit` mints credit from a signed link an administrator issues, and is what a demo or
-      an evaluation runs on — so it is what this deploys as unless it is changed here. `Stripe`
-      takes real payments and needs the two keys below.
+      `No purchases` sells nothing: the console has no buy panel and a checkout is refused, so credit
+      arrives the way an evaluation's does — an invitation code redeemed at sign-up, or an
+      administrator's grant. It is what this deploys as unless it is changed here. `Stripe` takes real
+      payments and needs the two keys below.
+
+
+      There is no third option. The router also implements a provider that mints credit from a signed
+      link, for a developer's laptop, and it is refused on any hostname other people can reach: a
+      deployment that shipped it gave every account holder an unbounded free-credit button (SUP-167).
     required: false
-    default: "manual"
+    default: "disabled"
     options:
       source:
         type: static
         values:
-          - value: "manual"
-            label: Manual credit
+          - value: "disabled"
+            label: No purchases
           - value: "stripe"
             label: Stripe
 
@@ -480,7 +486,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-api
-      version: "0.3.1"
+      version: "0.4.0"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
         digest: sha256:4a46243d7a19c92fe1b7eff534dda7cd556afb472610ade2d231896361aff204
@@ -535,8 +541,11 @@ components:
             # this is a campaign nobody can see converting.
             adminEmails:
               - "{{ consumer.user.email }}"
+          # Nothing is for sale: checkout is refused and the console hides its buy
+          # panel. The alternative the API used to fall back to was a provider
+          # that mints credit from a signed link (SUP-167).
           billing:
-            mode: manual
+            mode: disabled
           postgresql:
             primary:
               persistence:
@@ -556,6 +565,18 @@ components:
           - op: replace
             path: auth.magicLink.mailer
             value: console
+            when: "params.passwordSignup == false"
+
+          # And with it, out of production mode — the only thing that changes here.
+          # The API refuses to write sign-in links to a log it considers
+          # production, which is the right default and the wrong one for a
+          # deployment whose administrator reads them out of `kubectl logs` on
+          # purpose. It no longer touches billing: which provider binds follows
+          # from `billing.mode` and the API's own check that its publicBaseUrl is
+          # not a loopback address, neither of which this value can reach (SUP-167).
+          - op: add
+            path: nodeEnv
+            value: development
             when: "params.passwordSignup == false"
 
           # `add` rather than `replace` wherever the base above does not already
@@ -685,5 +706,5 @@ outputs:
   - id: billingNote
     title: Credit
     type: string
-    when: "params.billingMode == 'manual'"
-    value: "Billing runs on manual credit: an administrator mints it from the console's Billing screen and no payment leaves this deployment. Switch to Stripe by reconfiguring."
+    when: "params.billingMode == 'disabled'"
+    value: "This deployment sells no credit: the console has no buy panel and a checkout is refused. Credit arrives as a grant — an invitation code redeemed at sign-up, or `credits grant` from an administrator. Switch to Stripe by reconfiguring."

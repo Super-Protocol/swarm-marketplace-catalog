@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.3.1
+    helm.sh/chart: confidential-router-api-0.4.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.1"
@@ -23,7 +23,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.3.1
+    helm.sh/chart: confidential-router-api-0.4.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.1"
@@ -87,7 +87,7 @@ data:
       secret: ${ROUTER_AUTH_SECRET}
       sessionMaxAge: "720h"
       magicLink:
-        mailer: "console"
+        mailer: "none"
         from: "no-reply@confidential-router.local"
       # Rendered only while it is on, for the same reason `bootstrapToken` is:
       # the router's config schema is strict, so an image that predates SUP-112
@@ -97,7 +97,13 @@ data:
         minLength: 12
 
     billing:
+      # Named rather than left to the API's fallback, which was to bind a provider
+      # that mints credit from a signed link (SUP-167). Rendered only for this
+      # mode, so the chart still boots an image that predates the key — the same
+      # rule `auth.password` and `bootstrapToken` follow.
+      provider: disabled
       minTopUpMicros: 5000000
+      maxTopUpMicros: 10000000000
       allowOverdraftMicros: 0
       checkoutReturnUrl: "https://console.confidential-router.example/credits"
       autoTopUpCooldown: "1h"
@@ -126,7 +132,7 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.3.1
+    helm.sh/chart: confidential-router-api-0.4.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.1"
@@ -149,7 +155,7 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.3.1
+    helm.sh/chart: confidential-router-api-0.4.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.1"
@@ -166,7 +172,7 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: 590e4ae8ec075f98bc7db0494177f5bf5fa876f34c692e2d5dc6302016c09455
+        checksum/config: e3e41915bdbd4a13afbf1afa81509aa734b7be68a4e8a02bfefd4afc98149a84
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr
@@ -193,7 +199,7 @@ spec:
             readOnlyRootFilesystem: true
           env:
             - name: NODE_ENV
-              value: "development"
+              value: "production"
             - name: CR_API_CONFIG_FILE
               value: /etc/confidential-router/router.yaml
             - name: ROUTER_DATABASE_PASSWORD
@@ -236,7 +242,7 @@ spec:
               protocol: TCP
           env:
             - name: NODE_ENV
-              value: "development"
+              value: "production"
             - name: CR_API_CONFIG_FILE
               value: /etc/confidential-router/router.yaml
             - name: ROUTER_DATABASE_PASSWORD
@@ -302,7 +308,7 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.3.1
+    helm.sh/chart: confidential-router-api-0.4.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.1"

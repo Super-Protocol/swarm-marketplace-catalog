@@ -130,13 +130,19 @@ data:
       {{- end }}
 
     billing:
+      {{- if eq .Values.billing.mode "disabled" }}
+      # Named rather than left to the API's fallback, which was to bind a provider
+      # that mints credit from a signed link (SUP-167). Rendered only for this
+      # mode, so the chart still boots an image that predates the key — the same
+      # rule `auth.password` and `bootstrapToken` follow.
+      provider: disabled
+      {{- end }}
       minTopUpMicros: {{ .Values.billing.minTopUpMicros | int64 }}
+      maxTopUpMicros: {{ .Values.billing.maxTopUpMicros | int64 }}
       allowOverdraftMicros: {{ .Values.billing.allowOverdraftMicros | int64 }}
       checkoutReturnUrl: {{ printf "%s/credits" (include "confidential-router-api.consoleUrl" .) | quote }}
       autoTopUpCooldown: {{ .Values.billing.autoTopUpCooldown | quote }}
       {{- if eq .Values.billing.mode "stripe" }}
-      # Present means Stripe; absent means the manual provider, which is refused
-      # under NODE_ENV=production.
       stripe:
         secretKey: ${ROUTER_STRIPE_SECRET_KEY}
         webhookSecret: ${ROUTER_STRIPE_WEBHOOK_SECRET}
