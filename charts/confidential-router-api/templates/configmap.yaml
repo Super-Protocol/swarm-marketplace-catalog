@@ -129,12 +129,19 @@ data:
         minLength: {{ .Values.auth.password.minLength | int64 }}
       {{- end }}
 
+    # This section is the one place the chart does *not* keep itself bootable on an
+    # older image. `maxTopUpMicros` is unconditional, so on a router that predates
+    # SUP-167 — whose config schema is strict — every mode is a boot refusal, not
+    # just `disabled`. That is deliberate and is the safe direction: the image that
+    # would accept this chart without the key is the image that mints credit from a
+    # signed link, and a pod that will not start is a better outcome than one that
+    # quietly publishes a free-credit button. The chart version bump is the marker
+    # that the two have to move together.
     billing:
       {{- if eq .Values.billing.mode "disabled" }}
-      # Named rather than left to the API's fallback, which was to bind a provider
-      # that mints credit from a signed link (SUP-167). Rendered only for this
-      # mode, so the chart still boots an image that predates the key — the same
-      # rule `auth.password` and `bootstrapToken` follow.
+      # Named rather than left to the API's fallback, which was to bind the minting
+      # provider whenever `stripe` was absent (SUP-167). Conditional because the
+      # value is only meaningful for this mode, not to keep an older image booting.
       provider: disabled
       {{- end }}
       minTopUpMicros: {{ .Values.billing.minTopUpMicros | int64 }}

@@ -99,11 +99,18 @@ data:
         enabled: true
         minLength: 12
 
+    # This section is the one place the chart does *not* keep itself bootable on an
+    # older image. `maxTopUpMicros` is unconditional, so on a router that predates
+    # SUP-167 — whose config schema is strict — every mode is a boot refusal, not
+    # just `disabled`. That is deliberate and is the safe direction: the image that
+    # would accept this chart without the key is the image that mints credit from a
+    # signed link, and a pod that will not start is a better outcome than one that
+    # quietly publishes a free-credit button. The chart version bump is the marker
+    # that the two have to move together.
     billing:
-      # Named rather than left to the API's fallback, which was to bind a provider
-      # that mints credit from a signed link (SUP-167). Rendered only for this
-      # mode, so the chart still boots an image that predates the key — the same
-      # rule `auth.password` and `bootstrapToken` follow.
+      # Named rather than left to the API's fallback, which was to bind the minting
+      # provider whenever `stripe` was absent (SUP-167). Conditional because the
+      # value is only meaningful for this mode, not to keep an older image booting.
       provider: disabled
       minTopUpMicros: 5000000
       maxTopUpMicros: 10000000000
@@ -184,7 +191,7 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: bc559ad7f68fa354aaa357235511f8cda63d68146b926cfab91780774c66bccd
+        checksum/config: 937d1c93c0c06514dc27af068f3d4ddadb024e10f368ec4f32579e35b89bd518
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr
