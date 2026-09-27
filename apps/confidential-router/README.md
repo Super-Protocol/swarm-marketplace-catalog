@@ -109,7 +109,7 @@ The form is five sections, and only the first three are on the way to Deploy:
 | Advanced | Model storage, Database storage | 30 GB and 8 GB, sized for all five models and an evaluation's worth of metering. |
 | Advanced | First sign-in token | Generated, and shown once with the deployment's outputs. Set one to bring your own. |
 | Advanced | Allow sign-up with a password | On. It is what lets a second person in, since this deployment cannot send an invitation. |
-| Advanced | Billing, Stripe keys, Resend key, Sender address | Manual credit. The rest appear only if you switch to Stripe. |
+| Advanced | Billing, Stripe keys, Resend key, Sender address | No purchases. The rest appear only if you switch to Stripe. |
 
 Nothing above Advanced has to be typed: a deployment reaches Deploy on the offered hostnames and
 the default model. Advanced exists for the deployment that wants a bigger volume or real payments.
@@ -173,14 +173,20 @@ GitHub/Google application — but neither is needed to use this one.
 
 ## Billing
 
-**Manual credit** is the default and is what an evaluation runs on: an administrator mints credit
-from the console's Billing screen and no payment leaves the deployment.
+**No purchases** is the default and is what an evaluation runs on: the console has no buy panel, a
+checkout is refused, and credit arrives as a grant — an invitation code redeemed at sign-up, the
+feedback offer, or an administrator's `credits grant`.
 
-**Stripe** takes real payments, and choosing it moves the API into production mode — where a
-sign-in link written to the container log would be a sign-in link for anyone who can read logs. A
-Resend API key and a sender address are therefore part of the same choice, not extras, and the
-render refuses without them. Point a Stripe webhook at `https://<API hostname>/billing`, or a
-completed payment never becomes credit.
+It replaced a default called *manual credit*, which minted credit from a signed link. That provider
+exists for a developer's laptop, and the API now refuses to bind it on any hostname other people can
+reach: this listing's previous default shipped a working, unbounded, free-credit button to every
+account holder of a public deployment (SUP-167). The chart refuses to render it and there is no form
+field for it.
+
+**Stripe** takes real payments. A Resend API key and a sender address are part of the same choice,
+not extras, and the render refuses without them: the container runs in production mode, where a
+sign-in link written to the container log would be a sign-in link for anyone who can read logs. Point
+a Stripe webhook at `https://<API hostname>/billing`, or a completed payment never becomes credit.
 
 ## Reconfiguring
 

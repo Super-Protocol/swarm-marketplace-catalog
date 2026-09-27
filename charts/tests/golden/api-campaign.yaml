@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.3.1
+    helm.sh/chart: confidential-router-api-0.4.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.1"
@@ -25,7 +25,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.3.1
+    helm.sh/chart: confidential-router-api-0.4.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.1"
@@ -90,7 +90,7 @@ data:
       secret: ${ROUTER_AUTH_SECRET}
       sessionMaxAge: "720h"
       magicLink:
-        mailer: "console"
+        mailer: "none"
         from: "no-reply@confidential-router.local"
       # Rendered only while it is on, for the same reason `bootstrapToken` is:
       # the router's config schema is strict, so an image that predates SUP-112
@@ -99,8 +99,21 @@ data:
         enabled: true
         minLength: 12
 
+    # This section is the one place the chart does *not* keep itself bootable on an
+    # older image. `maxTopUpMicros` is unconditional, so on a router that predates
+    # SUP-167 — whose config schema is strict — every mode is a boot refusal, not
+    # just `disabled`. That is deliberate and is the safe direction: the image that
+    # would accept this chart without the key is the image that mints credit from a
+    # signed link, and a pod that will not start is a better outcome than one that
+    # quietly publishes a free-credit button. The chart version bump is the marker
+    # that the two have to move together.
     billing:
+      # Named rather than left to the API's fallback, which was to bind the minting
+      # provider whenever `stripe` was absent (SUP-167). Conditional because the
+      # value is only meaningful for this mode, not to keep an older image booting.
+      provider: disabled
       minTopUpMicros: 5000000
+      maxTopUpMicros: 10000000000
       allowOverdraftMicros: 0
       checkoutReturnUrl: "https://console.confidential-router.example/credits"
       autoTopUpCooldown: "1h"
@@ -138,7 +151,7 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.3.1
+    helm.sh/chart: confidential-router-api-0.4.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.1"
@@ -161,7 +174,7 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.3.1
+    helm.sh/chart: confidential-router-api-0.4.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.1"
@@ -178,7 +191,7 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: 65b061d18d8b00e02ec22f6022e98e66cc98510683b6c458283f3fac76b2a085
+        checksum/config: 937d1c93c0c06514dc27af068f3d4ddadb024e10f368ec4f32579e35b89bd518
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr
@@ -205,7 +218,7 @@ spec:
             readOnlyRootFilesystem: true
           env:
             - name: NODE_ENV
-              value: "development"
+              value: "production"
             - name: CR_API_CONFIG_FILE
               value: /etc/confidential-router/router.yaml
             - name: ROUTER_DATABASE_PASSWORD
@@ -258,7 +271,7 @@ spec:
               protocol: TCP
           env:
             - name: NODE_ENV
-              value: "development"
+              value: "production"
             - name: CR_API_CONFIG_FILE
               value: /etc/confidential-router/router.yaml
             - name: ROUTER_DATABASE_PASSWORD
@@ -334,7 +347,7 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.3.1
+    helm.sh/chart: confidential-router-api-0.4.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.1"

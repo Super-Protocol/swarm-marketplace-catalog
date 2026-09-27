@@ -6,10 +6,11 @@
   Models     {{ include "confidential-router-api.selectedModels" . | fromJsonArray | join ", " | default "none — /v1 answers model_not_found" }}
   Mode       NODE_ENV={{ include "confidential-router-api.nodeEnv" . }}, billing={{ .Values.billing.mode }}
 
-{{ if ne .Values.billing.mode "stripe" }}
-This deployment bills with the manual provider: a top-up is a signed link, not a
-payment, and the container runs outside production mode so the API will bind it.
-Set billing.mode=stripe with real credentials before anyone is charged.
+{{ if eq .Values.billing.mode "disabled" }}
+This deployment sells no credit: the console has no buy panel and a checkout is
+refused. Credit arrives as a grant — an invitation code redeemed at sign-up, the
+feedback offer, or `credits grant`. Set billing.mode=stripe with real credentials
+to take payments.
 {{- end }}
 {{- if eq .Values.auth.magicLink.mailer "console" }}
 Sign-in links are written to the API log, not sent:

@@ -1,4 +1,4 @@
-# Three models, Stripe. NODE_ENV becomes production, which in turn makes the
+# Three models, Stripe. The container runs in production mode, which makes the
 # console mailer illegal — so a real mailer is part of this case, not an extra.
 apiHostname: api.confidential-router.example
 consoleHostname: console.confidential-router.example
