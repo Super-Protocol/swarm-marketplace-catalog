@@ -12,6 +12,7 @@ api-bootstrap-token	confidential-router-api
 api-password-no-mailer	confidential-router-api		
 api-password-off	confidential-router-api		
 api-campaign	confidential-router-api		
+api-invite-only	confidential-router-api		
 litellm-one-model	confidential-router-litellm		
 litellm-three-models	confidential-router-litellm		
 ui-default	confidential-router-ui		

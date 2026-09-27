@@ -128,6 +128,14 @@ data:
         enabled: true
         minLength: {{ .Values.auth.password.minLength | int64 }}
       {{- end }}
+      {{- if .Values.auth.requireInviteForSignUp }}
+      # Invite-only registration (SUP-173): no sign-up path creates an account
+      # without an invitation code that is valid and unredeemed. Rendered only
+      # while it is on, the same seam rule as `password` above — an image that
+      # predates the key would refuse to boot on it rather than ignore it, and an
+      # explicit `false` would buy nothing the default does not.
+      requireInviteForSignUp: true
+      {{- end }}
 
     # This section is the one place the chart does *not* keep itself bootable on an
     # older image. `maxTopUpMicros` is unconditional, so on a router that predates

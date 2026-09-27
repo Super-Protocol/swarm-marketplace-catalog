@@ -192,6 +192,24 @@ auth:
     # composition rules buy less than the characters they cost. 8–128; the
     # console reads it back from the API and enforces the same number.
     minLength: 12
+  # Invite-only registration: while this is on, **no** sign-up path — password,
+  # magic link or OAuth — creates an account unless the request carries an
+  # invitation code that is valid and unredeemed at that moment. Sign-in to an
+  # existing account is unaffected, and so is the first-sign-in token below:
+  # nobody mails the operator a code for their own cluster.
+  #
+  # Off by default, which is what a demo or an evaluation wants — there a wrong
+  # code costs the $100 grant and never the account. Turn it on for a campaign
+  # running grants-only, where an account that cannot be credited is an account
+  # that should not exist.
+  #
+  # Rendered **only when it is on**, the same seam rule `password` and
+  # `bootstrapToken` follow: the router's config schema is strict, so an image
+  # that predates the key would refuse to boot on it.
+  #
+  # Turning it on with no codes generated closes registration completely. Mint the
+  # campaign first (`invites generate`), then reconfigure.
+  requireInviteForSignUp: false
   github:
     clientId: ""
     clientSecret: ""
