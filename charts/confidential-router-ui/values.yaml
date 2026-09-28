@@ -4,7 +4,7 @@
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-router/router-ui
-  digest: sha256:154a178ec68831d607e33412603fd85fd99fee3bbf84bcd702b7b8dcae56e6a7
+  digest: sha256:9c3a6bb38e2e46197293f11a4d481aa3aa45884411079a7705e1ca729d112bc7
   tag: ""
   pullPolicy: IfNotPresent
 
