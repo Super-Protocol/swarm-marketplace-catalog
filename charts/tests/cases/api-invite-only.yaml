@@ -1,0 +1,13 @@
+# A launch running grants-only: the campaign of `api-campaign`, plus the switch
+# that makes the code a requirement rather than a bonus (SUP-173). What this pins
+# is the `auth.requireInviteForSignUp` seam — rendered only while it is on, so the
+# same chart still boots an image that predates the key.
+apiHostname: api.confidential-router.example
+consoleHostname: console.confidential-router.example
+auth:
+  secret: golden-test-auth-secret-not-a-real-one
+  requireInviteForSignUp: true
+database:
+  password: golden-test-password
+invites:
+  landingHostname: landing.confidential-router.example

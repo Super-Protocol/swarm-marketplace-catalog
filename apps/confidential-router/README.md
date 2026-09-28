@@ -106,6 +106,7 @@ The form is five sections, and only the first three are on the way to Deploy:
 | Models | Models | Defaults to `llama3.2:3b`; pick more from the five below. |
 | Compute | Use a GPU, GPUs | Off, and one GPU when it is on. |
 | Campaign | Campaign landing page, PostHog project key | Both empty. A deployment that hands out no invitation codes and measures no funnel needs neither. |
+| Campaign | Only invited people can create an account | Off. An invitation then decides whether $100 comes with an account, not whether the account can exist. |
 | Advanced | Model storage, Database storage | 30 GB and 8 GB, sized for all five models and an evaluation's worth of metering. |
 | Advanced | First sign-in token | Generated, and shown once with the deployment's outputs. Set one to bring your own. |
 | Advanced | Allow sign-up with a password | On. It is what lets a second person in, since this deployment cannot send an invitation. |
@@ -139,6 +140,20 @@ database. It is a write-only ingest key — it can add events and read nothing b
 delivered as a sealed value rather than written into the deployment's configuration, which is
 published inside the evidence bundle and readable by anyone.
 
+**Only invited people can create an account** is the switch that turns a campaign into a closed
+launch. Off, this deployment's sign-up is open and a code only decides whether the $100 comes with
+the account — a wrong or spent code costs the credit and never the registration. On, the code
+decides whether the account exists: every sign-up path — password, magic link, an OAuth callback —
+is refused, before anything is created, unless the request carries a code that is valid and has not
+been redeemed. The visitor is told which of three it was: no code at all, already claimed, or
+expired-or-unknown, that last one deliberately merging "withdrawn" and "never issued" so the
+console cannot be used to tell a guessed code from a real one.
+
+Two things it does not touch: signing in to an account that already exists, and the first-sign-in
+token — nobody mails the operator a code for their own cluster. **Generate the campaign's codes
+before turning it on.** With none issued, registration is closed to everyone, so claim the
+administrator account with the token first.
+
 **Who can read how it converts** is not asked for either. The console's operator-only queries — a
 campaign's issued, redeemed, activated and granted totals — answer for the address of the
 marketplace account deploying this, the same address the first administrator account is created
@@ -161,8 +176,9 @@ the token is spent by the *first* account, whoever creates it.
 password, and answers with a session — there is nothing to deliver and nothing to verify. Each
 account arrives with its own empty workspace and no credit; it can read nobody else's keys,
 generations or balance. What it does mean is that **anyone who can reach the console can create an
-account**, so switch *Allow sign-up with a password* off in Advanced where that is not what you
-want. Switching it off leaves the administrator's own way back in as a magic link written to the
+account** — unless *Only invited people can create an account* is on, which is what a closed launch
+wants; otherwise switch *Allow sign-up with a password* off in Advanced where open registration is
+not what you want. Switching it off leaves the administrator's own way back in as a magic link written to the
 API log, which is where sign-in links went before this existed — or as real mail, on a Stripe
 deployment, since that one configures Resend.
 

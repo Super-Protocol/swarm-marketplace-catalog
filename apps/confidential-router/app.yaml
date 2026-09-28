@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.6.1"
+  version: "0.7.0"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -70,6 +70,8 @@ ui:
           widget: text
         - parameterId: posthogProjectKey
           widget: password
+        - parameterId: inviteOnlySignup
+          widget: switch
 
     # There is no collapsed-section or group concept in the specification, so "advanced"
     # is expressed the only way the form can express it: one section, last, holding every
@@ -149,6 +151,18 @@ parameters:
       console is reachable by people this deployment is not for. There is no password reset either
       way; that would need the mail delivery this deployment does without.
     default: true
+
+  - id: inviteOnlySignup
+    type: boolean
+    title: Only invited people can create an account
+    description: >-
+      Off, which is what an evaluation wants: anyone who can reach the console can sign up, and an
+      invitation code only decides whether $100 of credit comes with the account. On, the code decides
+      whether the account exists at all — every sign-up path is refused, before anything is created,
+      unless the request carries a code that is valid and has not been redeemed yet. Signing in to an
+      account that already exists is unaffected, and so is the first-sign-in token above. Turn this on
+      only once the campaign's codes have been generated: with none issued, nobody can register.
+    default: false
 
   - id: models
     type: array
@@ -486,7 +500,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-api
-      version: "0.4.1"
+      version: "0.4.2"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
         digest: sha256:edf50c726e4fa7a0e5ee6769cfcc57ca2ddc353a1610cf08d1fa8a7a4bcc568c
@@ -632,6 +646,15 @@ components:
             value: "{{ params.posthogProjectKey }}"
             when: 'params.posthogProjectKey != ""'
 
+          # Invite-only registration (SUP-173). `add`, and absent from the base
+          # for the same reason the two above are: the chart renders the key only
+          # when it is on, so a deployment that is not invite-only carries no
+          # `auth.requireInviteForSignUp` at all rather than an explicit `false`.
+          - op: add
+            path: auth.requireInviteForSignUp
+            value: true
+            when: "params.inviteOnlySignup == true"
+
   # ---------------------------------------------------------------------------
   # The console. Served on its own hostname and talking to the API on the other
   # one, which is why the API's ingress carries /auth and /graphql: the browser
@@ -680,8 +703,14 @@ outputs:
   - id: signUp
     title: Everyone else
     type: string
-    when: "params.passwordSignup == true"
+    when: "params.passwordSignup == true && params.inviteOnlySignup == false"
     value: "https://{{ params.consoleHostname }}/signup — an email address and a password, with nothing to deliver and nothing to verify. Each account arrives with its own empty workspace and no credit: anyone who can reach the console can create one, so turn \"Allow sign-up with a password\" off by reconfiguring if this console is reachable by people it is not for. There is no password reset — it would need the mail delivery this deployment does without."
+
+  - id: invitedSignUp
+    title: Everyone else
+    type: string
+    when: "params.inviteOnlySignup == true"
+    value: "https://{{ params.consoleHostname }}/signup — but only with an invitation. Every sign-up path is refused unless the request carries a code that is valid and has not been redeemed, and the refusal says which of the three it is: no code, already claimed, or expired. Generate the codes with `invites generate` before handing the hostname out; with none issued nobody can register, including you — claim the administrator account with the first-sign-in token above first."
 
   - id: bootstrapToken
     title: First sign-in token
