@@ -30,9 +30,10 @@ root="$(cd "$here/../.." && pwd)"
 cd "$root"
 
 # swarm-marketplace-spec, the revision these listings are written against:
-# the `evidence` block, on top of `widget: hostname` (SUP-104) and `type: array` +
+# mandatory `gpu.types` when `gpu.required` is true (exact nvidia-smi Product Names),
+# on top of the `evidence` block, `widget: hostname` (SUP-104), and `type: array` +
 # `widget: multiselect` (SUP-98).
-SPEC_REF="${SPEC_REF:-e9d72595b4785dcfa9e86d7d1e517ad8f2f41ebf}"
+SPEC_REF="${SPEC_REF:-b4203547bfdd29656aae536acc6d9a45ad2b6896}"
 SPEC_REPO="${SPEC_REPO:-Super-Protocol/swarm-marketplace-spec}"
 
 # Listings that predate strict validation and do not pass it (SUP-99). They are

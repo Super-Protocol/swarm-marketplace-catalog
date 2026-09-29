@@ -385,9 +385,9 @@ resources:
     minCount: 1
     minVram: "16Gi"
     # nvidia-smi product names, which hw-measurement writes to device.swarm.io/gpu-product.
-    # Placement matches the family (h100, a100, l40s, rtx4090), not the exact string, so an
-    # A100 80GB or PCIe node still matches A100-SXM4-40GB. Spaces stay: the node-label mirror
-    # turns them into hyphens, and the matcher ignores punctuation.
+    # Placement requires this exact string. An A100 80GB or PCIe card is a different product
+    # and needs its own entry. Spaces stay in the value; the node-label mirror turns them
+    # into hyphens for Kubernetes, while placement compares the raw product name.
     types:
       - NVIDIA H100 80GB HBM3
       - NVIDIA A100-SXM4-40GB
