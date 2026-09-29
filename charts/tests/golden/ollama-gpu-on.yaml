@@ -112,8 +112,13 @@ spec:
           # Therefore, the first case is no migs enabled
           # Second case is mig is enabled
             limits:
+              cpu: "2"
+              memory: 4Gi
               nvidia.com/gpu: 1
-            requests: {}
+            requests:
+              cpu: "2"
+              memory: 4Gi
+              nvidia.com/gpu: 1
           volumeMounts:
             - name: ollama-data
               mountPath: /root/.ollama

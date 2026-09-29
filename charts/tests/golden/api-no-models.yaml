@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.4.3
+    helm.sh/chart: confidential-router-api-0.4.4
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.3"
@@ -23,7 +23,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.4.3
+    helm.sh/chart: confidential-router-api-0.4.4
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.3"
@@ -127,7 +127,7 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.4.3
+    helm.sh/chart: confidential-router-api-0.4.4
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.3"
@@ -150,7 +150,7 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.4.3
+    helm.sh/chart: confidential-router-api-0.4.4
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.3"
@@ -167,7 +167,7 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: 5805d77ede2afbfcfe5ecd2c1933d4f69ba432192d5424f36afaafb3a034d9b9
+        checksum/config: 811992759bad4b304710d4d961116c53299bd378c3a1731c50be8ea4e120fadb
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr
@@ -218,6 +218,9 @@ spec:
             - name: data
               mountPath: /app/data
           resources:
+            limits:
+              cpu: 50m
+              memory: 128Mi
             requests:
               cpu: 50m
               memory: 128Mi
@@ -281,10 +284,11 @@ spec:
               mountPath: /app/data
           resources:
             limits:
+              cpu: 250m
               memory: 1Gi
             requests:
               cpu: 250m
-              memory: 512Mi
+              memory: 1Gi
       volumes:
         - name: config
           configMap:
@@ -303,7 +307,7 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.4.3
+    helm.sh/chart: confidential-router-api-0.4.4
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.2.3"

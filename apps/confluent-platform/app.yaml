@@ -5,7 +5,7 @@ metadata:
   name: confluent-platform
   title: Confluent Platform
   description: Apache Kafka with Confluent's Control Center — topics, schemas, consumer lag and message inspection from a browser.
-  version: "1.7.0"
+  version: "1.7.2"
   category: data-streaming
   # The chart this listing deploys, which is where the wiring can be read; Confluent Platform
   # itself is not open source.
@@ -110,7 +110,7 @@ parameters:
     title: Stream processing (ksqlDB)
     description: >-
       Continuous SQL over the topics — joins, aggregations and derived streams that keep running as
-      events arrive. Adds a pod and about a gigabyte of memory. Confluent Platform for Apache Flink
+      events arrive. Adds a pod and 2 GiB of memory. Confluent Platform for Apache Flink
       is the other option and is licensed separately; ksqlDB is under the Community licence.
     default: false
 
@@ -161,15 +161,17 @@ parameters:
             label: 250 GB
 
 resources:
-  # The quota the cluster space is created with, so it has to cover every container's limit at
-  # once: the broker, Schema Registry, and the console pod's three processes together.
+  # The quota the cluster space is created with. It does not grow when ksqlDB is switched on, so
+  # it covers that pod as well as the broker, Schema Registry, the console pod (Control Center,
+  # Prometheus, Alertmanager and the sign-in proxy) and the provision job that runs beside them
+  # at startup.
   min:
     cpu: "2"
-    memory: "10Gi"
+    memory: "12Gi"
     storage: "30Gi"
   recommended:
     cpu: "4"
-    memory: "12Gi"
+    memory: "14Gi"
     storage: "60Gi"
 
 components:
@@ -178,7 +180,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confluent-platform
-      version: "0.7.0"
+      version: "0.7.2"
     # Pinned by digest, and the render fails if the chart ever references an image not listed here.
     # Confluent ships Control Center, its Prometheus and its Alertmanager as one matched set, so
     # the three carry the same version and are raised together.

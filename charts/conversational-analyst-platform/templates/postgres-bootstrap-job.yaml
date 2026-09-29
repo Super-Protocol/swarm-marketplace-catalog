@@ -37,6 +37,8 @@ spec:
               value: {{ .Values.postgresql.fullnameOverride | quote }}
             - name: PGPASSWORD
               value: {{ $secret | quote }}
+          resources:
+            {{- toYaml .Values.postgresBootstrap.resources | nindent 12 }}
           volumeMounts:
             - name: sql
               mountPath: /sql

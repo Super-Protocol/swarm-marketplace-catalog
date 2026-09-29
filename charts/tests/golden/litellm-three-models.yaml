@@ -5,7 +5,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-litellm
   labels:
-    helm.sh/chart: confidential-router-litellm-0.1.0
+    helm.sh/chart: confidential-router-litellm-0.1.1
     app.kubernetes.io/name: confidential-router-litellm
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "1.80.5"
@@ -40,7 +40,7 @@ kind: Service
 metadata:
   name: confidential-router-litellm
   labels:
-    helm.sh/chart: confidential-router-litellm-0.1.0
+    helm.sh/chart: confidential-router-litellm-0.1.1
     app.kubernetes.io/name: confidential-router-litellm
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "1.80.5"
@@ -63,7 +63,7 @@ kind: Deployment
 metadata:
   name: confidential-router-litellm
   labels:
-    helm.sh/chart: confidential-router-litellm-0.1.0
+    helm.sh/chart: confidential-router-litellm-0.1.1
     app.kubernetes.io/name: confidential-router-litellm
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "1.80.5"
@@ -78,7 +78,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: a5c271958677c50c5b2236a521744783ab4e1c1e7b351731886bb79874c19a15
+        checksum/config: 0f3ca6bd302ad3baff0ef99cc981d7386ab3fc8f245270da80e46e15063b33ce
       labels:
         app.kubernetes.io/name: confidential-router-litellm
         app.kubernetes.io/instance: cr
@@ -127,10 +127,11 @@ spec:
               readOnly: true
           resources:
             limits:
+              cpu: 250m
               memory: 2Gi
             requests:
               cpu: 250m
-              memory: 512Mi
+              memory: 2Gi
       volumes:
         - name: config
           configMap:

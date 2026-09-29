@@ -42,6 +42,18 @@ Which is why a definition is versioned exactly like the charts it pins. Editing 
 
 `${VAR}` placeholders in `catalog.yaml` are substituted from the environment. Nothing in this repository is a real credential.
 
+To fill a stand without those variables (and without apps that declare publisher secrets, currently Conversational Analyst):
+
+```bash
+# on the marketplace VM
+/opt/swarm-marketplace-catalog/scripts/seed-marketplace.sh
+
+# from a laptop
+MARKETPLACE_SSH=ubuntu@<marketplace-ip> ./scripts/seed-marketplace.sh
+```
+
+The script copies the catalog, drops listings that need extra env, and runs `docker compose --profile seed` against `/etc/marketplace`.
+
 ## What is here
 
 | Listing | Kind | Notes |

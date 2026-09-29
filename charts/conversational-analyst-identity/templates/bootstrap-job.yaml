@@ -132,6 +132,8 @@ spec:
         - name: bootstrap
           image: "{{ .Values.keycloak.image.registry }}/{{ .Values.keycloak.image.repository }}:{{ .Values.keycloak.image.tag }}"
           command: ["bash", "/scripts/bootstrap.sh"]
+          resources:
+            {{- toYaml .Values.bootstrap.resources | nindent 12 }}
           volumeMounts:
             - name: scripts
               mountPath: /scripts

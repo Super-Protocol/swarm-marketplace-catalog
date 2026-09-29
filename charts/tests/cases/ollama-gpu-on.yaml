@@ -18,3 +18,12 @@ persistentVolume:
   size: 30Gi
 ingress:
   enabled: false
+resources:
+  requests:
+    cpu: "2"
+    memory: 4Gi
+    nvidia.com/gpu: 1
+  limits:
+    cpu: "2"
+    memory: 4Gi
+    nvidia.com/gpu: 1

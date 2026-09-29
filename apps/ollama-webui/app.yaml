@@ -5,7 +5,7 @@ metadata:
   name: ollama-webui
   title: Ollama + Open WebUI
   description: Run large language models with a chat interface powered by Open WebUI.
-  version: "1.0.2"
+  version: "1.0.3"
   category: ai-inference
   sourceRepo: https://github.com/swarm-cloud/marketplace-apps
   license: MIT
@@ -133,10 +133,13 @@ resources:
     required: false
     minCount: 1
     minVram: "8Gi"
+    # nvidia-smi product names, which hw-measurement writes to device.swarm.io/gpu-product.
+    # Placement requires this exact string. An A100 80GB or PCIe card is a different product
+    # and needs its own entry.
     types:
-      - nvidia-a100
-      - nvidia-l40s
-      - nvidia-rtx-4090
+      - NVIDIA A100-SXM4-40GB
+      - NVIDIA L40S
+      - NVIDIA GeForce RTX 4090
 
 components:
   # ---------------------------------------------------------------------------
@@ -169,6 +172,13 @@ components:
             size: 30Gi
           ingress:
             enabled: false
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
         patches:
           - op: replace
             path: ollama.models.pull
@@ -188,6 +198,22 @@ components:
           - op: replace
             path: runtimeClassName
             value: nvidia
+            when: "params.gpuEnabled == true"
+
+          # `nvidia.com/gpu` is not a dotted path, so the count cannot be set beside the
+          # CPU and memory above. The whole resources object is replaced, and those two
+          # are repeated.
+          - op: replace
+            path: resources
+            value:
+              requests:
+                cpu: "2"
+                memory: 4Gi
+                nvidia.com/gpu: "{{ params.gpuCount }}"
+              limits:
+                cpu: "2"
+                memory: 4Gi
+                nvidia.com/gpu: "{{ params.gpuCount }}"
             when: "params.gpuEnabled == true"
 
           - op: replace
@@ -225,6 +251,24 @@ components:
               value: "http://{{ components.ollama.release }}:11434"
             - name: ENABLE_OLLAMA_API
               value: "true"
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: 500m
+              memory: 2Gi
+          # Init container copies bundled app data onto the volume. Empty resources
+          # get LimitRange defaults (limit 4 CPU / request 1 CPU) and the pod is
+          # refused: tenant maxLimitRequestRatio is 1.
+          copyAppData:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 100m
+                memory: 128Mi
           ingress:
             enabled: true
             # Without a class the object is created, the cloud registers the hostname and writes

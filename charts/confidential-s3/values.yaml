@@ -85,8 +85,9 @@ gateway:
   resources:
     requests:
       cpu: 250m
-      memory: 256Mi
+      memory: 512Mi
     limits:
+      cpu: 250m
       memory: 512Mi
   ingress:
     enabled: true
@@ -136,8 +137,9 @@ api:
   resources:
     requests:
       cpu: 250m
-      memory: 512Mi
+      memory: 1Gi
     limits:
+      cpu: 250m
       memory: 1Gi
 
 console:
@@ -154,8 +156,9 @@ console:
   resources:
     requests:
       cpu: 100m
-      memory: 256Mi
+      memory: 512Mi
     limits:
+      cpu: 100m
       memory: 512Mi
   ingress:
     enabled: true
@@ -209,8 +212,9 @@ garage:
   resources:
     requests:
       cpu: 250m
-      memory: 512Mi
+      memory: 2Gi
     limits:
+      cpu: 250m
       memory: 2Gi
 
 # The one-shot that turns a started Garage into one that accepts writes: the
@@ -229,8 +233,9 @@ bootstrapJob:
   resources:
     requests:
       cpu: 50m
-      memory: 128Mi
+      memory: 256Mi
     limits:
+      cpu: 50m
       memory: 256Mi
 
 # ---------------------------------------------------------------------------
@@ -322,6 +327,13 @@ postgresql:
     enabled: false
   primary:
     resourcesPreset: none
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 250m
+        memory: 512Mi
     persistence:
       size: 8Gi
     # A cluster space isolates the namespace already, and a deployment that ships

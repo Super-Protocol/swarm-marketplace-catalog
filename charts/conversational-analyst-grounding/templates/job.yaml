@@ -86,6 +86,8 @@ spec:
               value: {{ .Values.embeddings.dimensions | quote }}
             - name: OPENAI_API_KEY
               value: {{ .Values.embeddings.apiKey | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: scripts
               mountPath: /scripts

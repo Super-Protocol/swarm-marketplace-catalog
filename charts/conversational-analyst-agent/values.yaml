@@ -20,6 +20,13 @@ aivo:
     enabled: false
 
   config:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
@@ -100,6 +107,13 @@ aivo:
             - en
 
   service-discovery:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
@@ -108,6 +122,13 @@ aivo:
       - name: regcred
 
   identity:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
@@ -116,6 +137,13 @@ aivo:
       - name: regcred
 
   instance:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
@@ -126,6 +154,13 @@ aivo:
   # The vendored subchart is named retail-ai upstream; the key has to match it. What the objects
   # are called is set below and is ours to choose.
   retail-ai:
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 500m
+        memory: 1Gi
     imagePullSecrets:
       - name: regcred
     # Traffic reaches the agent through the gateway component, which is where authentication
