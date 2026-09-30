@@ -7,7 +7,7 @@ metadata:
   description: >-
     A payer and a hospital publish into one confidential event bus that neither of them operates,
     and a continuous SQL query finds the claims that contradict the clinical record.
-  version: "1.6.2"
+  version: "1.6.3"
   category: data-streaming
   sourceRepo: https://github.com/Super-Protocol/swarm-marketplace-catalog/tree/main/charts/claims-fraud-feed
   license: LicenseRef-Confluent-Enterprise
@@ -156,6 +156,10 @@ resources:
     cpu: "4"
     memory: "16Gi"
     storage: "60Gi"
+  gpu:
+    required: false
+    types:
+      - NVIDIA H100 NVL
 
 components:
   # ---------------------------------------------------------------------------

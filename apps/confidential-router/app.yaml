@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.8.0"
+  version: "0.8.1"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -389,6 +389,7 @@ resources:
     # and needs its own entry. Spaces stay in the value; the node-label mirror turns them
     # into hyphens for Kubernetes, while placement compares the raw product name.
     types:
+      - NVIDIA H100 NVL
       - NVIDIA H100 80GB HBM3
       - NVIDIA A100-SXM4-40GB
       - NVIDIA L40S

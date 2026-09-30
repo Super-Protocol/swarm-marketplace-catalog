@@ -5,7 +5,7 @@ metadata:
   name: confluent-platform
   title: Confluent Platform
   description: Apache Kafka with Confluent's Control Center — topics, schemas, consumer lag and message inspection from a browser.
-  version: "1.7.2"
+  version: "1.7.3"
   category: data-streaming
   # The chart this listing deploys, which is where the wiring can be read; Confluent Platform
   # itself is not open source.
@@ -173,6 +173,10 @@ resources:
     cpu: "4"
     memory: "14Gi"
     storage: "60Gi"
+  gpu:
+    required: false
+    types:
+      - NVIDIA H100 NVL
 
 components:
   - name: platform

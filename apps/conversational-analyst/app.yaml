@@ -9,7 +9,7 @@ metadata:
     plain language: the agent finds the relevant tables, writes the SQL, runs it inside the
     confidential cluster space and answers with figures and charts. Raw records never leave the
     space and never reach the model — only aggregates do.
-  version: "3.0.7"
+  version: "3.0.8"
   category: ai-agents
   license: Proprietary
   tags:
@@ -120,6 +120,10 @@ resources:
     cpu: "12"
     memory: "32Gi"
     storage: "120Gi"
+  gpu:
+    required: false
+    types:
+      - NVIDIA H100 NVL
 
 data:
   slots:
