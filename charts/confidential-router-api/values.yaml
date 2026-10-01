@@ -6,7 +6,7 @@
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-router/router-api
-  digest: sha256:a0a63eb4ddeab9105b1741b01160fa5e061446c2152612a94eab9d9f6b4a388c
+  digest: sha256:019432a5b452aee9416fa4cf07b6aa212b3b826fe862860b91e425688826a685
   tag: ""
   pullPolicy: IfNotPresent
 

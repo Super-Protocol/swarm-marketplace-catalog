@@ -8,7 +8,7 @@ metadata:
     helm.sh/chart: confidential-router-ui-0.1.10
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.2.3"
+    app.kubernetes.io/version: "0.3.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
 spec:
@@ -31,7 +31,7 @@ metadata:
     helm.sh/chart: confidential-router-ui-0.1.10
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.2.3"
+    app.kubernetes.io/version: "0.3.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
 spec:
@@ -52,7 +52,7 @@ spec:
         runAsUser: 1001
       containers:
         - name: router-ui
-          image: ghcr.io/super-protocol/confidential-router/router-ui@sha256:9c3a6bb38e2e46197293f11a4d481aa3aa45884411079a7705e1ca729d112bc7
+          image: ghcr.io/super-protocol/confidential-router/router-ui@sha256:02b6f5e7fff1dcd530c8594a5b332cff7717a32a50dd90105cddaadc89b16ac2
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -130,7 +130,7 @@ metadata:
     helm.sh/chart: confidential-router-ui-0.1.10
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.2.3"
+    app.kubernetes.io/version: "0.3.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
   annotations:
