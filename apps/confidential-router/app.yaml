@@ -530,7 +530,7 @@ components:
       version: "0.4.4"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
-        digest: sha256:a0a63eb4ddeab9105b1741b01160fa5e061446c2152612a94eab9d9f6b4a388c
+        digest: sha256:019432a5b452aee9416fa4cf07b6aa212b3b826fe862860b91e425688826a685
       - name: docker.io/bitnamilegacy/postgresql
         digest: sha256:51db17ce1aa19e1b4ba65bf4ff45f0afcde6b59e44623d0005142703b91f4a1e
     deployment:
@@ -703,7 +703,7 @@ components:
       version: "0.1.10"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-ui
-        digest: sha256:9c3a6bb38e2e46197293f11a4d481aa3aa45884411079a7705e1ca729d112bc7
+        digest: sha256:02b6f5e7fff1dcd530c8594a5b332cff7717a32a50dd90105cddaadc89b16ac2
     deployment:
       values:
         base:
