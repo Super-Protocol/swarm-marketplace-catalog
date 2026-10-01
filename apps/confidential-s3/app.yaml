@@ -5,7 +5,7 @@ metadata:
   name: confidential-s3
   title: Confidential S3
   description: S3-compatible object storage that runs in a confidential environment, with a console for buckets, keys and access. Objects can be kept in the deployment's own engine, passed through to a storage you already have, or encrypted so that only this deployment can read them.
-  version: "0.1.7"
+  version: "0.1.8"
   category: storage
   sourceRepo: https://github.com/Super-Protocol/confidential-s3
   license: Apache-2.0
@@ -227,16 +227,16 @@ resources:
   # container at once: the data plane, the control plane, the console, the object
   # engine, PostgreSQL and the bootstrap Job.
   #
-  # Storage does not grow with the form. It has to hold the largest object volume (500Gi),
-  # the largest database (50Gi) and the engine's metadata volume (2Gi) at once.
+  # Storage covers the default volumes: 50Gi of objects, 8Gi of database and 2Gi of
+  # engine metadata. The space is created at this size for every deployment.
   min:
     cpu: "2"
     memory: "8Gi"
-    storage: "552Gi"
+    storage: "64Gi"
   recommended:
     cpu: "4"
     memory: "12Gi"
-    storage: "552Gi"
+    storage: "128Gi"
   gpu:
     required: false
     types:
