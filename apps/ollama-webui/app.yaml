@@ -5,7 +5,7 @@ metadata:
   name: ollama-webui
   title: Ollama + Open WebUI
   description: Run large language models with a chat interface powered by Open WebUI.
-  version: "1.0.6"
+  version: "1.0.7"
   category: ai-inference
   sourceRepo: https://github.com/swarm-cloud/marketplace-apps
   license: MIT
@@ -121,14 +121,16 @@ parameters:
             label: 100 GB
 
 resources:
+  # The space is created with this quota, and the quota does not grow when Model storage
+  # is raised. It has to hold the largest option (100Gi) plus the chat volume below (2Gi).
   min:
     cpu: "4"
     memory: "8Gi"
-    storage: "30Gi"
+    storage: "102Gi"
   recommended:
     cpu: "8"
     memory: "16Gi"
-    storage: "50Gi"
+    storage: "102Gi"
   gpu:
     required: false
     minCount: 1
@@ -252,6 +254,12 @@ components:
           # another image to pull and another pod to wait for before the chat answers.
           pipelines:
             enabled: false
+          # The chart's own volume, separate from Model storage. The space quota above
+          # includes these 2Gi; leaving the size implicit would let a chart bump spend
+          # quota the listing never counted.
+          persistence:
+            enabled: true
+            size: 2Gi
           extraEnvVars:
             - name: OLLAMA_BASE_URL
               value: "http://{{ components.ollama.release }}:11434"

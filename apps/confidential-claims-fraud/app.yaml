@@ -7,7 +7,7 @@ metadata:
   description: >-
     A payer and a hospital publish into one confidential event bus that neither of them operates,
     and a continuous SQL query finds the claims that contradict the clinical record.
-  version: "1.6.3"
+  version: "1.6.5"
   category: data-streaming
   sourceRepo: https://github.com/Super-Protocol/swarm-marketplace-catalog/tree/main/charts/claims-fraud-feed
   license: LicenseRef-Confluent-Enterprise
@@ -148,14 +148,16 @@ parameters:
     generated: true
 
 resources:
+  # Storage does not grow with Log storage. The only persistent claim is the Kafka log, so the
+  # quota is its largest option.
   min:
     cpu: "3"
     memory: "14Gi"
-    storage: "30Gi"
+    storage: "50Gi"
   recommended:
     cpu: "4"
     memory: "16Gi"
-    storage: "60Gi"
+    storage: "50Gi"
   gpu:
     required: false
     types:
@@ -172,7 +174,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confluent-platform
-      version: "0.7.2"
+      version: "0.7.3"
     images:
       - name: confluentinc/cp-server
         digest: sha256:62e3b04c4c88d03fbb484b9976e6145f751c2e908310f3f8b2db5ae7fcd3608f
@@ -277,7 +279,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: claims-fraud-feed
-      version: "0.1.1"
+      version: "0.1.2"
     images:
       - name: confluentinc/cp-server
         digest: sha256:62e3b04c4c88d03fbb484b9976e6145f751c2e908310f3f8b2db5ae7fcd3608f

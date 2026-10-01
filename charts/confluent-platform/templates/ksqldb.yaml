@@ -142,9 +142,11 @@ spec:
             requests:
               cpu: 50m
               memory: 512Mi
+              nvidia.com/gpu: "0"
             limits:
               cpu: 50m
               memory: 512Mi
+              nvidia.com/gpu: "0"
       volumes:
         - name: statements
           configMap:

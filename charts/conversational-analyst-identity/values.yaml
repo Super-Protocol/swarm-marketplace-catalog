@@ -24,9 +24,11 @@ bootstrap:
     requests:
       cpu: 100m
       memory: 256Mi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 100m
       memory: 256Mi
+      nvidia.com/gpu: "0"
 
 keycloak:
   fullnameOverride: analyst-keycloak
@@ -51,9 +53,11 @@ keycloak:
     requests:
       cpu: 500m
       memory: 1Gi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 500m
       memory: 1Gi
+      nvidia.com/gpu: "0"
   rbac:
     create: false
   serviceAccount:
