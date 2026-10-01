@@ -5,7 +5,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-litellm
   labels:
-    helm.sh/chart: confidential-router-litellm-0.1.1
+    helm.sh/chart: confidential-router-litellm-0.1.2
     app.kubernetes.io/name: confidential-router-litellm
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "1.80.5"
@@ -40,7 +40,7 @@ kind: Service
 metadata:
   name: confidential-router-litellm
   labels:
-    helm.sh/chart: confidential-router-litellm-0.1.1
+    helm.sh/chart: confidential-router-litellm-0.1.2
     app.kubernetes.io/name: confidential-router-litellm
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "1.80.5"
@@ -63,7 +63,7 @@ kind: Deployment
 metadata:
   name: confidential-router-litellm
   labels:
-    helm.sh/chart: confidential-router-litellm-0.1.1
+    helm.sh/chart: confidential-router-litellm-0.1.2
     app.kubernetes.io/name: confidential-router-litellm
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "1.80.5"
@@ -78,7 +78,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: 0f3ca6bd302ad3baff0ef99cc981d7386ab3fc8f245270da80e46e15063b33ce
+        checksum/config: 51d875c42a547654e760ecb7101ce4c4ca599a5cec58ef15502f2e0084af16d2
       labels:
         app.kubernetes.io/name: confidential-router-litellm
         app.kubernetes.io/instance: cr
@@ -129,9 +129,11 @@ spec:
             limits:
               cpu: 250m
               memory: 2Gi
+              nvidia.com/gpu: "0"
             requests:
               cpu: 250m
               memory: 2Gi
+              nvidia.com/gpu: "0"
       volumes:
         - name: config
           configMap:

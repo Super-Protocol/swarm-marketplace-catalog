@@ -30,6 +30,8 @@ oauth2-proxy:
     requests:
       cpu: 50m
       memory: 64Mi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 50m
       memory: 64Mi
+      nvidia.com/gpu: "0"

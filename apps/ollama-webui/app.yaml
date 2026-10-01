@@ -5,7 +5,7 @@ metadata:
   name: ollama-webui
   title: Ollama + Open WebUI
   description: Run large language models with a chat interface powered by Open WebUI.
-  version: "1.0.3"
+  version: "1.0.8"
   category: ai-inference
   sourceRepo: https://github.com/swarm-cloud/marketplace-apps
   license: MIT
@@ -121,10 +121,12 @@ parameters:
             label: 100 GB
 
 resources:
+  # Storage covers the default model disk (30Gi) and the chat volume (2Gi). The space is
+  # created at this size for every deployment.
   min:
     cpu: "4"
     memory: "8Gi"
-    storage: "30Gi"
+    storage: "32Gi"
   recommended:
     cpu: "8"
     memory: "16Gi"
@@ -137,6 +139,7 @@ resources:
     # Placement requires this exact string. An A100 80GB or PCIe card is a different product
     # and needs its own entry.
     types:
+      - NVIDIA H100 NVL
       - NVIDIA A100-SXM4-40GB
       - NVIDIA L40S
       - NVIDIA GeForce RTX 4090
@@ -176,9 +179,14 @@ components:
             requests:
               cpu: "2"
               memory: 4Gi
+              # Explicit zero, not an omitted field. A GPU cluster space's LimitRange
+              # defaults a missing nvidia.com/gpu to the reserved count, so a CPU
+              # deploy would still ask for a card and lose the quota to nothing.
+              nvidia.com/gpu: "0"
             limits:
               cpu: "2"
               memory: 4Gi
+              nvidia.com/gpu: "0"
         patches:
           - op: replace
             path: ollama.models.pull
@@ -246,6 +254,12 @@ components:
           # another image to pull and another pod to wait for before the chat answers.
           pipelines:
             enabled: false
+          # The chart's own volume, separate from Model storage. The space quota above
+          # includes these 2Gi; leaving the size implicit would let a chart bump spend
+          # quota the listing never counted.
+          persistence:
+            enabled: true
+            size: 2Gi
           extraEnvVars:
             - name: OLLAMA_BASE_URL
               value: "http://{{ components.ollama.release }}:11434"
@@ -255,20 +269,28 @@ components:
             requests:
               cpu: 500m
               memory: 2Gi
+              # The chat UI does not use a GPU. Zero opts out of the namespace
+              # LimitRange default, which would otherwise request a card here too
+              # and exceed a one-GPU quota already taken by Ollama.
+              nvidia.com/gpu: "0"
             limits:
               cpu: 500m
               memory: 2Gi
+              nvidia.com/gpu: "0"
           # Init container copies bundled app data onto the volume. Empty resources
-          # get LimitRange defaults (limit 4 CPU / request 1 CPU) and the pod is
-          # refused: tenant maxLimitRequestRatio is 1.
+          # get LimitRange defaults (limit 4 CPU / request 1 CPU, and a GPU when the
+          # space reserved one) and the pod is refused: tenant maxLimitRequestRatio
+          # is 1, and the GPU quota is already held by Ollama.
           copyAppData:
             resources:
               requests:
                 cpu: 100m
                 memory: 128Mi
+                nvidia.com/gpu: "0"
               limits:
                 cpu: 100m
                 memory: 128Mi
+                nvidia.com/gpu: "0"
           ingress:
             enabled: true
             # Without a class the object is created, the cloud registers the hostname and writes
