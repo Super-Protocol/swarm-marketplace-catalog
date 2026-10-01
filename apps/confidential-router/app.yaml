@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.8.2"
+  version: "0.8.3"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -373,16 +373,16 @@ resources:
   # including the model server, which has no limit of its own and grows with the number of models
   # kept resident.
   #
-  # Storage does not grow with the form. It has to hold the largest model disk (100Gi) and the
-  # largest database (50Gi) at once.
+  # Storage covers the default volumes: a 30Gi model disk and an 8Gi database. The space
+  # is created at this size for every deployment.
   min:
     cpu: "4"
     memory: "12Gi"
-    storage: "150Gi"
+    storage: "40Gi"
   recommended:
     cpu: "8"
     memory: "24Gi"
-    storage: "150Gi"
+    storage: "70Gi"
   gpu:
     required: false
     minCount: 1
