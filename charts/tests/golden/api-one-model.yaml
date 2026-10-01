@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.4.4
+    helm.sh/chart: confidential-router-api-0.4.5
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.3.0"
@@ -23,7 +23,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.4.4
+    helm.sh/chart: confidential-router-api-0.4.5
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.3.0"
@@ -139,7 +139,7 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.4.4
+    helm.sh/chart: confidential-router-api-0.4.5
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.3.0"
@@ -162,7 +162,7 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.4.4
+    helm.sh/chart: confidential-router-api-0.4.5
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.3.0"
@@ -179,7 +179,7 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: c82b38a9e93a454e0f15b56e8056890f94e96b6f7970f5a6273afad0e4772f31
+        checksum/config: b26eb0895a4a3c5340aa6b958e84472d3a6f0df092934560bfd8c354c86f75f9
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr
@@ -319,7 +319,7 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.4.4
+    helm.sh/chart: confidential-router-api-0.4.5
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.3.0"
