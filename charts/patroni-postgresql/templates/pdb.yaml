@@ -1,0 +1,18 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- /*
+A drain takes one instance at a time. The cloud's own node lifecycle cordons and
+drains a node before it reboots it, and without this it would be free to drain two
+at once — which on a three-instance cluster is the quorum.
+*/ -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "patroni-postgresql.fullname" . }}
+  labels:
+    {{- include "patroni-postgresql.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "patroni-postgresql.selectorLabels" . | nindent 6 }}
+{{- end }}

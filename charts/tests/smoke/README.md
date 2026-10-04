@@ -1,11 +1,42 @@
 # Smoke
 
-Two scripts, one per listing: `run.sh` for confidential-router, `confidential-s3.sh` for
-confidential-s3. Both build the images from a checkout of the application's repository,
+Three scripts. Two are per listing — `run.sh` for confidential-router, `confidential-s3.sh`
+for confidential-s3 — and build the images from a checkout of the application's repository,
 install the chart into a throwaway kind cluster with an ingress controller in front of it,
-and then ask the deployment for the things it exists to do — through the Ingress objects the
-chart renders, not through a port-forward that would prove the pods work and leave the
-routing untried.
+and then ask the deployment for the things it exists to do, through the Ingress objects the
+chart renders rather than through a port-forward that would prove the pods work and leave
+the routing untried.
+
+The third, `patroni.sh`, is per chart rather than per listing, because what it tests is not
+a request path: it is whether `patroni-postgresql` elects a leader, promotes a standby when
+the leader's node is taken away, and rebuilds an instance whose volume was wiped. None of
+that is visible in a render, and all of it is the reason the chart exists.
+
+## patroni-postgresql
+
+```bash
+charts/tests/smoke/patroni.sh
+KEEP=1 charts/tests/smoke/patroni.sh
+```
+
+Three *schedulable* nodes, because the chart's one-per-node anti-affinity is `required` and
+a smaller cluster would leave two instances Pending and prove nothing. The Spilo image is
+public, so this pulls rather than builds — onto every node up front, since otherwise
+`podManagementPolicy: OrderedReady` turns it into three sequential 600 MB pulls.
+
+- three instances become ready on three distinct nodes, which means each cloned itself from
+  the leader before reporting in;
+- `patronictl list` shows one leader, one synchronous standby and one asynchronous replica —
+  the shape `synchronous_node_count: 1` of two standbys is supposed to produce;
+- the application role and database the post-init hook created exist, and the application
+  connects **through the master Service** and lands on the primary;
+- a committed row survives the leader's node being cordoned and its pod destroyed: a standby
+  is promoted, the master Service follows it without anything watching for a failover, and
+  the row is still there. The cordon is load-bearing — see the comment in the script;
+- the destroyed instance re-joins and streams again;
+- and then the SUP-179 shape itself: an instance whose **volume** is deleted along with its
+  pod re-clones from the current leader and comes back with the data. That is the case a
+  single-instance database came back from healthy and empty.
 
 ## confidential-s3
 

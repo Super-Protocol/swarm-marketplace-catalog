@@ -24,6 +24,39 @@ import yaml
 # Keyed by chart. Subchart objects are included: they are applied too, and a
 # dependency that stops rendering its Service is the same failure.
 EXPECTED = {
+    "patroni-postgresql": {
+        ("ConfigMap", "patroni-postgresql-scripts"),
+        ("PodDisruptionBudget", "patroni-postgresql"),
+        ("Role", "patroni-postgresql"),
+        ("RoleBinding", "patroni-postgresql"),
+        ("Secret", "patroni-postgresql"),
+        ("Service", "patroni-postgresql"),
+        ("Service", "patroni-postgresql-config"),
+        ("Service", "patroni-postgresql-pods"),
+        ("Service", "patroni-postgresql-repl"),
+        ("ServiceAccount", "patroni-postgresql"),
+        ("StatefulSet", "patroni-postgresql"),
+    },
+    # The composed render, database included: this is the one place the whole
+    # deployment's object list is named, and the database is where an object that
+    # quietly fails to apply is a cluster that elects nobody.
+    "confidential-router-api": {
+        ("ConfigMap", "confidential-router-api"),
+        ("ConfigMap", "confidential-router-postgresql-scripts"),
+        ("Deployment", "confidential-router-api"),
+        ("Ingress", "confidential-router-api"),
+        ("PodDisruptionBudget", "confidential-router-postgresql"),
+        ("Role", "confidential-router-postgresql"),
+        ("RoleBinding", "confidential-router-postgresql"),
+        ("Secret", "confidential-router-api"),
+        ("Service", "confidential-router-api"),
+        ("Service", "confidential-router-postgresql"),
+        ("Service", "confidential-router-postgresql-config"),
+        ("Service", "confidential-router-postgresql-pods"),
+        ("Service", "confidential-router-postgresql-repl"),
+        ("ServiceAccount", "confidential-router-postgresql"),
+        ("StatefulSet", "confidential-router-postgresql"),
+    },
     "confidential-s3": {
         ("ConfigMap", "confidential-s3-bootstrap"),
         ("ConfigMap", "confidential-s3-garage"),

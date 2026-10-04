@@ -1,0 +1,34 @@
+{{- if .Values.rbac.create }}
+{{- /*
+Exactly the calls Patroni 4.0 makes against the Kubernetes API, and no others. Read
+off `patroni/dcs/kubernetes.py` rather than copied from the Postgres operator's
+ClusterRole, which grants a superset for work this chart does not do:
+
+  endpoints   the leader lock and the cluster configuration are Endpoints objects.
+              `create` the first time, `get`/`list`/`watch` to follow them, `patch`
+              and `update` to renew the lock. No `delete`: giving up leadership is a
+              patch that removes an annotation, and the only caller of the delete
+              path is `patronictl remove` — a human destroying the cluster on
+              purpose, who can be granted it at the time.
+  pods        `list` and `watch` to see the other members, because Patroni's
+              membership *is* the pod list, and `patch` to move the role label, which
+              is what makes the replica Service point at the standbys.
+  services    nothing. Patroni would like to create `<scope>-config` and is written
+              to tolerate a 403; this chart renders that Service instead.
+  secrets     nothing. Spilo is handed its passwords as environment variables, and
+              this namespace also holds the application's own credentials.
+*/ -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "patroni-postgresql.fullname" . }}
+  labels:
+    {{- include "patroni-postgresql.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["create", "get", "list", "patch", "update", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "patch", "watch"]
+{{- end }}

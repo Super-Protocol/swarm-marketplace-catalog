@@ -1,0 +1,14 @@
+# Three schedulable nodes, because the thing being tested is what happens when one of
+# them goes away. The chart's anti-affinity is `required`, so on fewer than three the
+# extra instances stay Pending and the run proves nothing — which is exactly what it
+# is supposed to do, and is checked for in the render tests instead.
+#
+# Three *workers*: kind taints the control-plane node NoSchedule, so a cluster of one
+# control-plane and two workers has two places to put three instances.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
+  - role: worker

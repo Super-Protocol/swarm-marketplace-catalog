@@ -1,0 +1,28 @@
+{{- /*
+The StatefulSet's governing Service: stable per-pod DNS and nothing else. Nothing in
+this chart connects through it — Patroni finds its members by listing pods, and
+clients go to the master or replica Service — but a StatefulSet has to name one, and
+naming one of those two would mean two different things writing one Endpoints object.
+
+`publishNotReadyAddresses`, so a pod that is still cloning still has a name.
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "patroni-postgresql.headlessServiceName" . }}
+  labels:
+    {{- include "patroni-postgresql.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "patroni-postgresql.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: postgresql
+      port: {{ .Values.service.port }}
+      targetPort: postgresql
+      protocol: TCP
+    - name: patroni
+      port: {{ .Values.patroni.apiPort }}
+      targetPort: patroni
+      protocol: TCP
