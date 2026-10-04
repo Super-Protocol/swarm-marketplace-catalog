@@ -1,0 +1,427 @@
+---
+# Source: patroni-postgresql/templates/pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: patroni-postgresql
+  labels:
+    helm.sh/chart: patroni-postgresql-0.1.0
+    app.kubernetes.io/name: patroni-postgresql
+    app.kubernetes.io/instance: pg
+    app.kubernetes.io/version: "17.5"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: patroni-postgresql
+      app.kubernetes.io/instance: pg
+---
+# Source: patroni-postgresql/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: patroni-postgresql
+  labels:
+    helm.sh/chart: patroni-postgresql-0.1.0
+    app.kubernetes.io/name: patroni-postgresql
+    app.kubernetes.io/instance: pg
+    app.kubernetes.io/version: "17.5"
+    app.kubernetes.io/managed-by: Helm
+---
+# Source: patroni-postgresql/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: patroni-postgresql
+  labels:
+    helm.sh/chart: patroni-postgresql-0.1.0
+    app.kubernetes.io/name: patroni-postgresql
+    app.kubernetes.io/instance: pg
+    app.kubernetes.io/version: "17.5"
+    app.kubernetes.io/managed-by: Helm
+type: Opaque
+stringData:
+  postgres-password: "golden-test-superuser-password"
+  replication-password: "golden-test-replication-password"
+  password: "golden-test-app-password"
+---
+# Source: patroni-postgresql/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: patroni-postgresql-scripts
+  labels:
+    helm.sh/chart: patroni-postgresql-0.1.0
+    app.kubernetes.io/name: patroni-postgresql
+    app.kubernetes.io/instance: pg
+    app.kubernetes.io/version: "17.5"
+    app.kubernetes.io/managed-by: Helm
+data:
+  post-init.sh: |
+    #!/bin/bash
+    #
+    # Patroni's post_init hook. A non-zero exit aborts the bootstrap and Patroni
+    # starts over with an empty data directory, so everything here has to be
+    # idempotent and has to fail loudly rather than half-way.
+    #
+    #   $1  the "human" role Spilo's own hook creates
+    #   $2  the connection string Patroni appends
+    #
+    # Patroni runs this with PGOPTIONS=-c synchronous_commit=local, which is what
+    # keeps it from blocking on a synchronous standby that does not exist yet.
+    set -Eeuo pipefail
+
+    human_role="$1"
+    connstring="$2"
+
+    # Spilo's own hook first: the admin and cron_admin roles, the log foreign
+    # tables, and the extensions every Spilo cluster is expected to have.
+    /scripts/post_init.sh "$human_role" "$connstring"
+
+    password_file=/etc/patroni/credentials/app-password
+    if [ ! -r "$password_file" ]; then
+      echo "post-init: $password_file is not readable" >&2
+      exit 1
+    fi
+
+    # The password reaches psql through psql's own backtick substitution, not
+    # through an argument and not through this file: an argument is visible in `ps`,
+    # and a password pasted into SQL text is one escaping mistake away from being
+    # executed. `:'name'` then interpolates it as a correctly quoted literal.
+    psql -Xd "$connstring" <<'SQL'
+    \set ON_ERROR_STOP on
+    \set app_user 'app'
+    \set app_database 'app'
+    \set app_password `cat /etc/patroni/credentials/app-password`
+
+    SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'app_user', :'app_password')
+      WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = :'app_user')
+    \gexec
+
+    -- Separately, and unconditionally: a role that already existed is a cluster
+    -- being re-bootstrapped over a restored dump, and its password is the one this
+    -- deployment was given rather than the one in the dump.
+    SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', :'app_user', :'app_password')
+    \gexec
+
+    SELECT format('CREATE DATABASE %I OWNER %I', :'app_database', :'app_user')
+      WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_database WHERE datname = :'app_database')
+    \gexec
+    SQL
+---
+# Source: patroni-postgresql/templates/role.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: patroni-postgresql
+  labels:
+    helm.sh/chart: patroni-postgresql-0.1.0
+    app.kubernetes.io/name: patroni-postgresql
+    app.kubernetes.io/instance: pg
+    app.kubernetes.io/version: "17.5"
+    app.kubernetes.io/managed-by: Helm
+rules:
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["create", "get", "list", "patch", "update", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "patch", "watch"]
+---
+# Source: patroni-postgresql/templates/rolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: patroni-postgresql
+  labels:
+    helm.sh/chart: patroni-postgresql-0.1.0
+    app.kubernetes.io/name: patroni-postgresql
+    app.kubernetes.io/instance: pg
+    app.kubernetes.io/version: "17.5"
+    app.kubernetes.io/managed-by: Helm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: patroni-postgresql
+subjects:
+  - kind: ServiceAccount
+    name: patroni-postgresql
+---
+# Source: patroni-postgresql/templates/service-config.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: patroni-postgresql-config
+  labels:
+    helm.sh/chart: patroni-postgresql-0.1.0
+    app.kubernetes.io/name: patroni-postgresql
+    app.kubernetes.io/instance: pg
+    app.kubernetes.io/version: "17.5"
+    app.kubernetes.io/managed-by: Helm
+    cluster-name: "patroni-postgresql"
+    application: "spilo"
+spec:
+  clusterIP: None
+---
+# Source: patroni-postgresql/templates/service-headless.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: patroni-postgresql-pods
+  labels:
+    helm.sh/chart: patroni-postgresql-0.1.0
+    app.kubernetes.io/name: patroni-postgresql
+    app.kubernetes.io/instance: pg
+    app.kubernetes.io/version: "17.5"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: patroni-postgresql
+    app.kubernetes.io/instance: pg
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+      protocol: TCP
+    - name: patroni
+      port: 8008
+      targetPort: patroni
+      protocol: TCP
+---
+# Source: patroni-postgresql/templates/service-master.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: patroni-postgresql
+  labels:
+    helm.sh/chart: patroni-postgresql-0.1.0
+    app.kubernetes.io/name: patroni-postgresql
+    app.kubernetes.io/instance: pg
+    app.kubernetes.io/version: "17.5"
+    app.kubernetes.io/managed-by: Helm
+    cluster-name: "patroni-postgresql"
+    application: "spilo"
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
+---
+# Source: patroni-postgresql/templates/service-replica.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: patroni-postgresql-repl
+  labels:
+    helm.sh/chart: patroni-postgresql-0.1.0
+    app.kubernetes.io/name: patroni-postgresql
+    app.kubernetes.io/instance: pg
+    app.kubernetes.io/version: "17.5"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: patroni-postgresql
+    app.kubernetes.io/instance: pg
+    spilo-role: "replica"
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+      protocol: TCP
+---
+# Source: patroni-postgresql/templates/statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: patroni-postgresql
+  labels:
+    helm.sh/chart: patroni-postgresql-0.1.0
+    app.kubernetes.io/name: patroni-postgresql
+    app.kubernetes.io/instance: pg
+    app.kubernetes.io/version: "17.5"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 3
+  serviceName: patroni-postgresql-pods
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: patroni-postgresql
+      app.kubernetes.io/instance: pg
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: patroni-postgresql
+        app.kubernetes.io/instance: pg
+        cluster-name: "patroni-postgresql"
+        application: "spilo"
+    spec:
+      enableServiceLinks: false
+      serviceAccountName: patroni-postgresql
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        fsGroup: 103
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: patroni-postgresql
+                  app.kubernetes.io/instance: pg
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: postgresql
+          image: ghcr.io/zalando/spilo-17@sha256:b7db9e8f62e809ebd9a0679fbdba147a811fdd240ab78380ea4720a46a017184
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              add:
+              - CHOWN
+              - DAC_OVERRIDE
+              - FOWNER
+              - SETGID
+              - SETUID
+              drop:
+              - ALL
+          ports:
+            - name: postgresql
+              containerPort: 5432
+              protocol: TCP
+            - name: patroni
+              containerPort: 8008
+              protocol: TCP
+          env:
+            - name: SCOPE
+              value: "patroni-postgresql"
+            - name: PGPORT
+              value: "5432"
+            - name: APIPORT
+              value: "8008"
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: DCS_ENABLE_KUBERNETES_API
+              value: "true"
+            - name: KUBERNETES_BYPASS_API_SERVICE
+              value: "false"
+            - name: KUBERNETES_LABELS
+              value: "{\"application\":\"spilo\"}"
+            - name: KUBERNETES_SCOPE_LABEL
+              value: "cluster-name"
+            - name: KUBERNETES_ROLE_LABEL
+              value: "spilo-role"
+            - name: KUBERNETES_LEADER_LABEL_VALUE
+              value: "master"
+            - name: KUBERNETES_STANDBY_LEADER_LABEL_VALUE
+              value: "master"
+            - name: KUBERNETES_FOLLOWER_LABEL_VALUE
+              value: "replica"
+            - name: PGUSER_SUPERUSER
+              value: "postgres"
+            - name: PGPASSWORD_SUPERUSER
+              valueFrom:
+                secretKeyRef:
+                  name: patroni-postgresql
+                  key: postgres-password
+            - name: PGUSER_STANDBY
+              value: "standby"
+            - name: PGPASSWORD_STANDBY
+              valueFrom:
+                secretKeyRef:
+                  name: patroni-postgresql
+                  key: replication-password
+            - name: SPILO_CONFIGURATION
+              value: |
+                bootstrap:
+                  dcs:
+                    loop_wait: 10
+                    maximum_lag_on_failover: 33554432
+                    retry_timeout: 10
+                    synchronous_mode: true
+                    synchronous_mode_strict: false
+                    synchronous_node_count: 1
+                    ttl: 30
+                  post_init: /etc/patroni/scripts/post-init.sh zalandos
+          livenessProbe:
+            httpGet:
+              path: /liveness
+              port: patroni
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /readiness
+              port: patroni
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /readiness
+              port: patroni
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 90
+          resources:
+            limits:
+              cpu: 250m
+              memory: 768Mi
+            requests:
+              cpu: 250m
+              memory: 768Mi
+          volumeMounts:
+            - name: pgdata
+              mountPath: /home/postgres/pgdata
+            - name: scripts
+              mountPath: /etc/patroni/scripts
+              readOnly: true
+            - name: credentials
+              mountPath: /etc/patroni/credentials
+              readOnly: true
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: scripts
+          configMap:
+            name: patroni-postgresql-scripts
+            defaultMode: 0555
+        - name: credentials
+          secret:
+            secretName: patroni-postgresql
+            defaultMode: 0440
+            items:
+              - key: password
+                path: app-password
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+        labels:
+          app.kubernetes.io/name: patroni-postgresql
+          app.kubernetes.io/instance: pg
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: "8Gi"

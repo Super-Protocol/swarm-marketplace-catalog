@@ -1,0 +1,33 @@
+{{- include "patroni-postgresql.validate" . -}}
+{{- /*
+The address an application connects to, and the only one it needs.
+
+It has **no selector**. The Endpoints object behind it is Patroni's leader lock:
+Patroni writes the current leader's pod IP into it as part of winning the election,
+so this Service follows a failover because the failover *is* the write. Give it a
+selector and Kubernetes' endpoints controller takes the object over, overwrites what
+Patroni put there, and the name resolves to all three instances — two of which
+refuse writes.
+
+The port is named `postgresql` because that is the name Patroni puts in the
+Endpoints it writes, and a selector-less Service matches its ports to an Endpoints
+subset's by name.
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "patroni-postgresql.scope" . }}
+  labels:
+    {{- include "patroni-postgresql.labels" . | nindent 4 }}
+    {{- include "patroni-postgresql.dcsLabels" . | nindent 4 }}
+  {{- with .Values.service.master.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgresql
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.port }}
+      protocol: TCP

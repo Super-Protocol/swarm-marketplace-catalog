@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.4.6
+    helm.sh/chart: confidential-router-api-0.5.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.3.1"
@@ -16,6 +16,7 @@ stringData:
   auth-secret: "golden-test-auth-secret-not-a-real-one"
   password: "golden-test-password"
   postgres-password: "golden-test-password"
+  replication-password: "golden-test-password"
 ---
 # Source: confidential-router-api/templates/configmap.yaml
 apiVersion: v1
@@ -23,7 +24,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.4.6
+    helm.sh/chart: confidential-router-api-0.5.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.3.1"
@@ -155,7 +156,7 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.4.6
+    helm.sh/chart: confidential-router-api-0.5.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.3.1"
@@ -178,7 +179,7 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.4.6
+    helm.sh/chart: confidential-router-api-0.5.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.3.1"
@@ -195,7 +196,7 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: b2212a01b6a4fa259369b3b4a2c39c4133f30033909e2deeb2f90cca2d96147c
+        checksum/config: d8bce8bde0c5c1a20ff62a0cf84a956c6f0c475f8c25cbb0707cbc58f21b2192
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr
@@ -335,7 +336,7 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.4.6
+    helm.sh/chart: confidential-router-api-0.5.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.3.1"

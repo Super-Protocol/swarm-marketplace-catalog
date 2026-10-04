@@ -1,0 +1,41 @@
+{{ include "patroni-postgresql.fullname" . }} — {{ .Values.replicaCount }} PostgreSQL {{ .Chart.AppVersion }} instances under Patroni.
+
+Connect through the master Service; it follows the leader across a failover:
+
+    host: {{ include "patroni-postgresql.scope" . }}
+    port: {{ .Values.service.port }}
+{{- if include "patroni-postgresql.hasAppRole" . }}
+    user: {{ .Values.auth.username }}
+    database: {{ .Values.auth.database }}
+{{- end }}
+{{- if .Values.service.replica.enabled }}
+
+Read-only, from whichever standbys are streaming:
+
+    host: {{ include "patroni-postgresql.replicaServiceName" . }}
+{{- end }}
+{{- if .Values.requireSsl }}
+
+TLS is required: `pg_hba.conf` ends in `hostnossl all all all reject`. The server
+certificate is self-signed and regenerated per pod, so a client that verifies
+certificates has to be told not to — libpq `sslmode=require`, node-postgres
+`sslmode=no-verify`.
+{{- end }}
+
+Ask the cluster who is leading:
+
+    kubectl exec -n {{ .Release.Namespace }} {{ include "patroni-postgresql.fullname" . }}-0 -- patronictl list
+
+{{ if .Values.patroni.synchronousMode -}}
+Synchronous replication is on, with {{ .Values.patroni.synchronousNodeCount }} standby
+required to confirm a commit{{ if not .Values.patroni.synchronousModeStrict }} — except while no standby is available at all, when
+the leader keeps serving alone{{ end }}.
+{{- else -}}
+Synchronous replication is OFF. A leader that disappears takes with it everything
+its standbys had not yet received.
+{{- end }}
+{{ if .Values.podAntiAffinity.enabled -}}
+One instance per node is required, not preferred. On a cluster with fewer than
+{{ .Values.replicaCount }} schedulable nodes the extra instances stay Pending, which is
+the chart refusing to put two copies of the data on one disk.
+{{- end }}

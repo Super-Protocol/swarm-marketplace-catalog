@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.8.1"
+  version: "0.9.0"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -264,6 +264,10 @@ parameters:
       Holds accounts, API keys, credit and one metering row per generation. Prompts and completions
       are never stored, so this grows with how often the endpoint is called rather than with how
       much is said to it — slowly enough that the default is the right answer for an evaluation.
+
+
+      This is the size of one instance's volume, and the database runs three of them — one per node,
+      each a full copy. The quota has to cover three times whatever is chosen here.
     required: false
     default: "8Gi"
     options:
@@ -372,14 +376,20 @@ resources:
   # A cluster space is created with this quota, so it has to cover every container at once —
   # including the model server, which has no limit of its own and grows with the number of models
   # kept resident.
+  #
+  # The database is three instances rather than one (replicated across the cloud's nodes, so that a
+  # node rebooting is a switchover and not the silent loss of everything it held — SUP-179), which
+  # is +500m, +1.5 GB and +2 × the database volume against the single-instance version of this
+  # listing. The rendered limits of a default deployment come to 3.35 CPU / 9.75 GB / 54 GB; what is
+  # declared here keeps the headroom the earlier numbers had.
   min:
-    cpu: "4"
-    memory: "12Gi"
-    storage: "40Gi"
+    cpu: "5"
+    memory: "14Gi"
+    storage: "60Gi"
   recommended:
-    cpu: "8"
-    memory: "24Gi"
-    storage: "70Gi"
+    cpu: "9"
+    memory: "26Gi"
+    storage: "120Gi"
   gpu:
     required: false
     minCount: 1
@@ -527,12 +537,16 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-api
-      version: "0.4.6"
+      version: "0.5.0"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
         digest: sha256:44f7b2b930c6c5da0fdabeb58b514da1112161b42459bbc304260f9c206bcb58
-      - name: docker.io/bitnamilegacy/postgresql
-        digest: sha256:51db17ce1aa19e1b4ba65bf4ff45f0afcde6b59e44623d0005142703b91f4a1e
+      # Spilo: PostgreSQL 17.5 and Patroni 4.0.4 in one image, which is what makes the
+      # database three instances that elect a leader instead of one that comes back empty.
+      # It replaces `bitnamilegacy/postgresql` — a mirror that receives no rebuilds, no
+      # PostgreSQL minor releases and no CVE patches since Bitnami's free catalogue ended.
+      - name: ghcr.io/zalando/spilo-17
+        digest: sha256:b7db9e8f62e809ebd9a0679fbdba147a811fdd240ab78380ea4720a46a017184
     deployment:
       values:
         base:
@@ -587,10 +601,10 @@ components:
           # that mints credit from a signed link (SUP-167).
           billing:
             mode: disabled
+          # Per instance, and there are three.
           postgresql:
-            primary:
-              persistence:
-                size: "{{ params.databaseStorage }}"
+            persistence:
+              size: "{{ params.databaseStorage }}"
         patches:
           - op: replace
             path: auth.password.enabled

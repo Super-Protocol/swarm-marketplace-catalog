@@ -1,0 +1,27 @@
+# Exactly how confidential-router-api installs it as a subchart, rendered directly so
+# the objects it produces are in a golden of their own: the api chart's goldens keep
+# only the api chart's own documents, the way they keep a vendored subchart's out.
+#
+# The two things to read here are the master Service's name — `confidential-router-postgresql`,
+# the name the router has had in its DSN since the Bitnami chart — and `requireSsl: false`,
+# which is the server accepting the plaintext connection the router actually makes.
+fullnameOverride: confidential-router-postgresql
+replicaCount: 3
+auth:
+  username: router
+  database: router
+  existingSecret: confidential-router-api
+  secretKeys:
+    superuserPasswordKey: postgres-password
+    replicationPasswordKey: replication-password
+    userPasswordKey: password
+requireSsl: false
+persistence:
+  size: 8Gi
+resources:
+  requests:
+    cpu: 250m
+    memory: 768Mi
+  limits:
+    cpu: 250m
+    memory: 768Mi

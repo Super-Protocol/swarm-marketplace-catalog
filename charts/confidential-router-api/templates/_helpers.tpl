@@ -172,6 +172,22 @@ Configuration checks that are cheaper to fail here than in a crash loop.
 {{- if and .Values.postgresql.enabled (ne .Values.postgresql.auth.existingSecret (include "confidential-router-api.fullname" .)) -}}
 {{- fail (printf "postgresql.auth.existingSecret must be %q — the secret this chart creates — or the server and the API will disagree on the password" (include "confidential-router-api.fullname" .)) -}}
 {{- end -}}
+{{/*
+The bundled database has to accept a connection in the clear, because that is the only
+kind the API makes.
+
+`database.sslmode` reaches the DSN and goes no further: TypeORM parses the URL with a
+regex of its own and discards the query string, so the driver is never told to
+negotiate TLS no matter what is in there. The database chart's default `pg_hba.conf`
+ends in `hostnossl all all all reject`, and the two together deploy cleanly and
+present as an API that cannot reach a database every probe says is healthy.
+
+The fix is on the router's side — TypeORM's own `ssl` option, which the rendered
+config does not set — so this refuses rather than papering over it.
+*/}}
+{{- if and .Values.postgresql.enabled .Values.postgresql.requireSsl -}}
+{{- fail "postgresql.requireSsl is true, and the API connects in the clear: it builds a DSN with ?sslmode=, which TypeORM discards along with the rest of the query string. The bundled server would refuse every connection. Set postgresql.requireSsl: false, or give the router a TypeORM ssl option first" -}}
+{{- end -}}
 {{- if not (has .Values.billing.mode (list "disabled" "manual" "stripe")) -}}
 {{- fail (printf "billing.mode must be disabled or stripe, not %q" .Values.billing.mode) -}}
 {{- end -}}

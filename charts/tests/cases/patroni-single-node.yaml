@@ -1,0 +1,22 @@
+# One instance, which is a database with no durability story at all — there is no
+# second copy to promote and nothing to re-sync from. The chart refuses to pretend
+# otherwise: synchronous replication has to be turned off explicitly, and the
+# disruption budget with it.
+#
+# Here to keep that path rendering, for a single-node development cloud. It is not
+# how this is deployed.
+replicaCount: 1
+patroni:
+  synchronousMode: false
+podAntiAffinity:
+  enabled: false
+podDisruptionBudget:
+  enabled: false
+auth:
+  superuser:
+    password: golden-test-superuser-password
+  replication:
+    password: golden-test-replication-password
+  username: app
+  database: app
+  password: golden-test-app-password

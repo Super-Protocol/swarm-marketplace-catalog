@@ -59,7 +59,7 @@ The script copies the catalog, drops listings that need extra env, and runs `doc
 | Listing | Kind | Notes |
 |---------|------|-------|
 | `conversational-analyst` | Application | A conversational analyst over connected datasets. Five components; the grounding component turns whatever is bound into the agent's knowledge graph and data-source registrations. |
-| `confidential-router` | Application | An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it runs, with a console for keys, credit and generations. Four components, three charts of our own, and the multi-select model parameter. |
+| `confidential-router` | Application | An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it runs, with a console for keys, credit and generations. Four components, four charts of our own — one of them a replicated PostgreSQL that survives a node rebooting — and the multi-select model parameter. |
 | `confidential-s3` | Application | S3-compatible object storage in a confidential environment, with a console. One chart and five workloads, two published hostnames, and three credentials the chart derives from generated seeds because the software they are handed to accepts exactly one shape each. |
 | `ollama-webui` | Application | Ollama with a chat UI. The simplest thing that exercises parameters, ingress and pinned images. |
 | `confidential-claims-fraud` | Application | A payer and a hospital publishing into one bus neither operates, with a ksqlDB query finding the claims that contradict the clinical record. Composes the Confluent chart with per-party SASL accounts. |

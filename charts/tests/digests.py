@@ -22,6 +22,9 @@ PLACEHOLDER = "sha256:" + "0" * 64
 
 # Keyed by chart: the values paths that hold an image this chart deploys.
 IMAGES = {
+    "patroni-postgresql": [
+        "image",
+    ],
     "confidential-s3": [
         "gateway.image",
         "api.image",

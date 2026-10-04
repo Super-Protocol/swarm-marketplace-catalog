@@ -1,0 +1,282 @@
+# The Spilo image: PostgreSQL and Patroni in one container, maintained by Zalando's
+# Team ACID. Pinned by digest, not by tag — the evidence bundle a deployment
+# publishes names the images it is running, and a digest is the only reference that
+# stays computable from what the cluster actually pulled (marketplace spec §2.7).
+# `tag` exists for a development build and is ignored whenever `digest` is set.
+#
+# The repository is `spilo-<major>`: the PostgreSQL major version is part of the
+# image name, so a major upgrade is a deliberate change of this line and not
+# something a tag can do behind the chart's back.
+image:
+  registry: ghcr.io
+  repository: zalando/spilo-17
+  digest: sha256:b7db9e8f62e809ebd9a0679fbdba147a811fdd240ab78380ea4720a46a017184
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+# The name every object in this chart is built from. It also decides the master
+# Service's name, which is the hostname an application connects to — so an
+# application that is replacing a different PostgreSQL chart sets this to whatever
+# that chart called its service and does not have to change its DSN.
+fullnameOverride: ""
+
+# Three: a leader and two standbys, one per node of a three-node cloud. `pods`
+# below is hard anti-affinity, so a fourth instance has nowhere to schedule on a
+# three-node cluster — that is the topology refusing to put two copies of the data
+# on one disk, not a bug.
+#
+# Two would also elect a leader, but it would mean a cluster that cannot lose a
+# node *and* keep a synchronous standby, which is the whole point.
+replicaCount: 3
+
+# The Patroni cluster scope. Empty means the chart's full name.
+#
+# In Endpoints mode (below) the leader lock *is* an Endpoints object named after the
+# scope, and the master Service is the Service in front of that object — so the scope
+# and the master Service's name are necessarily the same string, and this is it.
+scope: ""
+
+patroni:
+  # Patroni's REST API. The probes read it, and `patronictl` talks to it.
+  apiPort: 8008
+
+  # A commit is acknowledged only once it is on disk on at least one standby, so a
+  # node that disappears takes nothing with it that a client was told was durable,
+  # and Patroni will only promote a standby that was in sync. That is the RPO-0
+  # claim this chart exists to make.
+  #
+  # `synchronousNodeCount: 1` of two standbys: one has to confirm, either one will
+  # do. Requiring both would make any single standby's absence stall every write.
+  synchronousMode: true
+  synchronousNodeCount: 1
+  # What a leader does when it has no synchronous standby left at all — during the
+  # very first bootstrap, or after losing both standbys. `false` lets it keep
+  # serving, alone and therefore without the durability guarantee above; `true`
+  # refuses writes until a standby is back.
+  #
+  # `false`, because `true` cannot bootstrap: the first instance comes up alone, and
+  # a cluster that refuses to write before its second instance exists never gets a
+  # second instance. The cost is stated plainly: between losing the second-to-last
+  # instance and getting one back, this is a single-copy database.
+  synchronousModeStrict: false
+
+  # How long a leader's lock survives without being renewed, and how often the loop
+  # runs. The failover budget is roughly `ttl` — Patroni's defaults, restated here
+  # because the declared RTO is read off them.
+  ttl: 30
+  loopWait: 10
+  retryTimeout: 10
+  # A standby further behind than this is not a failover candidate (32 MiB).
+  maximumLagOnFailover: 33554432
+
+  # Where Patroni keeps the leader lock and the cluster configuration. Endpoints is
+  # Spilo's default and this chart's only supported setting, deliberately: the DCS
+  # objects carry a leader annotation that changes on every loop, and Endpoints are
+  # excluded from the deployment evidence digest as operational noise, while
+  # ConfigMaps are collected — so the ConfigMap mode would push a value that changes
+  # every ten seconds into the snapshot a deployment attests.
+  #
+  # There is no value to set. It is here as prose because the next person to reach
+  # for `KUBERNETES_USE_CONFIGMAPS` should read this first.
+
+  # The labels Patroni finds its own members by, and the label it writes the current
+  # role onto. The master and replica Services select on them, so they are the seam
+  # between "who is the leader" and "where does a client connect".
+  labels:
+    application: spilo
+  scopeLabel: cluster-name
+  roleLabel: spilo-role
+  leaderLabelValue: master
+  followerLabelValue: replica
+
+  # Merged over everything this chart generates for `SPILO_CONFIGURATION`, as the
+  # last word. An escape hatch for a Patroni setting the values above do not reach;
+  # it renders into the StatefulSet's environment, which is attested, so nothing
+  # secret belongs here.
+  #
+  # Note that `bootstrap.dcs` is read exactly once, when the cluster is first
+  # initialised. Changing it afterwards changes nothing — the live values live in the
+  # DCS and are edited with `patronictl edit-config`.
+  spiloConfiguration: {}
+
+# The three credentials this cluster needs, and the application role it creates.
+#
+# `existingSecret` is the whole intended path: the application that deploys this
+# chart already has a Secret with its database password in it, and pointing at that
+# object is what keeps one password in one place instead of two that drift. Setting
+# the passwords inline here is for a standalone install.
+#
+#   superuser     `postgres`. Patroni's own connection, and the role the bootstrap
+#                 SQL runs as.
+#   replication   the role a standby streams with.
+#   application   the role and database the application connects as. Created once,
+#                 at bootstrap, by the post-init script.
+auth:
+  superuser:
+    username: postgres
+    password: ""
+  replication:
+    username: standby
+    password: ""
+  # The application's role and database. Both are created at bootstrap and owned by
+  # the role; an empty username means no application role and no database, which is
+  # what a cluster deployed for something that manages its own roles wants.
+  username: ""
+  database: ""
+  password: ""
+  existingSecret: ""
+  secretKeys:
+    superuserPasswordKey: postgres-password
+    replicationPasswordKey: replication-password
+    userPasswordKey: password
+
+# Whether a client has to speak TLS.
+#
+# Spilo's `pg_hba.conf` ends in `hostnossl all all all reject`, so a client that
+# does not negotiate TLS is refused. That is the right default for a server that
+# anything outside the namespace can reach.
+#
+# It is also the setting that silently breaks a client whose driver cannot verify a
+# self-signed certificate — Spilo generates one per pod on start — and the symptom is
+# an application that cannot connect to a database that is perfectly healthy. Turning
+# this off adds `host all all all md5` and drops the reject line.
+requireSsl: true
+
+persistence:
+  size: 8Gi
+  # Empty means the cluster's default StorageClass. `-` means none at all.
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+
+# PostgreSQL puts the shared memory segments its parallel workers communicate
+# through in /dev/shm, which is 64 MiB in a container by default — small enough that
+# a parallel sequential scan fails with "could not resize shared memory segment".
+# This is memory-backed, so its size counts against the container's memory limit.
+shmVolume:
+  enabled: true
+  sizeLimit: 128Mi
+
+# One instance per node, and never two on one node: the volumes are node-local and
+# ephemeral by design, so two instances sharing a node share a disk and the
+# replication buys nothing against that node rebooting.
+#
+# `requiredDuringScheduling` rather than `preferred` on purpose. A fourth instance,
+# or a third on a two-node cloud, stays Pending — which is visible and correct —
+# instead of quietly scheduling next to a copy of itself.
+podAntiAffinity:
+  enabled: true
+  topologyKey: kubernetes.io/hostname
+
+# Extra placement, applied as given. `affinity` here is merged *under* the
+# anti-affinity above, which wins.
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+# `OrderedReady` so the first instance has finished initialising — and is reporting
+# a healthy leader through its readiness probe — before the second one tries to clone
+# from it, and so a chart upgrade replaces one instance at a time.
+podManagementPolicy: OrderedReady
+
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  # The Role and RoleBinding that let Patroni hold its leader lock and label its own
+  # pods. Without them the cluster never elects anybody. Both are namespaced; this
+  # chart creates nothing cluster-scoped.
+  create: true
+
+service:
+  port: 5432
+  # The master Service has no selector. Patroni writes the leader's pod IP into the
+  # Endpoints object itself — that object is the leader lock, so the Service follows
+  # a failover without anything watching for one. A selector here would hand the
+  # object to Kubernetes' endpoints controller, which would overwrite it.
+  #
+  # The replica Service is an ordinary selector Service on the role label, so it
+  # resolves to the standbys that are actually streaming.
+  master:
+    annotations: {}
+  replica:
+    enabled: true
+    # Empty means `<fullname>-repl`.
+    name: ""
+    annotations: {}
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 768Mi
+  limits:
+    cpu: 250m
+    memory: 768Mi
+
+# Spilo starts as root: it has to chown the data directory, fix /etc/passwd when it
+# is given a random uid, and set a couple of sysctls — and then runs Patroni and
+# PostgreSQL as uid 101 (`postgres`) through runit. `fsGroup` is what makes the
+# mounted Secret readable by that uid, and the data volume writable by it.
+podSecurityContext:
+  fsGroup: 103
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+    add:
+      # launch.sh chowns the data directory and rewrites /etc/passwd before dropping
+      # to `postgres`.
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+
+podAnnotations: {}
+podLabels: {}
+
+# Probes read Patroni's REST API, not PostgreSQL.
+#
+#   /liveness   Patroni's own loop is running. A failure here means the agent is
+#               wedged and the container should be restarted — it deliberately does
+#               not fail on "this node is not the leader".
+#   /readiness  this node is a healthy leader, or a standby that is streaming. It is
+#               what keeps the replica Service off a standby that is still cloning,
+#               and what makes `OrderedReady` wait for a real cluster.
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 6
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+# A standby cloning a large database can take a while, and the kubelet must not
+# restart it halfway through. `startupProbe` is what buys that time without making
+# the liveness threshold useless afterwards.
+startupProbe:
+  enabled: true
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 90
+
+# PostgreSQL's own shutdown is `pg_ctl stop -m fast`, and Patroni will not report a
+# member gone until it has finished. A grace period shorter than the longest
+# checkpoint turns a graceful switchover into a kill.
+terminationGracePeriodSeconds: 120

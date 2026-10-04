@@ -1,0 +1,247 @@
+{{- include "patroni-postgresql.validate" . -}}
+{{- $scope := include "patroni-postgresql.scope" . -}}
+{{- $secret := include "patroni-postgresql.secretName" . -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "patroni-postgresql.fullname" . }}
+  labels:
+    {{- include "patroni-postgresql.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  serviceName: {{ include "patroni-postgresql.headlessServiceName" . }}
+  podManagementPolicy: {{ .Values.podManagementPolicy }}
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "patroni-postgresql.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "patroni-postgresql.podLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- /*
+      Off, and it matters. The kubelet would otherwise inject one environment
+      variable per Service in the namespace, and `configure_spilo.py` builds
+      Patroni's DCS configuration by scanning the environment for names that start
+      with a DCS's name — so a Service called `etcd` next door would configure this
+      cluster to look for its leader in an etcd nobody runs.
+      */}}
+      enableServiceLinks: false
+      serviceAccountName: {{ include "patroni-postgresql.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or .Values.podAntiAffinity.enabled .Values.affinity }}
+      affinity:
+        {{- with .Values.affinity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.podAntiAffinity.enabled }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "patroni-postgresql.selectorLabels" . | nindent 18 }}
+              topologyKey: {{ .Values.podAntiAffinity.topologyKey }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: postgresql
+          image: {{ include "patroni-postgresql.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: postgresql
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+            - name: patroni
+              containerPort: {{ .Values.patroni.apiPort }}
+              protocol: TCP
+          env:
+            {{- /*
+            Spilo's contract, not Patroni's. `launch.sh` runs
+            `configure_spilo.py`, which reads these and writes the Patroni
+            configuration file; the runit service that then starts Patroni
+            deliberately unsets almost the whole environment first, so a
+            `PATRONI_*` variable set here would reach nothing.
+            */}}
+            - name: SCOPE
+              value: {{ $scope | quote }}
+            - name: PGPORT
+              value: {{ .Values.service.port | quote }}
+            - name: APIPORT
+              value: {{ .Values.patroni.apiPort | quote }}
+            {{- /*
+            Patroni's own address, and the namespace it keeps its leader lock in.
+            Without POD_NAMESPACE every cluster would take its lock in `default`,
+            where it has no rights and no neighbours it should be able to see.
+            */}}
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            {{- /*
+            The Kubernetes API as the leader election store, in Endpoints mode —
+            see `patroni.labels` in values.yaml for why it is not ConfigMaps.
+            `KUBERNETES_BYPASS_API_SERVICE` is Spilo's default and is turned off
+            here: it reads the `kubernetes` Endpoints out of the `default`
+            namespace, which nothing namespace-scoped may do.
+            */}}
+            - name: DCS_ENABLE_KUBERNETES_API
+              value: "true"
+            - name: KUBERNETES_BYPASS_API_SERVICE
+              value: "false"
+            - name: KUBERNETES_LABELS
+              value: {{ .Values.patroni.labels | toJson | quote }}
+            - name: KUBERNETES_SCOPE_LABEL
+              value: {{ .Values.patroni.scopeLabel | quote }}
+            - name: KUBERNETES_ROLE_LABEL
+              value: {{ .Values.patroni.roleLabel | quote }}
+            - name: KUBERNETES_LEADER_LABEL_VALUE
+              value: {{ .Values.patroni.leaderLabelValue | quote }}
+            - name: KUBERNETES_STANDBY_LEADER_LABEL_VALUE
+              value: {{ .Values.patroni.leaderLabelValue | quote }}
+            - name: KUBERNETES_FOLLOWER_LABEL_VALUE
+              value: {{ .Values.patroni.followerLabelValue | quote }}
+            {{- if not .Values.requireSsl }}
+            - name: ALLOW_NOSSL
+              value: "true"
+            {{- end }}
+            - name: PGUSER_SUPERUSER
+              value: {{ .Values.auth.superuser.username | quote }}
+            - name: PGPASSWORD_SUPERUSER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: {{ .Values.auth.secretKeys.superuserPasswordKey }}
+            - name: PGUSER_STANDBY
+              value: {{ .Values.auth.replication.username | quote }}
+            - name: PGPASSWORD_STANDBY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: {{ .Values.auth.secretKeys.replicationPasswordKey }}
+            - name: SPILO_CONFIGURATION
+              value: |
+                {{- include "patroni-postgresql.spiloConfiguration" . | nindent 16 }}
+          {{- if .Values.livenessProbe.enabled }}
+          livenessProbe:
+            httpGet:
+              path: /liveness
+              port: patroni
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.readinessProbe.enabled }}
+          readinessProbe:
+            httpGet:
+              path: /readiness
+              port: patroni
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.startupProbe.enabled }}
+          startupProbe:
+            httpGet:
+              path: /readiness
+              port: patroni
+            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            {{- /*
+            PGDATA is `$(mount)/pgroot/data` — the image's own layout, which is why
+            the volume is mounted a level above it. A PVC mounted directly on the
+            data directory would hand PostgreSQL a `lost+found` on some storage
+            classes and an initdb that refuses to run.
+            */}}
+            - name: pgdata
+              mountPath: /home/postgres/pgdata
+            {{- if include "patroni-postgresql.hasAppRole" . }}
+            - name: scripts
+              mountPath: /etc/patroni/scripts
+              readOnly: true
+            - name: credentials
+              mountPath: /etc/patroni/credentials
+              readOnly: true
+            {{- end }}
+            {{- if .Values.shmVolume.enabled }}
+            - name: dshm
+              mountPath: /dev/shm
+            {{- end }}
+      volumes:
+        {{- if include "patroni-postgresql.hasAppRole" . }}
+        - name: scripts
+          configMap:
+            name: {{ include "patroni-postgresql.configMapName" . }}
+            defaultMode: 0555
+        - name: credentials
+          secret:
+            secretName: {{ $secret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.auth.secretKeys.userPasswordKey }}
+                path: app-password
+        {{- end }}
+        {{- if .Values.shmVolume.enabled }}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.shmVolume.sizeLimit }}
+        {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+        labels:
+          {{- include "patroni-postgresql.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.accessModes | nindent 10 }}
+        {{- if eq .Values.persistence.storageClass "-" }}
+        storageClassName: ""
+        {{- else if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size | quote }}
