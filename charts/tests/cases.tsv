@@ -13,6 +13,7 @@ api-password-no-mailer	confidential-router-api
 api-password-off	confidential-router-api		
 api-campaign	confidential-router-api		
 api-invite-only	confidential-router-api		
+api-endpoint-hostname	confidential-router-api		
 patroni-default	patroni-postgresql		
 patroni-as-router	patroni-postgresql		
 patroni-single-node	patroni-postgresql		

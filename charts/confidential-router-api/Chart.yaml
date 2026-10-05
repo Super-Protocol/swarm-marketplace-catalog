@@ -2,7 +2,7 @@ apiVersion: v2
 name: confidential-router-api
 description: The Confidential Router's OpenAI-compatible gateway and console GraphQL API, with the replicated PostgreSQL it stores generations and sessions in.
 type: application
-version: 0.6.0
+version: 0.7.0
 appVersion: "0.3.2"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous

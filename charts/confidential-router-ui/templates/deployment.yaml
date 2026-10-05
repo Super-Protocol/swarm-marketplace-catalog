@@ -4,6 +4,12 @@ metadata:
   name: {{ include "confidential-router-ui.fullname" . }}
   labels:
     {{- include "confidential-router-ui.labels" . | nindent 4 }}
+  annotations:
+    # `checksum/public-config` below is a hash of the hostname-derived ConfigMap,
+    # so it varies with the hostname exactly as that object's `/data` does and is
+    # excluded for the same reason (SUP-211). `/` inside a JSON Pointer token is
+    # `~1` (RFC 6901), which is what makes this one token and not three.
+    swarm.io/exclude-evidence-fields: "/spec/template/metadata/annotations/checksum~1public-config"
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
@@ -11,10 +17,14 @@ spec:
       {{- include "confidential-router-ui.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
       annotations:
+        # `envFrom` is read once, when the container starts, so without this a
+        # hostname reconfigure updates the ConfigMap and the running console keeps
+        # calling the old origin.
+        checksum/public-config: {{ include (print $.Template.BasePath "/configmap-public.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
       labels:
         {{- include "confidential-router-ui.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
@@ -37,21 +47,18 @@ spec:
             - name: http
               containerPort: {{ .Values.service.targetPort }}
               protocol: TCP
+          # `ROUTER_UI_API_ORIGIN` and `ROUTER_UI_GRAPHQL_HTTP` — the two values
+          # that carry the API hostname, and the reason they are not in the list
+          # below (SUP-211). One pinned digest still serves any hostname
+          # (SUP-100); the hostname simply no longer reaches an attested object.
+          envFrom:
+            - configMapRef:
+                name: {{ include "confidential-router-ui.publicConfigName" . }}
           env:
             - name: PORT
               value: {{ .Values.service.targetPort | quote }}
             - name: HOSTNAME
               value: 0.0.0.0
-            # Read per request by the server and written into the document
-            # ahead of every bundle, so the browser calls the origin this
-            # deployment was given rather than one compiled into the image
-            # (SUP-100). That is what lets one pinned digest serve any hostname.
-            - name: ROUTER_UI_API_ORIGIN
-              value: {{ include "confidential-router-ui.apiOrigin" . | quote }}
-            # Derived from the origin by the console itself; set here so a
-            # `kubectl exec env` says where GraphQL is without knowing that.
-            - name: ROUTER_UI_GRAPHQL_HTTP
-              value: {{ printf "%s/graphql" (include "confidential-router-ui.apiOrigin" .) | quote }}
             - name: ROUTER_UI_AUTH_CALLBACK_URL
               value: {{ .Values.authCallbackUrl | quote }}
           # `/login` rather than `/`: it is the one route the console serves

@@ -1,0 +1,13 @@
+# An endpoint that names a hostname of its own. That is a parameter rather than
+# this deployment's address, so it is rendered as a literal and stays in the
+# attested config — `${ROUTER_PUBLIC_HOSTNAME}` is then referred to by nothing
+# and the public ConfigMap does not carry it (SUP-211).
+apiHostname: api.confidential-router.example
+consoleHostname: console.confidential-router.example
+auth:
+  secret: golden-test-auth-secret-not-a-real-one
+database:
+  password: golden-test-password
+endpoints:
+  confidential-router:
+    hostname: inference.elsewhere.example

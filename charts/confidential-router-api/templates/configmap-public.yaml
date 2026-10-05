@@ -1,0 +1,62 @@
+{{- include "confidential-router-api.validate" . -}}
+{{- /*
+The hostname-derived half of this deployment's configuration.
+
+`router.yaml` next to this file names these as `${…}` placeholders and the config
+loader substitutes them from the process environment, the same mechanism the
+secrets use. The reason is not secrecy — every value here is public, and two of
+them are printed in the console — but attestation: the rendered `router.yaml` is
+part of the deployment's evidence snapshot, and a hostname interpolated into it
+made the snapshot digest a property of the hostname the operator chose. No two
+deployments could then agree on one `expectedDigest` (SUP-210).
+
+So the values live here, in their own object, excluded from the snapshot by the
+annotation below — and `router.yaml` stays attested in full. The exclusion is
+disclosed rather than hidden: this ConfigMap's name and labels are still in the
+snapshot, and the listing repeats the exclusion in its `evidence.exclude` block,
+which is what the marketplace shows beside the digest. Putting these in the
+Secret instead would have hidden them, because Secrets are lifted out wholesale.
+
+Names are deliberately outside the `CR_API_` prefix: that prefix is also the
+environment *configuration* layer, where `CR_API_PUBLIC_BASE_URL` would be read
+as a top-level `publicBaseUrl` key and fail the boot on a strict schema.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "confidential-router-api.publicConfigName" . }}
+  labels:
+    {{- include "confidential-router-api.labels" . | nindent 4 }}
+  annotations:
+    # Every key here is derived from a hostname the operator chose, so all of
+    # `/data` goes. Losing this annotation would not fail a render; it would
+    # quietly make every deployment of this version attest a different digest.
+    swarm.io/exclude-evidence-fields: "/data"
+data:
+  # `server.publicBaseUrl` and `auth.baseUrl`. One value, because they are one
+  # origin: Better Auth builds its callback URLs from the second and the API
+  # advertises itself with the first, and the two disagreeing is a sign-in that
+  # returns the browser somewhere nothing serves.
+  ROUTER_PUBLIC_BASE_URL: {{ include "confidential-router-api.apiUrl" . | quote }}
+  {{- if include "confidential-router-api.endpointsUsePublicHostname" . }}
+  # `endpoints[].hostname` for an endpoint that did not name one — this
+  # deployment's own API hostname, which is where its evidence bundle is fetched
+  # from. A hostname, not a URL, which is what that field is. Absent when every
+  # endpoint named its own, and when there are no endpoints because every model
+  # is switched off.
+  ROUTER_PUBLIC_HOSTNAME: {{ required "apiHostname must be set" .Values.apiHostname | quote }}
+  {{- end }}
+  # `server.validClientOrigins`, comma-separated: the router's schema splits a
+  # string back into the list, so the whole allow-list travels as one value
+  # rather than as a placeholder per index that would have to be rendered — and
+  # a rendered index is a hostname count, which is itself hostname-derived.
+  ROUTER_VALID_CLIENT_ORIGINS: {{ include "confidential-router-api.clientOrigins" . | fromJsonArray | join "," | quote }}
+  # `billing.checkoutReturnUrl` — where Stripe returns the browser, which is a
+  # page of the console rather than of the API.
+  ROUTER_CHECKOUT_RETURN_URL: {{ printf "%s/credits" (include "confidential-router-api.consoleUrl" .) | quote }}
+  {{- if .Values.invites.landingHostname }}
+  # `invites.landingBaseUrl`. Present only when a campaign named a landing page,
+  # matching the conditional block in `router.yaml`: a placeholder with no value
+  # and no default fails the boot, naming itself.
+  ROUTER_LANDING_BASE_URL: {{ include "confidential-router-api.landingUrl" . | quote }}
+  {{- end }}
