@@ -1,0 +1,10 @@
+# The chart on its own terms: three instances, synchronous replication, TLS required,
+# and the passwords in a Secret it writes itself.
+auth:
+  superuser:
+    password: golden-test-superuser-password
+  replication:
+    password: golden-test-replication-password
+  username: app
+  database: app
+  password: golden-test-app-password

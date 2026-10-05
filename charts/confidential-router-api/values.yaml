@@ -6,7 +6,7 @@
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-router/router-api
-  digest: sha256:019432a5b452aee9416fa4cf07b6aa212b3b826fe862860b91e425688826a685
+  digest: sha256:025597cb7b207c00decb1b493ccbac01424f48e602f813fa4f42d1ab7babd3a7
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -444,50 +444,52 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
-# The bundled database. `auth.existingSecret` points at the secret this chart
-# creates, so the password lives in exactly one place; changing
-# `fullnameOverride` means changing this too, and the templates say so rather
-# than letting the two drift.
+# The bundled database: three PostgreSQL instances under Patroni, spread one per
+# node, with synchronous replication. `database.*` above points at the master
+# Service this creates, and Patroni keeps that Service's endpoints on whichever
+# instance is currently the leader — so a node rebooting is a switchover and not an
+# outage, and not the silent data loss a single node-pinned volume used to be
+# (SUP-179).
+#
+# `auth.existingSecret` points at the secret this chart creates, so there is one
+# password in one place; changing `fullnameOverride` means changing
+# `database.host`'s default with it, and the templates say so rather than letting
+# the two drift.
 postgresql:
   enabled: true
+  # Also the Patroni scope, and therefore the master Service's name: the name the
+  # router has had in its DSN since the Bitnami chart, kept deliberately.
   fullnameOverride: confidential-router-postgresql
+  replicaCount: 3
   auth:
     username: router
     database: router
     existingSecret: confidential-router-api
     secretKeys:
-      adminPasswordKey: postgres-password
+      superuserPasswordKey: postgres-password
+      replicationPasswordKey: replication-password
       userPasswordKey: password
-  global:
-    security:
-      allowInsecureImages: true
-  image:
-    registry: docker.io
-    # public.ecr.aws/bitnami is gone; the legacy mirror is what still serves
-    # these tags.
-    repository: bitnamilegacy/postgresql
-    tag: 17.3.0-debian-12-r1
-  rbac:
-    create: false
-  serviceAccount:
-    create: true
-  networkPolicy:
-    enabled: false
-  primary:
-    resourcesPreset: none
-    resources:
-      requests:
-        cpu: 250m
-        memory: 512Mi
-        nvidia.com/gpu: "0"
-      limits:
-        cpu: 250m
-        memory: 512Mi
-        nvidia.com/gpu: "0"
-    persistence:
-      size: 8Gi
-    # A cluster space isolates the namespace already, and a deployment that
-    # ships its own network policy is refused. This chart moved the switch under
-    # `primary`, so the top-level one above no longer reaches it.
-    networkPolicy:
-      enabled: false
+  # The router connects in the clear, so the server has to accept that.
+  #
+  # Not a preference: the API builds a DSN with `?sslmode=...` and hands it to
+  # TypeORM, which parses the URL with a regex of its own and discards the query
+  # string — so `database.sslmode` above has never reached the driver, and the
+  # connection has always been plaintext. Spilo's default `pg_hba.conf` ends in
+  # `hostnossl all all all reject`, which would refuse it, and the symptom would be
+  # an API that cannot reach a database that is perfectly healthy.
+  #
+  # The link is pod-to-pod inside one cluster space, which is the boundary the
+  # previous bundled server trusted too. Making it TLS is a change to the router's
+  # own connection options rather than to this chart.
+  requireSsl: false
+  persistence:
+    size: 8Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+      nvidia.com/gpu: "0"
+    limits:
+      cpu: 250m
+      memory: 768Mi
+      nvidia.com/gpu: "0"

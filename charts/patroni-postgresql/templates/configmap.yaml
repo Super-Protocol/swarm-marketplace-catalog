@@ -1,0 +1,73 @@
+{{- include "patroni-postgresql.validate" . -}}
+{{- if include "patroni-postgresql.hasAppRole" . }}
+{{- /*
+The application's role and database.
+
+Spilo creates a cluster, not an application's schema: the operator that normally
+drives this image does users and databases in its own code, which a chart does not
+have. So this is Patroni's `post_init` hook — the one place that runs exactly once,
+on the first leader, after initdb and before the cluster is announced.
+
+It is a ConfigMap and not a Secret because none of it is secret: the role name and
+the database name are attested, and the password is read at run time out of the
+mounted Secret, by psql, straight into a psql variable.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "patroni-postgresql.configMapName" . }}
+  labels:
+    {{- include "patroni-postgresql.labels" . | nindent 4 }}
+data:
+  post-init.sh: |
+    #!/bin/bash
+    #
+    # Patroni's post_init hook. A non-zero exit aborts the bootstrap and Patroni
+    # starts over with an empty data directory, so everything here has to be
+    # idempotent and has to fail loudly rather than half-way.
+    #
+    #   $1  the "human" role Spilo's own hook creates
+    #   $2  the connection string Patroni appends
+    #
+    # Patroni runs this with PGOPTIONS=-c synchronous_commit=local, which is what
+    # keeps it from blocking on a synchronous standby that does not exist yet.
+    set -Eeuo pipefail
+
+    human_role="$1"
+    connstring="$2"
+
+    # Spilo's own hook first: the admin and cron_admin roles, the log foreign
+    # tables, and the extensions every Spilo cluster is expected to have.
+    /scripts/post_init.sh "$human_role" "$connstring"
+
+    password_file=/etc/patroni/credentials/app-password
+    if [ ! -r "$password_file" ]; then
+      echo "post-init: $password_file is not readable" >&2
+      exit 1
+    fi
+
+    # The password reaches psql through psql's own backtick substitution, not
+    # through an argument and not through this file: an argument is visible in `ps`,
+    # and a password pasted into SQL text is one escaping mistake away from being
+    # executed. `:'name'` then interpolates it as a correctly quoted literal.
+    psql -Xd "$connstring" <<'SQL'
+    \set ON_ERROR_STOP on
+    \set app_user '{{ .Values.auth.username }}'
+    \set app_database '{{ .Values.auth.database }}'
+    \set app_password `cat /etc/patroni/credentials/app-password`
+
+    SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'app_user', :'app_password')
+      WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = :'app_user')
+    \gexec
+
+    -- Separately, and unconditionally: a role that already existed is a cluster
+    -- being re-bootstrapped over a restored dump, and its password is the one this
+    -- deployment was given rather than the one in the dump.
+    SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', :'app_user', :'app_password')
+    \gexec
+
+    SELECT format('CREATE DATABASE %I OWNER %I', :'app_database', :'app_user')
+      WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_database WHERE datname = :'app_database')
+    \gexec
+    SQL
+{{ end }}

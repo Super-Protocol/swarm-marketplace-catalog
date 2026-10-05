@@ -60,6 +60,24 @@ The router meters every generation — model, token counts, cost, latency — an
 content. Prompts and completions are not written to the database and not written to the log, which
 is why the console can show you a generation history and not a transcript.
 
+### The database is replicated, and that is not a performance decision
+
+A tenant volume on this platform lives on its node's state disk, which is re-keyed on every boot:
+the node that reboots comes back with an empty volume. A single-instance database on it comes back
+*healthy and empty*, which is the worst shape a data loss can take, and routine TCB updates reboot
+nodes (SUP-179).
+
+So `router-api` deploys three PostgreSQL instances under Patroni — one per node, hard anti-affinity,
+and a commit acknowledged only once a second instance has it on disk. A node going away promotes a
+standby, the master Service follows the new leader, and the returning node rebuilds its copy from
+the cluster without anybody being asked to do anything. The address the API connects to does not
+change, and neither does anything a client sees.
+
+Two things it does not do. It does not survive every node rebooting at once — there would be nothing
+left to re-sync from — which is why an image update of a swarm cloud has to roll one node at a time.
+And it does not make a deployment whose nodes are all on one physical machine survive that machine:
+replication across three cVMs on one host is not three hosts.
+
 ## Prerequisites
 
 - **Two hostnames**, one for the console and one for the API. Take the ones offered and the DNS is
@@ -68,12 +86,17 @@ is why the console can show you a generation history and not a transcript.
   worth choosing deliberately.
 - **An ingress controller** in the cluster space. Both ingresses name the `nginx` class; without a
   controller that serves it, the hostnames resolve and answer nothing.
+- **Three schedulable nodes.** The database is three instances with required one-per-node
+  anti-affinity, so on a smaller cloud the extra ones stay Pending — which is the chart refusing to
+  put two copies of the data on one ephemeral disk, not a fault. A single-node cloud needs
+  `postgresql.replicaCount` lowered, and then it is a database that does not survive its node.
 - **Nothing to authenticate against a registry.** `ghcr.io/super-protocol/confidential-router/*` is
   a public package; a cluster that can reach ghcr.io can pull it.
-- **Quota** as declared: 4 CPU / 12 GB / 40 GB at minimum, 8 CPU / 24 GB / 70 GB recommended. The
+- **Quota** as declared: 5 CPU / 14 GB / 60 GB at minimum, 9 CPU / 26 GB / 120 GB recommended. The
   model server has no memory limit of its own and grows with the number of models kept resident.
-  The declared storage covers the default volumes (30 GB of models, 8 GB of database); choosing
-  larger ones is a quota decision as well as a configuration one.
+  The declared storage covers the default volumes — 30 GB of models and **three** 8 GB database
+  volumes, because the database is three instances holding a copy each; choosing larger ones is a
+  quota decision as well as a configuration one, and the database size is multiplied by three.
 - **A GPU, optionally.** Off by default, because a cluster space without one schedules nothing at
   all when it is on: the pod asks for a device and a runtime class that are not there, and waits
   forever. On CPU these models answer, slowly.
@@ -107,7 +130,7 @@ The form is five sections, and only the first three are on the way to Deploy:
 | Compute | Use a GPU, GPUs | Off, and one GPU when it is on. |
 | Campaign | Campaign landing page, PostHog project key | Both empty. A deployment that hands out no invitation codes and measures no funnel needs neither. |
 | Campaign | Only invited people can create an account | Off. An invitation then decides whether $100 comes with an account, not whether the account can exist. |
-| Advanced | Model storage, Database storage | 30 GB and 8 GB, sized for all five models and an evaluation's worth of metering. |
+| Advanced | Model storage, Database storage | 30 GB and 8 GB, sized for all five models and an evaluation's worth of metering. The database size is per instance, and there are three. |
 | Advanced | First sign-in token | Generated, and shown once with the deployment's outputs. Set one to bring your own. |
 | Advanced | Allow sign-up with a password | On. It is what lets a second person in, since this deployment cannot send an invitation. |
 | Advanced | Billing, Stripe keys, Resend key, Sender address | No purchases. The rest appear only if you switch to Stripe. |

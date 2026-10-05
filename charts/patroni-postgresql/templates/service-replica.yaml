@@ -1,0 +1,28 @@
+{{- if .Values.service.replica.enabled }}
+{{- /*
+Every instance that is not the leader, for a reader that can tolerate replication
+lag. An ordinary selector Service on the role label Patroni maintains — and because
+the readiness probe is Patroni's `/readiness`, a standby that is still cloning is
+not in it.
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "patroni-postgresql.replicaServiceName" . }}
+  labels:
+    {{- include "patroni-postgresql.labels" . | nindent 4 }}
+  {{- with .Values.service.replica.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "patroni-postgresql.selectorLabels" . | nindent 4 }}
+    {{ .Values.patroni.roleLabel }}: {{ .Values.patroni.followerLabelValue | quote }}
+  ports:
+    - name: postgresql
+      port: {{ .Values.service.port }}
+      targetPort: postgresql
+      protocol: TCP
+{{- end }}

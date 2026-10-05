@@ -16,12 +16,12 @@ cd "$root"
 # One release name and namespace per listing. Neither reaches an object name in
 # these charts — they are chosen so the rendered labels say which listing a
 # golden belongs to, and nothing more.
-release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; *) printf 'cr' ;; esac; }
-namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; *) printf 'confidential-router' ;; esac; }
+release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; patroni-postgresql) printf 'pg' ;; *) printf 'cr' ;; esac; }
+namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; patroni-postgresql) printf 'patroni' ;; *) printf 'confidential-router' ;; esac; }
 
 RELEASE=cr
 NAMESPACE=confidential-router
-CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ui confidential-s3)
+CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ui confidential-s3 patroni-postgresql)
 
 update="${UPDATE:-}"
 failures=0
@@ -30,9 +30,11 @@ note() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 pass() { printf '  ok    %s\n' "$*"; }
 fail() { printf '  FAIL  %s\n' "$*"; failures=$((failures + 1)); }
 
-# Only the documents the case's own chart produced. A vendored subchart's output
-# is the vendor's contract, not this repository's, and bumping one would
-# otherwise rewrite every golden that installs it.
+# Only the documents the case's own chart produced. A subchart's output is a
+# contract of its own — the vendor's, or in `patroni-postgresql`'s case this
+# repository's but under its own goldens — and bumping one would otherwise rewrite
+# every golden that installs it. What the seam between the two looks like is checked
+# below, against named fields rather than a whole render.
 own_documents() {
   awk -v prefix="$1/templates/" '
     BEGIN { keep = 0; block = "" }
@@ -64,6 +66,7 @@ for chart in "${CHARTS[@]}"; do
     confidential-router-litellm) values="charts/tests/cases/litellm-one-model.yaml" ;;
     confidential-router-ui) values="charts/tests/cases/ui-default.yaml" ;;
     confidential-s3) values="charts/tests/cases/s3-default.yaml" ;;
+    patroni-postgresql) values="charts/tests/cases/patroni-default.yaml" ;;
   esac
   if output=$(helm lint "charts/$chart" --values "$values" 2>&1); then
     pass "$chart"
@@ -177,6 +180,12 @@ refuses "an unpinned image" "pinned by digest" \
 
 refuses "the bundled database alongside an external DSN" "postgresql.enabled is true" \
   "${base_api[@]}" --set database.url=postgres://elsewhere/router
+
+# The DSN carries `?sslmode=`, and TypeORM throws the query string away. A database
+# told to require TLS therefore refuses every connection the API makes, and says so in
+# a log nobody reads before deciding the API is broken.
+refuses "a bundled database that requires TLS the API never negotiates" "TypeORM discards" \
+  "${base_api[@]}" --set postgresql.requireSsl=true
 
 refuses "an auth secret too short to sign with" "at least 32 characters" \
   "${base_api[@]}" --set auth.secret=short
@@ -543,6 +552,101 @@ if [ "$(printf '%s' "$s3_console_images" | sort -u | wc -l)" = "1" ]; then
 else
   fail "the two renders pulled different console images: $(printf '%s' "$s3_console_images" | tr '\n' ' ')"
 fi
+
+# The database and the application that connects to it are two charts, and nothing at
+# deploy time checks that they agree. The api chart's goldens deliberately do not
+# carry the subchart's documents, so these read the composed render instead — field
+# by field, because what matters is a handful of strings that have to be identical.
+note "the router and its database agree on where the database is"
+composed=$(helm template "$RELEASE" charts/confidential-router-api --namespace "$NAMESPACE" \
+  --values charts/tests/cases/api-one-model.yaml 2>&1) || { fail "composed render"; printf '%s\n' "$composed" | sed 's/^/        /'; }
+
+if output=$(python3 charts/tests/router_database.py <<<"$composed"); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/router_database.py"
+fi
+
+# The database half of this listing has to be the same for everybody, or no version of
+# it can ever declare an `expectedDigest`. The api half already is not — several fields
+# in its ConfigMap carry the hostname the operator chose — so this asks the narrower
+# question the change is responsible for.
+note "the database attests the same thing for every consumer"
+if output=$(python3 charts/tests/database_drift.py confidential-router-api charts/tests/cases/api-one-model.yaml postgresql); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/database_drift.py"
+fi
+
+# Same reasoning as confidential-s3's: a golden diff cannot see a lost `---`, and the
+# database is the component where an object silently not being applied is a database
+# that comes up and cannot elect anybody.
+note "confidential-router-api renders every object it is supposed to, database included"
+if output=$(python3 charts/tests/inventory.py confidential-router-api charts/tests/cases/api-one-model.yaml); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/inventory.py confidential-router-api"
+fi
+
+note "patroni-postgresql pins the image it ships by a real digest"
+if output=$(python3 charts/tests/digests.py patroni-postgresql); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/digests.py patroni-postgresql"
+fi
+
+note "patroni-postgresql renders every object it is supposed to"
+if output=$(python3 charts/tests/inventory.py patroni-postgresql charts/tests/cases/patroni-default.yaml); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/inventory.py patroni-postgresql"
+fi
+
+# Each of these is a database that deploys cleanly and then loses data, or never
+# comes up at all, in a way no render error would have mentioned.
+note "patroni-postgresql refuses what would deploy cleanly and not be durable"
+base_pg=(helm template pg charts/patroni-postgresql --namespace patroni --values charts/tests/cases/patroni-default.yaml)
+
+refuses "synchronous replication on a single instance" "no standby for a commit" \
+  "${base_pg[@]}" --set replicaCount=1
+
+refuses "more synchronous standbys than there are instances" "cannot be its own standby" \
+  "${base_pg[@]}" --set patroni.synchronousNodeCount=3
+
+refuses "strict synchronous mode without synchronous mode" "property of synchronous replication" \
+  "${base_pg[@]}" --set patroni.synchronousMode=false --set patroni.synchronousModeStrict=true
+
+refuses "a disruption budget that permits the whole cluster" "not a budget" \
+  "${base_pg[@]}" --set podDisruptionBudget.maxUnavailable=3
+
+refuses "no replication password" "cannot stream from the leader" \
+  "${base_pg[@]}" --set auth.replication.password=
+
+refuses "an application role with no password" "auth.password is empty" \
+  "${base_pg[@]}" --set auth.password=
+
+refuses "an application role with nowhere to connect" "role is created together with the database" \
+  "${base_pg[@]}" --set auth.database=
+
+refuses "the application connecting as the superuser" "unrestricted rights" \
+  "${base_pg[@]}" --set auth.username=postgres
+
+refuses "an application role name that would have to be quoted" "lowercase letters, digits" \
+  "${base_pg[@]}" --set 'auth.username=Robert");DROP'
+
+refuses "an unpinned image" "pinned by digest" \
+  "${base_pg[@]}" --set image.digest= --set image.tag=
+
+refuses "a port Patroni will not write into the leader endpoints" "must be 5432" \
+  "${base_pg[@]}" --set service.port=5433
+
+refuses "replacing the one-per-node rule by accident" "the one that applies" \
+  "${base_pg[@]}" --set 'affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].weight=1'
 
 note "Result"
 if [ "$failures" -eq 0 ]; then
