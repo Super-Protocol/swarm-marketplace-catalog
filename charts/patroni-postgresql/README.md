@@ -164,6 +164,16 @@ already exists. Nothing in it is worth keeping, so the recovery is one command â
 `kubectl delete pod -l app.kubernetes.io/name=<name>-etcd` â€” and failsafe mode is what
 keeps the database serving while somebody runs it.
 
+The same command, and the same reasoning, is the answer to **an etcd member
+crash-looping on `member has already been bootstrapped`.** The init container decides
+once per pod whether to bootstrap or join and then exits, so a member that reached the
+wrong verdict cannot revisit it: the pod has to be replaced for the decision to be
+taken again. It sweeps its peers three times before concluding that no cluster exists,
+which is what makes that verdict hard to reach by accident, but a long enough outage of
+every peer at exactly the wrong moment would still do it. `kubectl logs <pod> -c
+dcs-bootstrap` is where the verdict and its reason are written down, and is the first
+place to look.
+
 **`patroni.*` is bootstrap configuration.** `synchronousMode`, `ttl` and the rest are
 written to the store once, when the cluster is first initialised. Changing them in
 values and upgrading the chart changes the StatefulSet's environment and nothing about

@@ -665,6 +665,9 @@ refuses "an unpinned DCS image" "etcd.image.digest is empty" \
 refuses "an unpinned router image" "router.image.digest is empty" \
   "${base_pg[@]}" --set router.image.digest= --set router.image.tag=
 
+refuses "an unpinned bootstrap image" "etcd.bootstrapImage.digest is empty" \
+  "${base_pg[@]}" --set etcd.bootstrapImage.digest= --set etcd.bootstrapImage.tag=
+
 refuses "replacing the one-per-node rule by accident" "the one that applies" \
   "${base_pg[@]}" --set 'affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].weight=1'
 

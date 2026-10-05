@@ -64,16 +64,27 @@ data:
       state=existing
       echo "dcs-bootstrap: $POD_NAME has its own write-ahead log" >&2
     else
+      # Swept three times rather than once, because this verdict is taken exactly once
+      # per pod and the etcd container crash-loops on a wrong one. A probe that failed
+      # for three seconds while the cluster was in fact alive would otherwise cost a
+      # pod delete to undo — and the init container, having already exited, would not
+      # be the thing that noticed. A genuine cold start pays for the extra sweeps in
+      # unresolvable names and refused connections, both of which fail immediately.
       serving=
-      for peer in $peers; do
-        case "$peer" in "$POD_NAME".*) continue ;; esac
-        # `/health` and not `/version`: a member answers it 200 only once it has a
-        # quorum. A member that is up but waiting for peers is a cluster that does not
-        # exist yet, and this member is one of the peers it is waiting for.
-        if wget -q -T 3 -O /dev/null "http://$peer:{{ $client }}/health" 2>/dev/null; then
-          serving=$peer
-          break
-        fi
+      attempt=1
+      while [ -z "$serving" ] && [ "$attempt" -le 3 ]; do
+        [ "$attempt" -eq 1 ] || sleep 3
+        for peer in $peers; do
+          case "$peer" in "$POD_NAME".*) continue ;; esac
+          # `/health` and not `/version`: a member answers it 200 only once it has a
+          # quorum. A member that is up but waiting for peers is a cluster that does
+          # not exist yet, and this member is one of the peers it is waiting for.
+          if wget -q -T 3 -O /dev/null "http://$peer:{{ $client }}/health" 2>/dev/null; then
+            serving=$peer
+            break
+          fi
+        done
+        attempt=$((attempt + 1))
       done
 
       if [ -n "$serving" ]; then
