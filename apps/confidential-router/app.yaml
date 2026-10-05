@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.9.1"
+  version: "0.10.0"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -380,8 +380,15 @@ resources:
   # The database is three instances rather than one (replicated across the cloud's nodes, so that a
   # node rebooting is a switchover and not the silent loss of everything it held — SUP-179), which
   # is +500m, +1.5 GB and +2 × the database volume against the single-instance version of this
-  # listing. The rendered limits of a default deployment come to 3.35 CPU / 9.75 GB / 54 GB; what is
-  # declared here keeps the headroom the earlier numbers had.
+  # listing.
+  #
+  # 0.10.0 adds five more small pods to it: three etcd members holding Patroni's leader lock, and
+  # two routers in front of the leader (SUP-215). That is +500m and +0.7 GB of limits, and no
+  # storage at all — the DCS keeps nothing it would need a volume for, so its members are
+  # `emptyDir` and count against the node's ephemeral disk rather than against this quota.
+  #
+  # The rendered limits of a default deployment now come to 3.85 CPU / 10.45 GB / 54 GB; what is
+  # declared here keeps the headroom the earlier numbers had, so neither minimum moves.
   min:
     cpu: "5"
     memory: "14Gi"
@@ -537,7 +544,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-api
-      version: "0.5.1"
+      version: "0.6.0"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
         digest: sha256:025597cb7b207c00decb1b493ccbac01424f48e602f813fa4f42d1ab7babd3a7
@@ -547,6 +554,23 @@ components:
       # PostgreSQL minor releases and no CVE patches since Bitnami's free catalogue ended.
       - name: ghcr.io/zalando/spilo-17
         digest: sha256:b7db9e8f62e809ebd9a0679fbdba147a811fdd240ab78380ea4720a46a017184
+      # Patroni's leader election store. It is etcd and not the Kubernetes API because a
+      # cluster space confines its tenant pods and pod → kube-apiserver is one of the
+      # things it blocks, which the API-as-DCS version of this listing found out by never
+      # electing anybody (SUP-215). Three members, in the namespace, holding nothing but
+      # the lock.
+      - name: quay.io/coreos/etcd
+        digest: sha256:2c029095680c13c2b36116cc3935e1b0cddc0f5af78004457fd863616d8d072b
+      # A shell and `wget`, for the one decision an etcd member cannot take from a
+      # manifest: whether to bootstrap the cluster or join one that is already there.
+      # etcd's own image is distroless and has neither.
+      - name: docker.io/library/busybox
+        digest: sha256:5cec3fc171c87218698e85a52af7087de727372aae264a787b8112901a5b0092
+      # The router in front of the leader. With the lock in etcd rather than in a
+      # Service's Endpoints, which instance is the primary is a question only Patroni's
+      # REST API answers — so something has to ask it, and a Service cannot.
+      - name: docker.io/library/haproxy
+        digest: sha256:56b887da77428b7a6621e59e480cdbd330cc805c22d3cedb66ceea76ffdea2c6
     deployment:
       values:
         base:

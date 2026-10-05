@@ -1,0 +1,98 @@
+{{- include "patroni-postgresql.validate" . -}}
+{{- $pods := include "patroni-postgresql.headlessServiceName" . -}}
+{{- /*
+The router's configuration: which instance is the primary, asked of the only thing
+that knows.
+
+Patroni's REST API answers `GET /primary` with 200 on the leader and 503 everywhere
+else, and `GET /replica` with 200 on a standby that is actually streaming. That is a
+health check, so a TCP proxy can route on it — which is how every Patroni deployment
+that is not using the Kubernetes DCS finds its primary, and is what this chart needs
+now that the leader lock is in etcd rather than in a Service's Endpoints.
+
+`${POD_NAMESPACE}` is expanded by HAProxy itself, from the environment the Deployment
+puts it in. It is not rendered: a namespace in an attested object makes the
+deployment's evidence digest a property of who deployed it (marketplace spec §2.7).
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "patroni-postgresql.routerFullname" . }}
+  labels:
+    {{- include "patroni-postgresql.routerLabels" . | nindent 4 }}
+data:
+  haproxy.cfg: |
+    global
+      log stdout format raw local0 info
+      maxconn {{ .Values.router.maxconn }}
+      # No chroot and no stats socket. Nothing in this configuration writes to the
+      # filesystem, which is what lets the container's root filesystem be read-only.
+
+    defaults
+      mode tcp
+      log global
+      option tcplog
+      option dontlognull
+      timeout connect {{ .Values.router.timeouts.connect }}
+      # Long, on purpose: a proxy in the connection path must not be the thing that
+      # closes an idle pooled connection. See `router.timeouts` in values.yaml.
+      timeout client {{ .Values.router.timeouts.client }}
+      timeout server {{ .Values.router.timeouts.server }}
+      timeout check {{ .Values.router.timeouts.check }}
+      retries 2
+
+    resolvers kubernetes
+      # The pod's own resolver. Without a `resolvers` section HAProxy resolves each
+      # backend once, at startup, and keeps the address — so the first instance to
+      # restart onto a new pod IP would be an instance the router never finds again.
+      parse-resolv-conf
+      hold valid 5s
+      hold nx 5s
+      hold other 5s
+      hold refused 5s
+      hold timeout 5s
+      resolve_retries 3
+      timeout resolve 1s
+      timeout retry 1s
+
+    # The router's own readiness, which deliberately fails while no instance is
+    # leading: an application then meets a Service with no endpoints and a refused
+    # connection, instead of a connection that is accepted and reset. During a
+    # failover that is the difference between a client that retries and a client that
+    # reports a database error.
+    frontend health
+      mode http
+      bind :{{ .Values.router.healthPort }}
+      monitor-uri /healthz
+      acl no_primary nbsrv(primary) lt 1
+      monitor fail if no_primary
+      option dontlog-normal
+
+    listen primary
+      bind :{{ .Values.router.primaryPort }}
+      option httpchk GET /primary
+      http-check expect status 200
+      # Exactly one instance answers 200, so there is nothing to balance; `first`
+      # makes which one it is a function of the check rather than of chance.
+      balance first
+      # `shutdown-sessions` is the load-bearing half: a leader that has been demoted
+      # still holds TCP connections that are now talking to a standby in recovery, and
+      # the client finds out by having a write fail rather than by reconnecting.
+      default-server check port {{ .Values.patroni.apiPort }} inter {{ .Values.router.check.interval }} fall {{ .Values.router.check.fall }} rise {{ .Values.router.check.rise }} on-marked-down shutdown-sessions resolvers kubernetes init-addr none
+      {{- range $i := until (.Values.replicaCount | int) }}
+      {{- $pod := printf "%s-%d" (include "patroni-postgresql.fullname" $) $i }}
+      server {{ $pod }} {{ include "patroni-postgresql.podFqdnShell" (dict "pod" $pod "service" $pods "context" $) }}:{{ $.Values.service.port }}
+      {{- end }}
+{{- if .Values.service.replica.enabled }}
+
+    listen standby
+      bind :{{ .Values.router.standbyPort }}
+      option httpchk GET /replica
+      http-check expect status 200
+      balance leastconn
+      default-server check port {{ .Values.patroni.apiPort }} inter {{ .Values.router.check.interval }} fall {{ .Values.router.check.fall }} rise {{ .Values.router.check.rise }} on-marked-down shutdown-sessions resolvers kubernetes init-addr none
+      {{- range $i := until (.Values.replicaCount | int) }}
+      {{- $pod := printf "%s-%d" (include "patroni-postgresql.fullname" $) $i }}
+      server {{ $pod }} {{ include "patroni-postgresql.podFqdnShell" (dict "pod" $pod "service" $pods "context" $) }}:{{ $.Values.service.port }}
+      {{- end }}
+{{- end }}

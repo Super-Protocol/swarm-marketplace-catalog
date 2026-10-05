@@ -1,9 +1,11 @@
 {{- if .Values.service.replica.enabled }}
+{{- include "patroni-postgresql.validate" . -}}
 {{- /*
-Every instance that is not the leader, for a reader that can tolerate replication
-lag. An ordinary selector Service on the role label Patroni maintains — and because
-the readiness probe is Patroni's `/readiness`, a standby that is still cloning is
-not in it.
+Every instance that is not the leader, for a reader that can tolerate replication lag.
+
+The same router pods as the master Service, on their other listener: that one checks
+Patroni's `/replica`, which answers 200 only on a standby that is streaming — so a
+standby still cloning itself from the leader is not in it.
 */ -}}
 apiVersion: v1
 kind: Service
@@ -18,11 +20,10 @@ metadata:
 spec:
   type: ClusterIP
   selector:
-    {{- include "patroni-postgresql.selectorLabels" . | nindent 4 }}
-    {{ .Values.patroni.roleLabel }}: {{ .Values.patroni.followerLabelValue | quote }}
+    {{- include "patroni-postgresql.routerSelectorLabels" . | nindent 4 }}
   ports:
     - name: postgresql
       port: {{ .Values.service.port }}
-      targetPort: postgresql
+      targetPort: standby
       protocol: TCP
 {{- end }}
