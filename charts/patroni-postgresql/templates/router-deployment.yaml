@@ -1,0 +1,132 @@
+{{- include "patroni-postgresql.validate" . -}}
+{{- /*
+The address an application connects to.
+
+Two instances on two nodes, required: this is in the connection path, and one instance
+of it would make a database that survives losing a node unreachable when the node the
+proxy was on is the one that goes. A Deployment rather than a StatefulSet because
+there is no identity and no state here — the configuration is the same on every
+instance and holds nothing a restart would have to recover.
+*/ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "patroni-postgresql.routerFullname" . }}
+  labels:
+    {{- include "patroni-postgresql.routerLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.router.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "patroni-postgresql.routerSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "patroni-postgresql.routerSelectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: router
+      annotations:
+        {{- /*
+        HAProxy reads its configuration once, at startup. Without this a change to the
+        rendered `haproxy.cfg` is a ConfigMap that updates and pods that keep serving
+        the old one — which is the kind of upgrade that appears to have worked.
+        */}}
+        checksum/config: {{ include (print $.Template.BasePath "/router-configmap.yaml") . | sha256sum }}
+        {{- with .Values.router.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.router.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.router.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.router.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.router.podAntiAffinity.enabled }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "patroni-postgresql.routerSelectorLabels" . | nindent 18 }}
+              topologyKey: {{ .Values.router.podAntiAffinity.topologyKey }}
+      {{- end }}
+      containers:
+        - name: router
+          image: {{ include "patroni-postgresql.routerImage" . }}
+          imagePullPolicy: {{ .Values.router.image.pullPolicy }}
+          {{- with .Values.router.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            {{- /*
+            What `${POD_NAMESPACE}` in `haproxy.cfg` expands to. HAProxy substitutes
+            environment variables in its own configuration file, which is how the
+            backend names can be fully qualified without the namespace being rendered
+            into an object the deployment attests.
+            */}}
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: primary
+              containerPort: {{ .Values.router.primaryPort }}
+              protocol: TCP
+            {{- if .Values.service.replica.enabled }}
+            - name: standby
+              containerPort: {{ .Values.router.standbyPort }}
+              protocol: TCP
+            {{- end }}
+            - name: health
+              containerPort: {{ .Values.router.healthPort }}
+              protocol: TCP
+          {{- /*
+          `/healthz` fails while no instance answers `/primary`, so a router that is
+          up but has nothing to route to is out of the master Service — which is what
+          makes a connection during a failover a refusal rather than a reset.
+
+          Liveness is the same URL, with a threshold long enough that a failover is
+          not a restart: the budget is `failureThreshold × periodSeconds`, sixty
+          seconds against a `patroni.ttl` of thirty.
+          */}}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: {{ .Values.router.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.router.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.router.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.router.readinessProbe.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: {{ .Values.router.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.router.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.router.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.router.livenessProbe.failureThreshold }}
+          {{- with .Values.router.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /usr/local/etc/haproxy
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "patroni-postgresql.routerFullname" . }}

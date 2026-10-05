@@ -1,8 +1,8 @@
 apiVersion: v2
 name: patroni-postgresql
-description: A replicated PostgreSQL cluster that survives losing a node — Patroni on the Zalando Spilo image, with the Kubernetes API as its leader election store. No operator, no CRDs, nothing outside the namespace it installs into.
+description: A replicated PostgreSQL cluster that survives losing a node — Patroni on the Zalando Spilo image, with its own in-namespace etcd as the leader election store and a TCP router in front of the leader. No operator, no CRDs, and no call to the Kubernetes API.
 type: application
-version: 0.1.0
+version: 0.2.0
 # The PostgreSQL the pinned Spilo image ships. Patroni is 4.0.4.
 appVersion: "17.5"
 keywords:

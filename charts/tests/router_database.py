@@ -12,15 +12,17 @@ Every one of these has been a real failure somewhere:
 
   * the DSN's host and the master Service's name are one string. A rename on either
     side deploys cleanly and the API retries a name that does not resolve.
-  * the master Service must have **no** selector. Patroni writes the leader's address
-    into its Endpoints itself; a selector hands that object to the endpoints
-    controller, which points the name at all three instances — two of which refuse
-    writes, so a third of the queries fail and the rest work.
+  * the master Service must select the **router**, and the router's primary listener.
+    Pointed at the database's own pods it would resolve to all three instances, two of
+    which refuse writes — so a third of the queries fail and the rest work.
   * the three passwords come out of the Secret the api chart writes, under the keys
     the database chart is told to read. A key that does not exist is a pod that never
     starts, and the message is about the Secret rather than about the names.
   * three instances, and required anti-affinity. `preferred` renders the same and
     schedules two copies of the data onto one ephemeral disk.
+  * no part of the database may need the Kubernetes API. That is what 0.1.0 got wrong
+    and what SUP-215 is: a cluster space blocks pod → kube-apiserver, so the
+    Endpoints-mode chart deployed cleanly and never elected anybody.
 
     cat manifests.yaml | charts/tests/router_database.py
 """
@@ -50,8 +52,10 @@ def main() -> int:
 
     api = by_kind_name.get(("Deployment", "confidential-router-api"))
     database = by_kind_name.get(("StatefulSet", "confidential-router-postgresql"))
-    if api is None or database is None:
-        fail("the composed render is missing the API Deployment or the database StatefulSet")
+    router = by_kind_name.get(("Deployment", "confidential-router-postgresql-router"))
+    dcs = by_kind_name.get(("StatefulSet", "confidential-router-postgresql-etcd"))
+    if api is None or database is None or router is None or dcs is None:
+        fail("the composed render is missing the API Deployment, the database StatefulSet, the router or the DCS")
         return 1
 
     # --- the DSN's host is the master Service, and the master Service exists ---
@@ -70,23 +74,30 @@ def main() -> int:
     else:
         ok(f"the API's DSN points at Service/{host}")
 
-        if "selector" in master["spec"]:
-            fail(
-                f"Service/{host} has a selector. Patroni maintains its Endpoints itself; "
-                "with a selector the name resolves to the standbys as well"
-            )
+        # The router's pods and nothing else: pointed at the database's own pods, two
+        # of the three it resolved to would refuse every write.
+        selector = master["spec"].get("selector")
+        router_labels = router["spec"]["template"]["metadata"]["labels"]
+        if not selector:
+            fail(f"Service/{host} has no selector, so nothing is behind it")
+        elif not all(router_labels.get(k) == v for k, v in selector.items()):
+            fail(f"Service/{host} selects {selector}, which does not match the router's pods")
+        elif selector.items() <= database["spec"]["template"]["metadata"]["labels"].items():
+            fail(f"Service/{host} selects the database's own pods, two of which refuse writes")
         else:
-            ok(f"Service/{host} has no selector, so Patroni's leader Endpoints is what answers")
+            ok(f"Service/{host} selects the router's pods")
 
         ports = master["spec"]["ports"]
         if [p.get("name") for p in ports] != ["postgresql"]:
-            fail(f"Service/{host} ports are {ports}: Patroni writes one named `postgresql`")
+            fail(f"Service/{host} ports are {ports}: the API's DSN wants one named `postgresql`")
         elif ports[0]["port"] != 5432:
-            fail(f"Service/{host} serves port {ports[0]['port']}, and Patroni writes 5432")
+            fail(f"Service/{host} serves port {ports[0]['port']}, and the DSN says 5432")
+        elif ports[0]["targetPort"] != "primary":
+            fail(f"Service/{host} targets {ports[0]['targetPort']!r}, not the router's `primary` listener")
         else:
-            ok("the master Service's port is named `postgresql` on 5432, which is what Patroni writes")
+            ok("the master Service's port is `postgresql` on 5432, targeting the router's primary listener")
 
-    # --- the Patroni scope is that same name: in Endpoints mode they cannot differ ---
+    # --- the Patroni scope is that same name: a convention, kept so the two read together ---
     spilo = {
         env["name"]: env
         for container in database["spec"]["template"]["spec"]["containers"]
@@ -95,7 +106,7 @@ def main() -> int:
     if spilo.get("SCOPE", {}).get("value") != host:
         fail(f"the Patroni scope is {spilo.get('SCOPE', {}).get('value')!r} and the master Service is {host!r}")
     else:
-        ok(f"the Patroni scope is {host}, so the leader lock and the master Service are one object")
+        ok(f"the Patroni scope is {host}, the same string as the master Service and the DSN's host")
 
     # --- the passwords come out of the api chart's Secret, under keys it writes ---
     secret = by_kind_name.get(("Secret", "confidential-router-api"))
@@ -136,6 +147,42 @@ def main() -> int:
         fail("the database carries a preferred anti-affinity term alongside the required one")
     else:
         ok("one instance per node, required")
+
+    # --- the DCS is this release's etcd, and nothing here talks to the API server ---
+    if spilo.get("DCS_ENABLE_KUBERNETES_API") is not None:
+        fail("the database is configured with the Kubernetes API as its DCS, which a cluster space blocks (SUP-215)")
+    elif any(name.startswith("KUBERNETES_") for name in spilo):
+        fail(f"the database still carries Kubernetes-DCS environment: {sorted(n for n in spilo if n.startswith('KUBERNETES_'))}")
+    elif "ETCD3_HOSTS" not in spilo:
+        fail("the database has neither a Kubernetes DCS nor ETCD3_HOSTS: Patroni would have no store at all")
+    else:
+        hosts = spilo["ETCD3_HOSTS"]["value"].split(",")
+        members = dcs["spec"]["replicas"]
+        if len(hosts) != members:
+            fail(f"Patroni is given {len(hosts)} etcd endpoint(s) and the DCS has {members} member(s)")
+        elif not all(h.startswith("confidential-router-postgresql-etcd-") for h in hosts):
+            fail(f"Patroni's etcd endpoints are {hosts}, which are not this release's members")
+        else:
+            ok(f"the DCS is {members} in-namespace etcd members, by their own names")
+
+    # Not a preference. A token in the pod is the only way an API call could be
+    # authenticated, so its absence is the check that the claim above stays true.
+    for kind, document in (("database", database), ("DCS", dcs), ("router", router)):
+        if document["spec"]["template"]["spec"].get("automountServiceAccountToken") is not False:
+            fail(f"the {kind} pods mount a service account token, so an API call could still be made")
+        else:
+            ok(f"the {kind} pods are given no service account token")
+
+    # A namespace rendered into a manifest makes the deployment's evidence digest a
+    # property of who deployed it, and `$(POD_NAMESPACE)`/`${POD_NAMESPACE}` is how
+    # every name in this chart avoids it. `database_drift.py` is what proves the
+    # absence; this is what names the mechanism, so a future rewrite that hard-codes a
+    # namespace fails here with a message about why.
+    etcd_hosts = spilo.get("ETCD3_HOSTS", {}).get("value", "")
+    if "$(POD_NAMESPACE)" not in etcd_hosts:
+        fail(f"ETCD3_HOSTS is {etcd_hosts!r}: the namespace has to arrive from the downward API, not from the render")
+    else:
+        ok("the etcd endpoints take their namespace from the downward API")
 
     # --- synchronous replication is on, and asks for one standby of the two ---
     configuration = yaml.safe_load(spilo["SPILO_CONFIGURATION"]["value"])["bootstrap"]["dcs"]

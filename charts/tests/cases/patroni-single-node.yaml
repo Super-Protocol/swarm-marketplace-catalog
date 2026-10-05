@@ -5,6 +5,11 @@
 #
 # Here to keep that path rendering, for a single-node development cloud. It is not
 # how this is deployed.
+#
+# Everything else has to come down with it. Three etcd members and two routers with
+# required one-per-node anti-affinity on a one-node cluster is two members and one
+# router Pending — a DCS with no quorum behind a database that cannot be reached, which
+# would be a worse way to develop against this than a single instance is.
 replicaCount: 1
 patroni:
   synchronousMode: false
@@ -12,6 +17,18 @@ podAntiAffinity:
   enabled: false
 podDisruptionBudget:
   enabled: false
+etcd:
+  replicaCount: 1
+  podAntiAffinity:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
+router:
+  replicaCount: 1
+  podAntiAffinity:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
 auth:
   superuser:
     password: golden-test-superuser-password

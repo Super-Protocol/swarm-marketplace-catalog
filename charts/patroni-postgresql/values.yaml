@@ -23,6 +23,18 @@ nameOverride: ""
 # that chart called its service and does not have to change its DSN.
 fullnameOverride: ""
 
+# The cluster's DNS domain, which the pod names in the DCS and router configuration
+# are built against. Everything in this chart addresses everything else by its
+# in-namespace name — `<pod>.<service>.$(POD_NAMESPACE).svc.<clusterDomain>` — with
+# the namespace supplied at run time from the downward API rather than rendered in.
+#
+# That is deliberate and not cosmetic: a namespace interpolated into a manifest makes
+# every deployment of this chart attest a different digest, so the version could never
+# declare an `expectedDigest` (marketplace spec §2.7). `$(POD_NAMESPACE)` is expanded
+# by the kubelet in an environment variable and by HAProxy in its own configuration,
+# and neither of them is the render.
+clusterDomain: cluster.local
+
 # Three: a leader and two standbys, one per node of a three-node cloud. `pods`
 # below is hard anti-affinity, so a fourth instance has nowhere to schedule on a
 # three-node cluster — that is the topology refusing to put two copies of the data
@@ -32,11 +44,13 @@ fullnameOverride: ""
 # node *and* keep a synchronous standby, which is the whole point.
 replicaCount: 3
 
-# The Patroni cluster scope. Empty means the chart's full name.
+# The Patroni cluster scope: the name of this cluster in the DCS, which is where the
+# leader lock lives under `/service/<scope>/`. Empty means the chart's full name.
 #
-# In Endpoints mode (below) the leader lock *is* an Endpoints object named after the
-# scope, and the master Service is the Service in front of that object — so the scope
-# and the master Service's name are necessarily the same string, and this is it.
+# It is also the master Service's name. That used to be a requirement — the lock was
+# an Endpoints object and the Service was the Service in front of it — and is now a
+# convention kept on purpose, so that `patronictl list` and an application's DSN can
+# be read side by side.
 scope: ""
 
 patroni:
@@ -63,6 +77,22 @@ patroni:
   # instance and getting one back, this is a single-copy database.
   synchronousModeStrict: false
 
+  # What a leader does when it cannot reach the DCS at all.
+  #
+  # The default is to demote: a leader that cannot renew its lock must assume somebody
+  # else has taken it, and a database that refuses writes is better than two that
+  # accept them. That default makes the DCS's availability the database's availability,
+  # which is a worse bargain here than it is anywhere else — the DCS is three pods on
+  # the same three ephemeral nodes as the database.
+  #
+  # Failsafe mode is Patroni's answer: before demoting, the leader asks every member it
+  # knows of, over their REST APIs, whether any of them has taken over. If none has and
+  # all of them answer, it keeps the lock locally and goes on serving. It is still
+  # fail-closed — a member it cannot reach is a member that might have been promoted,
+  # and then it demotes — but it means a DCS that is restarting, or that came back
+  # empty, is not by itself an outage.
+  failsafeMode: true
+
   # How long a leader's lock survives without being renewed, and how often the loop
   # runs. The failover budget is roughly `ttl` — Patroni's defaults, restated here
   # because the declared RTO is read off them.
@@ -72,25 +102,24 @@ patroni:
   # A standby further behind than this is not a failover candidate (32 MiB).
   maximumLagOnFailover: 33554432
 
-  # Where Patroni keeps the leader lock and the cluster configuration. Endpoints is
-  # Spilo's default and this chart's only supported setting, deliberately: the DCS
-  # objects carry a leader annotation that changes on every loop, and Endpoints are
-  # excluded from the deployment evidence digest as operational noise, while
-  # ConfigMaps are collected — so the ConfigMap mode would push a value that changes
-  # every ten seconds into the snapshot a deployment attests.
+  # Where Patroni keeps the leader lock, the member list and the cluster-wide
+  # configuration: the etcd this chart installs beside it (`etcd` below), over plain
+  # HTTP inside the namespace.
   #
-  # There is no value to set. It is here as prose because the next person to reach
-  # for `KUBERNETES_USE_CONFIGMAPS` should read this first.
-
-  # The labels Patroni finds its own members by, and the label it writes the current
-  # role onto. The master and replica Services select on them, so they are the seam
-  # between "who is the leader" and "where does a client connect".
-  labels:
-    application: spilo
-  scopeLabel: cluster-name
-  roleLabel: spilo-role
-  leaderLabelValue: master
-  followerLabelValue: replica
+  # **Not the Kubernetes API.** That was this chart's first shape and it cannot work
+  # here: a cluster space confines its tenant pods, and pod → kube-apiserver is one of
+  # the things the confinement blocks — a connection to the API server's ClusterIP
+  # times out from inside the pod. Patroni logs
+  # `K8sConnectionFailed('No more API server nodes in the cluster')`, no instance ever
+  # passes its readiness probe, `OrderedReady` keeps the StatefulSet at 0/3, and
+  # whatever is waiting on the database waits forever (SUP-215). The other way out —
+  # the platform allowlisting the API server for tenant pods — was considered and
+  # rejected: an application chart does not get to weaken a fail-closed confinement
+  # that every other tenant depends on.
+  #
+  # Nothing secret is in the DCS. The lock, the member list and the live Patroni
+  # configuration are all of it; the passwords live in a Secret and reach PostgreSQL
+  # through the environment.
 
   # Merged over everything this chart generates for `SPILO_CONFIGURATION`, as the
   # last word. An escape hatch for a Patroni setting the values above do not reach;
@@ -101,6 +130,120 @@ patroni:
   # initialised. Changing it afterwards changes nothing — the live values live in the
   # DCS and are edited with `patronictl edit-config`.
   spiloConfiguration: {}
+
+# The DCS: a three-member etcd, in this namespace, part of this chart.
+#
+# Plain StatefulSet pods and one headless Service. Nothing outside the namespace,
+# nothing the platform has to grant, every image pinned by digest — so the store the
+# cluster's availability depends on is inside the same attested snapshot as the
+# database it serves.
+#
+# **It holds no data, and it needs no durability of its own.** The leader lock, the
+# member list and the live Patroni configuration are all that is in it, and all three
+# are re-derivable from the PostgreSQL instances themselves. So every member's volume
+# is an `emptyDir`:
+#
+#   * one pod replaced — a rolling update, a drained node — comes back with an empty
+#     volume, re-derives the member id it always had from the static member list, and
+#     is caught up from the leader's snapshot;
+#   * every pod replaced at once — a cloud-wide reboot — finds no cluster to join and
+#     bootstraps a fresh one from the same static list. Patroni's members re-register
+#     and the instance with the newest timeline is elected again.
+#
+# A PVC would be worse than useless here: a cluster space pins every volume to the
+# node's per-boot-ephemeral disk, so the data would not survive the reboot that
+# matters and the member could never be rescheduled off a node that died.
+#
+# What an empty DCS does cost is a leader election — `patroni.ttl` seconds without a
+# primary — and `patroni.failsafeMode` is what buys even that back.
+etcd:
+  image:
+    registry: quay.io
+    repository: coreos/etcd
+    # etcd's own release image, distroless: no shell, no `cat`, nothing but the two
+    # binaries. Hence the HTTP probes below rather than `etcdctl`, and hence the init
+    # container that writes the configuration file — see `templates/etcd-configmap.yaml`
+    # for the one decision that cannot be made in a manifest.
+    tag: v3.5.34
+    digest: sha256:2c029095680c13c2b36116cc3935e1b0cddc0f5af78004457fd863616d8d072b
+    pullPolicy: IfNotPresent
+
+  # The userland the bootstrap script runs in: a shell, `wget` and `cat`, which is all
+  # of what it needs and all of what this image is.
+  bootstrapImage:
+    registry: docker.io
+    repository: library/busybox
+    tag: 1.37.0-musl
+    digest: sha256:5cec3fc171c87218698e85a52af7087de727372aae264a787b8112901a5b0092
+    pullPolicy: IfNotPresent
+
+  # Three, one per node, for the same reason PostgreSQL is three: a store that loses a
+  # node keeps its quorum. An even count is refused — two members have a quorum of
+  # two, which is strictly worse than one.
+  replicaCount: 3
+  clientPort: 2379
+  peerPort: 2380
+
+  # Patroni renews the leader lock every `patroni.loopWait` seconds: order 10,000 new
+  # revisions a day, forever, for a key space of a few hundred bytes. Compaction is
+  # what keeps that bounded, and the backend quota is the backstop — a member whose
+  # compaction somehow stopped refuses writes and says so, rather than filling the
+  # node's disk and taking the node with it.
+  autoCompactionRetention: "1h"
+  quotaBackendBytes: 268435456
+
+  # Logging at `info` would narrate every leader renewal. `warn` is what leaves the
+  # log worth reading when something is actually wrong.
+  logLevel: warn
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 192Mi
+    limits:
+      cpu: 100m
+      memory: 192Mi
+
+  # The init container runs for a second or two and exits. It still needs a request,
+  # because a cluster space's quota is a hard one and a container with no request is a
+  # container the scheduler cannot place against it.
+  bootstrapResources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 50m
+      memory: 32Mi
+
+  # One member per node, required, same argument as PostgreSQL's: two members of a
+  # three-member quorum on one node is a quorum that one reboot takes.
+  podAntiAffinity:
+    enabled: true
+    topologyKey: kubernetes.io/hostname
+
+  nodeSelector: {}
+  tolerations: []
+
+  # A drain takes one member. Two of three is the quorum, and a DCS with no quorum is
+  # a cluster that demotes its leader and serves nothing.
+  podDisruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+
+  # etcd's image runs as root by default and does not need to. 1000 owns the data
+  # directory through `fsGroup`, which is what makes the `emptyDir` writable by it.
+  podSecurityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    runAsNonRoot: true
+    fsGroup: 1000
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+
+  podAnnotations: {}
 
 # The three credentials this cluster needs, and the application role it creates.
 #
@@ -187,26 +330,15 @@ podDisruptionBudget:
   enabled: true
   maxUnavailable: 1
 
-serviceAccount:
-  create: true
-  name: ""
-  annotations: {}
-
-rbac:
-  # The Role and RoleBinding that let Patroni hold its leader lock and label its own
-  # pods. Without them the cluster never elects anybody. Both are namespaced; this
-  # chart creates nothing cluster-scoped.
-  create: true
-
 service:
+  # The port PostgreSQL listens on, and the port both client Services publish. The
+  # router (`router` below) is what is behind them, so this does not have to be the
+  # port the router's own listeners bind.
   port: 5432
-  # The master Service has no selector. Patroni writes the leader's pod IP into the
-  # Endpoints object itself — that object is the leader lock, so the Service follows
-  # a failover without anything watching for one. A selector here would hand the
-  # object to Kubernetes' endpoints controller, which would overwrite it.
-  #
-  # The replica Service is an ordinary selector Service on the role label, so it
-  # resolves to the standbys that are actually streaming.
+  # Both client Services select the router's pods: one on its primary listener, one on
+  # its standby listener. Neither selects a PostgreSQL pod directly — which instance
+  # is the leader is a question only Patroni can answer, and the router is what asks
+  # it (see `router` below for why it exists at all).
   master:
     annotations: {}
   replica:
@@ -214,6 +346,116 @@ service:
     # Empty means `<fullname>-repl`.
     name: ""
     annotations: {}
+
+# The router: what makes "connect to the database" land on whichever instance is the
+# leader right now.
+#
+# With the leader lock in the Kubernetes API this was free — the lock *was* the master
+# Service's Endpoints object, so a failover and the Service following it were one
+# write, and the chart needed no moving part for it. With the lock in etcd, nothing in
+# the cluster knows which pod is the primary; the only thing that does is Patroni's own
+# REST API, and a Service cannot ask it. Patroni's documentation answers this the same
+# way for every deployment that is not using the Kubernetes DCS: a TCP proxy that
+# health-checks `/primary`.
+#
+# So, HAProxy in TCP mode: one listener that forwards to whichever instance answers
+# `GET /primary` with 200, one that spreads over the instances answering `/replica`,
+# and a `/healthz` of its own that fails while there is no primary at all — so an
+# application's connection is refused by an endpointless Service instead of being
+# accepted and reset.
+#
+# It is in the connection path, so there are two of it on two nodes, required: one
+# instance would be a database that survives losing a node behind a proxy that does
+# not.
+router:
+  image:
+    registry: docker.io
+    repository: library/haproxy
+    # The multi-platform index for 3.0.29-alpine, HAProxy's long-term-supported
+    # branch. A digest wins over the tag beside it; the tag stays because it is what
+    # says *which* release this is.
+    tag: 3.0.29-alpine
+    digest: sha256:56b887da77428b7a6621e59e480cdbd330cc805c22d3cedb66ceea76ffdea2c6
+    pullPolicy: IfNotPresent
+
+  replicaCount: 2
+
+  # The listeners, inside the router's own pods. `service.port` is what the two client
+  # Services publish; these are what they target, which is why the standby one does
+  # not have to collide with PostgreSQL's port.
+  primaryPort: 5432
+  standbyPort: 5433
+  # `/healthz`, read by the readiness probe and by nothing else.
+  healthPort: 8404
+
+  maxconn: 2048
+
+  # `inter`/`fall`/`rise` against Patroni's REST API decide how quickly a failover
+  # becomes a working connection: three checks three seconds apart to mark the old
+  # leader down, two to accept the new one. Inside `patroni.ttl`, which is the budget
+  # the declared RTO is read off.
+  check:
+    interval: 3s
+    fall: 3
+    rise: 2
+
+  timeouts:
+    connect: 5s
+    # A proxy in the connection path must not be the thing that closes an idle pooled
+    # connection. A client whose pool hands out a connection the proxy quietly reaped
+    # fails on a query it had every reason to expect to work, and most pools report
+    # that as an error the application was never written to handle. Long enough never
+    # to be that reason; finite so a genuinely abandoned connection is still reclaimed.
+    client: 7d
+    server: 7d
+    check: 3s
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+  # Two instances, never on one node — see above.
+  podAntiAffinity:
+    enabled: true
+    topologyKey: kubernetes.io/hostname
+
+  nodeSelector: {}
+  tolerations: []
+
+  # A drain takes one of the two. Taking both is a database nothing can reach.
+  podDisruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+
+  # The image's own `haproxy` user. The listeners are all above 1024, so nothing here
+  # needs a privileged port or a capability to bind one.
+  podSecurityContext:
+    runAsUser: 99
+    runAsGroup: 99
+    runAsNonRoot: true
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+  podAnnotations: {}
+
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 2
+  livenessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 6
 
 resources:
   requests:

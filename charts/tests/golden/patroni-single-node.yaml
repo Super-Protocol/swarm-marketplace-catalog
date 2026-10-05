@@ -1,23 +1,11 @@
 ---
-# Source: patroni-postgresql/templates/serviceaccount.yaml
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: patroni-postgresql
-  labels:
-    helm.sh/chart: patroni-postgresql-0.1.0
-    app.kubernetes.io/name: patroni-postgresql
-    app.kubernetes.io/instance: pg
-    app.kubernetes.io/version: "17.5"
-    app.kubernetes.io/managed-by: Helm
----
 # Source: patroni-postgresql/templates/secret.yaml
 apiVersion: v1
 kind: Secret
 metadata:
   name: patroni-postgresql
   labels:
-    helm.sh/chart: patroni-postgresql-0.1.0
+    helm.sh/chart: patroni-postgresql-0.2.0
     app.kubernetes.io/name: patroni-postgresql
     app.kubernetes.io/instance: pg
     app.kubernetes.io/version: "17.5"
@@ -34,7 +22,7 @@ kind: ConfigMap
 metadata:
   name: patroni-postgresql-scripts
   labels:
-    helm.sh/chart: patroni-postgresql-0.1.0
+    helm.sh/chart: patroni-postgresql-0.2.0
     app.kubernetes.io/name: patroni-postgresql
     app.kubernetes.io/instance: pg
     app.kubernetes.io/version: "17.5"
@@ -92,59 +80,193 @@ data:
     \gexec
     SQL
 ---
-# Source: patroni-postgresql/templates/role.yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+# Source: patroni-postgresql/templates/etcd-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
 metadata:
-  name: patroni-postgresql
+  name: patroni-postgresql-etcd
   labels:
-    helm.sh/chart: patroni-postgresql-0.1.0
-    app.kubernetes.io/name: patroni-postgresql
+    helm.sh/chart: patroni-postgresql-0.2.0
+    app.kubernetes.io/name: patroni-postgresql-etcd
     app.kubernetes.io/instance: pg
-    app.kubernetes.io/version: "17.5"
+    app.kubernetes.io/component: dcs
     app.kubernetes.io/managed-by: Helm
-rules:
-  - apiGroups: [""]
-    resources: ["endpoints"]
-    verbs: ["create", "get", "list", "patch", "update", "watch"]
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list", "patch", "watch"]
+data:
+  bootstrap.sh: |
+    #!/bin/sh
+    set -eu
+
+    data_dir=/var/lib/etcd/data
+    output=/run/etcd/etcd.conf.yml
+    self=${POD_NAME}.patroni-postgresql-etcd.${POD_NAMESPACE}.svc.cluster.local
+    peers="patroni-postgresql-etcd-0.patroni-postgresql-etcd.${POD_NAMESPACE}.svc.cluster.local "
+
+    # etcd's v3 API over its gRPC gateway, which is plain JSON over HTTP and reachable
+    # with the `wget` this image has. `member remove` and `member add` need a quorum, so
+    # a failure here exits non-zero and the kubelet tries the whole decision again —
+    # which is the right behaviour for "the cluster is in the middle of something".
+    post() {
+      wget -q -T 10 -O - --post-data "$2" --header 'Content-Type: application/json' "$1"
+    }
+
+    state=new
+    if [ -d "$data_dir/member" ]; then
+      # This member's own write-ahead log is here, which is what etcd restarts from: it
+      # ignores every initial-cluster setting when a log is present, and the membership
+      # it rejoins with is the one recorded in the log rather than the one below.
+      state=existing
+      echo "dcs-bootstrap: $POD_NAME has its own write-ahead log" >&2
+    else
+      serving=
+      for peer in $peers; do
+        case "$peer" in "$POD_NAME".*) continue ;; esac
+        # `/health` and not `/version`: a member answers it 200 only once it has a
+        # quorum. A member that is up but waiting for peers is a cluster that does not
+        # exist yet, and this member is one of the peers it is waiting for.
+        if wget -q -T 3 -O /dev/null "http://$peer:2379/health" 2>/dev/null; then
+          serving=$peer
+          break
+        fi
+      done
+
+      if [ -n "$serving" ]; then
+        state=existing
+        old=$(post "http://$serving:2379/v3/cluster/member/list" '{}' \
+                | sed 's/},{/}\n{/g' | grep "\"name\":\"$POD_NAME\"" \
+                | sed -n 's/.*"ID":"\([0-9]*\)".*/\1/p' || true)
+        if [ -n "$old" ]; then
+          echo "dcs-bootstrap: $POD_NAME lost its volume; retiring member $old" >&2
+          post "http://$serving:2379/v3/cluster/member/remove" "{\"ID\":\"$old\"}" >/dev/null
+        fi
+        echo "dcs-bootstrap: admitting $POD_NAME at $self through $serving" >&2
+        post "http://$serving:2379/v3/cluster/member/add" \
+          "{\"peerURLs\":[\"http://$self:2380\"]}" >/dev/null
+      fi
+    fi
+
+    echo "dcs-bootstrap: $POD_NAME starts with initial-cluster-state=$state" >&2
+    cat > "$output" <<CONFIG
+    name: $POD_NAME
+    data-dir: $data_dir
+    listen-client-urls: http://0.0.0.0:2379
+    advertise-client-urls: http://$self:2379
+    listen-peer-urls: http://0.0.0.0:2380
+    initial-advertise-peer-urls: http://$self:2380
+    initial-cluster: patroni-postgresql-etcd-0=http://patroni-postgresql-etcd-0.patroni-postgresql-etcd.${POD_NAMESPACE}.svc.cluster.local:2380
+    initial-cluster-token: patroni-postgresql-etcd
+    initial-cluster-state: $state
+    auto-compaction-mode: periodic
+    auto-compaction-retention: "1h"
+    quota-backend-bytes: 268435456
+    log-level: warn
+    CONFIG
 ---
-# Source: patroni-postgresql/templates/rolebinding.yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+# Source: patroni-postgresql/templates/router-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
 metadata:
-  name: patroni-postgresql
+  name: patroni-postgresql-router
   labels:
-    helm.sh/chart: patroni-postgresql-0.1.0
-    app.kubernetes.io/name: patroni-postgresql
+    helm.sh/chart: patroni-postgresql-0.2.0
+    app.kubernetes.io/name: patroni-postgresql-router
     app.kubernetes.io/instance: pg
-    app.kubernetes.io/version: "17.5"
+    app.kubernetes.io/component: router
     app.kubernetes.io/managed-by: Helm
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: patroni-postgresql
-subjects:
-  - kind: ServiceAccount
-    name: patroni-postgresql
+data:
+  haproxy.cfg: |
+    global
+      log stdout format raw local0 info
+      maxconn 2048
+      # No chroot and no stats socket. Nothing in this configuration writes to the
+      # filesystem, which is what lets the container's root filesystem be read-only.
+
+    defaults
+      mode tcp
+      log global
+      option tcplog
+      option dontlognull
+      timeout connect 5s
+      # Long, on purpose: a proxy in the connection path must not be the thing that
+      # closes an idle pooled connection. See `router.timeouts` in values.yaml.
+      timeout client 7d
+      timeout server 7d
+      timeout check 3s
+      retries 2
+
+    resolvers kubernetes
+      # The pod's own resolver. Without a `resolvers` section HAProxy resolves each
+      # backend once, at startup, and keeps the address — so the first instance to
+      # restart onto a new pod IP would be an instance the router never finds again.
+      parse-resolv-conf
+      hold valid 5s
+      hold nx 5s
+      hold other 5s
+      hold refused 5s
+      hold timeout 5s
+      resolve_retries 3
+      timeout resolve 1s
+      timeout retry 1s
+
+    # The router's own readiness, which deliberately fails while no instance is
+    # leading: an application then meets a Service with no endpoints and a refused
+    # connection, instead of a connection that is accepted and reset. During a
+    # failover that is the difference between a client that retries and a client that
+    # reports a database error.
+    frontend health
+      mode http
+      bind :8404
+      monitor-uri /healthz
+      acl no_primary nbsrv(primary) lt 1
+      monitor fail if no_primary
+      option dontlog-normal
+
+    listen primary
+      bind :5432
+      option httpchk GET /primary
+      http-check expect status 200
+      # Exactly one instance answers 200, so there is nothing to balance; `first`
+      # makes which one it is a function of the check rather than of chance.
+      balance first
+      # `shutdown-sessions` is the load-bearing half: a leader that has been demoted
+      # still holds TCP connections that are now talking to a standby in recovery, and
+      # the client finds out by having a write fail rather than by reconnecting.
+      default-server check port 8008 inter 3s fall 3 rise 2 on-marked-down shutdown-sessions resolvers kubernetes init-addr none
+      server patroni-postgresql-0 patroni-postgresql-0.patroni-postgresql-pods.${POD_NAMESPACE}.svc.cluster.local:5432
+
+    listen standby
+      bind :5433
+      option httpchk GET /replica
+      http-check expect status 200
+      balance leastconn
+      default-server check port 8008 inter 3s fall 3 rise 2 on-marked-down shutdown-sessions resolvers kubernetes init-addr none
+      server patroni-postgresql-0 patroni-postgresql-0.patroni-postgresql-pods.${POD_NAMESPACE}.svc.cluster.local:5432
 ---
-# Source: patroni-postgresql/templates/service-config.yaml
+# Source: patroni-postgresql/templates/etcd-service-headless.yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: patroni-postgresql-config
+  name: patroni-postgresql-etcd
   labels:
-    helm.sh/chart: patroni-postgresql-0.1.0
-    app.kubernetes.io/name: patroni-postgresql
+    helm.sh/chart: patroni-postgresql-0.2.0
+    app.kubernetes.io/name: patroni-postgresql-etcd
     app.kubernetes.io/instance: pg
-    app.kubernetes.io/version: "17.5"
+    app.kubernetes.io/component: dcs
     app.kubernetes.io/managed-by: Helm
-    cluster-name: "patroni-postgresql"
-    application: "spilo"
 spec:
   clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: patroni-postgresql-etcd
+    app.kubernetes.io/instance: pg
+  ports:
+    - name: client
+      port: 2379
+      targetPort: client
+      protocol: TCP
+    - name: peer
+      port: 2380
+      targetPort: peer
+      protocol: TCP
 ---
 # Source: patroni-postgresql/templates/service-headless.yaml
 apiVersion: v1
@@ -152,7 +274,7 @@ kind: Service
 metadata:
   name: patroni-postgresql-pods
   labels:
-    helm.sh/chart: patroni-postgresql-0.1.0
+    helm.sh/chart: patroni-postgresql-0.2.0
     app.kubernetes.io/name: patroni-postgresql
     app.kubernetes.io/instance: pg
     app.kubernetes.io/version: "17.5"
@@ -179,19 +301,20 @@ kind: Service
 metadata:
   name: patroni-postgresql
   labels:
-    helm.sh/chart: patroni-postgresql-0.1.0
+    helm.sh/chart: patroni-postgresql-0.2.0
     app.kubernetes.io/name: patroni-postgresql
     app.kubernetes.io/instance: pg
     app.kubernetes.io/version: "17.5"
     app.kubernetes.io/managed-by: Helm
-    cluster-name: "patroni-postgresql"
-    application: "spilo"
 spec:
   type: ClusterIP
+  selector:
+    app.kubernetes.io/name: patroni-postgresql-router
+    app.kubernetes.io/instance: pg
   ports:
     - name: postgresql
       port: 5432
-      targetPort: 5432
+      targetPort: primary
       protocol: TCP
 ---
 # Source: patroni-postgresql/templates/service-replica.yaml
@@ -200,7 +323,7 @@ kind: Service
 metadata:
   name: patroni-postgresql-repl
   labels:
-    helm.sh/chart: patroni-postgresql-0.1.0
+    helm.sh/chart: patroni-postgresql-0.2.0
     app.kubernetes.io/name: patroni-postgresql
     app.kubernetes.io/instance: pg
     app.kubernetes.io/version: "17.5"
@@ -208,14 +331,232 @@ metadata:
 spec:
   type: ClusterIP
   selector:
-    app.kubernetes.io/name: patroni-postgresql
+    app.kubernetes.io/name: patroni-postgresql-router
     app.kubernetes.io/instance: pg
-    spilo-role: "replica"
   ports:
     - name: postgresql
       port: 5432
-      targetPort: postgresql
+      targetPort: standby
       protocol: TCP
+---
+# Source: patroni-postgresql/templates/router-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: patroni-postgresql-router
+  labels:
+    helm.sh/chart: patroni-postgresql-0.2.0
+    app.kubernetes.io/name: patroni-postgresql-router
+    app.kubernetes.io/instance: pg
+    app.kubernetes.io/component: router
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: patroni-postgresql-router
+      app.kubernetes.io/instance: pg
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: patroni-postgresql-router
+        app.kubernetes.io/instance: pg
+        app.kubernetes.io/component: router
+      annotations:
+        checksum/config: a8eef04a704c95d49628dc40d2475ab29b2a7637cf12b432e5922b0d9ae438a5
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      securityContext:
+        runAsGroup: 99
+        runAsNonRoot: true
+        runAsUser: 99
+      containers:
+        - name: router
+          image: docker.io/library/haproxy@sha256:56b887da77428b7a6621e59e480cdbd330cc805c22d3cedb66ceea76ffdea2c6
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: primary
+              containerPort: 5432
+              protocol: TCP
+            - name: standby
+              containerPort: 5433
+              protocol: TCP
+            - name: health
+              containerPort: 8404
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            limits:
+              cpu: 100m
+              memory: 64Mi
+            requests:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: config
+              mountPath: /usr/local/etc/haproxy
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: patroni-postgresql-router
+---
+# Source: patroni-postgresql/templates/etcd-statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: patroni-postgresql-etcd
+  labels:
+    helm.sh/chart: patroni-postgresql-0.2.0
+    app.kubernetes.io/name: patroni-postgresql-etcd
+    app.kubernetes.io/instance: pg
+    app.kubernetes.io/component: dcs
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  serviceName: patroni-postgresql-etcd
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: patroni-postgresql-etcd
+      app.kubernetes.io/instance: pg
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: patroni-postgresql-etcd
+        app.kubernetes.io/instance: pg
+        app.kubernetes.io/component: dcs
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      initContainers:
+        - name: dcs-bootstrap
+          image: docker.io/library/busybox@sha256:5cec3fc171c87218698e85a52af7087de727372aae264a787b8112901a5b0092
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+          command:
+            - /bin/sh
+            - /etc/etcd/bootstrap.sh
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            limits:
+              cpu: 50m
+              memory: 32Mi
+            requests:
+              cpu: 50m
+              memory: 32Mi
+          volumeMounts:
+            - name: scripts
+              mountPath: /etc/etcd
+              readOnly: true
+            - name: config
+              mountPath: /run/etcd
+            - name: data
+              mountPath: /var/lib/etcd
+      containers:
+        - name: etcd
+          image: quay.io/coreos/etcd@sha256:2c029095680c13c2b36116cc3935e1b0cddc0f5af78004457fd863616d8d072b
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+          command:
+            - /usr/local/bin/etcd
+            - --config-file=/run/etcd/etcd.conf.yml
+          ports:
+            - name: client
+              containerPort: 2379
+              protocol: TCP
+            - name: peer
+              containerPort: 2380
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: client
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: client
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: 100m
+              memory: 192Mi
+            requests:
+              cpu: 100m
+              memory: 192Mi
+          volumeMounts:
+            - name: config
+              mountPath: /run/etcd
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/etcd
+      volumes:
+        - name: scripts
+          configMap:
+            name: patroni-postgresql-etcd
+            defaultMode: 0555
+        - name: config
+          emptyDir: {}
+        - name: data
+          emptyDir: {}
 ---
 # Source: patroni-postgresql/templates/statefulset.yaml
 apiVersion: apps/v1
@@ -223,7 +564,7 @@ kind: StatefulSet
 metadata:
   name: patroni-postgresql
   labels:
-    helm.sh/chart: patroni-postgresql-0.1.0
+    helm.sh/chart: patroni-postgresql-0.2.0
     app.kubernetes.io/name: patroni-postgresql
     app.kubernetes.io/instance: pg
     app.kubernetes.io/version: "17.5"
@@ -243,11 +584,9 @@ spec:
       labels:
         app.kubernetes.io/name: patroni-postgresql
         app.kubernetes.io/instance: pg
-        cluster-name: "patroni-postgresql"
-        application: "spilo"
     spec:
       enableServiceLinks: false
-      serviceAccountName: patroni-postgresql
+      automountServiceAccountToken: false
       terminationGracePeriodSeconds: 120
       securityContext:
         fsGroup: 103
@@ -288,22 +627,12 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: DCS_ENABLE_KUBERNETES_API
-              value: "true"
-            - name: KUBERNETES_BYPASS_API_SERVICE
-              value: "false"
-            - name: KUBERNETES_LABELS
-              value: "{\"application\":\"spilo\"}"
-            - name: KUBERNETES_SCOPE_LABEL
-              value: "cluster-name"
-            - name: KUBERNETES_ROLE_LABEL
-              value: "spilo-role"
-            - name: KUBERNETES_LEADER_LABEL_VALUE
-              value: "master"
-            - name: KUBERNETES_STANDBY_LEADER_LABEL_VALUE
-              value: "master"
-            - name: KUBERNETES_FOLLOWER_LABEL_VALUE
-              value: "replica"
+            - name: NAMESPACE
+              value: $(POD_NAMESPACE)
+            - name: ETCD3_PROTOCOL
+              value: http
+            - name: ETCD3_HOSTS
+              value: "patroni-postgresql-etcd-0.patroni-postgresql-etcd.$(POD_NAMESPACE).svc.cluster.local:2379"
             - name: PGUSER_SUPERUSER
               value: "postgres"
             - name: PGPASSWORD_SUPERUSER
@@ -322,6 +651,7 @@ spec:
               value: |
                 bootstrap:
                   dcs:
+                    failsafe_mode: true
                     loop_wait: 10
                     maximum_lag_on_failover: 33554432
                     retry_timeout: 10
@@ -329,6 +659,11 @@ spec:
                     synchronous_mode_strict: false
                     ttl: 30
                   post_init: /etc/patroni/scripts/post-init.sh zalandos
+                postgresql:
+                  callbacks:
+                    on_role_change: /scripts/on_role_change.sh zalandos true
+                    on_start: /bin/true
+                    on_stop: /bin/true
           livenessProbe:
             httpGet:
               path: /liveness

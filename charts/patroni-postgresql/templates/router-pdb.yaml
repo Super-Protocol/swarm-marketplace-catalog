@@ -1,0 +1,18 @@
+{{- if .Values.router.podDisruptionBudget.enabled }}
+{{- include "patroni-postgresql.validate" . -}}
+{{- /*
+A drain takes one of the two. Taking both is a database every instance of which is
+healthy and nothing can reach.
+*/ -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "patroni-postgresql.routerFullname" . }}
+  labels:
+    {{- include "patroni-postgresql.routerLabels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.router.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "patroni-postgresql.routerSelectorLabels" . | nindent 6 }}
+{{- end }}
