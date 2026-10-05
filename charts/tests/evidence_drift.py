@@ -18,9 +18,18 @@ Two more things are checked, because an exclusion that names the wrong field is 
 than none — it renders, deploys, and quietly admits one deployment:
 
   * every pointer in an annotation resolves to something in the document it is on;
-  * the listing declares the same exclusions, for the same kind and name. That block is
-    what the marketplace reads to show them beside the digest, and a digest displayed
-    next to "no exclusions" answers the only question that matters about it wrongly.
+  * the chart's annotations and the listing's `evidence.exclude` block say the same
+    thing, in **both** directions. That block is what the marketplace reads to show the
+    exclusions beside the digest, so a chart that excludes more than the listing admits
+    is a digest displayed next to an incomplete answer — and a listing that claims an
+    exclusion the chart no longer applies is a disclosure of something that is not
+    happening, which is the worse of the two. The second direction cannot be seen by the
+    drift comparison above: if the field stopped being rendered at all, nothing differs
+    and nothing fails, while the listing goes on advertising that it was left out.
+
+The reverse direction is asked only about the entries this chart owns — the ones naming
+an object called `<chart>` or `<chart>-…`. A listing deploys several charts and vendors
+others it cannot annotate, and each of those is a question for whoever renders them.
 
     charts/tests/evidence_drift.py confidential-router-api \
         charts/tests/cases/api-campaign.yaml confidential-router \
@@ -110,6 +119,11 @@ def listing_exclusions(app: str) -> set[tuple[str, str, str]]:
     }
 
 
+def owns(chart: str, name: str) -> bool:
+    """Whether an object of this name is one this chart renders, by naming convention."""
+    return name == chart or name.startswith(f"{chart}-")
+
+
 def main(chart: str, values: str, app: str, overrides: list[str]) -> int:
     first, second = (render(chart, values, tag, namespace, overrides) for tag, namespace in SHAPES)
     from_listing = listing_exclusions(app) if app != "-" else None
@@ -145,9 +159,26 @@ def main(chart: str, values: str, app: str, overrides: list[str]) -> int:
                 failures += 1
         compared += 1
 
+    # The other direction: an entry this chart owns has to be an exclusion the chart
+    # actually applies, on an object the chart actually renders.
+    claimed = 0
+    for kind, name, pointer in sorted(from_listing or ()):
+        if not owns(chart, name):
+            continue
+        claimed += 1
+        rendered = first.get((kind, name))
+        if rendered is None:
+            print(f"  FAIL  apps/{app}/app.yaml declares {pointer} on {kind}/{name}, which this chart does not render")
+            failures += 1
+        elif pointer not in declared(rendered):
+            print(f"  FAIL  apps/{app}/app.yaml declares {pointer} on {kind}/{name}, which the object does not exclude")
+            failures += 1
+
     if failures:
         return 1
     print(f"  ok    {compared} object(s) compared, {excluded_total} differing field(s), all of them declared")
+    if from_listing is not None:
+        print(f"  ok    {claimed} exclusion(s) this chart owns in apps/{app}/app.yaml, each one applied by the chart")
     return 0
 
 

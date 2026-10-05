@@ -84,8 +84,13 @@ cannot answer the question:
   excluded field from one that merely contains an excluded hostname, and cannot tell that an
   exclusion pointer has gone stale. All three matter here: the router's hostname-derived values
   live in ConfigMaps whose whole `/data` is excluded, and one of those keys is rendered only for
-  a campaign (SUP-211). It also checks each pointer resolves to a real field and is declared in
-  the listing.
+  a campaign (SUP-211). It also checks that each pointer resolves to a real field, and that the
+  chart's annotations and the listing's `evidence.exclude` agree in **both** directions — an
+  exclusion the listing does not declare is a digest shown beside an incomplete answer, and one
+  the listing declares and the chart no longer applies is a disclosure of something that is not
+  happening. The second direction is invisible to the drift comparison: if the field stopped
+  being rendered, nothing differs and nothing fails, while the listing goes on advertising that
+  it was left out.
 - **Every placeholder has something that fills it** (`config_placeholders.py`). `router.yaml` is
   attested, so neither a secret nor a hostname is written into it — both are `${VAR}` the router's
   config loader substitutes from the environment. A placeholder with no value does not degrade:
