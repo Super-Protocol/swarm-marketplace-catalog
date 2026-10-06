@@ -63,7 +63,7 @@ Four components, in this order:
 | ----------- | --------------------------------------------------------------------------- | --------- |
 | `ollama`    | the model server, holding the weights you selected                          | no        |
 | `litellm`   | an OpenAI-compatible face on Ollama, keyed so only the router may call it   | no        |
-| `router-api`| `/v1` for clients, `/graphql` and `/auth` for the console, plus PostgreSQL  | API hostname |
+| `router-api`| `/v1` for clients, `/graphql` and `/auth` for the console, plus PostgreSQL and the attesting egress | API hostname |
 | `router-ui` | the console                                                                 | console hostname |
 
 Only the last two are reachable from outside the cluster space. An Ollama endpoint has no
@@ -93,6 +93,44 @@ left to re-sync from — which is why an image update of a swarm cloud has to ro
 And it does not make a deployment whose nodes are all on one physical machine survive that machine:
 replication across three cVMs on one host is not three hosts.
 
+### Models in other deployments, attested before anything is sent to them
+
+An administrator can register a model endpoint that lives somewhere else — another deployment of
+this listing, another swarm cloud — and it appears in `/v1/models` and in the console beside the
+local ones, at a price they set. Nothing is proxied to it until it has been verified.
+
+The verification is the Gatekeeper's own core, running as a second container in the API pod. It is
+the same binary a client runs on their own machine, which is the point: the check this deployment
+performs on an upstream and the check a user performs on this deployment cannot drift apart,
+because there is only one implementation of it. For each registered endpoint it fetches the
+upstream's evidence, verifies the signature chain and the hardware report, requires the
+measurement to be on a trust list the administrator maintains, binds the observed TLS leaf to the
+evidence, and from then on connects to that pinned certificate only — never to the global CA
+bundle. It re-verifies every ten minutes, immediately on a certificate that does not match the
+pin, and immediately after an edit to the trust list.
+
+**Fail-closed, in both halves.** A failed check drops the model out of `/v1/models` and refuses
+routing to it; a request that was in flight when a verdict was withdrawn ends with
+`attestation_revoked`. The API refuses before it opens a connection and the egress refuses again
+one hop later — two independent refusals for one rule, in two processes.
+
+A measurement admits a *cloud*, not a deployment: it says what kind of confidential VM answered,
+not which one. That is weaker than the digest pin a user puts on this router, and it is the trade
+the trust list makes deliberately — the alternative is approving every upstream deployment by hand.
+The endpoint's own published evidence is fetched and shown beside the verdict, informational and
+never gating.
+
+**The upstream's API key** is whatever credential that endpoint expects, entered once at
+registration and sealed with AES-256 under a key the marketplace generates and keeps in a Secret —
+so the plaintext is absent from SQL, from a database dump and from the log. It is never rendered
+back; rotating it is a new write. Rotating the sealing key makes every stored upstream key
+unreadable, and they are entered again rather than recovered.
+
+None of this is a chart value. Endpoints and trusted measurements are registered at run time in
+the console's admin section, which is what keeps the deployment's attested snapshot the same for
+everybody: two deployments of this listing version still publish the same digest, however
+differently they are configured afterwards.
+
 ## Prerequisites
 
 - **Two hostnames**, one for the console and one for the API. Take the ones offered and the DNS is
@@ -107,7 +145,7 @@ replication across three cVMs on one host is not three hosts.
   `postgresql.replicaCount` lowered, and then it is a database that does not survive its node.
 - **Nothing to authenticate against a registry.** `ghcr.io/super-protocol/confidential-router/*` is
   a public package; a cluster that can reach ghcr.io can pull it.
-- **Quota** as declared: 5 CPU / 14 GB / 60 GB at minimum, 9 CPU / 26 GB / 120 GB recommended. The
+- **Quota** as declared, unchanged by this version: 5 CPU / 14 GB / 60 GB at minimum, 9 CPU / 26 GB / 120 GB recommended. The
   model server has no memory limit of its own and grows with the number of models kept resident.
   The declared storage covers the default volumes — 30 GB of models and **three** 8 GB database
   volumes, because the database is three instances holding a copy each; choosing larger ones is a
@@ -253,3 +291,8 @@ image never has to change for it.
 Every image is pinned by digest, so what the definition says and what the cluster pulls are the
 same thing, and the evidence a deployment publishes is computable from the listing before anything
 is deployed.
+
+**Moving to 0.12.0 is a re-pin rollout.** The attesting egress is a new container in the API pod,
+so this version's snapshot is not the previous version's. Anyone who pinned a digest of 0.11.0
+pins both digests, deploys, and then removes the old one — the pattern ADR-003 §3 pre-approves for
+exactly this. Nothing a client sends changes; the base URL, the keys and the models are the same.

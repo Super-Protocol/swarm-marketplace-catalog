@@ -115,6 +115,31 @@ data:
       pollInterval: {{ .Values.evidence.pollInterval | quote }}
       freshnessWindow: {{ .Values.evidence.freshnessWindow | quote }}
 
+    {{- if .Values.externalEndpoints.enabled }}
+
+    # The seam between this process and the egress sidecar beside it (ADR-008
+    # §5), and nothing more: the endpoints themselves are not here. An admin
+    # registers them at run time and the API renders them into the sidecar's own
+    # file, because a chart value would make a dynamic trust decision part of the
+    # attested snapshot — and an upstream could then be added only by
+    # reconfiguring the deployment.
+    #
+    # No API key either, for the opposite reason: this document *is* attested and
+    # published. The upstream credentials are sealed in the database under
+    # CR_API_SECRETS_KEY, which arrives from the Secret.
+    #
+    # Rendered only while the egress is on, the same seam rule `auth.password`
+    # follows: the router's config schema is strict, so an image that predates
+    # ADR-008 would refuse to boot on this key rather than ignore it.
+    externalEndpoints:
+      configFile: {{ .Values.externalEndpoints.configPath | quote }}
+      adminListen: {{ printf "127.0.0.1:%d" (.Values.externalEndpoints.adminPort | int) | quote }}
+      reattestInterval: {{ .Values.externalEndpoints.reattestInterval | quote }}
+      statusPollInterval: {{ .Values.externalEndpoints.statusPollInterval | quote }}
+      connectTimeout: {{ .Values.externalEndpoints.connectTimeout | quote }}
+      readTimeout: {{ .Values.externalEndpoints.readTimeout | quote }}
+    {{- end }}
+
     rateLimits:
       requestsPerMinute: {{ .Values.rateLimits.requestsPerMinute | int64 }}
       tokensPerMinute: {{ .Values.rateLimits.tokensPerMinute | int64 }}

@@ -49,6 +49,35 @@ uncomputable (marketplace spec §2.7).
 {{- end -}}
 
 {{/*
+The egress sidecar's image reference. Same rule as the router's own: a digest
+wins over a tag, and one of the two has to be there, because this container is
+inside the snapshot a user pins (ADR-008 §2).
+*/}}
+{{- define "confidential-router-api.sidecarImage" -}}
+{{- $image := .Values.externalEndpoints.image -}}
+{{- $repo := printf "%s/%s" $image.registry $image.repository -}}
+{{- if $image.digest -}}
+{{- printf "%s@%s" $repo $image.digest -}}
+{{- else if $image.tag -}}
+{{- printf "%s:%s" $repo $image.tag -}}
+{{- else -}}
+{{- fail "externalEndpoints.image.digest is empty and externalEndpoints.image.tag is not set: every image in this chart is pinned by digest" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The directory the shared `emptyDir` is mounted at, in both containers.
+
+Derived from the one path rather than configured beside it: router-api writes
+that file and the sidecar watches it, and a chart that let the two be set
+separately would have a setting whose only effect is an egress that never
+reloads.
+*/}}
+{{- define "confidential-router-api.sidecarConfigDir" -}}
+{{- dir (required "externalEndpoints.configPath must be set" .Values.externalEndpoints.configPath) -}}
+{{- end -}}
+
+{{/*
 NODE_ENV — `production`, and nothing this chart is given changes that.
 
 It used to be derived: `development` unless billing ran on Stripe, because the
@@ -274,6 +303,29 @@ matches — and the symptom is a page that loads and quietly does nothing.
 {{- if .Values.invites.landingHostname -}}
 {{- if contains "/" .Values.invites.landingHostname -}}
 {{- fail (printf "invites.landingHostname must be a hostname, not a URL: %q" .Values.invites.landingHostname) -}}
+{{- end -}}
+{{- end -}}
+{{/*
+The attested egress. Both of these render cleanly and then do not work: a
+deployment whose administrator can register an upstream but never store its API
+key, and a second container pulled by a tag that moved.
+*/}}
+{{- if .Values.externalEndpoints.enabled -}}
+{{- if not (or .Values.externalEndpoints.secretsKey .Values.externalEndpoints.existingSecret) -}}
+{{- fail "externalEndpoints.enabled is true: set externalEndpoints.secretsKey, or externalEndpoints.existingSecret. It is CR_API_SECRETS_KEY, the AES-256 key an upstream API key is sealed under, and without it every registration is refused" -}}
+{{- end -}}
+{{- if .Values.externalEndpoints.secretsKey -}}
+{{- $length := len .Values.externalEndpoints.secretsKey -}}
+{{- if not (has $length (list 43 44 64)) -}}
+{{- fail (printf "externalEndpoints.secretsKey is %d characters: it has to decode to exactly 32 bytes, which is 43 characters of unpadded base64url, 44 of base64, or 64 of hex" $length) -}}
+{{- end -}}
+{{- end -}}
+{{- $port := .Values.externalEndpoints.adminPort | int -}}
+{{- if or (lt $port 1024) (gt $port 65535) -}}
+{{- fail (printf "externalEndpoints.adminPort must be between 1024 and 65535, not %d" $port) -}}
+{{- end -}}
+{{- if eq $port (.Values.service.targetPort | int) -}}
+{{- fail (printf "externalEndpoints.adminPort is %d, which is the port the API itself listens on: the two containers share one network namespace, so one of them would fail to bind" $port) -}}
 {{- end -}}
 {{- end -}}
 {{/*

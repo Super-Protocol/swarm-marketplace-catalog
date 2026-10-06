@@ -30,6 +30,7 @@ The release name and namespace are fixed per listing (`cr` / `confidential-route
 | `api-password-off` | passwords off: the `auth.password` block is absent rather than `enabled: false`, so the chart stays bootable on an image that predates the key |
 | `api-invite-only` | the SUP-173 auth seam: `requireInviteForSignUp` rendered only while it is on, so the chart stays bootable on an image that predates the key |
 | `api-endpoint-hostname` | an endpoint that names a hostname of its own: a parameter, so it is rendered as a literal rather than as `${ROUTER_PUBLIC_HOSTNAME}`, and the public ConfigMap does not carry that key at all (SUP-211) |
+| `api-external-endpoints` | the attested egress on (ADR-008): the gatekeeper as a second container, the shared `emptyDir` they talk through, and `CR_API_SECRETS_KEY` in the Secret rather than in the attested `router.yaml`. Every other `api-*` case has it off, which is the other half — a chart that still boots an image predating the key |
 | `ui-default` | the console's env and ingress; run.sh renders it against a second hostname as well, because one pinned image has to serve any API origin |
 | `ollama-gpu-off` / `ollama-gpu-on` | the GPU switch |
 | `s3-default` | what the confidential-s3 listing deploys: two hostnames, credentials derived from seeds, the bundled engine and the bundled PostgreSQL |
@@ -46,7 +47,7 @@ somewhere. They need network the first time, to pull the chart.
 
 ## Beyond lint and goldens
 
-Eight checks in `run.sh` are not a golden diff, and each exists because a golden diff
+Ten checks in `run.sh` are not a golden diff, and each exists because a golden diff
 cannot answer the question:
 
 - **Every object, parsed as a cluster parses it** (`inventory.py`). A template that loses a
@@ -98,9 +99,22 @@ cannot answer the question:
   error and no golden diff would have mentioned it. Checked in both directions, because a variable
   nothing refers to is dead configuration and, in the public ConfigMap's case, a field excluded
   from the snapshot for no reason.
+- **The listing declares every image its charts render** (`declared_images.py`). A component's
+  `images:` block is an allow-list and the render path is fail-closed on it, so an image the
+  listing does not declare refuses the whole deployment — and a digest bumped in one file and not
+  the other makes the listing advertise a pin the cluster never pulls. `helm template` reads
+  neither the listing nor the digest it declares, so no golden diff can see either. A second
+  container added to a chart is exactly the shape of change that walks into it.
+
+- **The two containers of the egress agree about the two things between them.** The sidecar
+  watches a file router-api renders and answers on a loopback port router-api polls, and nothing
+  in a cluster checks that the two were told the same path, the same mount, the same port or a
+  group that can actually open a 0640 file. Each disagreement is an egress that serves nothing
+  with both containers Ready.
+
 - **Misconfigurations are refused at render time.** Each one is a mistake that would deploy
   cleanly and then not work: an unpinned image, an Ingress with no class, a Garage key in a
-  shape Garage refuses, a master key that is not 32 bytes.
+  shape Garage refuses, a master key that is not 32 bytes, an AES key that is not 32 bytes.
 
 ## Smoke
 

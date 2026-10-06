@@ -2,8 +2,12 @@ apiVersion: v2
 name: confidential-router-api
 description: The Confidential Router's OpenAI-compatible gateway and console GraphQL API, with the replicated PostgreSQL it stores generations and sessions in.
 type: application
-version: 0.7.0
-appVersion: "0.3.2"
+# 0.8.0 adds the attested egress: a second container in the API pod, the
+# gatekeeper's own core, verifying an external model endpoint before anything is
+# proxied to it (ADR-008). Off unless `externalEndpoints.enabled` says otherwise,
+# and a re-pin rollout for anyone pinning this deployment's digest when it is on.
+version: 0.8.0
+appVersion: "0.4.0"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous
   # replication — because a tenant volume on this platform lives on the node's

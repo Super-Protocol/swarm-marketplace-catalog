@@ -1,0 +1,17 @@
+# The attested egress on (ADR-008): a second container in the API pod, a shared
+# emptyDir between the two, and the one reversible credential this deployment
+# holds — in the Secret, never in the attested ConfigMap.
+#
+# The key is 43 characters, which is what 32 bytes of base64url come to. The
+# marketplace generates these from an alphanumeric alphabet, which is a subset of
+# base64url's, so a 43-character generated value decodes to exactly the AES-256
+# key the router needs and anything else does not.
+apiHostname: api.confidential-router.example
+consoleHostname: console.confidential-router.example
+auth:
+  secret: golden-test-auth-secret-not-a-real-one
+database:
+  password: golden-test-password
+externalEndpoints:
+  enabled: true
+  secretsKey: goldentestsecretskeynotarealoneAAAAAAAAAAAAA

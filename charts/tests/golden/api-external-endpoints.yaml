@@ -13,7 +13,11 @@ metadata:
     app.kubernetes.io/part-of: confidential-router
 type: Opaque
 stringData:
-  database-url: "postgres://router:golden-test-password@db.internal:5432/router?sslmode=require"
+  auth-secret: "golden-test-auth-secret-not-a-real-one"
+  password: "golden-test-password"
+  postgres-password: "golden-test-password"
+  replication-password: "golden-test-password"
+  secrets-key: "goldentestsecretskeynotarealoneAAAAAAAAAAAAA"
 ---
 # Source: confidential-router-api/templates/configmap-public.yaml
 apiVersion: v1
@@ -118,6 +122,28 @@ data:
     evidence:
       pollInterval: "5m"
       freshnessWindow: "24h"
+
+    # The seam between this process and the egress sidecar beside it (ADR-008
+    # §5), and nothing more: the endpoints themselves are not here. An admin
+    # registers them at run time and the API renders them into the sidecar's own
+    # file, because a chart value would make a dynamic trust decision part of the
+    # attested snapshot — and an upstream could then be added only by
+    # reconfiguring the deployment.
+    #
+    # No API key either, for the opposite reason: this document *is* attested and
+    # published. The upstream credentials are sealed in the database under
+    # CR_API_SECRETS_KEY, which arrives from the Secret.
+    #
+    # Rendered only while the egress is on, the same seam rule `auth.password`
+    # follows: the router's config schema is strict, so an image that predates
+    # ADR-008 would refuse to boot on this key rather than ignore it.
+    externalEndpoints:
+      configFile: "/var/run/gatekeeper/config.yaml"
+      adminListen: "127.0.0.1:9465"
+      reattestInterval: "10m"
+      statusPollInterval: "5s"
+      connectTimeout: "5s"
+      readTimeout: "120s"
 
     rateLimits:
       requestsPerMinute: 600
@@ -230,7 +256,7 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: 5b667dd051c098aef09f6d42481588d9360a5cb73a7b5fa1f2d91820e29fac50
+        checksum/config: d5c350eee1bc0a5885a8bbac05de63c9f06e9720fec02d791c8289bd5ddc639d
         # And a hostname reconfigure is a config change the pod cannot see at all:
         # `envFrom` is read once, when the container starts, so without this the
         # ConfigMap is updated and the running router keeps advertising the old
@@ -268,16 +294,23 @@ spec:
               value: "production"
             - name: CR_API_CONFIG_FILE
               value: /etc/confidential-router/router.yaml
-            - name: ROUTER_DATABASE_URL
+            - name: ROUTER_DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: confidential-router-api
-                  key: database-url
+                  key: password
+            - name: ROUTER_DATABASE_URL
+              value: "postgres://router:$(ROUTER_DATABASE_PASSWORD)@confidential-router-postgresql:5432/router?sslmode=disable"
             - name: ROUTER_AUTH_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: confidential-router-secrets
+                  name: confidential-router-api
                   key: auth-secret
+            - name: CR_API_SECRETS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: secrets-key
           volumeMounts:
             - name: config
               mountPath: /etc/confidential-router
@@ -286,6 +319,8 @@ spec:
               mountPath: /tmp
             - name: data
               mountPath: /app/data
+            - name: gatekeeper-config
+              mountPath: "/var/run/gatekeeper"
           resources:
             limits:
               cpu: 50m
@@ -317,16 +352,23 @@ spec:
               value: "production"
             - name: CR_API_CONFIG_FILE
               value: /etc/confidential-router/router.yaml
-            - name: ROUTER_DATABASE_URL
+            - name: ROUTER_DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: confidential-router-api
-                  key: database-url
+                  key: password
+            - name: ROUTER_DATABASE_URL
+              value: "postgres://router:$(ROUTER_DATABASE_PASSWORD)@confidential-router-postgresql:5432/router?sslmode=disable"
             - name: ROUTER_AUTH_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: confidential-router-secrets
+                  name: confidential-router-api
                   key: auth-secret
+            - name: CR_API_SECRETS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: secrets-key
           # `/health` does a real database round trip, so an unready pod is one
           # that cannot serve rather than one that has merely started.
           startupProbe:
@@ -354,6 +396,8 @@ spec:
               mountPath: /tmp
             - name: data
               mountPath: /app/data
+            - name: gatekeeper-config
+              mountPath: "/var/run/gatekeeper"
           resources:
             limits:
               cpu: 250m
@@ -362,6 +406,70 @@ spec:
             requests:
               cpu: 250m
               memory: 1Gi
+              nvidia.com/gpu: "0"
+        # The attested egress (ADR-008 §2): the gatekeeper's own core, verifying
+        # an external model endpoint's evidence and pinning its TLS leaf before
+        # the container above proxies a prompt to it. A second container rather
+        # than a second implementation — the user-side gatekeeper and this run
+        # the same binary, so there is no verification logic that can diverge.
+        #
+        # It is driven through a file and read back over loopback, and that is
+        # the whole seam. It needs no Service (the listeners are on 127.0.0.1,
+        # which only this pod has), no kube-apiserver access (the confinement
+        # that cost the database an election is not in play here — SUP-215), and
+        # nothing writable: a static binary on a read-only root filesystem,
+        # running as the image's own non-root uid rather than the API's.
+        - name: gatekeeper
+          image: ghcr.io/super-protocol/confidential-router/gatekeeper@sha256:f6f5a2344eaa572120a567cb4cba7769720965bd3a3edb9be11dd0702fd3e6cd
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+            # 65532, the conventional "nonroot" id this image creates and `USER`s
+            # to. The pod-wide 1001 is the API image's user and does not exist
+            # here.
+            #
+            # The *group* stays the pod's, and that is load-bearing rather than
+            # an omission: router-api writes the rendered configuration 0640,
+            # owned by its own uid and gid, so sharing the group is the only
+            # thing that lets this container read it. Give it a group of its own
+            # and the egress comes up, waits for a file it can see and cannot
+            # open, and serves nothing — with both containers Ready.
+            runAsUser: 65532
+          env:
+            # Not a mount of its own: the entrypoint waits for this path to
+            # appear, so starting before router-api has rendered anything is the
+            # expected order rather than a crash loop.
+            - name: GATEKEEPER_CONFIG
+              value: "/var/run/gatekeeper/config.yaml"
+            - name: GATEKEEPER_WATCH_INTERVAL
+              value: "2s"
+          # No ports, and that is the point: every listener this process opens —
+          # the per-endpoint egress ones and the admin API — is bound to
+          # loopback, which is shared with the container above and with nothing
+          # else. A containerPort here would advertise a reachability that does
+          # not exist.
+          #
+          # No probe either. "Is it serving?" is not a question this container
+          # can answer about itself without a verdict, and a probe that reported
+          # healthy while every endpoint was fail-closed would be worse than
+          # none; the API polls the admin socket for exactly that and shows it in
+          # the console.
+          volumeMounts:
+            - name: gatekeeper-config
+              mountPath: "/var/run/gatekeeper"
+              readOnly: true
+          resources:
+            limits:
+              cpu: 100m
+              memory: 128Mi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: 100m
+              memory: 128Mi
               nvidia.com/gpu: "0"
       volumes:
         - name: config
@@ -373,6 +481,14 @@ spec:
         - name: tmp
           emptyDir: {}
         - name: data
+          emptyDir: {}
+        # The rendered sidecar configuration, and nothing else. router-api writes
+        # it — atomically, into a temporary file in this directory and then a
+        # rename — on boot and after every admin mutation; the sidecar reads it
+        # and SIGHUPs itself when the bytes actually change. It holds no secret:
+        # an upstream's API key stays sealed in the database and is injected on
+        # the egress leg one request at a time.
+        - name: gatekeeper-config
           emptyDir: {}
 ---
 # Source: confidential-router-api/templates/ingress.yaml
