@@ -1,0 +1,233 @@
+# The engine, pinned by digest for the reason every image in this repository is:
+# the deployment's evidence names what is running, and only a digest survives a
+# moved tag (marketplace spec §2.7). `tag` is used only when `digest` is emptied
+# for a local build, and records which tag the digest was resolved from.
+#
+# ---------------------------------------------------------------------------
+# Why 0.22.0 and not the newest release. This is measured, not cautious: every
+# version below was run on an sp-vm guest with one NVIDIA H200 NVL (143771 MiB,
+# driver 575.57.08, GPU in confidential-computing mode) and asked to complete
+# `"The capital of France is"` at temperature 0 with Llama 3.2 3B Instruct.
+#
+#   v0.19.1          " Paris. The capital of Italy is Rome."          correct
+#   v0.22.0          " Paris. The capital of Italy is Rome."          correct
+#   v0.24.0          "Question\nAnswer: 2\nExplanation: The"          WRONG
+#   v0.25.1          "Question\nAnswer: 2\nExplanation: The"          WRONG
+#   v0.27.1          "Question\nAnswer: 3\nExplanation: The"          WRONG
+#   v0.29.0-cu129    " are are are are are" (Qwen) / same as above    WRONG
+#   v0.30.0-cu129    will not import: ships torch 2.14.0+cu130 despite
+#                    the tag, and torchvision then raises
+#                    `operator torchvision::nms does not exist`
+#   v0.31.0-cu129    will not import: torchcodec 0.17.0 is a CUDA-13 wheel
+#                    wanting libcudart.so.13 (vLLM's requirement is
+#                    `torchcodec >= 0.14`, unbounded, so a pinned image picked
+#                    up an unpinned dependency)
+#   v0.31.0 (cu13x)  `torch.cuda.is_available()` is false — "driver too old
+#                    (found version 12090)". CUDA 13 wants r580+.
+#
+# The wrong answers are the dangerous ones: those builds start, pass a health
+# check, serve at full speed and return fluent nonsense. The same weights under
+# plain `transformers` in the same container answer "Paris.", and the wrongness
+# survives `--enforce-eager`, so it is neither the weights nor torch.compile.
+# Something between 0.22.0 and 0.24.0 miscomputes on this hardware; 0.23.0 was
+# not tested. Upstream issue not yet filed — see the SUP-230 report.
+#
+# Consequences for anyone bumping this:
+#   - Re-run `charts/tests/smoke/model-server.py` on a real card before merging
+#     a new digest. A render test and a health check both pass on a build that
+#     returns garbage.
+#   - A cu13x image needs driver r580+. Until the sp-vm guest ships one, only
+#     CUDA-12 builds are candidates at all.
+# ---------------------------------------------------------------------------
+image:
+  registry: docker.io
+  repository: vllm/vllm-openai
+  digest: sha256:0fec7ec5f3e6bc168e54899935fb0557da908a4832a1dbc88e2debcf2f889416
+  tag: v0.22.0
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+model:
+  # The name this endpoint advertises in `/v1/models`, and therefore the name a
+  # client — or the Confidential Router registering this as an external
+  # endpoint — asks for. Independent of the directory the weights land in, so
+  # changing the source repository does not rename the model.
+  id: ""
+
+  # Where the verified weights are mounted and what vLLM is pointed at. Not a
+  # user-facing choice.
+  dir: /models/current
+
+  # ---------------------------------------------------------------------------
+  # The weights, pinned file by file.
+  #
+  # The manifest is rendered into a ConfigMap, which means it is part of what the
+  # cloud digests and signs: the bytes this deployment will serve are named,
+  # by sha256, inside its published evidence. The init container downloads each
+  # file from `repo` at `revision`, hashes it while writing, and refuses to mark
+  # the volume ready on any mismatch — so "the evidence pins the weights" is a
+  # property of the running deployment, not a claim about it.
+  #
+  # `files` is not optional and not advisory. A manifest with no entries, or an
+  # entry without a sha256, fails the render: a model server that would serve
+  # whatever the network happened to return is the thing this chart exists to
+  # make impossible.
+  # ---------------------------------------------------------------------------
+  weights:
+    repo: ""
+    revision: ""
+    totalBytes: 0
+    files: []
+    # Where to fetch from. The Hugging Face resolve endpoint by default; a
+    # mirror is fine precisely because every file is hash-checked afterwards.
+    endpoint: https://huggingface.co
+
+  # --max-model-len. Left empty, vLLM takes the model's own maximum, which for
+  # several of these is far larger than the KV cache a single card can hold —
+  # and vLLM then refuses to start rather than quietly truncating. Set it.
+  maxModelLen: 32768
+
+  # --gpu-memory-utilization: the fraction of the card vLLM claims for weights
+  # plus KV cache. It is a fraction of the *whole* card, so the right value
+  # depends on the model and the card, and a 3B model given 0.9 of an H200 NVL
+  # reserves 127 GiB to hold 6.
+  gpuMemoryUtilization: 0.9
+
+  # --quantization. Empty means "whatever the checkpoint says", which is right
+  # for a checkpoint that is already quantised (compressed-tensors / FP8 carry
+  # their own config) and right for an unquantised one.
+  quantization: ""
+
+  dtype: auto
+
+  # Tool calling. `enabled` turns on `--enable-auto-tool-choice`, which is what
+  # makes `tool_choice: "auto"` work; `parser` is the vLLM tool-call parser for
+  # the model's own output format and has to match the family, not be guessed.
+  #
+  # A model whose chat template does not render `tools` at all cannot do this
+  # honestly, and the listing for such a model says so on its card rather than
+  # switching this on and hoping. See README.md.
+  toolCalling:
+    enabled: false
+    parser: ""
+
+  # An optional chat-template override, rendered into a ConfigMap and passed as
+  # `--chat-template`. Needed for exactly one reason in this repository: Gemma 2
+  # ships a template that calls `raise_exception` on a `system` message, so an
+  # ordinary OpenAI client — and LiteLLM, and the router — gets a 400 on its
+  # first request. See `apps/gemma-2-2b-it/README.md`.
+  chatTemplate: ""
+
+  # Appended to the engine command line verbatim, last, so a listing can reach a
+  # flag this chart has no opinion about.
+  extraArgs: []
+
+# The key the engine demands on every `/v1` request. It reaches the container
+# through a Secret as `VLLM_API_KEY` — never as an argument, because arguments
+# are rendered into the manifests and land in the evidence snapshot in clear
+# (marketplace trap 4).
+#
+# The chart refuses to publish an ingress without one. An inference endpoint on
+# a public hostname with no key is a GPU handed to whoever finds the name.
+apiKey: ""
+existingSecret: ""
+existingSecretKey: api-key
+
+# The public name this endpoint answers on. Required when the ingress is on.
+hostname: ""
+
+ingress:
+  enabled: true
+  # Without a class the object is created, the cloud registers the hostname and
+  # writes its DNS, and nothing serves it — the controller only picks up what
+  # names it. This is marketplace trap 1 and it reads as a DNS fault for an hour.
+  className: nginx
+  pathType: Prefix
+  # `/v1` and nothing else. vLLM leaves `/health`, `/metrics`, `/docs` and
+  # `/tokenize` outside its authentication middleware (it guards `/v1`, `/v2`,
+  # `/inference`, `/cohere` only), so a wider ingress would publish an
+  # unauthenticated metrics endpoint and an interactive API explorer next to the
+  # authenticated one.
+  paths:
+    - /v1
+  annotations:
+    # Answers stream token by token over a long-lived connection, which the
+    # default 60-second read timeout cuts off mid-sentence.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: 32m
+    # Tokens as they are produced, not a buffered answer at the end.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  tls:
+    enabled: false
+    secretName: ""
+
+service:
+  type: ClusterIP
+  port: 8000
+  targetPort: 8000
+
+# The weights volume. It survives a restart, which is the difference between a
+# pod that comes back in a minute and one that re-downloads 29 GiB first.
+persistence:
+  enabled: true
+  size: 20Gi
+  storageClass: ""
+  accessMode: ReadWriteOnce
+
+gpu:
+  # vLLM's published image is a CUDA build; it does not serve on a CPU. The
+  # chart refuses to render with this off rather than deploying a pod that
+  # starts, fails to find a device and restarts forever.
+  enabled: true
+  count: 1
+  # A device request without the runtime class leaves the pod Pending for ever
+  # rather than falling back to CPU, so the two move together.
+  runtimeClassName: nvidia
+
+# vLLM talks to its own workers over /dev/shm, and the 64Mi default is not
+# enough. A memory-backed emptyDir counts against the container's memory limit,
+# so this size is part of `resources` below, not free.
+shm:
+  size: 2Gi
+
+# requests and limits are one map on purpose: a tenant cluster space sets
+# `maxLimitRequestRatio: 1`, so a pod whose request differs from its limit is
+# refused outright.
+resources:
+  cpu: "4"
+  memory: 24Gi
+
+# The init container only downloads and hashes. `nvidia.com/gpu: "0"` is an
+# explicit zero rather than an omitted field: a GPU cluster space's LimitRange
+# defaults a missing `nvidia.com/gpu` to the reserved count, so this container
+# would otherwise ask for the card the engine needs and the pod would never
+# schedule.
+fetcher:
+  resources:
+    cpu: "2"
+    memory: 2Gi
+
+# The engine writes a torch.compile cache, a Triton cache and an HF cache. The
+# weights volume is not the place for them — it is the thing whose contents are
+# verified and pruned — so they go to an emptyDir that is thrown away with the
+# pod.
+cache:
+  size: 16Gi
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+
+podSecurityContext: {}
+podAnnotations: {}
+podLabels: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,238 @@
+{{- $name := include "swarm-model-server.fullname" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "swarm-model-server.labels" . | nindent 4 }}
+spec:
+  # One. A second replica would want a second card, and the weights volume is
+  # ReadWriteOnce.
+  replicas: 1
+  strategy:
+    # The card is held by the running pod until it exits, so a rolling update
+    # would leave the new pod Pending on a GPU quota of one for ever.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "swarm-model-server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/weights: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "swarm-model-server.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.gpu.runtimeClassName }}
+      runtimeClassName: {{ . }}
+      {{- end }}
+      initContainers:
+        # ---------------------------------------------------------------------
+        # Downloads the weights and refuses to hand over anything the manifest
+        # did not name, by sha256. Idempotent: a restarted pod with a populated
+        # volume re-hashes and starts in a minute instead of downloading again.
+        #
+        # It runs the engine image rather than a Python base, because the script
+        # is stdlib-only and a second image would be a second digest to keep
+        # true and a second registry to trust.
+        # ---------------------------------------------------------------------
+        - name: fetch-weights
+          image: {{ include "swarm-model-server.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - python3
+            - /opt/weights/fetch-weights.py
+          env:
+            - name: WEIGHTS_MANIFEST
+              value: /etc/model/manifest.json
+            - name: WEIGHTS_DIR
+              value: {{ .Values.model.dir | quote }}
+            - name: WEIGHTS_REPO
+              value: {{ .Values.model.weights.repo | quote }}
+            - name: HF_ENDPOINT
+              value: {{ .Values.model.weights.endpoint | quote }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: weights
+              mountPath: {{ .Values.model.dir }}
+            - name: weights-config
+              mountPath: /etc/model
+              readOnly: true
+            - name: fetcher
+              mountPath: /opt/weights
+              readOnly: true
+          resources:
+            requests:
+              cpu: {{ .Values.fetcher.resources.cpu | quote }}
+              memory: {{ .Values.fetcher.resources.memory | quote }}
+              # Explicit zero, not an omitted field. A GPU cluster space's
+              # LimitRange defaults a missing `nvidia.com/gpu` to the reserved
+              # count, so this container would ask for the card the engine needs
+              # and the pod would never schedule.
+              nvidia.com/gpu: "0"
+            limits:
+              cpu: {{ .Values.fetcher.resources.cpu | quote }}
+              memory: {{ .Values.fetcher.resources.memory | quote }}
+              nvidia.com/gpu: "0"
+      containers:
+        - name: vllm
+          image: {{ include "swarm-model-server.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            {{- range (include "swarm-model-server.engineArgs" . | fromJsonArray) }}
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            # The key the engine demands on every `/v1` request, by reference.
+            # The engine's equivalent command-line flag is deliberately unused:
+            # arguments are rendered into the manifests and published in the
+            # evidence snapshot in clear (marketplace trap 4).
+            - name: VLLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "swarm-model-server.secretName" . }}
+                  key: {{ include "swarm-model-server.secretKey" . }}
+            # The init container decided what this deployment may serve. Offline
+            # mode is what stops the engine quietly fetching a file the manifest
+            # never named when something is missing or renamed.
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
+            # Caches, on the throwaway volume. The weights volume is the one
+            # whose contents are verified and pruned, so nothing else lives
+            # there; and the image's default cache paths are under a root home
+            # this pod should not be writing to.
+            - name: HOME
+              value: /cache
+            - name: HF_HOME
+              value: /cache/huggingface
+            - name: XDG_CACHE_HOME
+              value: /cache/xdg
+            - name: VLLM_CACHE_ROOT
+              value: /cache/vllm
+            - name: TRITON_CACHE_DIR
+              value: /cache/triton
+            - name: TORCHINDUCTOR_CACHE_DIR
+              value: /cache/inductor
+            # Telemetry off: this endpoint serves prompts inside an enclave and
+            # should not be reporting anything about itself to a third party.
+            - name: VLLM_NO_USAGE_STATS
+              value: "1"
+            - name: DO_NOT_TRACK
+              value: "1"
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+          # `/health` is outside the engine's authentication middleware, which is
+          # what makes it usable as a probe at all. It answers only once the
+          # model is loaded, and loading 29 GiB of weights and compiling the
+          # graphs takes minutes — hence a startup probe with room rather than a
+          # liveness probe that would restart the pod halfway through.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 180
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            - name: weights
+              mountPath: {{ .Values.model.dir }}
+              readOnly: true
+            - name: cache
+              mountPath: /cache
+            - name: shm
+              mountPath: /dev/shm
+            {{- if .Values.model.chatTemplate }}
+            - name: chat-template
+              mountPath: /etc/model
+              readOnly: true
+            {{- end }}
+          resources:
+            requests:
+              cpu: {{ .Values.resources.cpu | quote }}
+              memory: {{ .Values.resources.memory | quote }}
+              nvidia.com/gpu: {{ .Values.gpu.count | quote }}
+            limits:
+              cpu: {{ .Values.resources.cpu | quote }}
+              memory: {{ .Values.resources.memory | quote }}
+              nvidia.com/gpu: {{ .Values.gpu.count | quote }}
+      volumes:
+        - name: weights
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ $name }}-weights
+          {{- else }}
+          emptyDir:
+            sizeLimit: {{ .Values.persistence.size }}
+          {{- end }}
+        - name: weights-config
+          configMap:
+            name: {{ $name }}-weights
+        - name: fetcher
+          configMap:
+            name: {{ $name }}-weights
+            items:
+              - key: fetch-weights.py
+                path: fetch-weights.py
+        - name: cache
+          emptyDir:
+            sizeLimit: {{ .Values.cache.size }}
+        # vLLM's workers talk over /dev/shm and the 64Mi default is not enough.
+        # Memory-backed, so this counts against the container's memory limit —
+        # `resources.memory` includes it.
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.shm.size }}
+        {{- if .Values.model.chatTemplate }}
+        - name: chat-template
+          configMap:
+            name: {{ $name }}-chat-template
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

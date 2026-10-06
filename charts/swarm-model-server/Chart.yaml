@@ -1,0 +1,8 @@
+apiVersion: v2
+name: swarm-model-server
+description: An authenticated, OpenAI-compatible model endpoint served by vLLM from weights pinned by sha256.
+type: application
+version: 0.1.0
+# The engine. Bumping it is a chart change, because the serving behaviour, the
+# tool-call parsers and the CUDA floor all move with it.
+appVersion: "0.22.0"
