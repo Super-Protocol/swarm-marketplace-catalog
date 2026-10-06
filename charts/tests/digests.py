@@ -24,6 +24,9 @@ PLACEHOLDER = "sha256:" + "0" * 64
 IMAGES = {
     "patroni-postgresql": [
         "image",
+        "etcd.image",
+        "etcd.bootstrapImage",
+        "router.image",
     ],
     "confidential-s3": [
         "gateway.image",

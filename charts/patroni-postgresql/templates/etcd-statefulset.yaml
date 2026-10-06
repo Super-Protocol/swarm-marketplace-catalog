@@ -1,0 +1,187 @@
+{{- include "patroni-postgresql.validate" . -}}
+{{- $fullname := include "patroni-postgresql.etcdFullname" . -}}
+{{- /*
+Patroni's distributed configuration store.
+
+Three members of vanilla etcd, bootstrapped statically: every member's name and peer
+URL is in the same `initial-cluster` string on every member, so a member's identity is
+a function of this manifest and of nothing written down at run time. That is what
+makes the volumes disposable — a member that comes back with an empty one re-derives
+the same member id from the same string and is admitted to the cluster it was already
+part of, with no `member add` and nothing to reconcile. The one thing that cannot be
+static is which of etcd's two bootstrap modes it starts in; see the init container
+below and the ConfigMap it reads.
+
+What it holds is written out at `etcd` in values.yaml: a leader lock, a member list
+and the live Patroni configuration, all re-derivable from the PostgreSQL instances
+themselves. Hence `emptyDir`, and hence no PVC to lose.
+*/ -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "patroni-postgresql.etcdLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.etcd.replicaCount }}
+  serviceName: {{ $fullname }}
+  {{- /*
+  `Parallel`, unlike the database's `OrderedReady`. A member is ready when it has a
+  quorum, and a quorum is the other members — so starting them one at a time, each
+  waiting for the previous one to be ready, is a cluster that never forms.
+  */}}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "patroni-postgresql.etcdSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "patroni-postgresql.etcdSelectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: dcs
+      {{- with .Values.etcd.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.etcd.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.etcd.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.etcd.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.etcd.podAntiAffinity.enabled }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "patroni-postgresql.etcdSelectorLabels" . | nindent 18 }}
+              topologyKey: {{ .Values.etcd.podAntiAffinity.topologyKey }}
+      {{- end }}
+      {{- /*
+      Which bootstrap mode this member starts in — the whole of the decision is in the
+      ConfigMap's comment. It writes etcd's configuration file, because etcd takes its
+      configuration from flags or from a file and never from both, and the server image
+      is distroless: there is no shell in it to decide anything with.
+      */}}
+      initContainers:
+        - name: dcs-bootstrap
+          image: {{ include "patroni-postgresql.etcdBootstrapImage" . }}
+          imagePullPolicy: {{ .Values.etcd.bootstrapImage.pullPolicy }}
+          {{- with .Values.etcd.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          command:
+            - /bin/sh
+            - /etc/etcd/bootstrap.sh
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            {{- toYaml .Values.etcd.bootstrapResources | nindent 12 }}
+          volumeMounts:
+            - name: scripts
+              mountPath: /etc/etcd
+              readOnly: true
+            - name: config
+              mountPath: /run/etcd
+            - name: data
+              mountPath: /var/lib/etcd
+      containers:
+        - name: etcd
+          image: {{ include "patroni-postgresql.etcdImage" . }}
+          imagePullPolicy: {{ .Values.etcd.image.pullPolicy }}
+          {{- with .Values.etcd.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- /*
+          `command` and not `args`: the image declares no entry point of its own, so an
+          `args` on its own would be read as the command and the container would try to
+          execute a flag.
+          */}}
+          command:
+            - /usr/local/bin/etcd
+            - --config-file=/run/etcd/etcd.conf.yml
+          ports:
+            - name: client
+              containerPort: {{ .Values.etcd.clientPort }}
+              protocol: TCP
+            - name: peer
+              containerPort: {{ .Values.etcd.peerPort }}
+              protocol: TCP
+          {{- /*
+          The image is distroless: there is no shell in it, and `etcdctl endpoint
+          health` as an exec probe would be a second process reading a second copy of
+          the flags. `/livez` is "this member's raft loop is running", `/readyz` is
+          "and it is part of a quorum" — which is the distinction between restarting
+          a member and taking it out of the Service.
+          */}}
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: client
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: client
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          {{- with .Values.etcd.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /run/etcd
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/etcd
+      volumes:
+        - name: scripts
+          configMap:
+            name: {{ $fullname }}
+            defaultMode: 0555
+        {{- /*
+        The configuration the init container wrote, which is this member's answer to
+        the one question that could not be answered in the manifest.
+        */}}
+        - name: config
+          emptyDir: {}
+        {{- /*
+        Deliberately not a PVC. A cluster space hands every PVC the node's
+        per-boot-ephemeral disk and pins it to that node, so a PVC here would buy no
+        durability and would cost a member that can never be rescheduled. The DCS does
+        not need durability — see `etcd` in values.yaml.
+        */}}
+        - name: data
+          emptyDir: {}

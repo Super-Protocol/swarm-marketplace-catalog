@@ -591,7 +591,7 @@ else
   fail "charts/tests/inventory.py confidential-router-api"
 fi
 
-note "patroni-postgresql pins the image it ships by a real digest"
+note "patroni-postgresql pins every image it ships by a real digest"
 if output=$(python3 charts/tests/digests.py patroni-postgresql); then
   printf '%s\n' "$output"
 else
@@ -642,8 +642,31 @@ refuses "an application role name that would have to be quoted" "lowercase lette
 refuses "an unpinned image" "pinned by digest" \
   "${base_pg[@]}" --set image.digest= --set image.tag=
 
-refuses "a port Patroni will not write into the leader endpoints" "must be 5432" \
-  "${base_pg[@]}" --set service.port=5433
+# The DCS and the router can make the database unreachable as thoroughly as the
+# database can, and each of these is a way of doing it that renders perfectly.
+refuses "an even number of etcd members" "strictly worse than an odd count" \
+  "${base_pg[@]}" --set etcd.replicaCount=2
+
+refuses "a DCS disruption budget that permits the quorum" "nobody can renew" \
+  "${base_pg[@]}" --set etcd.podDisruptionBudget.maxUnavailable=2
+
+refuses "a router budget that permits every router" "nothing can reach" \
+  "${base_pg[@]}" --set router.podDisruptionBudget.maxUnavailable=2
+
+refuses "two router listeners on one port" "cannot bind the same port" \
+  "${base_pg[@]}" --set router.standbyPort=5432
+
+refuses "a database with no router at all" "no path around it" \
+  "${base_pg[@]}" --set router.replicaCount=0
+
+refuses "an unpinned DCS image" "etcd.image.digest is empty" \
+  "${base_pg[@]}" --set etcd.image.digest= --set etcd.image.tag=
+
+refuses "an unpinned router image" "router.image.digest is empty" \
+  "${base_pg[@]}" --set router.image.digest= --set router.image.tag=
+
+refuses "an unpinned bootstrap image" "etcd.bootstrapImage.digest is empty" \
+  "${base_pg[@]}" --set etcd.bootstrapImage.digest= --set etcd.bootstrapImage.tag=
 
 refuses "replacing the one-per-node rule by accident" "the one that applies" \
   "${base_pg[@]}" --set 'affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].weight=1'

@@ -26,14 +26,21 @@ spec:
       {{- end }}
     spec:
       {{- /*
-      Off, and it matters. The kubelet would otherwise inject one environment
-      variable per Service in the namespace, and `configure_spilo.py` builds
-      Patroni's DCS configuration by scanning the environment for names that start
-      with a DCS's name — so a Service called `etcd` next door would configure this
-      cluster to look for its leader in an etcd nobody runs.
+      Off, and it is load-bearing. The kubelet would otherwise inject one environment
+      variable per Service in the namespace, and `configure_spilo.py` picks Patroni's
+      DCS by scanning the environment for names beginning with a DCS's name, in a
+      fixed order that puts `consul` and `zookeeper` ahead of `etcd3` — so a Service
+      called `consul` next door would point this cluster at a store nobody runs, in
+      preference to the one configured below.
       */}}
       enableServiceLinks: false
-      serviceAccountName: {{ include "patroni-postgresql.serviceAccountName" . }}
+      {{- /*
+      Patroni makes no Kubernetes API call in this configuration, and this is the
+      line that says so in a way a reader can check: with no token mounted there is
+      no credential in the pod to make one with. The Role and RoleBinding the
+      Endpoints-mode chart needed are gone with it.
+      */}}
+      automountServiceAccountToken: false
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -99,41 +106,38 @@ spec:
             - name: APIPORT
               value: {{ .Values.patroni.apiPort | quote }}
             {{- /*
-            Patroni's own address, and the namespace it keeps its leader lock in.
-            Without POD_NAMESPACE every cluster would take its lock in `default`,
-            where it has no rights and no neighbours it should be able to see.
+            Patroni's own address. `POD_IP` is what Spilo advertises as this member's
+            connect address, both in the DCS and to the standbys that stream from it.
             */}}
             - name: POD_IP
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
+            {{- /*
+            The namespace, twice over. `POD_NAMESPACE` is what `$(POD_NAMESPACE)`
+            below expands to — the kubelet substitutes variables declared earlier in
+            this same list, which is how the etcd endpoints can be FQDNs without the
+            namespace being rendered into an attested manifest. `NAMESPACE` is
+            Patroni's own key prefix: the lock lands on
+            `/<namespace>/<scope>/leader` instead of the shared `/service/` root.
+            */}}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: NAMESPACE
+              value: $(POD_NAMESPACE)
             {{- /*
-            The Kubernetes API as the leader election store, in Endpoints mode —
-            see `patroni.labels` in values.yaml for why it is not ConfigMaps.
-            `KUBERNETES_BYPASS_API_SERVICE` is Spilo's default and is turned off
-            here: it reads the `kubernetes` Endpoints out of the `default`
-            namespace, which nothing namespace-scoped may do.
+            The leader election store: the etcd this chart installs, by each member's
+            stable name. No Kubernetes API, for the reason written out at
+            `patroni.*` in values.yaml — the confinement a cluster space puts around
+            tenant pods blocks pod → kube-apiserver, and the Endpoints-mode chart
+            could not bootstrap behind it (SUP-215).
             */}}
-            - name: DCS_ENABLE_KUBERNETES_API
-              value: "true"
-            - name: KUBERNETES_BYPASS_API_SERVICE
-              value: "false"
-            - name: KUBERNETES_LABELS
-              value: {{ .Values.patroni.labels | toJson | quote }}
-            - name: KUBERNETES_SCOPE_LABEL
-              value: {{ .Values.patroni.scopeLabel | quote }}
-            - name: KUBERNETES_ROLE_LABEL
-              value: {{ .Values.patroni.roleLabel | quote }}
-            - name: KUBERNETES_LEADER_LABEL_VALUE
-              value: {{ .Values.patroni.leaderLabelValue | quote }}
-            - name: KUBERNETES_STANDBY_LEADER_LABEL_VALUE
-              value: {{ .Values.patroni.leaderLabelValue | quote }}
-            - name: KUBERNETES_FOLLOWER_LABEL_VALUE
-              value: {{ .Values.patroni.followerLabelValue | quote }}
+            - name: ETCD3_PROTOCOL
+              value: http
+            - name: ETCD3_HOSTS
+              value: {{ include "patroni-postgresql.etcdHosts" . | quote }}
             {{- if not .Values.requireSsl }}
             - name: ALLOW_NOSSL
               value: "true"

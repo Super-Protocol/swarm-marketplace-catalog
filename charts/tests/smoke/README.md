@@ -12,6 +12,11 @@ a request path: it is whether `patroni-postgresql` elects a leader, promotes a s
 the leader's node is taken away, and rebuilds an instance whose volume was wiped. None of
 that is visible in a render, and all of it is the reason the chart exists.
 
+It also runs with **pod → kube-apiserver blocked**, which is what a cluster space does to
+its tenant pods and what the 0.1.0 chart could not bootstrap behind (SUP-215). Behind that
+block the Kubernetes-DCS version sits at 0/3 forever; this run is the evidence that the
+etcd version does not.
+
 ## patroni-postgresql
 
 ```bash
@@ -20,23 +25,47 @@ KEEP=1 charts/tests/smoke/patroni.sh
 ```
 
 Three *schedulable* nodes, because the chart's one-per-node anti-affinity is `required` and
-a smaller cluster would leave two instances Pending and prove nothing. The Spilo image is
+a smaller cluster would leave two instances Pending and prove nothing. Every image is
 public, so this pulls rather than builds — onto every node up front, since otherwise
-`podManagementPolicy: OrderedReady` turns it into three sequential 600 MB pulls.
+`podManagementPolicy: OrderedReady` turns Spilo into three sequential 600 MB pulls.
 
+How the confinement is simulated: CoreDNS and the local-path provisioner are moved to the
+control-plane node, which stays unconfined — in a real cluster space they are on the
+platform's side of the boundary for the same reason — and then every worker gets a `DROP`
+in its `FORWARD` chain for the API server's address. Pod traffic crosses `FORWARD`;
+host-network traffic does not, so the kubelet, kube-proxy, kindnet and `kubectl exec` are
+all untouched, and a pod gets the TCP timeout a confined space gives it rather than a
+refusal.
+
+- the API server is unreachable from inside a database pod, the DCS on the same namespace's
+  network is reachable, and no pod in the deployment has a service account token to make an
+  API call with even if it could;
+- the DCS's three members come up on three distinct nodes, each having bootstrapped the
+  cluster rather than tried to join one;
 - three instances become ready on three distinct nodes, which means each cloned itself from
   the leader before reporting in;
 - `patronictl list` shows one leader, one synchronous standby and one asynchronous replica —
   the shape `synchronous_node_count: 1` of two standbys is supposed to produce;
 - the application role and database the post-init hook created exist, and the application
   connects **through the master Service** and lands on the primary;
+- the master Service resolves to the two router instances, which is what makes "connect to
+  the database" mean "connect to the leader" now that the leader lock is in etcd;
 - a committed row survives the leader's node being cordoned and its pod destroyed: a standby
-  is promoted, the master Service follows it without anything watching for a failover, and
-  the row is still there. The cordon is load-bearing — see the comment in the script;
+  is promoted, the master Service follows it, and the row is still there. The cordon is
+  load-bearing — see the comment in the script. The run prints how long the name took to
+  mean the new primary, which is Patroni's promotion plus the router's health check,
+  readiness and endpoints;
 - the destroyed instance re-joins and streams again;
 - and then the SUP-179 shape itself: an instance whose **volume** is deleted along with its
   pod re-clones from the current leader and comes back with the data. That is the case a
-  single-instance database came back from healthy and empty.
+  single-instance database came back from healthy and empty;
+- one DCS member is thrown away — the rolling-update and drained-node case — and is
+  re-admitted to the cluster it was already a member of with an empty volume;
+- and then **every** DCS member at once, which is the cloud-wide reboot: the leader lock,
+  the member list and the cluster configuration all go, a fresh cluster forms from the same
+  static member list, the PostgreSQL members re-register into it, and the leader is still
+  the same leader — because failsafe mode held the lock while the store was gone. A write
+  lands afterwards, which is the only way to know that all of it ended somewhere usable.
 
 ## confidential-s3
 

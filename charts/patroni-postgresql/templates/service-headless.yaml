@@ -1,10 +1,13 @@
 {{- /*
-The StatefulSet's governing Service: stable per-pod DNS and nothing else. Nothing in
-this chart connects through it — Patroni finds its members by listing pods, and
-clients go to the master or replica Service — but a StatefulSet has to name one, and
-naming one of those two would mean two different things writing one Endpoints object.
+The StatefulSet's governing Service: stable per-pod DNS.
 
-`publishNotReadyAddresses`, so a pod that is still cloning still has a name.
+This is what the router's backends are named against — one entry per instance, by the
+name it will always have — and `publishNotReadyAddresses` is what makes that work from
+the first second: an instance that is still cloning has to be resolvable for the
+router to be able to health-check it and find out that it is not ready yet.
+
+Patroni does not use it. Its members find each other through the DCS, and an
+application goes to the master or the replica Service.
 */ -}}
 apiVersion: v1
 kind: Service

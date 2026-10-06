@@ -1,0 +1,19 @@
+{{- if .Values.etcd.podDisruptionBudget.enabled }}
+{{- include "patroni-postgresql.validate" . -}}
+{{- /*
+A drain takes one member. Two of three is the quorum, and a DCS without a quorum is a
+leader whose lock cannot be renewed: Patroni demotes it, every instance of the
+database is healthy, and nothing can write.
+*/ -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "patroni-postgresql.etcdFullname" . }}
+  labels:
+    {{- include "patroni-postgresql.etcdLabels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.etcd.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "patroni-postgresql.etcdSelectorLabels" . | nindent 6 }}
+{{- end }}

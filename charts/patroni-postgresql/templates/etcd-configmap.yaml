@@ -1,0 +1,120 @@
+{{- include "patroni-postgresql.validate" . -}}
+{{- $fullname := include "patroni-postgresql.etcdFullname" . -}}
+{{- $client := .Values.etcd.clientPort | int -}}
+{{- /*
+How a member of a disposable etcd starts, which is the one thing about this DCS that
+cannot be written down in a manifest.
+
+A member whose volume is empty is in one of two situations and they need opposite
+flags. If no cluster exists — a first deployment, or every node rebooted at once and
+took every `emptyDir` with it — it has to bootstrap one from the static member list
+(`initial-cluster-state: new`). If the cluster exists without it, because this one pod
+was replaced, it has to join (`existing`). Each flag is fatal in the other's case:
+`new` against a live cluster is refused with "member has already been bootstrapped",
+and `existing` with nothing to join waits forever.
+
+Joining is not only a flag, either. The member id etcd derives from a name and a peer
+URL is stable, so a replaced pod computes the id the survivors still have in their
+member list — and a member they believe they have been talking to is one they send a
+heartbeat to rather than a snapshot, which a member with an empty raft log answers by
+panicking:
+
+    tocommit(108) is out of range [lastIndex(0)].
+    Was the raft log corrupted, truncated, or lost?
+
+So the old identity is handed in and a new one taken out: `member remove`, then
+`member add`, then start. That is etcd's documented recovery for a member that has lost
+its data, and it is what the first version of this chart's smoke test found out the
+hard way.
+
+All of it runs in an init container because etcd's own image is distroless — no shell,
+no `wget`, nothing to decide anything with — and the result is delivered as a
+configuration file because etcd reads its configuration from flags or from a file and
+never from both.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "patroni-postgresql.etcdLabels" . | nindent 4 }}
+data:
+  bootstrap.sh: |
+    #!/bin/sh
+    set -eu
+
+    data_dir=/var/lib/etcd/data
+    output=/run/etcd/etcd.conf.yml
+    self={{ include "patroni-postgresql.podFqdnShell" (dict "pod" "${POD_NAME}" "service" $fullname "context" .) }}
+    peers="{{ range $i := until (.Values.etcd.replicaCount | int) }}{{ $pod := printf "%s-%d" $fullname $i }}{{ include "patroni-postgresql.podFqdnShell" (dict "pod" $pod "service" $fullname "context" $) }} {{ end }}"
+
+    # etcd's v3 API over its gRPC gateway, which is plain JSON over HTTP and reachable
+    # with the `wget` this image has. `member remove` and `member add` need a quorum, so
+    # a failure here exits non-zero and the kubelet tries the whole decision again —
+    # which is the right behaviour for "the cluster is in the middle of something".
+    post() {
+      wget -q -T 10 -O - --post-data "$2" --header 'Content-Type: application/json' "$1"
+    }
+
+    state=new
+    if [ -d "$data_dir/member" ]; then
+      # This member's own write-ahead log is here, which is what etcd restarts from: it
+      # ignores every initial-cluster setting when a log is present, and the membership
+      # it rejoins with is the one recorded in the log rather than the one below.
+      state=existing
+      echo "dcs-bootstrap: $POD_NAME has its own write-ahead log" >&2
+    else
+      # Swept three times rather than once, because this verdict is taken exactly once
+      # per pod and the etcd container crash-loops on a wrong one. A probe that failed
+      # for three seconds while the cluster was in fact alive would otherwise cost a
+      # pod delete to undo — and the init container, having already exited, would not
+      # be the thing that noticed. A genuine cold start pays for the extra sweeps in
+      # unresolvable names and refused connections, both of which fail immediately.
+      serving=
+      attempt=1
+      while [ -z "$serving" ] && [ "$attempt" -le 3 ]; do
+        [ "$attempt" -eq 1 ] || sleep 3
+        for peer in $peers; do
+          case "$peer" in "$POD_NAME".*) continue ;; esac
+          # `/health` and not `/version`: a member answers it 200 only once it has a
+          # quorum. A member that is up but waiting for peers is a cluster that does
+          # not exist yet, and this member is one of the peers it is waiting for.
+          if wget -q -T 3 -O /dev/null "http://$peer:{{ $client }}/health" 2>/dev/null; then
+            serving=$peer
+            break
+          fi
+        done
+        attempt=$((attempt + 1))
+      done
+
+      if [ -n "$serving" ]; then
+        state=existing
+        old=$(post "http://$serving:{{ $client }}/v3/cluster/member/list" '{}' \
+                | sed 's/},{/}\n{/g' | grep "\"name\":\"$POD_NAME\"" \
+                | sed -n 's/.*"ID":"\([0-9]*\)".*/\1/p' || true)
+        if [ -n "$old" ]; then
+          echo "dcs-bootstrap: $POD_NAME lost its volume; retiring member $old" >&2
+          post "http://$serving:{{ $client }}/v3/cluster/member/remove" "{\"ID\":\"$old\"}" >/dev/null
+        fi
+        echo "dcs-bootstrap: admitting $POD_NAME at $self through $serving" >&2
+        post "http://$serving:{{ $client }}/v3/cluster/member/add" \
+          "{\"peerURLs\":[\"http://$self:{{ .Values.etcd.peerPort }}\"]}" >/dev/null
+      fi
+    fi
+
+    echo "dcs-bootstrap: $POD_NAME starts with initial-cluster-state=$state" >&2
+    cat > "$output" <<CONFIG
+    name: $POD_NAME
+    data-dir: $data_dir
+    listen-client-urls: http://0.0.0.0:{{ $client }}
+    advertise-client-urls: http://$self:{{ $client }}
+    listen-peer-urls: http://0.0.0.0:{{ .Values.etcd.peerPort }}
+    initial-advertise-peer-urls: http://$self:{{ .Values.etcd.peerPort }}
+    initial-cluster: {{ include "patroni-postgresql.etcdInitialClusterShell" . }}
+    initial-cluster-token: {{ $fullname }}
+    initial-cluster-state: $state
+    auto-compaction-mode: periodic
+    auto-compaction-retention: {{ .Values.etcd.autoCompactionRetention | quote }}
+    quota-backend-bytes: {{ .Values.etcd.quotaBackendBytes | int64 }}
+    log-level: {{ .Values.etcd.logLevel }}
+    CONFIG

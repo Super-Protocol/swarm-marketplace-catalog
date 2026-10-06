@@ -2,16 +2,16 @@
 {{- /*
 The address an application connects to, and the only one it needs.
 
-It has **no selector**. The Endpoints object behind it is Patroni's leader lock:
-Patroni writes the current leader's pod IP into it as part of winning the election,
-so this Service follows a failover because the failover *is* the write. Give it a
-selector and Kubernetes' endpoints controller takes the object over, overwrites what
-Patroni put there, and the name resolves to all three instances — two of which
-refuse writes.
+It selects the router's pods, not the database's. Which instance is the leader is a
+question only Patroni can answer; the router asks it on every check and keeps exactly
+one backend up, and the router's own readiness fails while there is no leader at all —
+so this name resolves to a proxy that has somewhere to send the connection, or to
+nothing.
 
-The port is named `postgresql` because that is the name Patroni puts in the
-Endpoints it writes, and a selector-less Service matches its ports to an Endpoints
-subset's by name.
+It used to have no selector, and the Endpoints object behind it used to be Patroni's
+leader lock: the lock moved and the Service followed, because the two were one write.
+That is what the Kubernetes DCS bought, and it is what a confined cluster space cannot
+have (SUP-215).
 */ -}}
 apiVersion: v1
 kind: Service
@@ -19,15 +19,16 @@ metadata:
   name: {{ include "patroni-postgresql.scope" . }}
   labels:
     {{- include "patroni-postgresql.labels" . | nindent 4 }}
-    {{- include "patroni-postgresql.dcsLabels" . | nindent 4 }}
   {{- with .Values.service.master.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
   type: ClusterIP
+  selector:
+    {{- include "patroni-postgresql.routerSelectorLabels" . | nindent 4 }}
   ports:
     - name: postgresql
       port: {{ .Values.service.port }}
-      targetPort: {{ .Values.service.port }}
+      targetPort: primary
       protocol: TCP
