@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.6.1
+    helm.sh/chart: confidential-router-api-0.6.2
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.3.2"
@@ -24,7 +24,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.6.1
+    helm.sh/chart: confidential-router-api-0.6.2
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.3.2"
@@ -156,7 +156,7 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.6.1
+    helm.sh/chart: confidential-router-api-0.6.2
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.3.2"
@@ -179,7 +179,7 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.6.1
+    helm.sh/chart: confidential-router-api-0.6.2
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.3.2"
@@ -196,7 +196,7 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: 86895a962292e79252226b144941de3e6a0488411e662ee5623fb47aa4f5eb53
+        checksum/config: bf8d0f67f3a2ac23c46ee331d87b16b95ca4dafd3f6b695c02dadef3d6bf3ecf
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr
@@ -248,11 +248,11 @@ spec:
               mountPath: /app/data
           resources:
             limits:
-              cpu: 50m
+              cpu: 100m
               memory: 128Mi
               nvidia.com/gpu: "0"
             requests:
-              cpu: 50m
+              cpu: 100m
               memory: 128Mi
               nvidia.com/gpu: "0"
       containers:
@@ -340,7 +340,7 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.6.1
+    helm.sh/chart: confidential-router-api-0.6.2
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.3.2"

@@ -2,7 +2,7 @@ apiVersion: v2
 name: confidential-router-api
 description: The Confidential Router's OpenAI-compatible gateway and console GraphQL API, with the replicated PostgreSQL it stores generations and sessions in.
 type: application
-version: 0.6.1
+version: 0.6.2
 appVersion: "0.3.2"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous
@@ -19,7 +19,7 @@ dependencies:
   # always was. Off for a deployment that brings its own database: set
   # `postgresql.enabled: false` and point `database.*` at it.
   - name: patroni-postgresql
-    version: 0.2.1
+    version: 0.2.2
     repository: "file://../patroni-postgresql"
     alias: postgresql
     condition: postgresql.enabled

@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.10.2"
+  version: "0.10.3"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -383,11 +383,13 @@ resources:
   # listing.
   #
   # 0.10.0 adds five more small pods to it: three etcd members holding Patroni's leader lock, and
-  # two routers in front of the leader (SUP-215). That is +500m and +0.7 GB of limits, and no
+  # two routers in front of the leader (SUP-215). That is +500m and +0.8 GB of limits, and no
   # storage at all — the DCS keeps nothing it would need a volume for, so its members are
   # `emptyDir` and count against the node's ephemeral disk rather than against this quota.
+  # The extra 0.1 GB is the two routers sitting on the cluster-space memory floor (128Mi each)
+  # instead of 64Mi, which that LimitRange refuses.
   #
-  # The rendered limits of a default deployment now come to 3.85 CPU / 10.45 GB / 54 GB; what is
+  # The rendered limits of a default deployment now come to 3.85 CPU / 10.6 GB / 54 GB; what is
   # declared here keeps the headroom the earlier numbers had, so neither minimum moves.
   min:
     cpu: "5"
@@ -634,6 +636,38 @@ components:
           postgresql:
             persistence:
               size: "{{ params.databaseStorage }}"
+            # Chart 0.6.1 (patroni-postgresql 0.2.1) asks for less than a cluster space's
+            # LimitRange allows, so admission rejects the pods before they exist. The floor
+            # is 100m CPU and 128Mi, and the request has to equal the limit. 0.6.2 carries
+            # the same numbers as defaults; these keep a deployment of 0.6.1 admissible.
+            etcd:
+              bootstrapResources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                  nvidia.com/gpu: "0"
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+                  nvidia.com/gpu: "0"
+            router:
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                  nvidia.com/gpu: "0"
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+                  nvidia.com/gpu: "0"
+          migrations:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 100m
+                memory: 128Mi
         patches:
           - op: replace
             path: auth.password.enabled
