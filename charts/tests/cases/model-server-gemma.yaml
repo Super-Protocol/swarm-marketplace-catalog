@@ -1,0 +1,51 @@
+# Generated from apps/gemma-2-2b-it/app.yaml by charts/tests/cases/model-server-cases.py.
+# Do not hand-edit: the point of this file is that the golden render is the
+# render the listing produces, so a listing change shows up as a golden diff.
+apiKey: TESTKEYtestkey0123456789abcdefAB
+hostname: gemma.models.example
+model:
+  chatTemplate: "{{ bos_token }}\n{%- if messages[0]['role'] == 'system' -%}\n    {%- set system_message\
+    \ = messages[0]['content'] | trim + '\\n\\n' -%}\n    {%- set loop_messages = messages[1:] -%}\n{%-\
+    \ else -%}\n    {%- set system_message = '' -%}\n    {%- set loop_messages = messages -%}\n{%- endif\
+    \ -%}\n{%- for message in loop_messages -%}\n    {%- if (message['role'] == 'user') != (loop.index0\
+    \ % 2 == 0) -%}\n        {{- raise_exception('Conversation roles must alternate user/assistant/user/assistant/...')\
+    \ -}}\n    {%- endif -%}\n    {%- set role = 'model' if message['role'] == 'assistant' else message['role']\
+    \ -%}\n    {{- '<start_of_turn>' + role + '\\n' -}}\n    {%- if loop.first and role == 'user' -%}{{-\
+    \ system_message -}}{%- endif -%}\n    {{- message['content'] | trim + '<end_of_turn>\\n' -}}\n{%-\
+    \ endfor -%}\n{%- if add_generation_prompt -%}\n    {{- '<start_of_turn>model\\n' -}}\n{%- endif -%}\n"
+  gpuMemoryUtilization: 0.85
+  id: gemma-2-2b-it
+  maxModelLen: 8192
+  toolCalling:
+    enabled: false
+  weights:
+    files:
+    - path: config.json
+      sha256: e3885c56a32ca83566f849283b402006bbb100a02c43aca3fe0c90dc62808893
+      size: 913
+    - path: generation_config.json
+      sha256: ebcbf26935f7b454678f1bfb7fa9142dc04f5210e73be8fccba44a9d59f5a986
+      size: 209
+    - path: model.safetensors
+      sha256: bf06a1e6cfe1610beb98a2975e5602e7fc108d902b3ff9dd62282d749c7a2394
+      size: 5228717512
+    - path: special_tokens_map.json
+      sha256: baec30ea10906f16adb8c18af7a34023002c1746542612b8b41c9f09e1351351
+      size: 636
+    - path: tokenizer.json
+      sha256: 3f289bc05132635a8bc7aca7aa21255efd5e18f3710f43e3cdb96bcd41be4922
+      size: 17525357
+    - path: tokenizer.model
+      sha256: 61a7b147390c64585d6c3543dd6fc636906c9af3865a5548f27f31aee1d4c8e2
+      size: 4241003
+    - path: tokenizer_config.json
+      sha256: e5ac0f1cfb5f450763d368edacbb2448a3c02c8d8f7f98d963a820751fb0ddc3
+      size: 47022
+    repo: unsloth/gemma-2-2b-it
+    revision: 457f2e15bf550c227ce6ad86e2ec108d3e42c106
+    totalBytes: 5250532652
+persistence:
+  size: 8Gi
+resources:
+  cpu: '4'
+  memory: 12Gi

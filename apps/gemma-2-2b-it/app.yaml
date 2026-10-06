@@ -1,0 +1,298 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: AppDefinition
+
+metadata:
+  name: gemma-2-2b-it
+  title: Gemma 2 2B IT
+  description: Google's Gemma 2 2B instruction-tuned on an authenticated, OpenAI-compatible endpoint whose deployment publishes signed evidence of the weights it is serving. This model cannot do tool calling — see the README before you plan on it.
+  version: "0.1.0"
+  category: ai-inference
+  sourceRepo: https://huggingface.co/google/gemma-2-2b-it
+  license: LicenseRef-Gemma-Terms-of-Use
+  tags:
+    - ai
+    - llm
+    - inference
+    - openai-compatible
+    - gemma
+    - attestation
+    - no-tool-calling
+
+ui:
+  sections:
+    # One field above Advanced, and it arrives filled in. Everything a model
+    # endpoint needs to be useful — the key, the context length, the share of the
+    # card — already has an answer.
+    - id: access
+      title: Access
+      description: >-
+        Where the OpenAI-compatible API is served. This is the name that ends up in somebody
+        else's configuration: a client's `base_url`, or the Confidential Router's
+        "Add external model" field.
+      fields:
+        - parameterId: apiHostname
+          widget: hostname
+
+    - id: advanced
+      title: Advanced
+      description: >-
+        Every field below is answered. The key is generated and shown with the deployment's
+        outputs, the context length is set to something a single card holds comfortably, and the
+        GPU share is sized for the smallest accelerator this listing accepts. Open this to bring
+        your own key, to trade context length against concurrency, or to give the engine more of
+        the card.
+      fields:
+        - parameterId: apiKey
+          widget: password
+        - parameterId: maxModelLen
+          widget: select
+        - parameterId: gpuMemoryUtilization
+          widget: number
+
+parameters:
+  - id: apiHostname
+    type: string
+    title: API hostname
+    description: >-
+      Where `/v1` is served. Take the one offered and the DNS is written for you; bring your own
+      and point it at this cloud's gateway before publishing the deployment.
+    required: true
+    validation:
+      pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+
+  - id: apiKey
+    type: string
+    title: API key
+    description: >-
+      Demanded on every `/v1` request as `Authorization: Bearer …`. Generated if left blank and
+      shown below once this is deployed, together with a connection link that carries it. Letters
+      and digits only — the key travels inside a URL fragment, and punctuation there would split
+      the link on its own separators.
+    sensitive: true
+    generated: true
+    validation:
+      minLength: 32
+      pattern: "^[A-Za-z0-9]+$"
+
+  - id: maxModelLen
+    type: integer
+    title: Context length
+    description: >-
+      The longest prompt-plus-answer the endpoint accepts. It is not free: this model needs
+      104 KiB of KV cache per token, so 0.8 GiB for one sequence at the default 8192 and 0.8 GiB at the model's own 8192. A longer
+      context means fewer requests in flight at once, and asking for more than the card can hold
+      makes the engine refuse to start rather than truncate quietly.
+    default: 8192
+    options:
+      source:
+        type: static
+        values:
+          - value: 2048
+            label: "2 048 tokens"
+          - value: 4096
+            label: "4 096 tokens"
+          - value: 8192
+            label: "8 192 tokens"
+
+  - id: gpuMemoryUtilization
+    type: number
+    title: Share of the GPU
+    description: >-
+      The fraction of the card the engine claims for weights and KV cache. A fraction of the
+      *whole* card, so the default is chosen for the smallest accelerator this listing accepts
+      (16Gi); on a larger one it simply buys a larger KV cache, which is more requests at
+      once. The engine checks this against free memory at startup and refuses to start if
+      something else holds the card.
+    default: 0.85
+    validation:
+      min: 0.2
+      max: 0.95
+
+resources:
+  # The cluster space quota, not a hint: it becomes the namespace's quota, and
+  # under-declared it evicts the heaviest pod and reads as "the app is broken".
+  #
+  # Measured rather than guessed. Serving this model on one H200 NVL, the
+  # container's cgroup peaked at 3.7 GiB; the limit below is that plus the
+  # 2 GiB of memory-backed `/dev/shm` the engine's workers talk over, plus
+  # headroom for the page cache that loading 4.89 GiB of weights pulls in.
+  # `storage` is the weights volume, which has to hold 4.89 GiB plus the
+  # `.part` file of whichever shard is being written.
+  min:
+    cpu: "4"
+    memory: "12Gi"
+    storage: "8Gi"
+  recommended:
+    cpu: "8"
+    memory: "16Gi"
+    storage: "16Gi"
+  gpu:
+    # Not optional and not a switch. The engine's published image is a CUDA build
+    # and does not serve on a CPU; a deployment without a card starts, finds no
+    # device and restarts for ever.
+    required: true
+    minCount: 1
+    minVram: "16Gi"
+    # nvidia-smi product names, which hw-measurement writes to
+    # device.swarm.io/gpu-product. Placement requires this exact string, so a
+    # different card of the same family needs its own entry.
+    types:
+      - NVIDIA H200 NVL
+      - NVIDIA H100 NVL
+      - NVIDIA A100-SXM4-40GB
+      - NVIDIA L40S
+
+components:
+  - name: engine
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: swarm-model-server
+      version: "0.1.0"
+    # The engine image, and the only image this deployment runs — it serves the
+    # model and, as an init container, fetches and hash-checks the weights. An
+    # unpinned reference would make the evidence digest uncomputable
+    # (specification 2.7).
+    images:
+      - name: docker.io/vllm/vllm-openai
+        digest: sha256:0fec7ec5f3e6bc168e54899935fb0557da908a4832a1dbc88e2debcf2f889416
+    deployment:
+      values:
+        base:
+          hostname: "{{ params.apiHostname }}"
+          apiKey: "{{ params.apiKey }}"
+          persistence:
+            size: 8Gi
+          resources:
+            cpu: "4"
+            memory: 12Gi
+          model:
+            id: gemma-2-2b-it
+            maxModelLen: "{{ params.maxModelLen }}"
+            gpuMemoryUtilization: "{{ params.gpuMemoryUtilization }}"
+            # Off, and not as a default waiting to be switched on: there is no parser for
+            # this model's output format, and `--enable-auto-tool-choice` without one is a
+            # startup error. The listing's README says what this costs.
+            toolCalling:
+              enabled: false
+            # Gemma 2's own chat template calls `raise_exception` on a `system`
+            # message, so an OpenAI client — or LiteLLM, or the Confidential Router
+            # — gets a 400 on its first request. This is that template with one
+            # change: a leading system message is folded into the first user turn,
+            # which is what Google's own guidance says to do for a model with no
+            # system role. Nothing else differs.
+            chatTemplate: |
+              {{ bos_token }}
+              {%- if messages[0]['role'] == 'system' -%}
+                  {%- set system_message = messages[0]['content'] | trim + '\n\n' -%}
+                  {%- set loop_messages = messages[1:] -%}
+              {%- else -%}
+                  {%- set system_message = '' -%}
+                  {%- set loop_messages = messages -%}
+              {%- endif -%}
+              {%- for message in loop_messages -%}
+                  {%- if (message['role'] == 'user') != (loop.index0 % 2 == 0) -%}
+                      {{- raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') -}}
+                  {%- endif -%}
+                  {%- set role = 'model' if message['role'] == 'assistant' else message['role'] -%}
+                  {{- '<start_of_turn>' + role + '\n' -}}
+                  {%- if loop.first and role == 'user' -%}{{- system_message -}}{%- endif -%}
+                  {{- message['content'] | trim + '<end_of_turn>\n' -}}
+              {%- endfor -%}
+              {%- if add_generation_prompt -%}
+                  {{- '<start_of_turn>model\n' -}}
+              {%- endif -%}
+
+            # ---------------------------------------------------------------
+            # The weights, pinned file by file.
+            #
+            # This block is rendered into a ConfigMap, so it is part of what the
+            # cloud digests and signs: the bytes this deployment serves are
+            # named, by sha256, inside its published evidence. An init container
+            # downloads each file, hashes it while writing, and refuses to let
+            # the engine start on any mismatch.
+            #
+            # Regenerate with:
+            #   scripts/model-weights-manifest.py unsloth/gemma-2-2b-it
+            # ---------------------------------------------------------------
+            weights:
+              repo: unsloth/gemma-2-2b-it
+              revision: 457f2e15bf550c227ce6ad86e2ec108d3e42c106
+              totalBytes: 5250532652
+              files:
+                - path: config.json
+                  size: 913
+                  sha256: e3885c56a32ca83566f849283b402006bbb100a02c43aca3fe0c90dc62808893
+                - path: generation_config.json
+                  size: 209
+                  sha256: ebcbf26935f7b454678f1bfb7fa9142dc04f5210e73be8fccba44a9d59f5a986
+                - path: model.safetensors
+                  size: 5228717512
+                  sha256: bf06a1e6cfe1610beb98a2975e5602e7fc108d902b3ff9dd62282d749c7a2394
+                - path: special_tokens_map.json
+                  size: 636
+                  sha256: baec30ea10906f16adb8c18af7a34023002c1746542612b8b41c9f09e1351351
+                - path: tokenizer.json
+                  size: 17525357
+                  sha256: 3f289bc05132635a8bc7aca7aa21255efd5e18f3710f43e3cdb96bcd41be4922
+                - path: tokenizer.model
+                  size: 4241003
+                  sha256: 61a7b147390c64585d6c3543dd6fc636906c9af3865a5548f27f31aee1d4c8e2
+                - path: tokenizer_config.json
+                  size: 47022
+                  sha256: e5ac0f1cfb5f450763d368edacbb2448a3c02c8d8f7f98d963a820751fb0ddc3
+
+outputs:
+  - id: baseUrl
+    title: OpenAI base URL
+    type: url
+    value: "https://{{ params.apiHostname }}/v1"
+
+  - id: modelId
+    title: Model
+    type: string
+    value: "gemma-2-2b-it"
+
+  - id: connectionLink
+    title: Connection link
+    # `secret`, because this is a credential with a URL wrapped around it. The
+    # key is in the fragment and not the query on purpose: a fragment is never
+    # sent to a server, so it is not in an access log, a proxy log or a Referer
+    # header. Format: docs/model-connection-link.md.
+    type: secret
+    value: "https://{{ params.apiHostname }}/v1#key={{ params.apiKey }}&model=gemma-2-2b-it"
+
+  - id: apiKey
+    title: API key
+    type: secret
+    value: "{{ params.apiKey }}"
+
+  - id: toolCalling
+    title: Tool calling
+    type: string
+    value: >-
+      **No tool calling.** Gemma 2's chat template has no `tools` handling at all and the engine ships no parser for its output format, so `tool_choice: "auto"` is refused rather than answered with prose. A named `tool_choice` returns grammar-shaped JSON the model was never told the purpose of; the README explains why that is not support.
+
+  - id: evidenceBundle
+    title: Published evidence
+    type: url
+    value: "https://{{ params.apiHostname }}/.well-known/swarm-evidence"
+
+  - id: registerWithRouter
+    title: Register this with a Confidential Router
+    type: string
+    value: "Copy the connection link above into the router's admin section, \"Add external model\". The router fetches this deployment's evidence, checks its measurement against its own trust list, pins the TLS certificate the evidence names, and only then proxies a request — so what it serves is attested, not asserted."
+
+evidence:
+  # The hostname is the one field that differs between two deployments of this
+  # listing, and excluding it is what makes the digest a property of the version
+  # rather than of the deployment. Declared here as well as in the chart's own
+  # annotation, because the listing page shows only what the definition declares
+  # — a digest displayed beside "no exclusions" answers the only question that
+  # matters about it wrongly.
+  exclude:
+    - match:
+        kind: Ingress
+        name: swarm-model-server
+      fields:
+        - /spec/rules/0/host

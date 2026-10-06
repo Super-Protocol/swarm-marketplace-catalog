@@ -395,6 +395,7 @@ Two habits that repeatedly turn out to matter:
 | `apps/confidential-claims-fraud` | Two components composed into one deployment; per-party credentials; continuous SQL; `charts/claims-fraud-feed/README.md` explains the mechanism with diagrams |
 | `apps/conversational-analyst` | Five components, data slots, publisher secrets, and a grounding job derived from the dataset's own schema |
 | `apps/rag-agent` | Data slots with a schema constraint |
+| `apps/llama-3-2-3b-instruct` and its siblings | One chart behind three cards; weights pinned by sha256 inside the evidence; a credential emitted as a connection link; a card that says what the model *cannot* do |
 
 ---
 
