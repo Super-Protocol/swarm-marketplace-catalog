@@ -5,6 +5,16 @@ metadata:
   name: {{ include "confidential-router-api.fullname" . }}
   labels:
     {{- include "confidential-router-api.labels" . | nindent 4 }}
+  annotations:
+    # `checksum/public-config` below is a hash of the hostname-derived ConfigMap,
+    # so it varies with the hostname exactly as that object's `/data` does and is
+    # excluded for the same reason (SUP-211). `/` inside a JSON Pointer token is
+    # `~1` (RFC 6901), which is what makes this one token and not three.
+    #
+    # `checksum/config` is deliberately *not* excluded: `router.yaml` carries no
+    # hostname any more, so that hash is a property of the version and the
+    # parameters — which is precisely what the digest should attest.
+    swarm.io/exclude-evidence-fields: "/spec/template/metadata/annotations/checksum~1public-config"
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
@@ -16,6 +26,11 @@ spec:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        # And a hostname reconfigure is a config change the pod cannot see at all:
+        # `envFrom` is read once, when the container starts, so without this the
+        # ConfigMap is updated and the running router keeps advertising the old
+        # origin.
+        checksum/public-config: {{ include (print $.Template.BasePath "/configmap-public.yaml") . | sha256sum }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -44,6 +59,8 @@ spec:
           args: ["migrate"]
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
+          envFrom:
+            {{- include "confidential-router-api.envFrom" . | nindent 12 }}
           env:
             {{- include "confidential-router-api.env" . | nindent 12 }}
           volumeMounts:
@@ -61,6 +78,8 @@ spec:
             - name: http
               containerPort: {{ .Values.service.targetPort }}
               protocol: TCP
+          envFrom:
+            {{- include "confidential-router-api.envFrom" . | nindent 12 }}
           env:
             {{- include "confidential-router-api.env" . | nindent 12 }}
           # `/health` does a real database round trip, so an unready pod is one

@@ -40,6 +40,21 @@ The router never learns whether, when, or by whom this happened. The client's ba
 Pinning is always explicit. `--from-upstream` prints the full report and asks before it writes;
 there is no trust-on-first-use anywhere in this product.
 
+**What the snapshot covers, and what it leaves out.** Besides the hardware quote and the image
+digests, the signed snapshot carries the rendered Kubernetes objects — including `router.yaml` in
+full, which is how a reviewer can see which models are served, which endpoints are attested, what
+the rate limits are and whether sign-up needs an invitation. Left out are the two hostnames the
+operator chose and the handful of values derived from them: the API's public base URL, the browser
+origins allowed to call it, the checkout return URL, the campaign landing origin, and the API
+origin the console fetches from. They live in ConfigMaps of their own, named in the listing's
+`evidence.exclude` block and annotated on the objects that carry them.
+
+That is a deliberate trade and it runs one way only: *where* this deployment answers is not
+attested, *what* it is configured to do is. The reason is that a digest containing the hostname
+would be a digest of one deployment — nobody else could ever reproduce it, and a pinned value would
+admit exactly one endpoint. With them out, two deployments of the same listing version attest the
+same snapshot, which is what makes a published digest worth comparing against at all.
+
 ## What runs
 
 Four components, in this order:

@@ -10,10 +10,9 @@ further than the Ingress — and the failure is invisible: it renders, it deploy
 works, and `evidence.expectedDigest` can simply never be declared for the version.
 
 So: render the parent chart twice, under two hostnames in two namespaces, and require
-that every object the database chart contributed came out byte-identical. The api
-chart's own objects are reported but not required to match — several of them carry the
-hostname the operator chose, which is a pre-existing property of this listing and the
-reason it declares no digest yet.
+that every object the database chart contributed came out byte-identical. Only those:
+the api chart's own objects are a question of their own, asked — with the exclusions
+the chart declares taken into account — by `evidence_drift.py`.
 
     charts/tests/database_drift.py confidential-router-api charts/tests/cases/api-one-model.yaml postgresql
 """

@@ -41,12 +41,6 @@ data:
   # advertises itself with the first, and the two disagreeing is a sign-in that
   # returns the browser somewhere nothing serves.
   ROUTER_PUBLIC_BASE_URL: "https://api.confidential-router.example"
-  # `endpoints[].hostname` for an endpoint that did not name one — this
-  # deployment's own API hostname, which is where its evidence bundle is fetched
-  # from. A hostname, not a URL, which is what that field is. Absent when every
-  # endpoint named its own, and when there are no endpoints because every model
-  # is switched off.
-  ROUTER_PUBLIC_HOSTNAME: "api.confidential-router.example"
   # `server.validClientOrigins`, comma-separated: the router's schema splits a
   # string back into the list, so the whole allow-list travels as one value
   # rather than as a placeholder per index that would have to be rendered — and
@@ -102,7 +96,7 @@ data:
 
     endpoints:
       - name: "confidential-router"
-        hostname: "${ROUTER_PUBLIC_HOSTNAME}"
+        hostname: "inference.elsewhere.example"
         tee: "Intel TDX + H100 CC"
 
     # `litellmModel` is the catalogue key, which is the Ollama model name and the
@@ -233,12 +227,12 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: ec9a0ec7eba37a237ae71c019669b46ea01cb294e1d5880e78c8e45f33fc16a1
+        checksum/config: b7f3d5420b761b2c7115aa10a0479c2d3a41350aca32cdc2f6a73947e89e523b
         # And a hostname reconfigure is a config change the pod cannot see at all:
         # `envFrom` is read once, when the container starts, so without this the
         # ConfigMap is updated and the running router keeps advertising the old
         # origin.
-        checksum/public-config: 2249ee9f32e4ac416a6a951f510d6358b0314352f5aaeb7c764442f1b9bde36e
+        checksum/public-config: 012179805c52c2489666e2b16fdcfc32d493d9801a383fc180b39ca23bfbd1d9
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr

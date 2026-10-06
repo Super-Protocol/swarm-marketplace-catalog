@@ -112,6 +112,16 @@ one entry.
 {{- end -}}
 
 {{/*
+The ConfigMap carrying the hostname-derived values `router.yaml` refers to by
+placeholder. Separate from the attested one so the exclusion that stabilises this
+listing's evidence digest can name a whole object rather than a field inside a
+document (SUP-211); see the comment at the top of `configmap-public.yaml`.
+*/}}
+{{- define "confidential-router-api.publicConfigName" -}}
+{{- printf "%s-public" (include "confidential-router-api.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/*
 The selected model names, as a JSON array so the caller can `fromJsonArray` it.
 
 The list is passed through in the order it was given — that is the order the
@@ -145,6 +155,23 @@ values mistake that would otherwise render a catalogue nobody asked for.
 {{- $_ := set $seen $endpoint true -}}
 {{- end -}}
 {{- keys $seen | sortAlpha | toJson -}}
+{{- end -}}
+
+{{/*
+Does any attested endpoint fall back to this deployment's own API hostname?
+
+Non-empty when at least one referenced endpoint named no hostname of its own, which is
+what makes `${ROUTER_PUBLIC_HOSTNAME}` appear in the rendered config. The public
+ConfigMap renders that key only then: a key nothing refers to would be a field excluded
+from the evidence snapshot for no reason, and `charts/tests/config_placeholders.py`
+fails on it. A deployment with every model switched off has no endpoints at all.
+*/}}
+{{- define "confidential-router-api.endpointsUsePublicHostname" -}}
+{{- range $name := (include "confidential-router-api.referencedEndpoints" . | fromJsonArray) -}}
+{{- if not (get $.Values.endpoints $name).hostname -}}
+{{- "yes" -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

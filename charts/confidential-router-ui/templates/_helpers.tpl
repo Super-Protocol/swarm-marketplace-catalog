@@ -34,6 +34,15 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{/*
+The ConfigMap carrying the API origin, kept out of the evidence snapshot so the
+digest is a property of the version rather than of the hostname the operator
+chose (SUP-211); see the comment at the top of `configmap-public.yaml`.
+*/}}
+{{- define "confidential-router-ui.publicConfigName" -}}
+{{- printf "%s-public" (include "confidential-router-ui.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
 {{- define "confidential-router-ui.apiOrigin" -}}
 {{- printf "%s://%s" .Values.publicScheme (required "apiHostname must be set" .Values.apiHostname) -}}
 {{- end -}}

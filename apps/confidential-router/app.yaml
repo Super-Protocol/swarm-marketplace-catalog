@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.10.1"
+  version: "0.11.0"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -549,7 +549,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-api
-      version: "0.6.1"
+      version: "0.7.0"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
         digest: sha256:025597cb7b207c00decb1b493ccbac01424f48e602f813fa4f42d1ab7babd3a7
@@ -743,7 +743,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-ui
-      version: "0.1.14"
+      version: "0.2.0"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-ui
         digest: sha256:2c315c97b599cc57f51c7d0f0490a674bf7eb37c93b79119272a58d666413123
@@ -807,3 +807,67 @@ outputs:
     type: string
     when: "params.billingMode == 'disabled'"
     value: "This deployment sells no credit: the console has no buy panel and a checkout is refused. Credit arrives as a grant — an invitation code redeemed at sign-up, or `credits grant` from an administrator. Switch to Stripe by reconfiguring."
+
+# What a deployment of this version attests to, and what about it is left out.
+#
+# `expectedDigest` is deliberately absent. It cannot be derived from the charts —
+# a cluster defaults fields no template writes — so it has to be measured from a
+# reference deployment of exactly this version and declared afterwards. Until
+# then the cloud publishes a digest, nothing compares it to anything, and no
+# operator is shown a mismatch that is not one.
+#
+# What this version does deliver is the property that makes such a measurement
+# worth declaring: two deployments of it, under different hostnames in different
+# namespaces, render byte-identical snapshots. Before it they could not — the
+# chosen hostname reached `server.publicBaseUrl`, the CORS allow-list, the
+# checkout return URL and the attested endpoint inside `router.yaml`, so the
+# digest was a property of the hostname and no two deployments could ever agree
+# on one (SUP-210).
+#
+# The way out was not to drop `router.yaml` from the snapshot — that would have
+# hidden the router's entire configuration, which is the one thing the digest is
+# worth attesting. The hostname-derived values moved into a ConfigMap of their
+# own and `router.yaml` names them by `${…}` placeholder; the small object is
+# excluded, the configuration stays attested (SUP-211). They are not in a Secret
+# for the same reason: Secrets are lifted out wholesale, which would have hidden
+# the exclusion from this listing instead of disclosing it.
+#
+# Each entry below is also a `swarm.io/exclude-evidence-fields` annotation on the
+# object that carries it. Repeated here because this block is what the
+# marketplace reads to show the exclusions beside the digest, and a digest
+# displayed next to "no exclusions" answers the only question that matters about
+# it wrongly.
+evidence:
+  exclude:
+    # The two published hostnames. `ingress.tls.enabled` is false for this
+    # listing — the cloud holds the certificate — so `/spec/rules/0/host` is the
+    # only pointer each Ingress renders.
+    - match: { kind: Ingress, name: confidential-router-api }
+      fields:
+        - "/spec/rules/0/host"
+    - match: { kind: Ingress, name: confidential-router-ui }
+      fields:
+        - "/spec/rules/0/host"
+
+    # The hostname-derived values themselves: the API's public base URL and
+    # attested endpoint, the browser origins allowed to call it, the checkout
+    # return URL, the campaign landing origin — and, for the console, the API
+    # origin it fetches from. Whole objects rather than fields inside them, which
+    # is what moving them out of the attested documents bought.
+    - match: { kind: ConfigMap, name: confidential-router-api-public }
+      fields:
+        - "/data"
+    - match: { kind: ConfigMap, name: confidential-router-ui-public }
+      fields:
+        - "/data"
+
+    # And the two pod-template hashes of those objects, which exist so a hostname
+    # reconfigure actually restarts the pods that read them once at start.
+    # `checksum/config` — the hash of the attested `router.yaml` — is not here,
+    # and that is the point: it no longer varies.
+    - match: { kind: Deployment, name: confidential-router-api }
+      fields:
+        - "/spec/template/metadata/annotations/checksum~1public-config"
+    - match: { kind: Deployment, name: confidential-router-ui }
+      fields:
+        - "/spec/template/metadata/annotations/checksum~1public-config"

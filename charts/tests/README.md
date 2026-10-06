@@ -29,6 +29,7 @@ The release name and namespace are fixed per listing (`cr` / `confidential-route
 | `api-password-no-mailer` | what the listing deploys (SUP-112): passwords on with `mailer: none`, which has to render a config the router boots on |
 | `api-password-off` | passwords off: the `auth.password` block is absent rather than `enabled: false`, so the chart stays bootable on an image that predates the key |
 | `api-invite-only` | the SUP-173 auth seam: `requireInviteForSignUp` rendered only while it is on, so the chart stays bootable on an image that predates the key |
+| `api-endpoint-hostname` | an endpoint that names a hostname of its own: a parameter, so it is rendered as a literal rather than as `${ROUTER_PUBLIC_HOSTNAME}`, and the public ConfigMap does not carry that key at all (SUP-211) |
 | `ui-default` | the console's env and ingress; run.sh renders it against a second hostname as well, because one pinned image has to serve any API origin |
 | `ollama-gpu-off` / `ollama-gpu-on` | the GPU switch |
 | `s3-default` | what the confidential-s3 listing deploys: two hostnames, credentials derived from seeds, the bundled engine and the bundled PostgreSQL |
@@ -45,7 +46,7 @@ somewhere. They need network the first time, to pull the chart.
 
 ## Beyond lint and goldens
 
-Six checks in `run.sh` are not a golden diff, and each exists because a golden diff
+Eight checks in `run.sh` are not a golden diff, and each exists because a golden diff
 cannot answer the question:
 
 - **Every object, parsed as a cluster parses it** (`inventory.py`). A template that loses a
@@ -76,6 +77,27 @@ cannot answer the question:
 - **The listing declares what the chart annotates.** An exclusion the chart applies and the
   definition does not is a digest shown beside "no exclusions", which answers the only
   question that matters about it wrongly.
+- **Two consumers, one version — field by field** (`evidence_drift.py`). The same question as
+  the confidential-s3 check above, asked about `confidential-router` and asked of JSON Pointers
+  rather than of diff lines. The line-based version passes as long as no unexpected *string*
+  appears, which cannot see a field that differs by being absent on one side, cannot tell an
+  excluded field from one that merely contains an excluded hostname, and cannot tell that an
+  exclusion pointer has gone stale. All three matter here: the router's hostname-derived values
+  live in ConfigMaps whose whole `/data` is excluded, and one of those keys is rendered only for
+  a campaign (SUP-211). It also checks that each pointer resolves to a real field, and that the
+  chart's annotations and the listing's `evidence.exclude` agree in **both** directions — an
+  exclusion the listing does not declare is a digest shown beside an incomplete answer, and one
+  the listing declares and the chart no longer applies is a disclosure of something that is not
+  happening. The second direction is invisible to the drift comparison: if the field stopped
+  being rendered, nothing differs and nothing fails, while the listing goes on advertising that
+  it was left out.
+- **Every placeholder has something that fills it** (`config_placeholders.py`). `router.yaml` is
+  attested, so neither a secret nor a hostname is written into it — both are `${VAR}` the router's
+  config loader substitutes from the environment. A placeholder with no value does not degrade:
+  the loader throws before the first listener, so the deployment is a crash loop and no render
+  error and no golden diff would have mentioned it. Checked in both directions, because a variable
+  nothing refers to is dead configuration and, in the public ConfigMap's case, a field excluded
+  from the snapshot for no reason.
 - **Misconfigurations are refused at render time.** Each one is a mistake that would deploy
   cleanly and then not work: an unpinned image, an Ingress with no class, a Garage key in a
   shape Garage refuses, a master key that is not 32 bytes.

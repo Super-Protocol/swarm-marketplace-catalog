@@ -128,6 +128,24 @@ two are simply not read.
 {{- end }}
 {{- end -}}
 
+{{/*
+The hostname-derived values `router.yaml` names by placeholder.
+
+`envFrom` rather than five `env` entries: this is one object the evidence
+snapshot excludes whole, instead of five index-based pointers into a container's
+env list that would silently point at the wrong value the next time a variable is
+added above them.
+
+Both the server and the migration container need it. The init container loads the
+same config file, and a placeholder with no value fails the boot — so a migration
+container without this would make every deployment a crash loop before the server
+ever started.
+*/}}
+{{- define "confidential-router-api.envFrom" -}}
+- configMapRef:
+    name: {{ include "confidential-router-api.publicConfigName" . }}
+{{- end -}}
+
 {{- define "confidential-router-api.volumeMounts" -}}
 - name: config
   mountPath: /etc/confidential-router

@@ -229,6 +229,13 @@ console_for() {
 env_value() {
   printf '%s\n' "$2" | grep -A1 -- "- name: $1\$" | tail -1 | sed 's/^ *value: //; s/^"//; s/"$//'
 }
+# The console's two origin variables moved out of the env list and into the
+# ConfigMap the evidence snapshot excludes (SUP-211), so they are read from
+# `data` rather than from a `- name:` pair. The pod still gets them, through
+# `envFrom`, which `charts/tests/evidence_drift.py` and the golden both hold.
+config_value() {
+  printf '%s\n' "$2" | grep -- "^  $1: " | tail -1 | sed "s/^  $1: //; s/^\"//; s/\"$//"
+}
 
 console_images=""
 for host in api.confidential-router.example somewhere.else.example; do
@@ -237,8 +244,8 @@ for host in api.confidential-router.example somewhere.else.example; do
     printf '%s\n' "$rendered" | sed 's/^/        /'
     continue
   fi
-  origin=$(env_value ROUTER_UI_API_ORIGIN "$rendered")
-  graphql=$(env_value ROUTER_UI_GRAPHQL_HTTP "$rendered")
+  origin=$(config_value ROUTER_UI_API_ORIGIN "$rendered")
+  graphql=$(config_value ROUTER_UI_GRAPHQL_HTTP "$rendered")
   console_images="$console_images$(printf '%s\n' "$rendered" | grep -o 'image: .*' | head -1)
 "
   if [ "$origin" = "https://$host" ] && [ "$graphql" = "https://$host/graphql" ]; then
@@ -264,23 +271,51 @@ fi
 note "a campaign deployment renders its three settings, each in the right object"
 campaign=charts/tests/golden/api-campaign.yaml
 config=$(sed -n '/^  router.yaml: |/,/^---$/p' "$campaign")
+public=$(sed -n '/^  ROUTER_/p' "$campaign")
 
-for origin in \
-  https://console.confidential-router.example \
-  https://landing.confidential-router.example
-do
-  if printf '%s\n' "$config" | grep -q -- "- \"$origin\""; then
-    pass "validClientOrigins carries $origin"
-  else
-    fail "validClientOrigins does not carry $origin"
-  fi
-done
+# The two origins and the landing URL used to be literals in `router.yaml`, which
+# made the attested document — and so the evidence digest — a property of the
+# hostnames the operator chose (SUP-210). They are in the excluded public
+# ConfigMap now, and the attested document names them by placeholder; both halves
+# are asserted, because a placeholder nothing fills is a boot the router refuses.
+if printf '%s\n' "$public" | grep -q 'ROUTER_VALID_CLIENT_ORIGINS: "https://console.confidential-router.example,https://landing.confidential-router.example"'; then
+  pass "validClientOrigins carries the console and the landing page, in that order"
+else
+  fail "ROUTER_VALID_CLIENT_ORIGINS does not carry both origins"
+fi
 
-if printf '%s\n' "$config" | grep -q 'landingBaseUrl: "https://landing.confidential-router.example"'; then
+if printf '%s\n' "$config" | grep -q 'validClientOrigins: "${ROUTER_VALID_CLIENT_ORIGINS}"'; then
+  pass "the attested config refers to the origin list rather than carrying it"
+else
+  fail "the attested router.yaml does not refer to ROUTER_VALID_CLIENT_ORIGINS"
+fi
+
+if printf '%s\n' "$public" | grep -q 'ROUTER_LANDING_BASE_URL: "https://landing.confidential-router.example"'; then
   pass "invites.landingBaseUrl points at the landing page, not the schema default"
 else
-  fail "the rendered config has no invites.landingBaseUrl"
+  fail "the rendered config has no landing base URL"
 fi
+
+if printf '%s\n' "$config" | grep -q 'landingBaseUrl: "${ROUTER_LANDING_BASE_URL}"'; then
+  pass "the attested config refers to the landing origin rather than carrying it"
+else
+  fail "the attested router.yaml does not refer to ROUTER_LANDING_BASE_URL"
+fi
+
+# And the point of the whole split: no hostname of this deployment is left in the
+# document the snapshot attests. A literal that came back would render, deploy and
+# work, and silently make the digest a property of the hostname again.
+for host in \
+  api.confidential-router.example \
+  console.confidential-router.example \
+  landing.confidential-router.example
+do
+  if printf '%s\n' "$config" | grep -q -- "$host"; then
+    fail "the attested router.yaml carries $host, which makes the evidence digest a property of it"
+  else
+    pass "$host is not in the attested router.yaml"
+  fi
+done
 
 for leak in operator@confidential-router.example phc_golden_test_project_key; do
   if printf '%s\n' "$config" | grep -q -- "$leak"; then
@@ -570,9 +605,9 @@ else
 fi
 
 # The database half of this listing has to be the same for everybody, or no version of
-# it can ever declare an `expectedDigest`. The api half already is not — several fields
-# in its ConfigMap carry the hostname the operator chose — so this asks the narrower
-# question the change is responsible for.
+# it can ever declare an `expectedDigest`. This asks only about that half, by name: the
+# api half is a question of its own, and `evidence_drift.py` below asks it with the
+# chart's declared exclusions taken into account.
 note "the database attests the same thing for every consumer"
 if output=$(python3 charts/tests/database_drift.py confidential-router-api charts/tests/cases/api-one-model.yaml postgresql); then
   printf '%s\n' "$output"
@@ -672,6 +707,39 @@ refuses "an unpinned bootstrap image" "etcd.bootstrapImage.digest is empty" \
 refuses "replacing the one-per-node rule by accident" "the one that applies" \
   "${base_pg[@]}" --set 'affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].weight=1'
 
+# Every `${…}` in the attested config is filled by something the pod is given, and
+# nothing excluded from the snapshot is dead weight. This is the failure mode the
+# hostname split introduced: a renamed variable is not a bad render, it is a
+# config loader that throws before the first listener — the whole deployment is a
+# crash loop and no golden diff would have mentioned it.
+note "every placeholder in the attested config has something that fills it"
+for case in api-one-model api-campaign api-billing-stripe api-no-models api-endpoint-hostname; do
+  if output=$(python3 charts/tests/config_placeholders.py confidential-router-api "charts/tests/cases/$case.yaml"); then
+    printf '%s\n' "$output" | sed "s/\$/ ($case)/"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/config_placeholders.py $case"
+  fi
+done
+
+# The property this listing exists to have (SUP-211): two deployments of this
+# version, under two hostnames in two namespaces, differ only in fields the chart
+# excludes and the definition declares. Field by field rather than line by line,
+# which is what catches a key that is absent on one side and a pointer that has
+# gone stale — see the module docstring.
+note "two deployments of the router differ only where the chart says they do"
+drift_case() {
+  if output=$(python3 charts/tests/evidence_drift.py "$1" "charts/tests/cases/$2.yaml" confidential-router \
+      'apiHostname=api.{t}.example' 'consoleHostname=console.{t}.example' "${@:3}"); then
+    printf '%s\n' "$output" | sed "s/\$/ ($1, $2)/"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/evidence_drift.py $1 $2"
+  fi
+}
+drift_case confidential-router-api api-one-model
+drift_case confidential-router-api api-campaign 'invites.landingHostname=landing.{t}.example'
+drift_case confidential-router-ui ui-default
 # ---------------------------------------------------------------------------
 # swarm-model-server. Every one of these is a deployment that renders cleanly
 # and then serves something it should not, or nothing at all.

@@ -9,6 +9,15 @@ the config loader substitutes from the process environment, and the environment
 is filled from a Secret by the Deployment — so this object stays readable to
 anyone who can read the namespace without handing them the signing key.
 
+Neither is a hostname, for a different reason: this document is attested, and a
+hostname interpolated into it made the deployment's evidence digest a property of
+the name the operator chose, so no two deployments could agree on one
+`expectedDigest` (SUP-210). The five `ROUTER_PUBLIC_*` / `ROUTER_*_URL`
+placeholders below are filled from `configmap-public.yaml`, which is excluded
+from the snapshot while this document stays in it in full. Which is the whole
+point: what the router is configured to do remains attested; only where it
+answers is left out, and the listing discloses that it is.
+
 The placeholder names deliberately do not start with `CR_API_`: that prefix is
 also the environment *configuration* layer, and `CR_API_DATABASE_URL` would be
 read as a top-level `databaseUrl` key and fail the boot on a strict schema.
@@ -26,15 +35,18 @@ data:
     server:
       port: {{ .Values.service.targetPort | int64 }}
       host: 0.0.0.0
-      publicBaseUrl: {{ include "confidential-router-api.apiUrl" . | quote }}
+      publicBaseUrl: "${ROUTER_PUBLIC_BASE_URL}"
       # CORS, and Better Auth's trusted origins. The console calls this API from
       # the browser with `credentials: 'include'`, so its origin has to be here —
       # and so does the campaign landing page's, which looks an invitation code up
       # from the browser before anyone has signed in at all.
-      validClientOrigins:
-        {{- range $origin := (include "confidential-router-api.clientOrigins" . | fromJsonArray) }}
-        - {{ $origin | quote }}
-        {{- end }}
+      #
+      # One scalar rather than a list: the router's schema splits a
+      # comma-separated string back into the list, and a placeholder per index
+      # would mean rendering how many origins there are — which is itself
+      # hostname-derived, since the second one exists only when a campaign named
+      # a landing page.
+      validClientOrigins: "${ROUTER_VALID_CLIENT_ORIGINS}"
 
     database:
       type: postgres
@@ -57,7 +69,14 @@ data:
       {{- range $name := $endpointNames }}
       {{- $endpoint := get $.Values.endpoints $name }}
       - name: {{ $name | quote }}
-        hostname: {{ $endpoint.hostname | default $.Values.apiHostname | quote }}
+        {{- /*
+        This deployment's own API hostname unless the endpoint named another: the
+        router fetches an endpoint's evidence bundle from it. The default is the
+        placeholder rather than the value, so an endpoint that did not name a
+        hostname does not put one in an attested document; an endpoint that did
+        is a parameter, and parameters belong in the digest.
+        */}}
+        hostname: {{ $endpoint.hostname | default "${ROUTER_PUBLIC_HOSTNAME}" | quote }}
         tee: {{ required (printf "endpoints.%s.tee must be set" $name) $endpoint.tee | quote }}
         {{- if $endpoint.evidenceUrl }}
         evidenceUrl: {{ $endpoint.evidenceUrl | quote }}
@@ -101,7 +120,7 @@ data:
       tokensPerMinute: {{ .Values.rateLimits.tokensPerMinute | int64 }}
 
     auth:
-      baseUrl: {{ include "confidential-router-api.apiUrl" . | quote }}
+      baseUrl: "${ROUTER_PUBLIC_BASE_URL}"
       secret: ${ROUTER_AUTH_SECRET}
       sessionMaxAge: {{ .Values.auth.sessionMaxAge | quote }}
       {{- if .Values.auth.github.clientId }}
@@ -155,7 +174,7 @@ data:
       minTopUpMicros: {{ .Values.billing.minTopUpMicros | int64 }}
       maxTopUpMicros: {{ .Values.billing.maxTopUpMicros | int64 }}
       allowOverdraftMicros: {{ .Values.billing.allowOverdraftMicros | int64 }}
-      checkoutReturnUrl: {{ printf "%s/credits" (include "confidential-router-api.consoleUrl" .) | quote }}
+      checkoutReturnUrl: "${ROUTER_CHECKOUT_RETURN_URL}"
       autoTopUpCooldown: {{ .Values.billing.autoTopUpCooldown | quote }}
       {{- if eq .Values.billing.mode "stripe" }}
       stripe:
@@ -172,7 +191,7 @@ data:
     # that predates the feature still boots on this chart rather than refusing a
     # key its schema has never heard of.
     invites:
-      landingBaseUrl: {{ include "confidential-router-api.landingUrl" . | quote }}
+      landingBaseUrl: "${ROUTER_LANDING_BASE_URL}"
       lookupsPerMinute: {{ .Values.invites.lookupsPerMinute | int64 }}
     {{- end }}
 

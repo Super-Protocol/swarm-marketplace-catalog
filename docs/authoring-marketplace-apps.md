@@ -317,6 +317,37 @@ under two different hostnames in two different namespaces, and reports every fie
 Those fields are the candidates for exclusion. It cannot tell you the digest to declare; it tells you
 whether the digest you declare will hold for anybody else.
 
+**When the hostname is inside a config file.** An exclusion names a whole JSON Pointer, so a
+hostname interpolated into a rendered configuration document cannot be excluded on its own: the
+only pointer available is `/data/<the whole file>`, and dropping that hides the application's entire
+configuration from the snapshot — which is usually the one thing the digest was worth attesting.
+
+The way out is to not render it there. Keep the hostname-derived values in a small ConfigMap of
+their own, refer to them from the config document by whatever placeholder syntax the application
+already supports for its secrets, and feed that ConfigMap to the container with `envFrom`:
+
+```yaml
+# config.yaml, attested in full
+publicBaseUrl: "${APP_PUBLIC_BASE_URL}"
+```
+```yaml
+# <name>-public, excluded whole
+metadata:
+  annotations:
+    swarm.io/exclude-evidence-fields: "/data"
+```
+
+Two things to get right. The pod reads `envFrom` once, at start, so a hostname reconfigure needs a
+`checksum/…` annotation over that ConfigMap to roll the pods — and that annotation is derived from
+the hostname too, so it is excluded alongside. And every container that loads the config file needs
+the `envFrom`, migration init containers included: an unfilled placeholder is usually a hard boot
+failure rather than a default.
+
+Not the `Secret`, even though Secrets are lifted out for free. That hides the exclusion instead of
+disclosing it: a reader of the listing sees the ConfigMap's name in the snapshot and the pointer in
+`evidence.exclude`, and can tell exactly what was left out. `confidential-router` is the worked
+example (SUP-211).
+
 **Anything non-deterministic outside a Secret destroys this.** A bcrypt salt, a random suffix, a
 timestamp in an annotation — each makes every deployment attest differently. Inside a `Secret` it is
 free, because Secrets are lifted out before the snapshot is taken.
