@@ -208,15 +208,18 @@ etcd:
 
   # The init container runs for a second or two and exits. It still needs a request,
   # because a cluster space's quota is a hard one and a container with no request is a
-  # container the scheduler cannot place against it.
+  # container the scheduler cannot place against it. The same cluster space carries a
+  # LimitRange that refuses anything under 100m CPU or 128Mi, with a request/limit
+  # ratio of 1 — so these are the floor, not a measurement of what etcd's bootstrap
+  # needs (SUP-238).
   bootstrapResources:
     requests:
-      cpu: 50m
-      memory: 32Mi
+      cpu: 100m
+      memory: 128Mi
       nvidia.com/gpu: "0"
     limits:
-      cpu: 50m
-      memory: 32Mi
+      cpu: 100m
+      memory: 128Mi
       nvidia.com/gpu: "0"
 
   # One member per node, required, same argument as PostgreSQL's: two members of a
@@ -414,14 +417,17 @@ router:
     server: 7d
     check: 3s
 
+  # Same floor as the etcd init container: 100m CPU, 128Mi, request equal to limit.
+  # HAProxy proxies TCP and holds no buffers worth speaking of, so 64Mi would do —
+  # but a cluster space's LimitRange refuses it (SUP-238).
   resources:
     requests:
       cpu: 100m
-      memory: 64Mi
+      memory: 128Mi
       nvidia.com/gpu: "0"
     limits:
       cpu: 100m
-      memory: 64Mi
+      memory: 128Mi
       nvidia.com/gpu: "0"
 
   # Two instances, never on one node — see above.
