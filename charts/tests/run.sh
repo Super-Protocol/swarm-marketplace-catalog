@@ -728,6 +728,15 @@ refuses "a model with no id at all" "model.id is empty" \
 refuses "TLS switched on with no certificate" "ingress.tls.secretName is empty" \
   "${base_ms[@]}" --set ingress.tls.enabled=true
 
+# SUP-230: a chat template inlined in a listing renders here and is refused by the
+# marketplace's publish parse, a long way from whoever wrote it. The chart refuses
+# it where the message can say what to do instead.
+refuses "a chat template passed inline instead of by file name" "model.chatTemplate is gone" \
+  "${base_ms[@]}" --set 'model.chatTemplate=hello {{ bos_token }}'
+
+refuses "a chat template file the chart does not carry" "does not exist" \
+  "${base_ms[@]}" --set model.chatTemplateFile=not-here.jinja
+
 # The three things a published endpoint must not expose, asserted on the render
 # rather than trusted to the values file.
 note "swarm-model-server publishes only what authenticates"
@@ -885,6 +894,42 @@ if output=$(python3 charts/tests/fetcher_guard.py 2>&1); then
 else
   fail "charts/tests/fetcher_guard.py"
   printf '%s\n' "$output" | sed 's/^/        /'
+fi
+
+# `.Files.Get` must hand the template over verbatim. If Helm ever rendered it —
+# or if someone "fixed" the braces by escaping them — the model would be served a
+# template with holes in it, and nothing downstream would say so.
+note "the chat template reaches the ConfigMap unrendered"
+if output=$(python3 - <<'PYTHON'
+import subprocess, sys, yaml, pathlib
+rendered = subprocess.run(
+    ["helm", "template", "ms", "charts/swarm-model-server", "--namespace", "model-server",
+     "--values", "charts/tests/cases/model-server-gemma.yaml"],
+    capture_output=True, text=True, check=True).stdout
+docs = [d for d in yaml.safe_load_all(rendered) if d]
+cm = next((d for d in docs
+           if d["kind"] == "ConfigMap" and d["metadata"]["name"].endswith("chat-template")), None)
+if cm is None:
+    sys.exit("the gemma case rendered no chat-template ConfigMap")
+served = cm["data"]["chat-template.jinja"].rstrip("\n")
+source = pathlib.Path(
+    "charts/swarm-model-server/files/chat-templates/gemma-2.jinja").read_text().rstrip("\n")
+if served != source:
+    sys.exit("the rendered template differs from the file in the chart")
+for needed in ("{{ bos_token }}", "{%- if messages[0]['role'] == 'system' -%}"):
+    if needed not in served:
+        sys.exit(f"{needed!r} did not survive into the ConfigMap")
+# The engine has to be told to use it.
+deployment = next(d for d in docs if d["kind"] == "Deployment")
+args = deployment["spec"]["template"]["spec"]["containers"][0]["args"]
+if "--chat-template" not in args:
+    sys.exit("the ConfigMap is rendered but the engine is never pointed at it")
+print(f"{len(served)} bytes, byte-identical to the file, and the engine is pointed at it")
+PYTHON
+); then
+  pass "$output"
+else
+  fail "$output"
 fi
 
 note "the connection link matches its specification"

@@ -52,9 +52,16 @@ makes — or LiteLLM, or the Confidential Router — with:
 
 Verified on the deployed endpoint. The listing therefore ships a chat template with exactly one
 change: a leading system message is folded into the first user turn, which is what Google's own
-guidance says to do for a model with no system role. The template is in `app.yaml`, rendered into a
-ConfigMap, and therefore inside the published evidence — so the modification is visible to anyone
-verifying what this deployment runs, rather than hidden in an image.
+guidance says to do for a model with no system role. It lives in the chart at
+`charts/swarm-model-server/files/chat-templates/gemma-2.jinja`, and the listing selects it by name
+(`model.chatTemplateFile`); it is rendered into a ConfigMap and therefore inside the published
+evidence — so the modification is visible to anyone verifying what this deployment runs, rather
+than hidden in an image.
+
+It lives in the chart rather than in `app.yaml` because a chat template is Jinja, and the
+marketplace parses every `{{ … }}` in a listing's values as *its* expression language. Inlined, the
+listing is green in CI and refused at publish with one error per tag (SUP-230). `.Files.Get` reads
+the file without rendering it, which is what gets a template past both interpolators.
 
 ## Measured, on one NVIDIA H200 NVL
 

@@ -5,7 +5,7 @@ metadata:
   name: llama-3-2-3b-instruct
   title: Llama 3.2 3B Instruct
   description: Meta's Llama 3.2 3B Instruct on an authenticated, OpenAI-compatible endpoint whose deployment publishes signed evidence of the weights it is serving. Tool calling works.
-  version: "0.1.0"
+  version: "0.2.0"
   category: ai-inference
   sourceRepo: https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct
   license: LicenseRef-Llama-3.2-Community
@@ -150,7 +150,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: swarm-model-server
-      version: "0.1.0"
+      version: "0.2.0"
     # The engine image, and the only image this deployment runs — it serves the
     # model and, as an init container, fetches and hash-checks the weights. An
     # unpinned reference would make the evidence digest uncomputable

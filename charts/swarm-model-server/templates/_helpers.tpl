@@ -111,6 +111,20 @@ render time, refused here while there is still a human looking.
 {{- end -}}
 {{- end -}}
 
+{{/* The trap this chart was caught by once. A listing that sets a template
+     inline renders here and is refused by the marketplace's publish parse, which
+     is a long way from the person who wrote it — so it is refused here instead,
+     where the message can say what to do. */}}
+{{- if .Values.model.chatTemplate -}}
+{{- fail "model.chatTemplate is gone: a chat template is Jinja, and a listing cannot carry `{{ }}` because the marketplace parses it as its own expression language. Put the template in charts/swarm-model-server/files/chat-templates/ and name it with model.chatTemplateFile" -}}
+{{- end -}}
+{{- if .Values.model.chatTemplateFile -}}
+{{- $file := printf "files/chat-templates/%s" .Values.model.chatTemplateFile -}}
+{{- if not (.Files.Get $file) -}}
+{{- fail (printf "model.chatTemplateFile %q does not exist: %s is not in the chart, so the engine would start with no template at all" .Values.model.chatTemplateFile $file) -}}
+{{- end -}}
+{{- end -}}
+
 {{- if .Values.ingress.enabled -}}
 {{- if not .Values.hostname -}}
 {{- fail "hostname is empty and the ingress is on: there is no name to serve on" -}}
@@ -182,7 +196,7 @@ the manifests — so anything secret must not be here (marketplace trap 4).
 {{- if .Values.model.toolCalling.enabled -}}
 {{- $args = concat $args (list "--enable-auto-tool-choice" "--tool-call-parser" .Values.model.toolCalling.parser) -}}
 {{- end -}}
-{{- if .Values.model.chatTemplate -}}
+{{- if .Values.model.chatTemplateFile -}}
 {{- $args = concat $args (list "--chat-template" "/etc/model/chat-template.jinja") -}}
 {{- end -}}
 {{- $args = concat $args (.Values.model.extraArgs | default list) -}}

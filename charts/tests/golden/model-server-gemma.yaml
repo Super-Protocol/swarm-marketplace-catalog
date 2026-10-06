@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: swarm-model-server
   labels:
-    helm.sh/chart: swarm-model-server-0.1.0
+    helm.sh/chart: swarm-model-server-0.2.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"
@@ -21,7 +21,7 @@ kind: ConfigMap
 metadata:
   name: swarm-model-server-weights
   labels:
-    helm.sh/chart: swarm-model-server-0.1.0
+    helm.sh/chart: swarm-model-server-0.2.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"
@@ -197,7 +197,7 @@ kind: ConfigMap
 metadata:
   name: swarm-model-server-chat-template
   labels:
-    helm.sh/chart: swarm-model-server-0.1.0
+    helm.sh/chart: swarm-model-server-0.2.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"
@@ -232,7 +232,7 @@ kind: PersistentVolumeClaim
 metadata:
   name: swarm-model-server-weights
   labels:
-    helm.sh/chart: swarm-model-server-0.1.0
+    helm.sh/chart: swarm-model-server-0.2.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"
@@ -251,7 +251,7 @@ kind: Service
 metadata:
   name: swarm-model-server
   labels:
-    helm.sh/chart: swarm-model-server-0.1.0
+    helm.sh/chart: swarm-model-server-0.2.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"
@@ -274,7 +274,7 @@ kind: Deployment
 metadata:
   name: swarm-model-server
   labels:
-    helm.sh/chart: swarm-model-server-0.1.0
+    helm.sh/chart: swarm-model-server-0.2.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"
@@ -295,7 +295,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/weights: 1ad670dcc02e9a2f5eb1b6230e55d62b2a2cf87bcb8bde2ea4ab3c8f2efa7573
+        checksum/weights: 1fa2582873f82ad6fdec0e0d9c8e42662e98155b30923ec97d6f831b72388ea2
       labels:
         app.kubernetes.io/name: swarm-model-server
         app.kubernetes.io/instance: ms
@@ -498,7 +498,7 @@ kind: Ingress
 metadata:
   name: swarm-model-server
   labels:
-    helm.sh/chart: swarm-model-server-0.1.0
+    helm.sh/chart: swarm-model-server-0.2.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"
