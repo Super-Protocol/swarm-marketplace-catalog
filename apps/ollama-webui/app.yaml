@@ -5,7 +5,7 @@ metadata:
   name: ollama-webui
   title: Ollama + Open WebUI
   description: Run large language models with a chat interface powered by Open WebUI.
-  version: "1.0.8"
+  version: "1.0.9"
   category: ai-inference
   sourceRepo: https://github.com/swarm-cloud/marketplace-apps
   license: MIT
@@ -155,7 +155,7 @@ components:
       type: helm
       repoUrl: https://otwld.github.io/ollama-helm/
       chart: ollama
-      version: "1.12.0"
+      version: "1.85.0"
     deployment:
       values:
         base:
