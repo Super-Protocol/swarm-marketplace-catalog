@@ -786,42 +786,107 @@ done
 # cloud acts on, and `evidence.exclude` in the listing is what the marketplace
 # reads to show it beside the digest.
 note "each model listing declares the exclusion its chart annotates"
-for app in llama-3-2-3b-instruct gemma-2-2b-it qwen3-coder-30b-a3b-instruct-fp8; do
-  if python3 - "apps/$app/app.yaml" "charts/tests/golden/model-server-llama.yaml" <<'PYTHON'
+# Each listing against its own golden. Feeding one golden to all three would
+# still check every listing's declaration, but would only ever resolve the
+# llama render's pointer — and a pointer is an index, so the whole point of
+# resolving it is that it is checked against the object it indexes.
+for pair in "llama-3-2-3b-instruct:model-server-llama" \
+            "gemma-2-2b-it:model-server-gemma" \
+            "qwen3-coder-30b-a3b-instruct-fp8:model-server-qwen-fp8"; do
+  app="${pair%%:*}"
+  case_name="${pair##*:}"
+  if output=$(python3 - "apps/$app/app.yaml" "charts/tests/golden/$case_name.yaml" <<'PYTHON'
 import sys, yaml
 definition = yaml.safe_load(open(sys.argv[1]))
 golden = [d for d in yaml.safe_load_all(open(sys.argv[2])) if d]
 ingress = next(d for d in golden if d["kind"] == "Ingress")
 annotated = ingress["metadata"]["annotations"]["swarm.io/exclude-evidence-fields"]
+pointers = [p.strip() for p in annotated.split(",") if p.strip()]
 
-# The pointer has to resolve to the host it claims to name. It indexes
-# `rules`, so a second rule added above would leave a well-formed exclusion
-# pointing at the wrong value and nothing else here would notice.
-node = ingress
-for token in annotated.strip("/").split("/"):
-    node = node[int(token)] if isinstance(node, list) else node[token]
-if node != ingress["spec"]["rules"][0]["host"]:
-    sys.exit("the annotation's pointer does not resolve to the ingress host")
+# Every pointer has to resolve, and to resolve to the hostname it claims to
+# name. They are indexes, so a second rule added above would leave a
+# well-formed exclusion pointing at the wrong value and nothing else here
+# would notice.
+host = ingress["spec"]["rules"][0]["host"]
+for pointer in pointers:
+    node = ingress
+    for token in pointer.strip("/").split("/"):
+        node = node[int(token)] if isinstance(node, list) else node[token]
+    if node != host:
+        sys.exit(f"{pointer} resolves to {node!r}, not the ingress host {host!r}")
+
+# Every place the hostname appears in this object has to be one of them.
+def host_pointers(node, prefix=""):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield from host_pointers(value, f"{prefix}/{key}")
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from host_pointers(value, f"{prefix}/{index}")
+    elif node == host:
+        yield prefix
+
+found = set(host_pointers(ingress["spec"], "/spec"))
+missing = found - set(pointers)
+if missing:
+    sys.exit(f"the hostname also appears at {sorted(missing)}, which is not excluded")
 
 declared = definition.get("evidence", {}).get("exclude", [])
 fields = {f for entry in declared for f in entry.get("fields", [])}
-if annotated not in fields:
-    sys.exit(f"the listing does not declare {annotated}: {sorted(fields)}")
+for pointer in pointers:
+    if pointer not in fields:
+        sys.exit(f"the listing does not declare {pointer}: {sorted(fields)}")
 names = {entry["match"].get("name") for entry in declared}
 if ingress["metadata"]["name"] not in names:
     sys.exit(f"the listing's exclusion matches {names}, not {ingress['metadata']['name']}")
+print(f"{len(pointers)} pointer(s), all resolved and declared")
 PYTHON
-  then
-    pass "$app"
+  ); then
+    pass "$app ($output)"
   else
-    fail "$app"
+    fail "$app: $output"
   fi
 done
 
-# The connection link is the artefact that leaves this repository and is parsed
-# somewhere else — the Confidential Router's admin console. Both ends are written
-# against docs/model-connection-link.md, so the spec's vectors run here, and each
-# listing's own output template is then fed through the same parser.
+# TLS is off in every listing because the platform terminates it, but if anyone
+# turns it on the hostname appears a second time under /spec/tls/0/hosts/0 — and
+# one unexcluded copy is enough to make the digest a property of the deployment.
+note "the hostname stays excluded when TLS is switched on"
+tls_render="$(mktemp)"
+if helm template ms charts/swarm-model-server --namespace model-server \
+      --values charts/tests/cases/model-server-llama.yaml \
+      --set ingress.tls.enabled=true --set ingress.tls.secretName=tls > "$tls_render" 2>&1 \
+   && python3 - "$tls_render" <<'PYTHON'
+import sys, yaml
+ingress = next(d for d in yaml.safe_load_all(open(sys.argv[1])) if d and d["kind"] == "Ingress")
+pointers = {p.strip() for p in
+            ingress["metadata"]["annotations"]["swarm.io/exclude-evidence-fields"].split(",")}
+host = ingress["spec"]["rules"][0]["host"]
+if ingress["spec"]["tls"][0]["hosts"] != [host]:
+    sys.exit("the TLS block does not carry the hostname this test assumes")
+for expected in ("/spec/rules/0/host", "/spec/tls/0/hosts/0"):
+    if expected not in pointers:
+        sys.exit(f"{expected} is not excluded: {sorted(pointers)}")
+PYTHON
+then
+  pass "both /spec/rules/0/host and /spec/tls/0/hosts/0 are excluded"
+else
+  fail "a TLS-enabled render leaves the hostname in the snapshot"
+  sed 's/^/        /' "$tls_render"
+fi
+rm -f "$tls_render"
+
+# The fetcher is what stands between the manifest and the GPU, so its refusals
+# are tested rather than read. It is loaded from the chart's files/ directory —
+# the same bytes the ConfigMap carries — and handed manifests it must reject.
+note "the weights fetcher refuses what the manifest should not be able to say"
+if output=$(python3 charts/tests/fetcher_guard.py 2>&1); then
+  pass "$(printf '%s' "$output" | tail -1)"
+else
+  fail "charts/tests/fetcher_guard.py"
+  printf '%s\n' "$output" | sed 's/^/        /'
+fi
+
 note "the connection link matches its specification"
 if output=$(python3 charts/tests/smoke/model-server.py --self-test 2>&1); then
   pass "docs/model-connection-link.md test vectors ($(printf '%s' "$output" | grep -c '  ok ') vectors)"

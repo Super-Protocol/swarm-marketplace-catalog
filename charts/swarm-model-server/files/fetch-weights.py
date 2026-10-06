@@ -70,7 +70,9 @@ def main() -> int:
     done = 0
     for entry in manifest["files"]:
         rel, sha, size = entry["path"], entry["sha256"], entry["size"]
-        if "/" in rel and (".." in rel.split("/") or rel.startswith("/")):
+        # Every component, not only the ones in a path with a separator in it:
+        # a bare ".." has no "/" and would otherwise reach os.path.join.
+        if rel.startswith("/") or any(part in ("", ".", "..") for part in rel.split("/")):
             log(f"refusing suspicious manifest path {rel!r}")
             return 1
         dest = os.path.join(target, rel)

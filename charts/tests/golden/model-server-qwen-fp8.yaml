@@ -169,7 +169,9 @@ data:
         done = 0
         for entry in manifest["files"]:
             rel, sha, size = entry["path"], entry["sha256"], entry["size"]
-            if "/" in rel and (".." in rel.split("/") or rel.startswith("/")):
+            # Every component, not only the ones in a path with a separator in it:
+            # a bare ".." has no "/" and would otherwise reach os.path.join.
+            if rel.startswith("/") or any(part in ("", ".", "..") for part in rel.split("/")):
                 log(f"refusing suspicious manifest path {rel!r}")
                 return 1
             dest = os.path.join(target, rel)
@@ -283,7 +285,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/weights: 845de3dcf90ff32a2f1d588a05b5e4d481f2b8cdc963685784c0be455c032d78
+        checksum/weights: 6f97d4bae7376577f620ac487764c699dd53cd419afc1c7789a4553465630f80
       labels:
         app.kubernetes.io/name: swarm-model-server
         app.kubernetes.io/instance: ms
