@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.10.3"
+  version: "0.10.4"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -456,6 +456,21 @@ components:
             size: 30Gi
           ingress:
             enabled: false
+          # llama-server counts the host's CPUs. This container is capped at the
+          # limit below, and a thread per host CPU is what throttles token
+          # generation. The limit is read back from the container so the two
+          # cannot drift, including when the GPU patch replaces `resources`.
+          extraEnv:
+            - name: LLAMA_ARG_THREADS
+              valueFrom:
+                resourceFieldRef:
+                  resource: limits.cpu
+                  divisor: "1"
+            - name: LLAMA_ARG_THREADS_BATCH
+              valueFrom:
+                resourceFieldRef:
+                  resource: limits.cpu
+                  divisor: "1"
           resources:
             requests:
               cpu: "2"
