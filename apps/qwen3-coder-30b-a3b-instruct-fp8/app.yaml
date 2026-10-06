@@ -5,7 +5,7 @@ metadata:
   name: qwen3-coder-30b-a3b-instruct-fp8
   title: Qwen3-Coder 30B A3B Instruct (FP8)
   description: Qwen3-Coder 30B-A3B Instruct in Qwen's own FP8 quantisation — a coding model that fits one H200 NVL with room for a long context — on an authenticated, OpenAI-compatible endpoint whose deployment publishes signed evidence of the weights. Tool calling works.
-  version: "0.1.0"
+  version: "0.2.0"
   category: ai-inference
   sourceRepo: https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
   license: Apache-2.0
@@ -150,7 +150,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: swarm-model-server
-      version: "0.1.0"
+      version: "0.2.0"
     # The engine image, and the only image this deployment runs — it serves the
     # model and, as an init container, fetches and hash-checks the weights. An
     # unpinned reference would make the evidence digest uncomputable

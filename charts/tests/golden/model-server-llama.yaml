@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: swarm-model-server
   labels:
-    helm.sh/chart: swarm-model-server-0.1.0
+    helm.sh/chart: swarm-model-server-0.2.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"
@@ -21,7 +21,7 @@ kind: ConfigMap
 metadata:
   name: swarm-model-server-weights
   labels:
-    helm.sh/chart: swarm-model-server-0.1.0
+    helm.sh/chart: swarm-model-server-0.2.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"
@@ -207,7 +207,7 @@ kind: PersistentVolumeClaim
 metadata:
   name: swarm-model-server-weights
   labels:
-    helm.sh/chart: swarm-model-server-0.1.0
+    helm.sh/chart: swarm-model-server-0.2.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"
@@ -226,7 +226,7 @@ kind: Service
 metadata:
   name: swarm-model-server
   labels:
-    helm.sh/chart: swarm-model-server-0.1.0
+    helm.sh/chart: swarm-model-server-0.2.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"
@@ -249,7 +249,7 @@ kind: Deployment
 metadata:
   name: swarm-model-server
   labels:
-    helm.sh/chart: swarm-model-server-0.1.0
+    helm.sh/chart: swarm-model-server-0.2.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"
@@ -270,7 +270,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/weights: d56f49cfb973f77aff611f9ec826c316e644614e3e212367034bacbc62ac808e
+        checksum/weights: 4887bc8ac432762479c846c9b74515dba92e626398ebba66c44313ba6a87770f
       labels:
         app.kubernetes.io/name: swarm-model-server
         app.kubernetes.io/instance: ms
@@ -468,7 +468,7 @@ kind: Ingress
 metadata:
   name: swarm-model-server
   labels:
-    helm.sh/chart: swarm-model-server-0.1.0
+    helm.sh/chart: swarm-model-server-0.2.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"

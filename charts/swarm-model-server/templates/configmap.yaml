@@ -19,12 +19,13 @@ data:
     {{- toPrettyJson (dict "repo" .Values.model.weights.repo "revision" .Values.model.weights.revision "totalBytes" (int64 .Values.model.weights.totalBytes) "files" .Values.model.weights.files) | nindent 4 }}
   fetch-weights.py: |
     {{- .Files.Get "files/fetch-weights.py" | nindent 4 }}
-{{- if .Values.model.chatTemplate }}
+{{- if .Values.model.chatTemplateFile }}
 ---
 {{- /*
-A chat-template override. Only ever needed when the model's own template cannot
-answer an ordinary OpenAI request — see the Gemma 2 listing's README for the one
-case in this repository.
+A chat-template override, read from the chart's own files/ directory rather than
+from a value. `.Files.Get` returns the bytes without rendering them as a Helm
+template, which is what lets a file full of `{{ … }}` survive — see
+files/chat-templates/README.md for why a listing cannot carry one.
 */ -}}
 apiVersion: v1
 kind: ConfigMap
@@ -34,5 +35,5 @@ metadata:
     {{- include "swarm-model-server.labels" . | nindent 4 }}
 data:
   chat-template.jinja: |
-    {{- .Values.model.chatTemplate | nindent 4 }}
+    {{- .Files.Get (printf "files/chat-templates/%s" .Values.model.chatTemplateFile) | nindent 4 }}
 {{- end }}

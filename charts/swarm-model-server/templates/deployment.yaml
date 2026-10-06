@@ -177,7 +177,7 @@ spec:
               mountPath: /cache
             - name: shm
               mountPath: /dev/shm
-            {{- if .Values.model.chatTemplate }}
+            {{- if .Values.model.chatTemplateFile }}
             - name: chat-template
               mountPath: /etc/model
               readOnly: true
@@ -219,7 +219,7 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: {{ .Values.shm.size }}
-        {{- if .Values.model.chatTemplate }}
+        {{- if .Values.model.chatTemplateFile }}
         - name: chat-template
           configMap:
             name: {{ $name }}-chat-template

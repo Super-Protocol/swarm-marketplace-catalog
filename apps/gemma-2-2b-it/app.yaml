@@ -5,7 +5,7 @@ metadata:
   name: gemma-2-2b-it
   title: Gemma 2 2B IT
   description: Google's Gemma 2 2B instruction-tuned on an authenticated, OpenAI-compatible endpoint whose deployment publishes signed evidence of the weights it is serving. This model cannot do tool calling — see the README before you plan on it.
-  version: "0.1.0"
+  version: "0.2.0"
   category: ai-inference
   sourceRepo: https://huggingface.co/google/gemma-2-2b-it
   license: LicenseRef-Gemma-Terms-of-Use
@@ -148,7 +148,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: swarm-model-server
-      version: "0.1.0"
+      version: "0.2.0"
     # The engine image, and the only image this deployment runs — it serves the
     # model and, as an init container, fetches and hash-checks the weights. An
     # unpinned reference would make the evidence digest uncomputable
@@ -177,31 +177,15 @@ components:
               enabled: false
             # Gemma 2's own chat template calls `raise_exception` on a `system`
             # message, so an OpenAI client — or LiteLLM, or the Confidential Router
-            # — gets a 400 on its first request. This is that template with one
-            # change: a leading system message is folded into the first user turn,
-            # which is what Google's own guidance says to do for a model with no
-            # system role. Nothing else differs.
-            chatTemplate: |
-              {{ bos_token }}
-              {%- if messages[0]['role'] == 'system' -%}
-                  {%- set system_message = messages[0]['content'] | trim + '\n\n' -%}
-                  {%- set loop_messages = messages[1:] -%}
-              {%- else -%}
-                  {%- set system_message = '' -%}
-                  {%- set loop_messages = messages -%}
-              {%- endif -%}
-              {%- for message in loop_messages -%}
-                  {%- if (message['role'] == 'user') != (loop.index0 % 2 == 0) -%}
-                      {{- raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') -}}
-                  {%- endif -%}
-                  {%- set role = 'model' if message['role'] == 'assistant' else message['role'] -%}
-                  {{- '<start_of_turn>' + role + '\n' -}}
-                  {%- if loop.first and role == 'user' -%}{{- system_message -}}{%- endif -%}
-                  {{- message['content'] | trim + '<end_of_turn>\n' -}}
-              {%- endfor -%}
-              {%- if add_generation_prompt -%}
-                  {{- '<start_of_turn>model\n' -}}
-              {%- endif -%}
+            # — gets a 400 on its first request. The chart carries a corrected copy
+            # that folds a leading system message into the first user turn, which is
+            # what Google's own guidance says to do for a model with no system role.
+            #
+            # A *file name*, not the template. A template is Jinja and Jinja is
+            # `{{ … }}`, which the marketplace parses as its own expression language
+            # the moment it appears in a listing's values — so an inlined template is
+            # refused at publish with one error per tag (SUP-230).
+            chatTemplateFile: gemma-2.jinja
 
             # ---------------------------------------------------------------
             # The weights, pinned file by file.

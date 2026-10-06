@@ -115,12 +115,20 @@ model:
     enabled: false
     parser: ""
 
-  # An optional chat-template override, rendered into a ConfigMap and passed as
-  # `--chat-template`. Needed for exactly one reason in this repository: Gemma 2
-  # ships a template that calls `raise_exception` on a `system` message, so an
-  # ordinary OpenAI client — and LiteLLM, and the router — gets a 400 on its
-  # first request. See `apps/gemma-2-2b-it/README.md`.
-  chatTemplate: ""
+  # An optional chat-template override: the *name of a file* in
+  # `files/chat-templates/`, never the template itself.
+  #
+  # A template is Jinja, and Jinja is `{{ … }}` — which a listing cannot carry,
+  # because the marketplace parses every `{{ … }}` in a listing's values as its
+  # own expression language and refuses the publish with one error per tag
+  # (SUP-230). `.Files.Get` reads the file's bytes without rendering them, so the
+  # template passes both interpolators untouched and nothing has to escape a
+  # brace. `files/chat-templates/README.md` has the whole story.
+  #
+  # Empty means the engine uses the template that ships with the weights — the
+  # one the manifest pinned by sha256, which is what you want unless a model's
+  # own template is broken for OpenAI-shaped requests.
+  chatTemplateFile: ""
 
   # Appended to the engine command line verbatim, last, so a listing can reach a
   # flag this chart has no opinion about.

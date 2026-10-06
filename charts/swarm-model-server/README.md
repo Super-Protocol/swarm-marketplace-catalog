@@ -51,6 +51,22 @@ does not match the files, a volume too small for the weights, a tool-call parser
 register, `gpu.enabled: false` (the engine's image is a CUDA build and does not serve on a CPU), an
 unpinned image, a model id with characters that would break the connection link.
 
+## Chat templates are files here, not values
+
+A model whose own chat template cannot answer an OpenAI-shaped request needs an override — Gemma 2
+is the one case here, because its template calls `raise_exception` on a `system` message. The
+override is a **file in `files/chat-templates/`**, named by the listing through
+`model.chatTemplateFile`, never a template passed as a value.
+
+That is not a style preference. A chat template is Jinja, and the marketplace parses every
+`{{ … }}` in a listing's values as its own expression language — seven namespaces, a dotted path,
+one optional `| json`. An inlined template passes the JSON Schema, renders perfectly, and is
+refused at publish with one error per tag. `.Files.Get` returns a file's bytes without rendering
+them as a Helm template, so the file passes both interpolators untouched and nothing has to escape
+a brace — which is the trap behind the trap, because escaping for two layers is how this gets
+rediscovered. The chart refuses a template passed inline, and `apps/tests/expressions.py` refuses
+one in CI.
+
 ## Weights at boot, not baked into an image
 
 The issue that commissioned this chart leaned towards baking the weights into the image, because
