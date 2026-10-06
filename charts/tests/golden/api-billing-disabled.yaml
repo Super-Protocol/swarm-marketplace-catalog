@@ -313,9 +313,11 @@ spec:
             limits:
               cpu: 50m
               memory: 128Mi
+              nvidia.com/gpu: "0"
             requests:
               cpu: 50m
               memory: 128Mi
+              nvidia.com/gpu: "0"
       containers:
         - name: router-api
           image: ghcr.io/super-protocol/confidential-router/router-api@sha256:025597cb7b207c00decb1b493ccbac01424f48e602f813fa4f42d1ab7babd3a7
@@ -381,9 +383,11 @@ spec:
             limits:
               cpu: 250m
               memory: 1Gi
+              nvidia.com/gpu: "0"
             requests:
               cpu: 250m
               memory: 1Gi
+              nvidia.com/gpu: "0"
       volumes:
         - name: config
           configMap:

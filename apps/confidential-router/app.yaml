@@ -406,6 +406,7 @@ resources:
     # and needs its own entry. Spaces stay in the value; the node-label mirror turns them
     # into hyphens for Kubernetes, while placement compares the raw product name.
     types:
+      - NVIDIA H100 NVL
       - NVIDIA H100 80GB HBM3
       - NVIDIA A100-SXM4-40GB
       - NVIDIA L40S
@@ -457,9 +458,13 @@ components:
             requests:
               cpu: "2"
               memory: 4Gi
+              # Explicit zero, not an omitted field. A GPU cluster space's LimitRange
+              # defaults a missing nvidia.com/gpu to the reserved count.
+              nvidia.com/gpu: "0"
             limits:
               cpu: "2"
               memory: 4Gi
+              nvidia.com/gpu: "0"
         patches:
           # The whole selection, as a list: a value that is exactly one
           # placeholder is interpolated in its native type, so this reaches the
@@ -518,7 +523,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-litellm
-      version: "0.1.1"
+      version: "0.1.2"
     images:
       - name: ghcr.io/berriai/litellm
         digest: sha256:e9711f484c7c8462c028803130afef546aa54c8d2fc11120242c01bbadc12e65

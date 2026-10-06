@@ -16,12 +16,12 @@ cd "$root"
 # One release name and namespace per listing. Neither reaches an object name in
 # these charts — they are chosen so the rendered labels say which listing a
 # golden belongs to, and nothing more.
-release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; patroni-postgresql) printf 'pg' ;; *) printf 'cr' ;; esac; }
-namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; patroni-postgresql) printf 'patroni' ;; *) printf 'confidential-router' ;; esac; }
+release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; patroni-postgresql) printf 'pg' ;; swarm-model-server) printf 'ms' ;; *) printf 'cr' ;; esac; }
+namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; patroni-postgresql) printf 'patroni' ;; swarm-model-server) printf 'model-server' ;; *) printf 'confidential-router' ;; esac; }
 
 RELEASE=cr
 NAMESPACE=confidential-router
-CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ui confidential-s3 patroni-postgresql)
+CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ui confidential-s3 patroni-postgresql swarm-model-server)
 
 update="${UPDATE:-}"
 failures=0
@@ -67,6 +67,7 @@ for chart in "${CHARTS[@]}"; do
     confidential-router-ui) values="charts/tests/cases/ui-default.yaml" ;;
     confidential-s3) values="charts/tests/cases/s3-default.yaml" ;;
     patroni-postgresql) values="charts/tests/cases/patroni-default.yaml" ;;
+    swarm-model-server) values="charts/tests/cases/model-server-llama.yaml" ;;
   esac
   if output=$(helm lint "charts/$chart" --values "$values" 2>&1); then
     pass "$chart"
@@ -739,6 +740,327 @@ drift_case() {
 drift_case confidential-router-api api-one-model
 drift_case confidential-router-api api-campaign 'invites.landingHostname=landing.{t}.example'
 drift_case confidential-router-ui ui-default
+# ---------------------------------------------------------------------------
+# swarm-model-server. Every one of these is a deployment that renders cleanly
+# and then serves something it should not, or nothing at all.
+# ---------------------------------------------------------------------------
+base_ms=(helm template ms charts/swarm-model-server --namespace model-server --values charts/tests/cases/model-server-llama.yaml)
+
+# The one that matters most: a public hostname in front of a GPU with no
+# credential is the deployment handed to whoever finds the name.
+refuses "an inference endpoint published with no key" "does not publish an unauthenticated" \
+  "${base_ms[@]}" --set apiKey= --set existingSecret=
+
+refuses "an ingress with no hostname" "hostname is empty" \
+  "${base_ms[@]}" --set hostname=
+
+# The weights pin. Without it the deployment serves whatever the network
+# returned, and the evidence says nothing about which bytes those were.
+refuses "a weights manifest with no files" "will not serve weights it cannot verify" \
+  "${base_ms[@]}" --set 'model.weights.files=null'
+
+refuses "a branch name where a commit belongs" "not a 40-character commit sha" \
+  "${base_ms[@]}" --set model.weights.revision=main
+
+refuses "a weight file with no sha256" "an unverifiable file is the whole problem" \
+  "${base_ms[@]}" --set 'model.weights.files[0].sha256='
+
+refuses "a totalBytes that does not match the files" "edited by hand" \
+  "${base_ms[@]}" --set model.weights.totalBytes=1234
+
+# Fails after the download rather than before it, with the volume full.
+refuses "a volume too small for the weights" "the download would fail with the volume full" \
+  "${base_ms[@]}" --set persistence.size=2Gi
+
+# An engine started with a parser it does not register exits at startup; an
+# engine started with the *wrong* parser turns every tool call into prose.
+refuses "a tool-call parser the engine does not register" "is not one of the parsers vLLM" \
+  "${base_ms[@]}" --set model.toolCalling.parser=llama3-json
+
+# The published engine image is a CUDA build. Without a card the pod starts,
+# finds no device, and restarts for ever.
+refuses "a GPU-less deployment of a CUDA-only engine" "does not serve on a CPU" \
+  "${base_ms[@]}" --set gpu.enabled=false
+
+refuses "an unpinned engine image" "pinned by digest" \
+  "${base_ms[@]}" --set image.digest= --set image.tag=
+
+# A model id travels in the connection link's fragment and in an OpenAI request
+# body; a space in it breaks both.
+refuses "a model id that would break the connection link" "limited to letters, digits" \
+  "${base_ms[@]}" --set 'model.id=my model'
+
+refuses "a model with no id at all" "model.id is empty" \
+  "${base_ms[@]}" --set model.id=
+
+refuses "TLS switched on with no certificate" "ingress.tls.secretName is empty" \
+  "${base_ms[@]}" --set ingress.tls.enabled=true
+
+# SUP-230: a chat template inlined in a listing renders here and is refused by the
+# marketplace's publish parse, a long way from whoever wrote it. The chart refuses
+# it where the message can say what to do instead.
+refuses "a chat template passed inline instead of by file name" "model.chatTemplate is gone" \
+  "${base_ms[@]}" --set 'model.chatTemplate=hello {{ bos_token }}'
+
+refuses "a chat template file the chart does not carry" "does not exist" \
+  "${base_ms[@]}" --set model.chatTemplateFile=not-here.jinja
+
+# The three things a published endpoint must not expose, asserted on the render
+# rather than trusted to the values file.
+note "swarm-model-server publishes only what authenticates"
+for case in model-server-llama model-server-gemma model-server-qwen-fp8; do
+  rendered=$(helm template ms charts/swarm-model-server --namespace model-server \
+    --values "charts/tests/cases/$case.yaml" 2>&1) || { fail "$case (render)"; continue; }
+  problems=""
+  # Every ingress path is under /v1: vLLM authenticates /v1 and leaves
+  # /metrics, /docs and /tokenize open.
+  paths=$(printf '%s\n' "$rendered" | awk '/^kind: Ingress$/,0' | grep -oE '^\s+- path: .*' | sed 's/.*path: //; s/"//g')
+  for path in $paths; do
+    case "$path" in /v1*) ;; *) problems="$problems published-path:$path" ;; esac
+  done
+  [ -n "$paths" ] || problems="$problems no-ingress-paths"
+  # The key is referenced, never written into an argument or a literal env value.
+  printf '%s\n' "$rendered" | grep -q 'secretKeyRef' || problems="$problems key-not-by-reference"
+  # A list item, not a mention: the chart's own comment explains why the flag is
+  # not used, and a bare substring match would flag that comment.
+  printf '%s\n' "$rendered" | grep -qE '^\s+- "?--api-key' && problems="$problems key-on-the-command-line"
+  # Every container that is not the engine asks for zero GPUs explicitly: a GPU
+  # space's LimitRange defaults a missing nvidia.com/gpu to the reserved count.
+  printf '%s\n' "$rendered" | grep -q 'nvidia.com/gpu: "0"' || problems="$problems fetcher-wants-a-gpu"
+  # The hostname is excluded from the evidence snapshot, or the digest is a
+  # property of the deployment rather than of the version.
+  printf '%s\n' "$rendered" | grep -q 'swarm.io/exclude-evidence-fields' || problems="$problems hostname-not-excluded"
+  if [ -z "$problems" ]; then pass "$case"; else fail "$case:$problems"; fi
+done
+
+# The same check for the model-serving family. The release name is fixed per
+# listing (`releasePrefix = shortName(listing.name)` on the marketplace side), so
+# it is held constant here and only the things a deployment really chooses — the
+# namespace, the hostname and the generated key — are varied.
+note "two deployments of a model listing differ only in the hostname"
+for case in model-server-llama model-server-gemma model-server-qwen-fp8; do
+  render_ms() {
+    helm template ms-fixed charts/swarm-model-server --namespace "$2" \
+      --values "charts/tests/cases/$case.yaml" \
+      --set "hostname=$1.conf-apps.example" \
+      --set "apiKey=$3" 2>&1 | grep -v '^  namespace:'
+  }
+  a=$(render_ms alpha space-a KEYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA)
+  b=$(render_ms beta space-b KEYBBBBBBBBBBBBBBBBBBBBBBBBBBBBB)
+  # The key is in a Secret, whose contents the platform lifts out before the
+  # snapshot is taken, so a difference there is not one this has to declare.
+  declared='alpha.conf-apps.example|beta.conf-apps.example|KEYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|KEYBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
+  undeclared=$(diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") | grep -E '^[<>]' | grep -vE "$declared" || true)
+  if [ -z "$undeclared" ]; then
+    pass "$case"
+  else
+    fail "$case: a field differs between two consumers and is not excluded:"
+    printf '%s\n' "$undeclared" | sed 's/^/        /'
+  fi
+done
+
+# The exclusion has to be declared in both places: the annotation is what the
+# cloud acts on, and `evidence.exclude` in the listing is what the marketplace
+# reads to show it beside the digest.
+note "each model listing declares the exclusion its chart annotates"
+# Each listing against its own golden. Feeding one golden to all three would
+# still check every listing's declaration, but would only ever resolve the
+# llama render's pointer — and a pointer is an index, so the whole point of
+# resolving it is that it is checked against the object it indexes.
+for pair in "llama-3-2-3b-instruct:model-server-llama" \
+            "gemma-2-2b-it:model-server-gemma" \
+            "qwen3-coder-30b-a3b-instruct-fp8:model-server-qwen-fp8"; do
+  app="${pair%%:*}"
+  case_name="${pair##*:}"
+  if output=$(python3 - "apps/$app/app.yaml" "charts/tests/golden/$case_name.yaml" <<'PYTHON'
+import sys, yaml
+definition = yaml.safe_load(open(sys.argv[1]))
+golden = [d for d in yaml.safe_load_all(open(sys.argv[2])) if d]
+ingress = next(d for d in golden if d["kind"] == "Ingress")
+annotated = ingress["metadata"]["annotations"]["swarm.io/exclude-evidence-fields"]
+pointers = [p.strip() for p in annotated.split(",") if p.strip()]
+
+# Every pointer has to resolve, and to resolve to the hostname it claims to
+# name. They are indexes, so a second rule added above would leave a
+# well-formed exclusion pointing at the wrong value and nothing else here
+# would notice.
+host = ingress["spec"]["rules"][0]["host"]
+for pointer in pointers:
+    node = ingress
+    for token in pointer.strip("/").split("/"):
+        node = node[int(token)] if isinstance(node, list) else node[token]
+    if node != host:
+        sys.exit(f"{pointer} resolves to {node!r}, not the ingress host {host!r}")
+
+# Every place the hostname appears in this object has to be one of them.
+def host_pointers(node, prefix=""):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield from host_pointers(value, f"{prefix}/{key}")
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from host_pointers(value, f"{prefix}/{index}")
+    elif node == host:
+        yield prefix
+
+found = set(host_pointers(ingress["spec"], "/spec"))
+missing = found - set(pointers)
+if missing:
+    sys.exit(f"the hostname also appears at {sorted(missing)}, which is not excluded")
+
+declared = definition.get("evidence", {}).get("exclude", [])
+fields = {f for entry in declared for f in entry.get("fields", [])}
+for pointer in pointers:
+    if pointer not in fields:
+        sys.exit(f"the listing does not declare {pointer}: {sorted(fields)}")
+names = {entry["match"].get("name") for entry in declared}
+if ingress["metadata"]["name"] not in names:
+    sys.exit(f"the listing's exclusion matches {names}, not {ingress['metadata']['name']}")
+print(f"{len(pointers)} pointer(s), all resolved and declared")
+PYTHON
+  ); then
+    pass "$app ($output)"
+  else
+    fail "$app: $output"
+  fi
+done
+
+# TLS is off in every listing because the platform terminates it, but if anyone
+# turns it on the hostname appears a second time under /spec/tls/0/hosts/0 — and
+# one unexcluded copy is enough to make the digest a property of the deployment.
+note "the hostname stays excluded when TLS is switched on"
+tls_render="$(mktemp)"
+if helm template ms charts/swarm-model-server --namespace model-server \
+      --values charts/tests/cases/model-server-llama.yaml \
+      --set ingress.tls.enabled=true --set ingress.tls.secretName=tls > "$tls_render" 2>&1 \
+   && python3 - "$tls_render" <<'PYTHON'
+import sys, yaml
+ingress = next(d for d in yaml.safe_load_all(open(sys.argv[1])) if d and d["kind"] == "Ingress")
+pointers = {p.strip() for p in
+            ingress["metadata"]["annotations"]["swarm.io/exclude-evidence-fields"].split(",")}
+host = ingress["spec"]["rules"][0]["host"]
+if ingress["spec"]["tls"][0]["hosts"] != [host]:
+    sys.exit("the TLS block does not carry the hostname this test assumes")
+for expected in ("/spec/rules/0/host", "/spec/tls/0/hosts/0"):
+    if expected not in pointers:
+        sys.exit(f"{expected} is not excluded: {sorted(pointers)}")
+PYTHON
+then
+  pass "both /spec/rules/0/host and /spec/tls/0/hosts/0 are excluded"
+else
+  fail "a TLS-enabled render leaves the hostname in the snapshot"
+  sed 's/^/        /' "$tls_render"
+fi
+rm -f "$tls_render"
+
+# The fetcher is what stands between the manifest and the GPU, so its refusals
+# are tested rather than read. It is loaded from the chart's files/ directory —
+# the same bytes the ConfigMap carries — and handed manifests it must reject.
+note "the weights fetcher refuses what the manifest should not be able to say"
+if output=$(python3 charts/tests/fetcher_guard.py 2>&1); then
+  pass "$(printf '%s' "$output" | tail -1)"
+else
+  fail "charts/tests/fetcher_guard.py"
+  printf '%s\n' "$output" | sed 's/^/        /'
+fi
+
+# `.Files.Get` must hand the template over verbatim. If Helm ever rendered it —
+# or if someone "fixed" the braces by escaping them — the model would be served a
+# template with holes in it, and nothing downstream would say so.
+note "the chat template reaches the ConfigMap unrendered"
+if output=$(python3 - <<'PYTHON'
+import subprocess, sys, yaml, pathlib
+rendered = subprocess.run(
+    ["helm", "template", "ms", "charts/swarm-model-server", "--namespace", "model-server",
+     "--values", "charts/tests/cases/model-server-gemma.yaml"],
+    capture_output=True, text=True, check=True).stdout
+docs = [d for d in yaml.safe_load_all(rendered) if d]
+cm = next((d for d in docs
+           if d["kind"] == "ConfigMap" and d["metadata"]["name"].endswith("chat-template")), None)
+if cm is None:
+    sys.exit("the gemma case rendered no chat-template ConfigMap")
+served = cm["data"]["chat-template.jinja"].rstrip("\n")
+source = pathlib.Path(
+    "charts/swarm-model-server/files/chat-templates/gemma-2.jinja").read_text().rstrip("\n")
+if served != source:
+    sys.exit("the rendered template differs from the file in the chart")
+for needed in ("{{ bos_token }}", "{%- if messages[0]['role'] == 'system' -%}"):
+    if needed not in served:
+        sys.exit(f"{needed!r} did not survive into the ConfigMap")
+# The engine has to be told to use it.
+deployment = next(d for d in docs if d["kind"] == "Deployment")
+args = deployment["spec"]["template"]["spec"]["containers"][0]["args"]
+if "--chat-template" not in args:
+    sys.exit("the ConfigMap is rendered but the engine is never pointed at it")
+print(f"{len(served)} bytes, byte-identical to the file, and the engine is pointed at it")
+PYTHON
+); then
+  pass "$output"
+else
+  fail "$output"
+fi
+
+note "the connection link matches its specification"
+if output=$(python3 charts/tests/smoke/model-server.py --self-test 2>&1); then
+  pass "docs/model-connection-link.md test vectors ($(printf '%s' "$output" | grep -c '  ok ') vectors)"
+else
+  fail "docs/model-connection-link.md test vectors"
+  printf '%s\n' "$output" | sed 's/^/        /'
+fi
+
+for app in llama-3-2-3b-instruct gemma-2-2b-it qwen3-coder-30b-a3b-instruct-fp8; do
+  if output=$(python3 - "apps/$app/app.yaml" <<'PYTHON'
+import pathlib, sys, yaml
+sys.path.insert(0, "charts/tests/smoke")
+# The checker is a script, not a module; load it by path so the parser under test
+# is literally the one the smoke run uses.
+import importlib.util
+spec = importlib.util.spec_from_file_location("ms", "charts/tests/smoke/model-server.py")
+ms = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ms)
+
+definition = yaml.safe_load(open(sys.argv[1]))
+outputs = {o["id"]: o for o in definition["outputs"]}
+link_output = outputs.get("connectionLink")
+if not link_output:
+    sys.exit("the listing emits no connectionLink output")
+if link_output.get("type") != "secret":
+    sys.exit(f"connectionLink is type {link_output.get('type')!r}, not 'secret': a link is a "
+             f"credential with a URL around it")
+
+# What the marketplace will substitute: a hostname and a generated key of the
+# shape the platform's generator emits (A-Za-z0-9, >= 32).
+key = "GENERATEDkey0123456789abcdefABCD"
+link = (link_output["value"]
+        .replace("{{ params.apiHostname }}", "m.conf-apps.example")
+        .replace("{{ params.apiKey }}", key))
+if "{{" in link:
+    sys.exit(f"an expression was left unsubstituted: {link}")
+
+base, model, parsed_key = ms.parse_connection_link(link)
+if parsed_key != key:
+    sys.exit(f"the key round-tripped as {parsed_key!r}")
+declared = definition["components"][0]["deployment"]["values"]["base"]["model"]["id"]
+if model != declared:
+    sys.exit(f"the link says model={model!r} but the chart serves {declared!r}")
+if base != "https://m.conf-apps.example/v1":
+    sys.exit(f"unexpected base URL {base!r}")
+
+# The key parameter has to constrain its alphabet, because an output template has
+# no percent-encoder: punctuation in a key would split the link on its own
+# separators.
+params = {p["id"]: p for p in definition["parameters"]}
+pattern = params["apiKey"].get("validation", {}).get("pattern")
+if pattern != "^[A-Za-z0-9]+$":
+    sys.exit(f"apiKey's pattern is {pattern!r}; the link needs a URL-safe alphabet")
+print(f"model={model} key={len(parsed_key)} chars")
+PYTHON
+  ); then
+    pass "$app emits a parseable link ($output)"
+  else
+    fail "$app: $output"
+  fi
+done
 
 note "Result"
 if [ "$failures" -eq 0 ]; then

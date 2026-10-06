@@ -130,3 +130,36 @@ build of another repository's images. The golden tests in
 [`../run.sh`](../run.sh) are what CI runs; this is what a human runs before
 changing something structural, and what produced the two fixes recorded in the
 SUP-93 pull request.
+
+## swarm-model-server
+
+Two scripts, and neither builds a cluster: a GPU model server cannot be smoke-tested in `kind`, so
+these run against a **deployed endpoint** — on the marketplace stand, or on any host that serves the
+chart.
+
+```bash
+# the artefact a person actually copies out of the deployment's secrets panel
+charts/tests/smoke/model-server.py 'https://m.example.com/v1#key=…&model=…' --tools auto
+
+# or an endpoint reached some other way, e.g. a port-forward during development
+charts/tests/smoke/model-server.py --base-url http://127.0.0.1:8000/v1 \
+    --key … --model … --tools auto --no-evidence
+
+charts/tests/smoke/model-server.py --self-test        # the link vectors; no endpoint needed
+charts/tests/smoke/model-throughput.py --base-url … --key … --model …
+```
+
+`--tools` is what the listing's card claims, and the run holds the endpoint to it: `auto` demands a
+valid tool call back from `tool_choice: "auto"`, `none` demands that a tools request be *refused*
+rather than answered with prose. That is why Gemma 2's "no tool calling" is a test and not a
+sentence.
+
+What it checks, in order: `/v1/models` is 401 without a key and 401 with a wrong one; a completion
+with a `system` message answers (Gemma 2's own template raises on one, which is why this is a check);
+streaming terminates with `[DONE]`; tool choice behaves as the card claims; and
+`/.well-known/swarm-evidence` serves a JWS, because a router cannot attest what it cannot fetch.
+
+**The engine version must be re-checked here before any bump.** Several vLLM releases start, pass a
+readiness probe, serve at full speed and return fluent nonsense on this hardware — a golden render
+cannot see that, and neither can `/health`. `charts/swarm-model-server/values.yaml` has the matrix.
+

@@ -5,7 +5,7 @@ metadata:
   name: confluent-platform
   title: Confluent Platform
   description: Apache Kafka with Confluent's Control Center — topics, schemas, consumer lag and message inspection from a browser.
-  version: "1.7.2"
+  version: "1.7.6"
   category: data-streaming
   # The chart this listing deploys, which is where the wiring can be read; Confluent Platform
   # itself is not open source.
@@ -165,6 +165,9 @@ resources:
   # it covers that pod as well as the broker, Schema Registry, the console pod (Control Center,
   # Prometheus, Alertmanager and the sign-in proxy) and the provision job that runs beside them
   # at startup.
+  #
+  # Storage covers the default Kafka log, 20Gi. Prometheus keeps its 8Gi on an emptyDir,
+  # which this quota does not count. The space is created at this size for every deployment.
   min:
     cpu: "2"
     memory: "12Gi"
@@ -173,6 +176,10 @@ resources:
     cpu: "4"
     memory: "14Gi"
     storage: "60Gi"
+  gpu:
+    required: false
+    types:
+      - NVIDIA H100 NVL
 
 components:
   - name: platform
@@ -180,7 +187,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confluent-platform
-      version: "0.7.2"
+      version: "0.7.3"
     # Pinned by digest, and the render fails if the chart ever references an image not listed here.
     # Confluent ships Control Center, its Prometheus and its Alertmanager as one matched set, so
     # the three carry the same version and are raised together.

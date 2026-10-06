@@ -214,6 +214,15 @@ precisely what the evidence exists to make impossible. Then declare each image i
 `images:` list with its digest: the renderer rewrites every reference to the digest and **fails
 closed** on any image not declared.
 
+**Never put another template language in a listing's values.** The marketplace parses every
+`{{ … }}` in `deployment.values`, `patches[].value` and `outputs[].value` as *its* expression
+language: seven namespaces, a dotted path, one optional `| json`, no function calls and no
+arithmetic. A model's Jinja chat template, a Go template, a Helm snippet — each one publishes with
+an error per tag (`"bos_token" is not a known namespace`), and none of it is visible to the JSON
+Schema, which sees a valid string. Put the file in the chart and have the listing name it;
+`.Files.Get` reads bytes without rendering them, so it survives Helm too. `apps/tests/expressions.py`
+checks this, and exists because the listing that taught it was green here and red on the stand.
+
 **Put every secret in a `Secret`.** The platform lifts all of them out of the manifests and seals
 them for the target. A password in a container `env` value or a command-line argument travels in the
 bundle in clear and lands in the evidence snapshot. A `Secret` is also the only place where a
@@ -426,6 +435,7 @@ Two habits that repeatedly turn out to matter:
 | `apps/confidential-claims-fraud` | Two components composed into one deployment; per-party credentials; continuous SQL; `charts/claims-fraud-feed/README.md` explains the mechanism with diagrams |
 | `apps/conversational-analyst` | Five components, data slots, publisher secrets, and a grounding job derived from the dataset's own schema |
 | `apps/rag-agent` | Data slots with a schema constraint |
+| `apps/llama-3-2-3b-instruct` and its siblings | One chart behind three cards; weights pinned by sha256 inside the evidence; a credential emitted as a connection link; a card that says what the model *cannot* do |
 
 ---
 

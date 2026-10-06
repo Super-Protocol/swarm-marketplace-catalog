@@ -31,6 +31,8 @@ resources:
   requests:
     cpu: 50m
     memory: 768Mi
+    nvidia.com/gpu: "0"
   limits:
     cpu: 50m
     memory: 768Mi
+    nvidia.com/gpu: "0"

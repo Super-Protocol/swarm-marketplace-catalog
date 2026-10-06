@@ -1,0 +1,22 @@
+{{- if .Values.persistence.enabled }}
+{{- /*
+The verified weights. Kept across restarts because the alternative is paying the
+download again — 29 GiB for the largest of these listings — every time the pod
+moves.
+*/ -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "swarm-model-server.fullname" . }}-weights
+  labels:
+    {{- include "swarm-model-server.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.accessMode }}
+  {{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size | quote }}
+{{- end }}

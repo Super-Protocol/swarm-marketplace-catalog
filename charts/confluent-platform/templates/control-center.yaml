@@ -141,9 +141,11 @@ spec:
             requests:
               cpu: 20m
               memory: 64Mi
+              nvidia.com/gpu: "0"
             limits:
               cpu: 20m
               memory: 64Mi
+              nvidia.com/gpu: "0"
           volumeMounts:
             - name: seed
               mountPath: /seed
@@ -299,9 +301,11 @@ spec:
             requests:
               cpu: 20m
               memory: 128Mi
+              nvidia.com/gpu: "0"
             limits:
               cpu: 20m
               memory: 128Mi
+              nvidia.com/gpu: "0"
         {{- end }}
         - name: prometheus
           image: {{ .Values.images.prometheus | quote }}

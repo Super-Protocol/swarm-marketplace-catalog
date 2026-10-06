@@ -88,9 +88,11 @@ kafka:
     requests:
       cpu: 500m
       memory: 3Gi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 500m
       memory: 3Gi
+      nvidia.com/gpu: "0"
 
 schemaRegistry:
   enabled: true
@@ -98,9 +100,11 @@ schemaRegistry:
     requests:
       cpu: 100m
       memory: 1Gi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 100m
       memory: 1Gi
+      nvidia.com/gpu: "0"
 
 # Control Center 2.x, its Prometheus and its Alertmanager run as three containers in one pod.
 # That is not packaging convenience: Control Center *writes* the trigger rules and the Alertmanager
@@ -114,17 +118,21 @@ controlCenter:
       requests:
         cpu: 500m
         memory: 3Gi
+        nvidia.com/gpu: "0"
       limits:
         cpu: 500m
         memory: 3Gi
+        nvidia.com/gpu: "0"
   prometheus:
     resources:
       requests:
         cpu: 200m
         memory: 2Gi
+        nvidia.com/gpu: "0"
       limits:
         cpu: 200m
         memory: 2Gi
+        nvidia.com/gpu: "0"
     # Metrics live for as long as the pod does. A restart loses the history and keeps the cluster
     # running, which is the right trade for an evaluation deployment; nothing else reads this data.
     storage: 8Gi
@@ -133,9 +141,11 @@ controlCenter:
       requests:
         cpu: 50m
         memory: 256Mi
+        nvidia.com/gpu: "0"
       limits:
         cpu: 50m
         memory: 256Mi
+        nvidia.com/gpu: "0"
 
 # Stream processing, as SQL over the topics. Confluent Platform for Apache Flink is the other
 # option and is licensed separately; ksqlDB ships under the Community licence, deploys as an
@@ -147,9 +157,11 @@ ksqldb:
     requests:
       cpu: 250m
       memory: 2Gi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 250m
       memory: 2Gi
+      nvidia.com/gpu: "0"
   # Statements applied once the server is up. Written as one SQL script; re-running it is safe
   # because every statement uses IF NOT EXISTS or CREATE OR REPLACE.
   statements: ""

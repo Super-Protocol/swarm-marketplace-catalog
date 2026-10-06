@@ -1,0 +1,18 @@
+{{ .Chart.Name }} {{ .Chart.Version }} — vLLM {{ .Chart.AppVersion }}
+
+  Model      {{ .Values.model.id }}
+  Weights    {{ .Values.model.weights.repo }}@{{ substr 0 12 .Values.model.weights.revision }}
+             {{ len .Values.model.weights.files }} files, {{ include "swarm-model-server.humanBytes" (dict "n" .Values.model.weights.totalBytes) }}, each verified by sha256 before the engine starts
+  Inside     http://{{ include "swarm-model-server.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/v1
+{{- if .Values.ingress.enabled }}
+  Published  https://{{ .Values.hostname }}/v1
+  Evidence   https://{{ .Values.hostname }}/.well-known/swarm-evidence
+{{- end }}
+  Tools      {{ if .Values.model.toolCalling.enabled }}tool_choice auto, parser {{ .Values.model.toolCalling.parser }}{{ else }}no auto tool choice — this model has no parser configured{{ end }}
+
+Every `/v1` request needs `Authorization: Bearer <the key>`. `/health` does not,
+which is why it is the probe; it is also why the ingress publishes `/v1` alone
+and leaves `/metrics` and `/docs` inside the cluster space.
+
+The first start downloads the weights and hashes them. That is minutes, and the
+pod is not ready until the engine has loaded them and compiled its graphs.
