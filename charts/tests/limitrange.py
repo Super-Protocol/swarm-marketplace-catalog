@@ -53,9 +53,27 @@ def memory_mib(value: str) -> float:
     return float(text) / (1024 * 1024)
 
 
+def pod_spec(doc: dict) -> dict | None:
+    """The pod spec one rendered object carries, wherever it keeps it.
+
+    Three shapes, because a container that escapes this function escapes the
+    whole check: a `Pod` *is* the pod spec, a `CronJob` buries it two templates
+    deep, and everything else that owns pods — Deployment, StatefulSet,
+    DaemonSet, Job, ReplicaSet — keeps it at `spec.template.spec`. No chart here
+    renders a bare `Pod` or a `CronJob` today; both are read anyway, so the first
+    one that does is checked rather than waved through.
+    """
+    spec = doc.get("spec") or {}
+    if doc.get("kind") == "Pod":
+        return spec or None
+    if doc.get("kind") == "CronJob":
+        spec = ((spec.get("jobTemplate") or {}).get("spec")) or {}
+    return ((spec.get("template") or {}).get("spec")) or None
+
+
 def containers(doc: dict):
     """Every container of every pod template in one rendered object."""
-    pod = ((doc.get("spec") or {}).get("template") or {}).get("spec")
+    pod = pod_spec(doc)
     if not pod:
         return
     for key in ("initContainers", "containers"):
@@ -93,7 +111,7 @@ def problems(kind: str, name: str, container: dict) -> list[str]:
 
 
 def cases(only: str | None) -> list[tuple[str, str]]:
-    found = []
+    local, vendor = [], []
     with open("charts/tests/cases.tsv", encoding="utf-8") as handle:
         for line in handle:
             if not line.strip() or line.startswith("#"):
@@ -102,10 +120,20 @@ def cases(only: str | None) -> list[tuple[str, str]]:
             # A chart pulled from a vendor repository carries whatever defaults its
             # author chose; what makes it admissible is the listing's own values,
             # which this render does not see.
-            if repo or (only and name != only):
-                continue
-            found.append((name, chart))
-    return found
+            (vendor if repo else local).append((name, chart))
+
+    if only is None:
+        return local
+
+    selected = [case for case in local if case[0] == only]
+    if selected:
+        return selected
+    # Exiting 0 having checked nothing is the one outcome this script must never
+    # produce: invoked by hand on a name it skipped, it would read as a pass.
+    if any(name == only for name, _ in vendor):
+        raise SystemExit(f"  FAIL  {only} renders a vendor chart, which this check "
+                         f"does not cover — see the comment in cases()")
+    raise SystemExit(f"  FAIL  no case named {only} in charts/tests/cases.tsv")
 
 
 def main(only: str | None) -> int:
