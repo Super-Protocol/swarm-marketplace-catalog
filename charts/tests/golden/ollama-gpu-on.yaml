@@ -6,10 +6,10 @@ metadata:
   name: cr-ollama
   namespace: confidential-router
   labels:
-    helm.sh/chart: ollama-1.12.0
+    helm.sh/chart: ollama-1.85.0
     app.kubernetes.io/name: ollama
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.6.3"
+    app.kubernetes.io/version: "0.35.0"
     app.kubernetes.io/managed-by: Helm
 automountServiceAccountToken: true
 ---
@@ -18,10 +18,10 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   labels:
-    helm.sh/chart: ollama-1.12.0
+    helm.sh/chart: ollama-1.85.0
     app.kubernetes.io/name: ollama
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.6.3"
+    app.kubernetes.io/version: "0.35.0"
     app.kubernetes.io/managed-by: Helm
   name: cr-ollama
   namespace: confidential-router
@@ -39,10 +39,10 @@ metadata:
   name: cr-ollama
   namespace: confidential-router
   labels:
-    helm.sh/chart: ollama-1.12.0
+    helm.sh/chart: ollama-1.85.0
     app.kubernetes.io/name: ollama
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.6.3"
+    app.kubernetes.io/version: "0.35.0"
     app.kubernetes.io/managed-by: Helm
 spec:
   type: ClusterIP
@@ -62,15 +62,16 @@ metadata:
   name: cr-ollama
   namespace: confidential-router
   labels:
-    helm.sh/chart: ollama-1.12.0
+    helm.sh/chart: ollama-1.85.0
     app.kubernetes.io/name: ollama
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.6.3"
+    app.kubernetes.io/version: "0.35.0"
     app.kubernetes.io/managed-by: Helm
 spec:
   replicas: 1
   strategy: 
     type: Recreate
+  revisionHistoryLimit: 10
   selector:
     matchLabels:
       app.kubernetes.io/name: ollama
@@ -78,13 +79,14 @@ spec:
   template:
     metadata:
       labels:
-        helm.sh/chart: ollama-1.12.0
+        helm.sh/chart: ollama-1.85.0
         app.kubernetes.io/name: ollama
         app.kubernetes.io/instance: cr
-        app.kubernetes.io/version: "0.6.3"
+        app.kubernetes.io/version: "0.35.0"
         app.kubernetes.io/managed-by: Helm
     spec:
       serviceAccountName: cr-ollama
+      terminationGracePeriodSeconds: 120
       securityContext:
         {}
       runtimeClassName: "nvidia"
@@ -92,7 +94,7 @@ spec:
         - name: ollama
           securityContext:
             {}
-          image: "ollama/ollama:0.6.3"
+          image: "ollama/ollama:0.35.0"
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -150,6 +152,7 @@ spec:
                     while ! /bin/ollama ps > /dev/null 2>&1; do
                       sleep 5
                     done
+
                     /bin/ollama pull  llama3.2:3b
       volumes:
         - name: ollama-data
@@ -167,10 +170,10 @@ metadata:
   name: "cr-ollama-test-connection"
   namespace: confidential-router
   labels:
-    helm.sh/chart: ollama-1.12.0
+    helm.sh/chart: ollama-1.85.0
     app.kubernetes.io/name: ollama
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.6.3"
+    app.kubernetes.io/version: "0.35.0"
     app.kubernetes.io/managed-by: Helm
   annotations:
     "helm.sh/hook": test
@@ -178,6 +181,8 @@ spec:
   containers:
     - name: wget
       image: busybox
-      command: ['wget']
-      args: ['cr-ollama:11434']
+      command: ['sh', '-ec']
+      args:
+        - >
+          wget -qO- "http://cr-ollama:11434" >/dev/null
   restartPolicy: Never

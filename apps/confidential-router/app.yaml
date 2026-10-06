@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.10.1"
+  version: "0.10.2"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -425,14 +425,14 @@ components:
       type: helm
       repoUrl: https://otwld.github.io/ollama-helm/
       chart: ollama
-      version: "1.12.0"
+      version: "1.85.0"
     # This chart references `ollama/ollama` by tag and its init container by
     # bare name, and an unpinned reference makes the deployment's evidence
     # digest uncomputable (specification 2.7). Declaring them here rewrites both
     # to a digest before the manifests are sent.
     images:
       - name: ollama/ollama
-        digest: sha256:de0786b654561830021475310d61df8073797e917d006a8c6372c8548efc639b
+        digest: sha256:2a6e883b917fc543389599dae79918f5cac9e1438890506982f44aa4f5625d01
       - name: busybox
         digest: sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
     deployment:
