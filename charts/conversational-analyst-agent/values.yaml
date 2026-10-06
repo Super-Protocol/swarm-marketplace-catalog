@@ -24,9 +24,11 @@ aivo:
       requests:
         cpu: 100m
         memory: 256Mi
+        nvidia.com/gpu: "0"
       limits:
         cpu: 100m
         memory: 256Mi
+        nvidia.com/gpu: "0"
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
@@ -111,9 +113,11 @@ aivo:
       requests:
         cpu: 100m
         memory: 256Mi
+        nvidia.com/gpu: "0"
       limits:
         cpu: 100m
         memory: 256Mi
+        nvidia.com/gpu: "0"
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
@@ -126,9 +130,11 @@ aivo:
       requests:
         cpu: 100m
         memory: 256Mi
+        nvidia.com/gpu: "0"
       limits:
         cpu: 100m
         memory: 256Mi
+        nvidia.com/gpu: "0"
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
@@ -141,9 +147,11 @@ aivo:
       requests:
         cpu: 100m
         memory: 256Mi
+        nvidia.com/gpu: "0"
       limits:
         cpu: 100m
         memory: 256Mi
+        nvidia.com/gpu: "0"
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: Always
@@ -158,9 +166,11 @@ aivo:
       requests:
         cpu: 500m
         memory: 1Gi
+        nvidia.com/gpu: "0"
       limits:
         cpu: 500m
         memory: 1Gi
+        nvidia.com/gpu: "0"
     imagePullSecrets:
       - name: regcred
     # Traffic reaches the agent through the gateway component, which is where authentication

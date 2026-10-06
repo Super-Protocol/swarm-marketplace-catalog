@@ -11,9 +11,11 @@ postgresBootstrap:
     requests:
       cpu: 100m
       memory: 256Mi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 100m
       memory: 256Mi
+      nvidia.com/gpu: "0"
 
 # Container registry credentials for the agent's private images. The secret this creates is
 # named `regcred` and is referenced by the identity and agent components.
@@ -33,9 +35,11 @@ neo4j:
     requests:
       cpu: 500m
       memory: 4Gi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 500m
       memory: 4Gi
+      nvidia.com/gpu: "0"
 
 postgresql:
   fullnameOverride: analyst-postgresql
@@ -59,9 +63,11 @@ postgresql:
       requests:
         cpu: 250m
         memory: 512Mi
+        nvidia.com/gpu: "0"
       limits:
         cpu: 250m
         memory: 512Mi
+        nvidia.com/gpu: "0"
     persistence:
       size: 8Gi
     # Network policy belongs to the cluster space, which already isolates the namespace; a
@@ -92,9 +98,11 @@ redis:
       requests:
         cpu: 100m
         memory: 256Mi
+        nvidia.com/gpu: "0"
       limits:
         cpu: 100m
         memory: 256Mi
+        nvidia.com/gpu: "0"
     persistence:
       size: 8Gi
 
@@ -105,9 +113,11 @@ nats:
       requests:
         cpu: 100m
         memory: 256Mi
+        nvidia.com/gpu: "0"
       limits:
         cpu: 100m
         memory: 256Mi
+        nvidia.com/gpu: "0"
   # The reloader container has no resources field of its own; `merge` is how this chart
   # adds one. Without it LimitRange fills a default limit above the request and the pod
   # is rejected (maxLimitRequestRatio is 1).
@@ -117,9 +127,11 @@ nats:
         requests:
           cpu: 10m
           memory: 32Mi
+          nvidia.com/gpu: "0"
         limits:
           cpu: 10m
           memory: 32Mi
+          nvidia.com/gpu: "0"
   # Debug toolbox. Its chart renders `resources: {}`, which LimitRange then rejects.
   natsBox:
     container:
@@ -127,9 +139,11 @@ nats:
         requests:
           cpu: 10m
           memory: 32Mi
+          nvidia.com/gpu: "0"
         limits:
           cpu: 10m
           memory: 32Mi
+          nvidia.com/gpu: "0"
   config:
     monitor:
       enabled: true
@@ -151,9 +165,11 @@ minio:
     requests:
       cpu: 250m
       memory: 1Gi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 250m
       memory: 1Gi
+      nvidia.com/gpu: "0"
   # The bucket Job only sets a memory request upstream. A missing CPU request and missing
   # limits are filled by LimitRange and then rejected.
   makeBucketJob:
@@ -161,9 +177,11 @@ minio:
       requests:
         cpu: 50m
         memory: 128Mi
+        nvidia.com/gpu: "0"
       limits:
         cpu: 50m
         memory: 128Mi
+        nvidia.com/gpu: "0"
   # Upstream ships a default console user, so this container is created too, and its
   # chart only sets a memory request.
   makeUserJob:
@@ -171,9 +189,11 @@ minio:
       requests:
         cpu: 50m
         memory: 128Mi
+        nvidia.com/gpu: "0"
       limits:
         cpu: 50m
         memory: 128Mi
+        nvidia.com/gpu: "0"
   persistence:
     size: 20Gi
   rootUser: root

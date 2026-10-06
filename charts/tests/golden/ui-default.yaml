@@ -5,7 +5,7 @@ kind: Service
 metadata:
   name: confidential-router-ui
   labels:
-    helm.sh/chart: confidential-router-ui-0.1.13
+    helm.sh/chart: confidential-router-ui-0.1.14
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.3.2"
@@ -28,7 +28,7 @@ kind: Deployment
 metadata:
   name: confidential-router-ui
   labels:
-    helm.sh/chart: confidential-router-ui-0.1.13
+    helm.sh/chart: confidential-router-ui-0.1.14
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.3.2"
@@ -112,9 +112,11 @@ spec:
             limits:
               cpu: 100m
               memory: 512Mi
+              nvidia.com/gpu: "0"
             requests:
               cpu: 100m
               memory: 512Mi
+              nvidia.com/gpu: "0"
       volumes:
         - name: cache
           emptyDir: {}
@@ -127,7 +129,7 @@ kind: Ingress
 metadata:
   name: confidential-router-ui
   labels:
-    helm.sh/chart: confidential-router-ui-0.1.13
+    helm.sh/chart: confidential-router-ui-0.1.14
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.3.2"

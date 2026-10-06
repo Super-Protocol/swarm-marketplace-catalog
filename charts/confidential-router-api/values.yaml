@@ -118,9 +118,11 @@ migrations:
     requests:
       cpu: 50m
       memory: 128Mi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 50m
       memory: 128Mi
+      nvidia.com/gpu: "0"
 
 # `disabled` sells no credit at all: checkout is refused outright and the console
 # hides its buy panel, which is the honest shape for a deployment whose credit
@@ -418,9 +420,11 @@ resources:
   requests:
     cpu: 250m
     memory: 1Gi
+    nvidia.com/gpu: "0"
   limits:
     cpu: 250m
     memory: 1Gi
+    nvidia.com/gpu: "0"
 
 podAnnotations: {}
 podLabels: {}
@@ -484,6 +488,8 @@ postgresql:
     requests:
       cpu: 250m
       memory: 768Mi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 250m
       memory: 768Mi
+      nvidia.com/gpu: "0"

@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: patroni-postgresql
   labels:
-    helm.sh/chart: patroni-postgresql-0.2.0
+    helm.sh/chart: patroni-postgresql-0.2.1
     app.kubernetes.io/name: patroni-postgresql
     app.kubernetes.io/instance: pg
     app.kubernetes.io/version: "17.5"
@@ -22,7 +22,7 @@ kind: ConfigMap
 metadata:
   name: patroni-postgresql-scripts
   labels:
-    helm.sh/chart: patroni-postgresql-0.2.0
+    helm.sh/chart: patroni-postgresql-0.2.1
     app.kubernetes.io/name: patroni-postgresql
     app.kubernetes.io/instance: pg
     app.kubernetes.io/version: "17.5"
@@ -86,7 +86,7 @@ kind: ConfigMap
 metadata:
   name: patroni-postgresql-etcd
   labels:
-    helm.sh/chart: patroni-postgresql-0.2.0
+    helm.sh/chart: patroni-postgresql-0.2.1
     app.kubernetes.io/name: patroni-postgresql-etcd
     app.kubernetes.io/instance: pg
     app.kubernetes.io/component: dcs
@@ -178,7 +178,7 @@ kind: ConfigMap
 metadata:
   name: patroni-postgresql-router
   labels:
-    helm.sh/chart: patroni-postgresql-0.2.0
+    helm.sh/chart: patroni-postgresql-0.2.1
     app.kubernetes.io/name: patroni-postgresql-router
     app.kubernetes.io/instance: pg
     app.kubernetes.io/component: router
@@ -258,7 +258,7 @@ kind: Service
 metadata:
   name: patroni-postgresql-etcd
   labels:
-    helm.sh/chart: patroni-postgresql-0.2.0
+    helm.sh/chart: patroni-postgresql-0.2.1
     app.kubernetes.io/name: patroni-postgresql-etcd
     app.kubernetes.io/instance: pg
     app.kubernetes.io/component: dcs
@@ -285,7 +285,7 @@ kind: Service
 metadata:
   name: patroni-postgresql-pods
   labels:
-    helm.sh/chart: patroni-postgresql-0.2.0
+    helm.sh/chart: patroni-postgresql-0.2.1
     app.kubernetes.io/name: patroni-postgresql
     app.kubernetes.io/instance: pg
     app.kubernetes.io/version: "17.5"
@@ -312,7 +312,7 @@ kind: Service
 metadata:
   name: patroni-postgresql
   labels:
-    helm.sh/chart: patroni-postgresql-0.2.0
+    helm.sh/chart: patroni-postgresql-0.2.1
     app.kubernetes.io/name: patroni-postgresql
     app.kubernetes.io/instance: pg
     app.kubernetes.io/version: "17.5"
@@ -334,7 +334,7 @@ kind: Service
 metadata:
   name: patroni-postgresql-repl
   labels:
-    helm.sh/chart: patroni-postgresql-0.2.0
+    helm.sh/chart: patroni-postgresql-0.2.1
     app.kubernetes.io/name: patroni-postgresql
     app.kubernetes.io/instance: pg
     app.kubernetes.io/version: "17.5"
@@ -356,7 +356,7 @@ kind: Deployment
 metadata:
   name: patroni-postgresql-router
   labels:
-    helm.sh/chart: patroni-postgresql-0.2.0
+    helm.sh/chart: patroni-postgresql-0.2.1
     app.kubernetes.io/name: patroni-postgresql-router
     app.kubernetes.io/instance: pg
     app.kubernetes.io/component: router
@@ -374,7 +374,7 @@ spec:
         app.kubernetes.io/instance: pg
         app.kubernetes.io/component: router
       annotations:
-        checksum/config: a8eef04a704c95d49628dc40d2475ab29b2a7637cf12b432e5922b0d9ae438a5
+        checksum/config: 399a45ef1f0dfe1392016e96b32ae92b66609df79958d7c398f52abdee1955cb
     spec:
       enableServiceLinks: false
       automountServiceAccountToken: false
@@ -427,9 +427,11 @@ spec:
             limits:
               cpu: 100m
               memory: 64Mi
+              nvidia.com/gpu: "0"
             requests:
               cpu: 100m
               memory: 64Mi
+              nvidia.com/gpu: "0"
           volumeMounts:
             - name: config
               mountPath: /usr/local/etc/haproxy
@@ -445,7 +447,7 @@ kind: StatefulSet
 metadata:
   name: patroni-postgresql-etcd
   labels:
-    helm.sh/chart: patroni-postgresql-0.2.0
+    helm.sh/chart: patroni-postgresql-0.2.1
     app.kubernetes.io/name: patroni-postgresql-etcd
     app.kubernetes.io/instance: pg
     app.kubernetes.io/component: dcs
@@ -500,9 +502,11 @@ spec:
             limits:
               cpu: 50m
               memory: 32Mi
+              nvidia.com/gpu: "0"
             requests:
               cpu: 50m
               memory: 32Mi
+              nvidia.com/gpu: "0"
           volumeMounts:
             - name: scripts
               mountPath: /etc/etcd
@@ -550,9 +554,11 @@ spec:
             limits:
               cpu: 100m
               memory: 192Mi
+              nvidia.com/gpu: "0"
             requests:
               cpu: 100m
               memory: 192Mi
+              nvidia.com/gpu: "0"
           volumeMounts:
             - name: config
               mountPath: /run/etcd
@@ -575,7 +581,7 @@ kind: StatefulSet
 metadata:
   name: patroni-postgresql
   labels:
-    helm.sh/chart: patroni-postgresql-0.2.0
+    helm.sh/chart: patroni-postgresql-0.2.1
     app.kubernetes.io/name: patroni-postgresql
     app.kubernetes.io/instance: pg
     app.kubernetes.io/version: "17.5"
@@ -702,9 +708,11 @@ spec:
             limits:
               cpu: 250m
               memory: 768Mi
+              nvidia.com/gpu: "0"
             requests:
               cpu: 250m
               memory: 768Mi
+              nvidia.com/gpu: "0"
           volumeMounts:
             - name: pgdata
               mountPath: /home/postgres/pgdata

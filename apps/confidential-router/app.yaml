@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.10.0"
+  version: "0.10.1"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -406,6 +406,7 @@ resources:
     # and needs its own entry. Spaces stay in the value; the node-label mirror turns them
     # into hyphens for Kubernetes, while placement compares the raw product name.
     types:
+      - NVIDIA H100 NVL
       - NVIDIA H100 80GB HBM3
       - NVIDIA A100-SXM4-40GB
       - NVIDIA L40S
@@ -457,9 +458,13 @@ components:
             requests:
               cpu: "2"
               memory: 4Gi
+              # Explicit zero, not an omitted field. A GPU cluster space's LimitRange
+              # defaults a missing nvidia.com/gpu to the reserved count.
+              nvidia.com/gpu: "0"
             limits:
               cpu: "2"
               memory: 4Gi
+              nvidia.com/gpu: "0"
         patches:
           # The whole selection, as a list: a value that is exactly one
           # placeholder is interpolated in its native type, so this reaches the
@@ -518,7 +523,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-litellm
-      version: "0.1.1"
+      version: "0.1.2"
     images:
       - name: ghcr.io/berriai/litellm
         digest: sha256:e9711f484c7c8462c028803130afef546aa54c8d2fc11120242c01bbadc12e65
@@ -544,7 +549,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-api
-      version: "0.6.0"
+      version: "0.6.1"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
         digest: sha256:025597cb7b207c00decb1b493ccbac01424f48e602f813fa4f42d1ab7babd3a7
@@ -738,7 +743,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-ui
-      version: "0.1.13"
+      version: "0.1.14"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-ui
         digest: sha256:2c315c97b599cc57f51c7d0f0490a674bf7eb37c93b79119272a58d666413123

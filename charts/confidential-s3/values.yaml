@@ -86,9 +86,11 @@ gateway:
     requests:
       cpu: 250m
       memory: 512Mi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 250m
       memory: 512Mi
+      nvidia.com/gpu: "0"
   ingress:
     enabled: true
     className: nginx
@@ -138,9 +140,11 @@ api:
     requests:
       cpu: 250m
       memory: 1Gi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 250m
       memory: 1Gi
+      nvidia.com/gpu: "0"
 
 console:
   image:
@@ -157,9 +161,11 @@ console:
     requests:
       cpu: 100m
       memory: 512Mi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 100m
       memory: 512Mi
+      nvidia.com/gpu: "0"
   ingress:
     enabled: true
     className: nginx
@@ -213,9 +219,11 @@ garage:
     requests:
       cpu: 250m
       memory: 2Gi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 250m
       memory: 2Gi
+      nvidia.com/gpu: "0"
 
 # The one-shot that turns a started Garage into one that accepts writes: the
 # storage layout, and the gateway's credential. Both are cluster decisions rather
@@ -234,9 +242,11 @@ bootstrapJob:
     requests:
       cpu: 50m
       memory: 256Mi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 50m
       memory: 256Mi
+      nvidia.com/gpu: "0"
 
 # ---------------------------------------------------------------------------
 # Secrets
@@ -331,9 +341,11 @@ postgresql:
       requests:
         cpu: 250m
         memory: 512Mi
+        nvidia.com/gpu: "0"
       limits:
         cpu: 250m
         memory: 512Mi
+        nvidia.com/gpu: "0"
     persistence:
       size: 8Gi
     # A cluster space isolates the namespace already, and a deployment that ships

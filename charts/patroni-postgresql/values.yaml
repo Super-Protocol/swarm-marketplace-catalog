@@ -200,9 +200,11 @@ etcd:
     requests:
       cpu: 100m
       memory: 192Mi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 100m
       memory: 192Mi
+      nvidia.com/gpu: "0"
 
   # The init container runs for a second or two and exits. It still needs a request,
   # because a cluster space's quota is a hard one and a container with no request is a
@@ -211,9 +213,11 @@ etcd:
     requests:
       cpu: 50m
       memory: 32Mi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 50m
       memory: 32Mi
+      nvidia.com/gpu: "0"
 
   # One member per node, required, same argument as PostgreSQL's: two members of a
   # three-member quorum on one node is a quorum that one reboot takes.
@@ -414,9 +418,11 @@ router:
     requests:
       cpu: 100m
       memory: 64Mi
+      nvidia.com/gpu: "0"
     limits:
       cpu: 100m
       memory: 64Mi
+      nvidia.com/gpu: "0"
 
   # Two instances, never on one node — see above.
   podAntiAffinity:
@@ -461,9 +467,11 @@ resources:
   requests:
     cpu: 250m
     memory: 768Mi
+    nvidia.com/gpu: "0"
   limits:
     cpu: 250m
     memory: 768Mi
+    nvidia.com/gpu: "0"
 
 # Spilo starts as root: it has to chown the data directory, fix /etc/passwd when it
 # is given a random uid, and set a couple of sysctls — and then runs Patroni and

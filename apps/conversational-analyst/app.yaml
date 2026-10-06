@@ -9,7 +9,7 @@ metadata:
     plain language: the agent finds the relevant tables, writes the SQL, runs it inside the
     confidential cluster space and answers with figures and charts. Raw records never leave the
     space and never reach the model — only aggregates do.
-  version: "3.0.7"
+  version: "3.0.9"
   category: ai-agents
   license: Proprietary
   tags:
@@ -120,6 +120,10 @@ resources:
     cpu: "12"
     memory: "32Gi"
     storage: "120Gi"
+  gpu:
+    required: false
+    types:
+      - NVIDIA H100 NVL
 
 data:
   slots:
@@ -144,7 +148,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-platform
-      version: "0.3.1"
+      version: "0.3.2"
     deployment:
       values:
         base:
@@ -198,7 +202,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-identity
-      version: "0.5.2"
+      version: "0.5.3"
     deployment:
       values:
         base:
@@ -283,7 +287,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-agent
-      version: "0.4.1"
+      version: "0.4.2"
     deployment:
       values:
         base:
@@ -384,7 +388,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-gateway
-      version: "0.3.1"
+      version: "0.3.2"
     deployment:
       values:
         base:
@@ -487,7 +491,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-grounding
-      version: "0.3.1"
+      version: "0.3.2"
     deployment:
       values:
         base:
