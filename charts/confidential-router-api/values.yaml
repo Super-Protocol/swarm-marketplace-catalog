@@ -235,9 +235,20 @@ auth:
   bootstrapToken: ""
   bootstrapTokenExistingSecret: ""
   bootstrapTokenExistingSecretKey: bootstrap-token
-  # The address the bootstrapped account is created under. Only rendered
-  # alongside a token — on its own it configures nothing.
+  # The address the bootstrapped account is created under. The variable is
+  # rendered only alongside a token — on its own this configures nothing, though
+  # the Secret below carries the key either way.
+  #
+  # Delivered to the pod as CR_API_AUTH__BOOTSTRAP_EMAIL out of the Secret below
+  # rather than as a literal in the container's env list, for the same reason
+  # `adminEmails` is: a marketplace deployment fills this from the account
+  # deploying the listing, and the env list is attested. As a plain value it was
+  # published at `/.well-known/swarm-evidence` and made the evidence digest a
+  # property of who deployed it — the same address was already sealed two entries
+  # down, so one copy was protected and the other was not (SUP-241).
   bootstrapEmail: ""
+  bootstrapEmailExistingSecret: ""
+  bootstrapEmailExistingSecretKey: bootstrap-email
   # Who may read the operator-only console queries — today the invitation-campaign
   # aggregates and the fraud-watch numbers behind them. Empty means nobody, which
   # is the right default for a deployment that has not named its operators and the

@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.11.1"
+  version: "0.11.2"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -554,7 +554,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-api
-      version: "0.7.1"
+      version: "0.7.2"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
         digest: sha256:025597cb7b207c00decb1b493ccbac01424f48e602f813fa4f42d1ab7babd3a7
@@ -618,6 +618,12 @@ components:
             # asked for: the console's first administrator is that person, and a
             # parameter here would only be a second copy of an address the
             # marketplace already holds — one that drifts the moment either changes.
+            #
+            # The chart carries it to the pod in its Secret rather than as a
+            # literal in the container's env list, which is what keeps it out of
+            # the published snapshot: until chart 0.8.0 this one address was the
+            # last thing making the evidence digest a property of who deployed
+            # this listing rather than of the version (SUP-241).
             bootstrapEmail: "{{ consumer.user.email }}"
             # Who may read the campaign's own numbers — issued, redeemed,
             # activated, granted, and the fraud-watch queries behind them. Read
@@ -867,6 +873,16 @@ outputs:
 # They are instead the second reason `expectedDigest` is absent above — there is
 # no single value it could hold — and it stays absent until expectation profiles
 # declare one digest per parameter set (SUP-240).
+#
+# One field survived that and was found by the measurement it blocked: the
+# address of whoever deployed this, which the chart handed the API as a literal
+# in two containers' env lists. Byte-identical deployments by two different
+# marketplace accounts published two different digests, and each snapshot carried
+# a personal address nobody was told it would publish. It is in the chart's
+# Secret from 0.7.2 on (SUP-241) — and not in the exclusions below, because a
+# Secret's values are stripped by the platform rather than left out by this
+# listing, so there is no exclusion to disclose and the configuration a reviewer
+# reads is no smaller than it was.
 #
 # Each entry below is also a `swarm.io/exclude-evidence-fields` annotation on the
 # object that carries it. Repeated here because this block is what the

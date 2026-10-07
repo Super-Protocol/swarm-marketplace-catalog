@@ -229,6 +229,12 @@ refuses "an operator name where an address belongs" "not an email address" \
 refuses "two operator addresses in one list entry" "one address per list entry" \
   "${base_api[@]}" --set 'auth.adminEmails[0]=a@example.com\,b@example.com'
 
+# The one address the first account is created under. A name here is a
+# `POST /auth/bootstrap` that creates an account nobody can sign in to — and the
+# token is spent on it, so there is no second attempt.
+refuses "a bootstrap name where an address belongs" "not an email address" \
+  "${base_api[@]}" --set auth.bootstrapToken=golden-test-bootstrap-token --set auth.bootstrapEmail=operator
+
 # The console used to have its API origin compiled into its browser bundle, so
 # this chart refused to render one pointed anywhere else and the listing was
 # capped at the hostname the image was built for. The origin is resolved at run
@@ -735,6 +741,32 @@ for case in api-one-model api-campaign api-billing-stripe api-no-models api-endp
   fi
 done
 
+# The listing/chart seam again — the one confidential-s3's check above asks — on
+# the listing that needed it most and never had it asked. `consumer_fields.py`
+# existed from confidential-s3 0.1.1 and was only ever run
+# against that listing, while `confidential-router` passed the deployer's address
+# into two chart values — one sealed, one a literal in the container's env list.
+# Four published versions later a measurement found it: two deployments identical
+# but for who clicked deploy, two digests, and a personal address inside both
+# signed snapshots (SUP-241).
+#
+# Once per case rather than once, and that is the shape of the hole: a chart
+# renders an env var only on the path that uses it, so a single set of values
+# clears the paths it happens to exercise and says nothing about the rest. The
+# deployer's address is rendered only alongside a first-sign-in token — on
+# `api-one-model` it is neither published nor probed, and `consumer_fields.py`
+# says so rather than passing.
+note "no attested object of the router carries a consumer value as a literal"
+for case in api-bootstrap-token api-campaign api-one-model; do
+  if output=$(python3 charts/tests/consumer_fields.py confidential-router \
+      "confidential-router-api=charts/tests/cases/$case.yaml"); then
+    printf '%s\n' "$output" | sed "s/\$/ ($case)/"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/consumer_fields.py confidential-router $case"
+  fi
+done
+
 # The property this listing exists to have (SUP-211): two deployments of this
 # version, under two hostnames in two namespaces, differ only in fields the chart
 # excludes and the definition declares. Field by field rather than line by line,
@@ -753,6 +785,18 @@ drift_case() {
 drift_case confidential-router-api api-one-model
 drift_case confidential-router-api api-campaign 'invites.landingHostname=landing.{t}.example'
 drift_case confidential-router-ui ui-default
+
+# And the same question with the *consumer* varying, not just the hostname they
+# typed. The marketplace fills both of these from the account clicking deploy, so
+# two people deploying one version render two different values for them — which is
+# a difference no listing may declare, because declaring it admits one deployer.
+# On the bootstrap case rather than api-one-model: that is the path where the
+# address reaches a container's environment at all, and before SUP-241 it reached
+# it as a literal, on the server and on the migration container both.
+note "two people deploying the same version of the router attest the same snapshot"
+drift_case confidential-router-api api-bootstrap-token \
+  'auth.bootstrapEmail=deployer-{t}@example.test' 'auth.adminEmails[0]=deployer-{t}@example.test'
+
 # ---------------------------------------------------------------------------
 # swarm-model-server. Every one of these is a deployment that renders cleanly
 # and then serves something it should not, or nothing at all.

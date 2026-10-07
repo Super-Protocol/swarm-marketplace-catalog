@@ -49,11 +49,20 @@ origins allowed to call it, the checkout return URL, the campaign landing origin
 origin the console fetches from. They live in ConfigMaps of their own, named in the listing's
 `evidence.exclude` block and annotated on the objects that carry them.
 
+Left out for a different reason, and worth saying plainly: **your own email address is not in the
+snapshot.** The marketplace hands this deployment the address of the account deploying it — it is
+who the first administrator account is created for and who may read the campaign numbers — and both
+copies of it travel to the pod sealed, out of a Secret whose values the platform strips before it
+signs anything. Until chart 0.8.0 one of the two was a plain value in the container's environment,
+which published it to anyone who fetched the bundle and made the digest a property of who deployed
+this listing rather than of its version (SUP-241).
+
 That is a deliberate trade and it runs one way only: *where* this deployment answers is not
 attested, *what* it is configured to do is. The reason is that a digest containing the hostname
 would be a digest of one deployment — nobody else could ever reproduce it, and a pinned value would
-admit exactly one endpoint. With them out, two deployments of the same listing version attest the
-same snapshot, which is what makes a published digest worth comparing against at all.
+admit exactly one endpoint. With them out — and with the deployer out — two deployments of the same
+listing version attest the same snapshot, which is what makes a published digest worth comparing
+against at all.
 
 ## What runs
 
