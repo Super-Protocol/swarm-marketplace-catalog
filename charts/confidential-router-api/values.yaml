@@ -6,7 +6,7 @@
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-router/router-api
-  digest: sha256:025597cb7b207c00decb1b493ccbac01424f48e602f813fa4f42d1ab7babd3a7
+  digest: sha256:081f99911e0d288d6df6ada72730ffcf79158373d7e417169db9db44dd3769fc
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -115,7 +115,7 @@ database:
 migrations:
   enabled: true
   # A cluster space's LimitRange refuses a container under 100m CPU or 128Mi, and
-  # its request/limit ratio is 1, so the two have to be the same number.
+  # its request/limit ratio is 1, so the two have to be the same number (SUP-238).
   resources:
     requests:
       cpu: 100m
@@ -235,9 +235,20 @@ auth:
   bootstrapToken: ""
   bootstrapTokenExistingSecret: ""
   bootstrapTokenExistingSecretKey: bootstrap-token
-  # The address the bootstrapped account is created under. Only rendered
-  # alongside a token — on its own it configures nothing.
+  # The address the bootstrapped account is created under. The variable is
+  # rendered only alongside a token — on its own this configures nothing, though
+  # the Secret below carries the key either way.
+  #
+  # Delivered to the pod as CR_API_AUTH__BOOTSTRAP_EMAIL out of the Secret below
+  # rather than as a literal in the container's env list, for the same reason
+  # `adminEmails` is: a marketplace deployment fills this from the account
+  # deploying the listing, and the env list is attested. As a plain value it was
+  # published at `/.well-known/swarm-evidence` and made the evidence digest a
+  # property of who deployed it — the same address was already sealed two entries
+  # down, so one copy was protected and the other was not (SUP-241).
   bootstrapEmail: ""
+  bootstrapEmailExistingSecret: ""
+  bootstrapEmailExistingSecretKey: bootstrap-email
   # Who may read the operator-only console queries — today the invitation-campaign
   # aggregates and the fraud-watch numbers behind them. Empty means nobody, which
   # is the right default for a deployment that has not named its operators and the
@@ -339,6 +350,102 @@ endpoints:
     # An operator-only override for where the evidence bundle is fetched from.
     # Empty means `https://<hostname>/.well-known/swarm-evidence`.
     evidenceUrl: ""
+
+# The attesting egress (ADR-008). A model may live in **another** deployment or
+# another swarm cloud: an administrator registers it in the console at run time,
+# and nothing is proxied to it until its evidence has been verified and its TLS
+# leaf pinned. The verification is the gatekeeper's own core, run as a second
+# container in this pod rather than ported into the API — one verification
+# pipeline, the same binary a client runs on their own machine.
+#
+# Off by default, the same seam rule `auth.password` and `auth.bootstrapToken`
+# follow: `externalEndpoints` is a key the router's strict config schema has only
+# from the image this chart version pins, so an older image would refuse to boot
+# on it rather than ignore it. A deployment that registers no external endpoint
+# also has no reason to run the second container.
+#
+# Switching it on changes the pod, and therefore the deployment's canonical
+# snapshot: ADR-008 calls that out as a re-pin rollout for every pinned user —
+# pin the old digest and the new one, deploy, then remove the old (ADR-003 §3).
+externalEndpoints:
+  enabled: false
+
+  # The gatekeeper core, packaged for a cluster. The same `CGO_ENABLED=0` binary
+  # the GitHub Releases carry; the entrypoint is the supervisor that watches the
+  # rendered config and SIGHUPs the gatekeeper in place. Pinned by digest for the
+  # reason every image here is: it is inside the snapshot a user verifies, so the
+  # egress verifier is part of what they pin.
+  image:
+    registry: ghcr.io
+    repository: super-protocol/confidential-router/gatekeeper
+    digest: sha256:f6f5a2344eaa572120a567cb4cba7769720965bd3a3edb9be11dd0702fd3e6cd
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # The shared `emptyDir` both containers mount, and the only thing between them
+  # besides loopback: router-api renders `config.yaml` into it on boot and after
+  # every admin mutation, the sidecar watches the file and reloads itself on a
+  # real change. Nothing secret is written here — the upstream API keys stay in
+  # the database, sealed, and are injected on the egress leg one request at a
+  # time.
+  # One value rather than a directory and a filename: the mount point is derived
+  # from it, so the two containers cannot be pointed at different paths.
+  configPath: /var/run/gatekeeper/config.yaml
+
+  # How often the sidecar's entrypoint examines the rendered file. Far below the
+  # re-attest interval it feeds, so it is never the slow part of applying an
+  # admin's edit.
+  watchInterval: 2s
+
+  # The sidecar's admin API, which router-api polls for verdicts. Loopback only —
+  # the two containers share a network namespace, nothing else can reach it, and
+  # local-only is the whole of its access control. It is read-only by design.
+  adminPort: 9465
+
+  # Background full re-verification of every registered upstream. The router's
+  # schema bounds this to [1m, 1h] and refuses a longer one at boot: an hour was
+  # named as the acceptable worst case, not as a preference.
+  reattestInterval: 10m
+
+  # How often router-api reads `/verdicts` and `/status` back off the admin API
+  # and projects them onto the endpoint rows and the event timeline.
+  statusPollInterval: 5s
+
+  # The egress leg's own timeouts, separate from `litellm.*` above: a refusal to
+  # connect here means the sidecar has not started that listener yet, which is a
+  # different fault with a different fix — and the patience an external model
+  # deserves is a property of that model and of the network between two clouds,
+  # not of this deployment's own workers.
+  connectTimeout: 5s
+  readTimeout: 120s
+
+  # The AES-256 data key the stored upstream API keys are sealed under, delivered
+  # as `CR_API_SECRETS_KEY`. A Secret and never the rendered `router.yaml`: that
+  # ConfigMap is attested and readable inside the deployment's published evidence
+  # bundle, so a key written there would be published with it (SUP-124). The
+  # router accepts it base64url-unpadded (43 characters), base64 (44) or hex (64);
+  # whatever the spelling it has to decode to exactly 32 bytes.
+  #
+  # Rotating it makes every stored upstream key unreadable — they are re-entered,
+  # not recovered.
+  secretsKey: ""
+  existingSecret: ""
+  existingSecretKey: secrets-key
+
+  # Requests and limits for the second container. A ~30 MiB static binary holding
+  # a verdict per endpoint and one connection pool per verified upstream; it
+  # parses evidence bundles and rebuilds an OVMF launch measurement on each
+  # re-attestation, which is the one thing here that wants a whole core for a
+  # moment.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+      nvidia.com/gpu: "0"
+    limits:
+      cpu: 100m
+      memory: 128Mi
+      nvidia.com/gpu: "0"
 
 evidence:
   pollInterval: 5m

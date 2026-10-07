@@ -1,0 +1,39 @@
+{{- include "swarm-model-server.validate" . -}}
+{{- /*
+Two documents the deployment's evidence is supposed to contain.
+
+`manifest.json` names every weight file this deployment may serve, by sha256.
+`fetch-weights.py` is the code that enforces it. Both are rendered into the
+manifests the cloud digests and signs, so a verifier reading the published
+evidence can see which bytes were admitted *and* the rule that admitted them —
+which is the whole reason the weights are not simply pulled by model name.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "swarm-model-server.fullname" . }}-weights
+  labels:
+    {{- include "swarm-model-server.labels" . | nindent 4 }}
+data:
+  manifest.json: |
+    {{- toPrettyJson (dict "repo" .Values.model.weights.repo "revision" .Values.model.weights.revision "totalBytes" (int64 .Values.model.weights.totalBytes) "files" .Values.model.weights.files) | nindent 4 }}
+  fetch-weights.py: |
+    {{- .Files.Get "files/fetch-weights.py" | nindent 4 }}
+{{- if .Values.model.chatTemplateFile }}
+---
+{{- /*
+A chat-template override, read from the chart's own files/ directory rather than
+from a value. `.Files.Get` returns the bytes without rendering them as a Helm
+template, which is what lets a file full of `{{ … }}` survive — see
+files/chat-templates/README.md for why a listing cannot carry one.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "swarm-model-server.fullname" . }}-chat-template
+  labels:
+    {{- include "swarm-model-server.labels" . | nindent 4 }}
+data:
+  chat-template.jinja: |
+    {{- .Files.Get (printf "files/chat-templates/%s" .Values.model.chatTemplateFile) | nindent 4 }}
+{{- end }}

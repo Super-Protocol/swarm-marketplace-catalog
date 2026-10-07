@@ -3,4 +3,4 @@ dependencies:
   repository: file://../patroni-postgresql
   version: 0.2.2
 digest: sha256:f9bcd5779b7bc7d596f97dfd693d4d44b7d2f7127d4d8bebb058d1a507cbfa47
-generated: "2026-10-06T16:52:03.919291+03:00"
+generated: "2026-10-06T17:36:00.174998926Z"

@@ -34,6 +34,16 @@ apps:
     organization: acme-corp
   - path: apps/confidential-router
     organization: acme-corp
+  # The model-serving family. Published by the platform team rather than by
+  # acme-corp, because what these listings stand behind is the packaging and the
+  # weights pin — the models themselves are Meta's, Google's and Qwen's, and the
+  # publisher of a listing is whoever vouches for it on this marketplace.
+  - path: apps/llama-3-2-3b-instruct
+    organization: platform-team
+  - path: apps/gemma-2-2b-it
+    organization: platform-team
+  - path: apps/qwen3-coder-30b-a3b-instruct-fp8
+    organization: platform-team
   - path: apps/confidential-s3
     organization: acme-corp
   - path: apps/rag-agent

@@ -1,0 +1,512 @@
+---
+# Source: swarm-model-server/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: swarm-model-server
+  labels:
+    helm.sh/chart: swarm-model-server-0.2.0
+    app.kubernetes.io/name: swarm-model-server
+    app.kubernetes.io/instance: ms
+    app.kubernetes.io/version: "0.22.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: model-server
+type: Opaque
+stringData:
+  api-key: "TESTKEYtestkey0123456789abcdefAB"
+---
+# Source: swarm-model-server/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: swarm-model-server-weights
+  labels:
+    helm.sh/chart: swarm-model-server-0.2.0
+    app.kubernetes.io/name: swarm-model-server
+    app.kubernetes.io/instance: ms
+    app.kubernetes.io/version: "0.22.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: model-server
+data:
+  manifest.json: |
+    {
+      "files": [
+        {
+          "path": "chat_template.jinja",
+          "sha256": "5a38bfa05833266240066aedc497decc9b00cc0d3e3b8cceea98cf530196ab06",
+          "size": 6211
+        },
+        {
+          "path": "config.json",
+          "sha256": "2705ed03bb322c864470bc282738b4713daca31b54ee4a639fe198bd7b9523f4",
+          "size": 7156
+        },
+        {
+          "path": "generation_config.json",
+          "sha256": "c99723ab3ba28630d26ae23def77603b540a46924895af5cf234740d3b27b51d",
+          "size": 180
+        },
+        {
+          "path": "merges.txt",
+          "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+          "size": 1671853
+        },
+        {
+          "path": "model-00001-of-00004.safetensors",
+          "sha256": "04665458e2332cc10409cd51298c95627000ed44cf29134663203e3f15c3c053",
+          "size": 10001462368
+        },
+        {
+          "path": "model-00002-of-00004.safetensors",
+          "sha256": "3d2228cdb569b07b2eb18b342c98ffb4c425264a5324446014046d402c80c1a2",
+          "size": 10000577408
+        },
+        {
+          "path": "model-00003-of-00004.safetensors",
+          "sha256": "7a6b5fd146a07c319f475589d08dd8d583b1e0919905c73a1e5af745244fc1db",
+          "size": 10000577448
+        },
+        {
+          "path": "model-00004-of-00004.safetensors",
+          "sha256": "6438b5403255c6fbf02bd20f9c75985e8a98ebc46f9f45899283ea374c25383a",
+          "size": 1173001360
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "sha256": "270f54aead2ae634567310218340069621fd8dfa2ad80001b69888ea5cc03477",
+          "size": 3565670
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+          "size": 11422654
+        },
+        {
+          "path": "tokenizer_config.json",
+          "sha256": "60f6e8cb15c98dd07300a3cc465ea662de245d2095e4245616af21b2324db3fc",
+          "size": 13055
+        },
+        {
+          "path": "vocab.json",
+          "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+          "size": 2776833
+        }
+      ],
+      "repo": "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+      "revision": "dcaee4d4dfc5ee71ad501f01f530e5652438fde0",
+      "totalBytes": 31195082196
+    }
+  fetch-weights.py: |
+    #!/usr/bin/env python3
+    """Fetch model weights and refuse to hand over anything the manifest did not name.
+    
+    Reads a manifest (repo, revision, files[].path/.size/.sha256), downloads each file from
+    the Hugging Face resolve endpoint at that exact revision, and verifies the sha256 while
+    writing. Idempotent: a file already on disk with the right digest is left alone, so a
+    restarted pod does not re-download 29 GiB. Fails closed: any mismatch, any short read,
+    any file the manifest does not name is an error and the destination is not marked ready.
+    
+    stdlib only, so the image that runs this can stay a plain python base.
+    """
+    import hashlib, json, os, sys, time, urllib.error, urllib.request
+    
+    CHUNK = 8 << 20
+    RETRIES = 5
+    UA = "swarm-marketplace-weights-fetcher/1"
+    
+    
+    def log(msg: str) -> None:
+        print(f"[weights] {msg}", flush=True)
+    
+    
+    def digest(path: str) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            while chunk := fh.read(CHUNK):
+                h.update(chunk)
+        return h.hexdigest()
+    
+    
+    def fetch(url: str, dest: str, expect_sha: str, expect_size: int) -> None:
+        tmp = dest + ".part"
+        h = hashlib.sha256()
+        written = 0
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=120) as resp, open(tmp, "wb") as out:
+            while chunk := resp.read(CHUNK):
+                out.write(chunk)
+                h.update(chunk)
+                written += len(chunk)
+        if written != expect_size:
+            os.unlink(tmp)
+            raise ValueError(f"size {written} != manifest {expect_size}")
+        got = h.hexdigest()
+        if got != expect_sha:
+            os.unlink(tmp)
+            raise ValueError(f"sha256 {got} != manifest {expect_sha}")
+        os.replace(tmp, dest)
+    
+    
+    def main() -> int:
+        manifest_path = os.environ.get("WEIGHTS_MANIFEST", "/etc/model/manifest.json")
+        target = os.environ.get("WEIGHTS_DIR", "/models/current")
+        endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
+    
+        with open(manifest_path) as fh:
+            manifest = json.load(fh)
+        repo, revision = manifest["repo"], manifest["revision"]
+        source = os.environ.get("WEIGHTS_REPO", repo)
+    
+        os.makedirs(target, exist_ok=True)
+        ready = os.path.join(target, ".weights-ready")
+        stamp = f"{source}@{revision}"
+        if os.path.exists(ready) and open(ready).read().strip() == stamp:
+            log(f"already verified {stamp}")
+            return 0
+    
+        total = manifest["totalBytes"]
+        log(f"{stamp}: {len(manifest['files'])} files, {total / 2**30:.2f} GiB -> {target}")
+        done = 0
+        for entry in manifest["files"]:
+            rel, sha, size = entry["path"], entry["sha256"], entry["size"]
+            # Every component, not only the ones in a path with a separator in it:
+            # a bare ".." has no "/" and would otherwise reach os.path.join.
+            if rel.startswith("/") or any(part in ("", ".", "..") for part in rel.split("/")):
+                log(f"refusing suspicious manifest path {rel!r}")
+                return 1
+            dest = os.path.join(target, rel)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            if os.path.exists(dest) and os.path.getsize(dest) == size and digest(dest) == sha:
+                log(f"ok (cached)  {rel}")
+                done += size
+                continue
+            url = f"{endpoint}/{source}/resolve/{revision}/{rel}"
+            for attempt in range(1, RETRIES + 1):
+                try:
+                    started = time.monotonic()
+                    fetch(url, dest, sha, size)
+                    took = max(time.monotonic() - started, 1e-6)
+                    done += size
+                    log(f"ok  {rel}  {size / 2**20:.0f} MiB in {took:.0f}s "
+                        f"({size / 2**20 / took:.0f} MiB/s)  [{done / total:.0%}]")
+                    break
+                except (urllib.error.URLError, OSError, ValueError, TimeoutError) as err:
+                    log(f"attempt {attempt}/{RETRIES} failed for {rel}: {err}")
+                    if attempt == RETRIES:
+                        log("giving up — weights are NOT usable, failing closed")
+                        return 1
+                    time.sleep(min(2 ** attempt, 30))
+    
+        # Nothing outside the manifest may reach the serving container.
+        named = {e["path"] for e in manifest["files"]}
+        for root, _dirs, names in os.walk(target):
+            for name in names:
+                rel = os.path.relpath(os.path.join(root, name), target)
+                if rel in named or rel == ".weights-ready":
+                    continue
+                log(f"removing unmanifested file {rel}")
+                os.unlink(os.path.join(root, name))
+    
+        with open(ready, "w") as fh:
+            fh.write(stamp + "\n")
+        log(f"verified {stamp}")
+        return 0
+    
+    
+    if __name__ == "__main__":
+        sys.exit(main())
+---
+# Source: swarm-model-server/templates/pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: swarm-model-server-weights
+  labels:
+    helm.sh/chart: swarm-model-server-0.2.0
+    app.kubernetes.io/name: swarm-model-server
+    app.kubernetes.io/instance: ms
+    app.kubernetes.io/version: "0.22.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: model-server
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: "40Gi"
+---
+# Source: swarm-model-server/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: swarm-model-server
+  labels:
+    helm.sh/chart: swarm-model-server-0.2.0
+    app.kubernetes.io/name: swarm-model-server
+    app.kubernetes.io/instance: ms
+    app.kubernetes.io/version: "0.22.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: model-server
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: swarm-model-server
+    app.kubernetes.io/instance: ms
+---
+# Source: swarm-model-server/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: swarm-model-server
+  labels:
+    helm.sh/chart: swarm-model-server-0.2.0
+    app.kubernetes.io/name: swarm-model-server
+    app.kubernetes.io/instance: ms
+    app.kubernetes.io/version: "0.22.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: model-server
+spec:
+  # One. A second replica would want a second card, and the weights volume is
+  # ReadWriteOnce.
+  replicas: 1
+  strategy:
+    # The card is held by the running pod until it exits, so a rolling update
+    # would leave the new pod Pending on a GPU quota of one for ever.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: swarm-model-server
+      app.kubernetes.io/instance: ms
+  template:
+    metadata:
+      annotations:
+        checksum/weights: 0fcd47d17fd3831ce128b3204fc5ccfa5647a5180e6dce2d925c53c8fe0d2ef0
+      labels:
+        app.kubernetes.io/name: swarm-model-server
+        app.kubernetes.io/instance: ms
+    spec:
+      runtimeClassName: nvidia
+      initContainers:
+        # ---------------------------------------------------------------------
+        # Downloads the weights and refuses to hand over anything the manifest
+        # did not name, by sha256. Idempotent: a restarted pod with a populated
+        # volume re-hashes and starts in a minute instead of downloading again.
+        #
+        # It runs the engine image rather than a Python base, because the script
+        # is stdlib-only and a second image would be a second digest to keep
+        # true and a second registry to trust.
+        # ---------------------------------------------------------------------
+        - name: fetch-weights
+          image: docker.io/vllm/vllm-openai@sha256:0fec7ec5f3e6bc168e54899935fb0557da908a4832a1dbc88e2debcf2f889416
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - /opt/weights/fetch-weights.py
+          env:
+            - name: WEIGHTS_MANIFEST
+              value: /etc/model/manifest.json
+            - name: WEIGHTS_DIR
+              value: "/models/current"
+            - name: WEIGHTS_REPO
+              value: "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
+            - name: HF_ENDPOINT
+              value: "https://huggingface.co"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+          volumeMounts:
+            - name: weights
+              mountPath: /models/current
+            - name: weights-config
+              mountPath: /etc/model
+              readOnly: true
+            - name: fetcher
+              mountPath: /opt/weights
+              readOnly: true
+          resources:
+            requests:
+              cpu: "2"
+              memory: "2Gi"
+              # Explicit zero, not an omitted field. A GPU cluster space's
+              # LimitRange defaults a missing `nvidia.com/gpu` to the reserved
+              # count, so this container would ask for the card the engine needs
+              # and the pod would never schedule.
+              nvidia.com/gpu: "0"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+              nvidia.com/gpu: "0"
+      containers:
+        - name: vllm
+          image: docker.io/vllm/vllm-openai@sha256:0fec7ec5f3e6bc168e54899935fb0557da908a4832a1dbc88e2debcf2f889416
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--model"
+            - "/models/current"
+            - "--served-model-name"
+            - "qwen3-coder-30b-a3b-instruct-fp8"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8000"
+            - "--max-model-len"
+            - "65536"
+            - "--gpu-memory-utilization"
+            - "0.85"
+            - "--dtype"
+            - "auto"
+            - "--quantization"
+            - "fp8"
+            - "--enable-auto-tool-choice"
+            - "--tool-call-parser"
+            - "qwen3_coder"
+          env:
+            # The key the engine demands on every `/v1` request, by reference.
+            # The engine's equivalent command-line flag is deliberately unused:
+            # arguments are rendered into the manifests and published in the
+            # evidence snapshot in clear (marketplace trap 4).
+            - name: VLLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: swarm-model-server
+                  key: api-key
+            # The init container decided what this deployment may serve. Offline
+            # mode is what stops the engine quietly fetching a file the manifest
+            # never named when something is missing or renamed.
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
+            # Caches, on the throwaway volume. The weights volume is the one
+            # whose contents are verified and pruned, so nothing else lives
+            # there; and the image's default cache paths are under a root home
+            # this pod should not be writing to.
+            - name: HOME
+              value: /cache
+            - name: HF_HOME
+              value: /cache/huggingface
+            - name: XDG_CACHE_HOME
+              value: /cache/xdg
+            - name: VLLM_CACHE_ROOT
+              value: /cache/vllm
+            - name: TRITON_CACHE_DIR
+              value: /cache/triton
+            - name: TORCHINDUCTOR_CACHE_DIR
+              value: /cache/inductor
+            # Telemetry off: this endpoint serves prompts inside an enclave and
+            # should not be reporting anything about itself to a third party.
+            - name: VLLM_NO_USAGE_STATS
+              value: "1"
+            - name: DO_NOT_TRACK
+              value: "1"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          # `/health` is outside the engine's authentication middleware, which is
+          # what makes it usable as a probe at all. It answers only once the
+          # model is loaded, and loading 29 GiB of weights and compiling the
+          # graphs takes minutes — hence a startup probe with room rather than a
+          # liveness probe that would restart the pod halfway through.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 180
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            - name: weights
+              mountPath: /models/current
+              readOnly: true
+            - name: cache
+              mountPath: /cache
+            - name: shm
+              mountPath: /dev/shm
+          resources:
+            requests:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+      volumes:
+        - name: weights
+          persistentVolumeClaim:
+            claimName: swarm-model-server-weights
+        - name: weights-config
+          configMap:
+            name: swarm-model-server-weights
+        - name: fetcher
+          configMap:
+            name: swarm-model-server-weights
+            items:
+              - key: fetch-weights.py
+                path: fetch-weights.py
+        - name: cache
+          emptyDir:
+            sizeLimit: 16Gi
+        # vLLM's workers talk over /dev/shm and the 64Mi default is not enough.
+        # Memory-backed, so this counts against the container's memory limit —
+        # `resources.memory` includes it.
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+---
+# Source: swarm-model-server/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: swarm-model-server
+  labels:
+    helm.sh/chart: swarm-model-server-0.2.0
+    app.kubernetes.io/name: swarm-model-server
+    app.kubernetes.io/instance: ms
+    app.kubernetes.io/version: "0.22.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: model-server
+  annotations:
+    swarm.io/exclude-evidence-fields: "/spec/rules/0/host"
+    nginx.ingress.kubernetes.io/proxy-body-size: 32m
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: "qwen-coder.models.example"
+      http:
+        paths:
+          - path: "/v1"
+            pathType: Prefix
+            backend:
+              service:
+                name: swarm-model-server
+                port:
+                  number: 8000

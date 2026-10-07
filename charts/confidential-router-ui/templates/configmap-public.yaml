@@ -1,0 +1,34 @@
+{{- /*
+Where the console calls the API, which is the one thing about this deployment
+that is the operator's choice rather than the version's.
+
+The console resolves its API origin at run time (SUP-100), so one pinned image
+serves any hostname — and the two variables that carry it used to be literals in
+the Deployment's env list, which put the chosen hostname into the attested
+snapshot and made the deployment's evidence digest a property of it (SUP-210).
+
+They live here instead, in an object the snapshot excludes whole, read through
+`envFrom`. A field-level exclusion on the Deployment would have worked too, but
+its pointer is an index into the env list — `/…/env/2/value` — and adding a
+variable above it leaves a well-formed exclusion naming the wrong value, which
+nothing fails on. An object has a name.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "confidential-router-ui.publicConfigName" . }}
+  labels:
+    {{- include "confidential-router-ui.labels" . | nindent 4 }}
+  annotations:
+    # Both keys are the API hostname the operator chose, so all of `/data` goes.
+    # Declared in the listing's `evidence.exclude` as well, which is what the
+    # marketplace reads to show the exclusion beside the digest.
+    swarm.io/exclude-evidence-fields: "/data"
+data:
+  # Read per request by the server and written into the document ahead of every
+  # bundle, so the browser calls the origin this deployment was given rather than
+  # one compiled into the image.
+  ROUTER_UI_API_ORIGIN: {{ include "confidential-router-ui.apiOrigin" . | quote }}
+  # Derived from the origin by the console itself; set here so a
+  # `kubectl exec env` says where GraphQL is without knowing that.
+  ROUTER_UI_GRAPHQL_HTTP: {{ printf "%s/graphql" (include "confidential-router-ui.apiOrigin" .) | quote }}

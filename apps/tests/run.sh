@@ -144,6 +144,21 @@ for definition in apps/*/app.yaml; do
   fi
 done
 
+# The schema pass above says the shape is right. It cannot say that the strings
+# are parseable, because a `{{ … }}` the marketplace will choke on sits inside a
+# perfectly valid string — which is how three listings went green here and were
+# then refused by the stand's publish parse (SUP-230).
+note "every {{ … }} is an expression the marketplace can parse"
+for definition in apps/*/app.yaml; do
+  [ -f "$definition" ] || continue
+  if output=$(python3 "$here/expressions.py" "$definition"); then
+    pass "$definition"
+  else
+    fail "$definition"
+    printf '%s\n' "$output" | grep -v '^  FAIL' | sed 's/^/      /'
+  fi
+done
+
 note "Result"
 if [ "$failures" -eq 0 ]; then
   printf '  everything passed\n\n'

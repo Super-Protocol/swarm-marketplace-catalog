@@ -5,6 +5,7 @@
   Backend    {{ .Values.litellmUrl }}
   Models     {{ include "confidential-router-api.selectedModels" . | fromJsonArray | join ", " | default "none — /v1 answers model_not_found" }}
   Mode       NODE_ENV={{ include "confidential-router-api.nodeEnv" . }}, billing={{ .Values.billing.mode }}
+  Egress     {{ if .Values.externalEndpoints.enabled }}attested, re-verified every {{ .Values.externalEndpoints.reattestInterval }}{{ else }}off — no external model endpoints{{ end }}
 
 {{ if eq .Values.billing.mode "disabled" }}
 This deployment sells no credit: the console has no buy panel and a checkout is
@@ -35,4 +36,20 @@ space there is no exec to run `invites stats` through instead.
 Product analytics is off: the console's events are accepted with 202 and dropped,
 and so are the ones captured here. Set analytics.posthog.projectKey to record
 them.
+{{- end }}
+{{- if .Values.externalEndpoints.enabled }}
+The attested egress is on. An administrator can register a model endpoint living
+in another deployment, and nothing is proxied to it until the gatekeeper beside
+this API has verified its evidence, found its measurement on the trust list and
+pinned its TLS leaf — then re-verified it every {{ .Values.externalEndpoints.reattestInterval }}, dropping it from
+/v1/models the moment a check fails. Both lists live in the console's admin
+section; neither is a chart value.
+
+An upstream's API key is sealed with CR_API_SECRETS_KEY. Rotating that key does
+not re-encrypt anything — every stored upstream key becomes unreadable and has to
+be entered again.
+
+This container changes what the deployment attests. For anyone pinning its
+digest, shipping it is a re-pin rollout: pin the old digest and the new one,
+deploy, then remove the old (ADR-003 §3).
 {{- end }}

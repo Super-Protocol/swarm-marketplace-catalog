@@ -13,6 +13,8 @@ api-password-no-mailer	confidential-router-api
 api-password-off	confidential-router-api		
 api-campaign	confidential-router-api		
 api-invite-only	confidential-router-api		
+api-endpoint-hostname	confidential-router-api		
+api-external-endpoints	confidential-router-api		
 patroni-default	patroni-postgresql		
 patroni-as-router	patroni-postgresql		
 patroni-single-node	patroni-postgresql		
@@ -24,5 +26,8 @@ s3-virtual-host	confidential-s3
 s3-external-postgres	confidential-s3		
 s3-explicit-credentials	confidential-s3		
 s3-large-volumes	confidential-s3		
+model-server-llama	swarm-model-server		
+model-server-gemma	swarm-model-server		
+model-server-qwen-fp8	swarm-model-server		
 ollama-gpu-off	ollama	https://otwld.github.io/ollama-helm/	1.85.0
 ollama-gpu-on	ollama	https://otwld.github.io/ollama-helm/	1.85.0

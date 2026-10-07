@@ -73,9 +73,22 @@ only from SUP-95 onwards — hence the condition around it.
     secretKeyRef:
       name: {{ .Values.auth.bootstrapTokenExistingSecret | default (include "confidential-router-api.secretName" .) }}
       key: {{ if .Values.auth.bootstrapTokenExistingSecret }}{{ .Values.auth.bootstrapTokenExistingSecretKey }}{{ else }}bootstrap-token{{ end }}
-{{- if .Values.auth.bootstrapEmail }}
+{{- if or .Values.auth.bootstrapEmail .Values.auth.bootstrapEmailExistingSecret }}
+{{- /*
+Out of the Secret and not a plain `value:`, for the same reason
+`CR_API_AUTH__ADMIN_EMAILS` below is: this is the address of whoever deployed
+this, and a literal here is published. The container's env list is part of the
+attested snapshot, so the address would be readable by anyone who fetches
+`/.well-known/swarm-evidence` — and the digest would be a property of who
+deployed it rather than of the version, which is the one thing it must not be
+(SUP-241). It is the same value as the admin list, and one copy of it being
+protected while the other was published was an oversight, not a decision.
+*/}}
 - name: CR_API_AUTH__BOOTSTRAP_EMAIL
-  value: {{ .Values.auth.bootstrapEmail | quote }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.auth.bootstrapEmailExistingSecret | default (include "confidential-router-api.secretName" .) }}
+      key: {{ if .Values.auth.bootstrapEmailExistingSecret }}{{ .Values.auth.bootstrapEmailExistingSecretKey }}{{ else }}bootstrap-email{{ end }}
 {{- end }}
 {{- end }}
 {{- if or .Values.auth.adminEmails .Values.auth.adminEmailsExistingSecret }}
@@ -92,6 +105,23 @@ refers to.
     secretKeyRef:
       name: {{ .Values.auth.adminEmailsExistingSecret | default (include "confidential-router-api.secretName" .) }}
       key: {{ if .Values.auth.adminEmailsExistingSecret }}{{ .Values.auth.adminEmailsExistingSecretKey }}{{ else }}admin-emails{{ end }}
+{{- end }}
+{{- if .Values.externalEndpoints.enabled }}
+{{- /*
+`CR_API_SECRETS_KEY` — the AES-256 data key an external endpoint's upstream API
+key is sealed under. Outside the `CR_API_*` configuration tree in the router's
+own code as well: it is read straight from the environment and never becomes a
+config key, because the rendered `router.yaml` is attested and readable inside
+the published evidence bundle (ADR-008 §6, SUP-124).
+
+The migration container gets it too, for no reason of its own — this list is one
+list — and reads nothing with it.
+*/}}
+- name: CR_API_SECRETS_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.externalEndpoints.existingSecret | default (include "confidential-router-api.secretName" .) }}
+      key: {{ if .Values.externalEndpoints.existingSecret }}{{ .Values.externalEndpoints.existingSecretKey }}{{ else }}secrets-key{{ end }}
 {{- end }}
 {{- if or .Values.analytics.posthog.projectKey .Values.analytics.posthog.existingSecret }}
 {{- /*
@@ -128,6 +158,24 @@ two are simply not read.
 {{- end }}
 {{- end -}}
 
+{{/*
+The hostname-derived values `router.yaml` names by placeholder.
+
+`envFrom` rather than five `env` entries: this is one object the evidence
+snapshot excludes whole, instead of five index-based pointers into a container's
+env list that would silently point at the wrong value the next time a variable is
+added above them.
+
+Both the server and the migration container need it. The init container loads the
+same config file, and a placeholder with no value fails the boot — so a migration
+container without this would make every deployment a crash loop before the server
+ever started.
+*/}}
+{{- define "confidential-router-api.envFrom" -}}
+- configMapRef:
+    name: {{ include "confidential-router-api.publicConfigName" . }}
+{{- end -}}
+
 {{- define "confidential-router-api.volumeMounts" -}}
 - name: config
   mountPath: /etc/confidential-router
@@ -136,4 +184,14 @@ two are simply not read.
   mountPath: /tmp
 - name: data
   mountPath: /app/data
+{{- if .Values.externalEndpoints.enabled }}
+{{- /*
+The one path this container shares with the sidecar, and the only one it writes
+that another process reads. The migration container mounts it for the same
+reason it loads the same config file — this list is one list — and writes
+nothing to it.
+*/}}
+- name: gatekeeper-config
+  mountPath: {{ include "confidential-router-api.sidecarConfigDir" . | quote }}
+{{- end }}
 {{- end -}}

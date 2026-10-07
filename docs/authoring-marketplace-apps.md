@@ -214,6 +214,15 @@ precisely what the evidence exists to make impossible. Then declare each image i
 `images:` list with its digest: the renderer rewrites every reference to the digest and **fails
 closed** on any image not declared.
 
+**Never put another template language in a listing's values.** The marketplace parses every
+`{{ … }}` in `deployment.values`, `patches[].value` and `outputs[].value` as *its* expression
+language: seven namespaces, a dotted path, one optional `| json`, no function calls and no
+arithmetic. A model's Jinja chat template, a Go template, a Helm snippet — each one publishes with
+an error per tag (`"bos_token" is not a known namespace`), and none of it is visible to the JSON
+Schema, which sees a valid string. Put the file in the chart and have the listing name it;
+`.Files.Get` reads bytes without rendering them, so it survives Helm too. `apps/tests/expressions.py`
+checks this, and exists because the listing that taught it was green here and red on the stand.
+
 **Put every secret in a `Secret`.** The platform lifts all of them out of the manifests and seals
 them for the target. A password in a container `env` value or a command-line argument travels in the
 bundle in clear and lands in the evidence snapshot. A `Secret` is also the only place where a
@@ -308,9 +317,55 @@ under two different hostnames in two different namespaces, and reports every fie
 Those fields are the candidates for exclusion. It cannot tell you the digest to declare; it tells you
 whether the digest you declare will hold for anybody else.
 
+**When the hostname is inside a config file.** An exclusion names a whole JSON Pointer, so a
+hostname interpolated into a rendered configuration document cannot be excluded on its own: the
+only pointer available is `/data/<the whole file>`, and dropping that hides the application's entire
+configuration from the snapshot — which is usually the one thing the digest was worth attesting.
+
+The way out is to not render it there. Keep the hostname-derived values in a small ConfigMap of
+their own, refer to them from the config document by whatever placeholder syntax the application
+already supports for its secrets, and feed that ConfigMap to the container with `envFrom`:
+
+```yaml
+# config.yaml, attested in full
+publicBaseUrl: "${APP_PUBLIC_BASE_URL}"
+```
+```yaml
+# <name>-public, excluded whole
+metadata:
+  annotations:
+    swarm.io/exclude-evidence-fields: "/data"
+```
+
+Two things to get right. The pod reads `envFrom` once, at start, so a hostname reconfigure needs a
+`checksum/…` annotation over that ConfigMap to roll the pods — and that annotation is derived from
+the hostname too, so it is excluded alongside. And every container that loads the config file needs
+the `envFrom`, migration init containers included: an unfilled placeholder is usually a hard boot
+failure rather than a default.
+
+Not the `Secret`, even though Secrets are lifted out for free. That hides the exclusion instead of
+disclosing it: a reader of the listing sees the ConfigMap's name in the snapshot and the pointer in
+`evidence.exclude`, and can tell exactly what was left out. `confidential-router` is the worked
+example (SUP-211).
+
 **Anything non-deterministic outside a Secret destroys this.** A bcrypt salt, a random suffix, a
 timestamp in an annotation — each makes every deployment attest differently. Inside a `Secret` it is
 free, because Secrets are lifted out before the snapshot is taken.
+
+**And so does anything from `consumer`.** `consumer.user.email` and the rest are resolved per
+deployment, so a chart value filled from one is a chart value that differs for every person who
+deploys the listing — and the Secret is the only place it can go. An exclusion is the wrong tool
+twice over: the pointer is an `env/N` index that goes stale the moment a variable is added above it,
+and excluding it leaves a personal address attested-but-unattested rather than unpublished. There is
+a second cost that has nothing to do with the digest: a snapshot is served at
+`/.well-known/swarm-evidence` and rendered on the deployment's evidence panel, so a literal there
+publishes the deploying user's own address without telling them.
+
+`charts/tests/consumer_fields.py <app> <chart>=<values>` asks this of a listing — it follows every
+`consumer.*` expression to the chart value it lands on and fails if the value reaches an attested
+object. Run it once per set of case values that exercises a different path: a chart renders an env
+var only on the path that uses it, and `confidential-router` published the deployer's address for
+four versions because the only values it was ever probed with left that path off (SUP-241).
 
 ---
 
@@ -395,6 +450,7 @@ Two habits that repeatedly turn out to matter:
 | `apps/confidential-claims-fraud` | Two components composed into one deployment; per-party credentials; continuous SQL; `charts/claims-fraud-feed/README.md` explains the mechanism with diagrams |
 | `apps/conversational-analyst` | Five components, data slots, publisher secrets, and a grounding job derived from the dataset's own schema |
 | `apps/rag-agent` | Data slots with a schema constraint |
+| `apps/llama-3-2-3b-instruct` and its siblings | One chart behind three cards; weights pinned by sha256 inside the evidence; a credential emitted as a connection link; a card that says what the model *cannot* do |
 
 ---
 
@@ -408,8 +464,10 @@ Before opening a pull request:
 - [ ] Every Ingress names its class
 - [ ] Nothing secret outside a `Secret`
 - [ ] Nothing non-deterministic outside a `Secret`
+- [ ] Nothing from `consumer.*` outside a `Secret`
 - [ ] Nothing unauthenticated published on a hostname
 - [ ] Sensitive values that a person needs are surfaced as outputs of `type: secret`
 - [ ] `apps/tests/run.sh` and `charts/tests/run.sh` pass
-- [ ] Rendered as two consumers; the only differences are declared exclusions
+- [ ] Rendered as two consumers — two hostnames *and* two consumer identities; the only
+      differences are declared exclusions
 - [ ] README says what the listing deliberately does not do

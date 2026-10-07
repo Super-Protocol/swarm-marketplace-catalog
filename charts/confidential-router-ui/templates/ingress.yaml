@@ -5,10 +5,21 @@ metadata:
   name: {{ include "confidential-router-ui.fullname" . }}
   labels:
     {{- include "confidential-router-ui.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
   annotations:
+    # The hostname is the one thing that differs between two deployments of this
+    # version, and a digest that varied with it would be a digest nobody else
+    # could ever match (SUP-211). Declared in the listing's `evidence.exclude` as
+    # well — that is what the marketplace reads to show the exclusion beside the
+    # digest.
+    #
+    # The TLS host is the same hostname again, so it is listed too when the chart
+    # terminates TLS itself. This listing does not: the cloud holds the
+    # certificate, `ingress.tls.enabled` is false, and the rendered value is the
+    # single `/spec/rules/0/host` the definition declares.
+    swarm.io/exclude-evidence-fields: {{ (printf "/spec/rules/0/host%s" (ternary ",/spec/tls/0/hosts/0" "" .Values.ingress.tls.enabled)) | quote }}
+    {{- with .Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- end }}
 spec:
   # Without a class the object is created, the cloud registers the hostname and
   # writes its DNS, and nothing serves it: the controller only picks up what

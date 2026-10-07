@@ -29,6 +29,8 @@ The release name and namespace are fixed per listing (`cr` / `confidential-route
 | `api-password-no-mailer` | what the listing deploys (SUP-112): passwords on with `mailer: none`, which has to render a config the router boots on |
 | `api-password-off` | passwords off: the `auth.password` block is absent rather than `enabled: false`, so the chart stays bootable on an image that predates the key |
 | `api-invite-only` | the SUP-173 auth seam: `requireInviteForSignUp` rendered only while it is on, so the chart stays bootable on an image that predates the key |
+| `api-endpoint-hostname` | an endpoint that names a hostname of its own: a parameter, so it is rendered as a literal rather than as `${ROUTER_PUBLIC_HOSTNAME}`, and the public ConfigMap does not carry that key at all (SUP-211) |
+| `api-external-endpoints` | the attested egress on (ADR-008): the gatekeeper as a second container, the shared `emptyDir` they talk through, and `CR_API_SECRETS_KEY` in the Secret rather than in the attested `router.yaml`. Every other `api-*` case has it off, which is the other half — a chart that still boots an image predating the key |
 | `ui-default` | the console's env and ingress; run.sh renders it against a second hostname as well, because one pinned image has to serve any API origin |
 | `ollama-gpu-off` / `ollama-gpu-on` | the GPU switch |
 | `s3-default` | what the confidential-s3 listing deploys: two hostnames, credentials derived from seeds, the bundled engine and the bundled PostgreSQL |
@@ -45,8 +47,16 @@ somewhere. They need network the first time, to pull the chart.
 
 ## Beyond lint and goldens
 
-Six checks in `run.sh` are not a golden diff, and each exists because a golden diff
+Ten checks in `run.sh` are not a golden diff, and each exists because a golden diff
 cannot answer the question:
+
+- **Every container is admissible on a cluster space** (`limitrange.py`). A cluster space
+  carries a LimitRange the cloud writes itself: a 100m / 128Mi floor, and a request/limit
+  ratio of 1. A container under the floor, or one declaring no resources at all and handed a
+  2:1 pair by that same LimitRange, is refused at admission — so the pod never exists, and
+  nothing an operator looks at says "quota". It reads as "the app is broken". Four sub-floor
+  containers shipped that way before this check existed (SUP-238), and a golden diff held
+  every one of their numbers without a word.
 
 - **Every object, parsed as a cluster parses it** (`inventory.py`). A template that loses a
   `---` glues two objects into one document; the golden is regenerated from the same broken
@@ -67,6 +77,14 @@ cannot answer the question:
   `consumer.organization.name` straight into the control plane's environment; it rendered,
   deployed and worked, and made the evidence digest a property of who deployed it. A real
   deployment is what found it.
+
+  Run against every listing that passes one, and once per set of case values. Both halves of
+  that sentence are SUP-241: the check existed and was wired to confidential-s3 alone, while
+  `confidential-router` passed the deployer's address into two chart values — one sealed, one a
+  literal in two containers' env lists — and a chart renders an env var only on the path that
+  uses it, so a single set of values clears the paths it happens to exercise and is silent about
+  the rest. A path whose marker reaches nothing is reported rather than passed; lists are walked,
+  because an address passed as a one-entry list was invisible to the first version of this.
 - **Two consumers, one version.** The confidential-s3 chart is rendered twice, under two
   hostnames in two namespaces, and every field that differs has to be a declared exclusion.
   This is `cli/evidence-preview.js` done on the chart, and it is the only check that catches
@@ -76,9 +94,51 @@ cannot answer the question:
 - **The listing declares what the chart annotates.** An exclusion the chart applies and the
   definition does not is a digest shown beside "no exclusions", which answers the only
   question that matters about it wrongly.
+- **Two consumers, one version — field by field** (`evidence_drift.py`). The same question as
+  the confidential-s3 check above, asked about `confidential-router` and asked of JSON Pointers
+  rather than of diff lines. The line-based version passes as long as no unexpected *string*
+  appears, which cannot see a field that differs by being absent on one side, cannot tell an
+  excluded field from one that merely contains an excluded hostname, and cannot tell that an
+  exclusion pointer has gone stale. All three matter here: the router's hostname-derived values
+  live in ConfigMaps whose whole `/data` is excluded, and one of those keys is rendered only for
+  a campaign (SUP-211). It also checks that each pointer resolves to a real field, and that the
+  chart's annotations and the listing's `evidence.exclude` agree in **both** directions — an
+  exclusion the listing does not declare is a digest shown beside an incomplete answer, and one
+  the listing declares and the chart no longer applies is a disclosure of something that is not
+  happening. The second direction is invisible to the drift comparison: if the field stopped
+  being rendered, nothing differs and nothing fails, while the listing goes on advertising that
+  it was left out.
+
+  What varies between the two shapes is the caller's to choose, and "two consumers" means
+  everything a consumer brings rather than the hostname they typed: the router is also rendered
+  with two different deployer addresses, which is the difference that no listing may ever declare
+  because declaring it admits one deployer. Secret values are not compared — the platform's
+  canonical rules drop `/data`, `/stringData` and `/immutable` from every Secret — which is both
+  what makes a Secret the right carrier for such a value and what makes the comparison possible
+  to ask about one at all.
+- **Every placeholder has something that fills it** (`config_placeholders.py`). `router.yaml` is
+  attested, so neither a secret nor a hostname is written into it — both are `${VAR}` the router's
+  config loader substitutes from the environment. A placeholder with no value does not degrade:
+  the loader throws before the first listener, so the deployment is a crash loop and no render
+  error and no golden diff would have mentioned it. Checked in both directions, because a variable
+  nothing refers to is dead configuration and, in the public ConfigMap's case, a field excluded
+  from the snapshot for no reason.
+- **The listing declares every image its charts render** (`declared_images.py`). A component's
+  `images:` block is an allow-list and the render path is fail-closed on it, so an image the
+  listing does not declare refuses the whole deployment — and a digest bumped in one file and not
+  the other makes the listing advertise a pin the cluster never pulls. `helm template` reads
+  neither the listing nor the digest it declares, so no golden diff can see either. A second
+  container added to a chart is exactly the shape of change that walks into it.
+
+- **The two containers of the egress agree about the two things between them.** The sidecar
+  watches a file router-api renders and answers on a loopback port router-api polls, and nothing
+  in a cluster checks that the two were told the same path, the same mount, the same port or a
+  group that can actually open a 0640 file. Each disagreement is an egress that serves nothing
+  with both containers Ready.
+
 - **Misconfigurations are refused at render time.** Each one is a mistake that would deploy
   cleanly and then not work: an unpinned image, an Ingress with no class, a Garage key in a
-  shape Garage refuses, a master key that is not 32 bytes.
+  shape Garage refuses, a master key that is not 32 bytes, an AES key that is not 32 bytes.
 
 ## Smoke
 

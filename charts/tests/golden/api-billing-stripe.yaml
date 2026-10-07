@@ -5,10 +5,10 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.6.2
+    helm.sh/chart: confidential-router-api-0.8.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.3.2"
+    app.kubernetes.io/version: "0.4.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
 type: Opaque
@@ -21,16 +21,54 @@ stringData:
   stripe-secret-key: "sk_test_golden_not_a_real_key"
   stripe-webhook-secret: "whsec_golden_not_a_real_key"
 ---
+# Source: confidential-router-api/templates/configmap-public.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: confidential-router-api-public
+  labels:
+    helm.sh/chart: confidential-router-api-0.8.0
+    app.kubernetes.io/name: confidential-router-api
+    app.kubernetes.io/instance: cr
+    app.kubernetes.io/version: "0.4.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-router
+  annotations:
+    # Every key here is derived from a hostname the operator chose, so all of
+    # `/data` goes. Losing this annotation would not fail a render; it would
+    # quietly make every deployment of this version attest a different digest.
+    swarm.io/exclude-evidence-fields: "/data"
+data:
+  # `server.publicBaseUrl` and `auth.baseUrl`. One value, because they are one
+  # origin: Better Auth builds its callback URLs from the second and the API
+  # advertises itself with the first, and the two disagreeing is a sign-in that
+  # returns the browser somewhere nothing serves.
+  ROUTER_PUBLIC_BASE_URL: "https://api.confidential-router.example"
+  # `endpoints[].hostname` for an endpoint that did not name one — this
+  # deployment's own API hostname, which is where its evidence bundle is fetched
+  # from. A hostname, not a URL, which is what that field is. Absent when every
+  # endpoint named its own, and when there are no endpoints because every model
+  # is switched off.
+  ROUTER_PUBLIC_HOSTNAME: "api.confidential-router.example"
+  # `server.validClientOrigins`, comma-separated: the router's schema splits a
+  # string back into the list, so the whole allow-list travels as one value
+  # rather than as a placeholder per index that would have to be rendered — and
+  # a rendered index is a hostname count, which is itself hostname-derived.
+  ROUTER_VALID_CLIENT_ORIGINS: "https://console.confidential-router.example"
+  # `billing.checkoutReturnUrl` — where Stripe returns the browser, which is a
+  # page of the console rather than of the API.
+  ROUTER_CHECKOUT_RETURN_URL: "https://console.confidential-router.example/credits"
+---
 # Source: confidential-router-api/templates/configmap.yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.6.2
+    helm.sh/chart: confidential-router-api-0.8.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.3.2"
+    app.kubernetes.io/version: "0.4.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
 data:
@@ -40,13 +78,18 @@ data:
     server:
       port: 3000
       host: 0.0.0.0
-      publicBaseUrl: "https://api.confidential-router.example"
+      publicBaseUrl: "${ROUTER_PUBLIC_BASE_URL}"
       # CORS, and Better Auth's trusted origins. The console calls this API from
       # the browser with `credentials: 'include'`, so its origin has to be here —
       # and so does the campaign landing page's, which looks an invitation code up
       # from the browser before anyone has signed in at all.
-      validClientOrigins:
-        - "https://console.confidential-router.example"
+      #
+      # One scalar rather than a list: the router's schema splits a
+      # comma-separated string back into the list, and a placeholder per index
+      # would mean rendering how many origins there are — which is itself
+      # hostname-derived, since the second one exists only when a campaign named
+      # a landing page.
+      validClientOrigins: "${ROUTER_VALID_CLIENT_ORIGINS}"
 
     database:
       type: postgres
@@ -62,7 +105,7 @@ data:
 
     endpoints:
       - name: "confidential-router"
-        hostname: "api.confidential-router.example"
+        hostname: "${ROUTER_PUBLIC_HOSTNAME}"
         tee: "Intel TDX + H100 CC"
 
     # `litellmModel` is the catalogue key, which is the Ollama model name and the
@@ -105,7 +148,7 @@ data:
       tokensPerMinute: 2000000
 
     auth:
-      baseUrl: "https://api.confidential-router.example"
+      baseUrl: "${ROUTER_PUBLIC_BASE_URL}"
       secret: ${ROUTER_AUTH_SECRET}
       sessionMaxAge: "720h"
       magicLink:
@@ -131,7 +174,7 @@ data:
       minTopUpMicros: 5000000
       maxTopUpMicros: 10000000000
       allowOverdraftMicros: 0
-      checkoutReturnUrl: "https://console.confidential-router.example/credits"
+      checkoutReturnUrl: "${ROUTER_CHECKOUT_RETURN_URL}"
       autoTopUpCooldown: "1h"
       stripe:
         secretKey: ${ROUTER_STRIPE_SECRET_KEY}
@@ -162,10 +205,10 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.6.2
+    helm.sh/chart: confidential-router-api-0.8.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.3.2"
+    app.kubernetes.io/version: "0.4.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
 spec:
@@ -185,12 +228,22 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.6.2
+    helm.sh/chart: confidential-router-api-0.8.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.3.2"
+    app.kubernetes.io/version: "0.4.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
+  annotations:
+    # `checksum/public-config` below is a hash of the hostname-derived ConfigMap,
+    # so it varies with the hostname exactly as that object's `/data` does and is
+    # excluded for the same reason (SUP-211). `/` inside a JSON Pointer token is
+    # `~1` (RFC 6901), which is what makes this one token and not three.
+    #
+    # `checksum/config` is deliberately *not* excluded: `router.yaml` carries no
+    # hostname any more, so that hash is a property of the version and the
+    # parameters — which is precisely what the digest should attest.
+    swarm.io/exclude-evidence-fields: "/spec/template/metadata/annotations/checksum~1public-config"
 spec:
   replicas: 1
   selector:
@@ -202,7 +255,12 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: 7bbd96c28a271e9a2c9ab82b5baa4ac5c423dec68630c482678161e1c1b03730
+        checksum/config: d6ed255cf89558851616c715b4c47629c189cfe62ed7e4ab24e7b81d283d17a8
+        # And a hostname reconfigure is a config change the pod cannot see at all:
+        # `envFrom` is read once, when the container starts, so without this the
+        # ConfigMap is updated and the running router keeps advertising the old
+        # origin.
+        checksum/public-config: a2639e94331a573a0b2e42bf169c701dc5e4231f54b3a2573add9761a118952a
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr
@@ -218,7 +276,7 @@ spec:
         # PostgreSQL accepts connections, which is exactly the wait this pod needs
         # and is why there is no separate wait-for-database container.
         - name: migrate
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:025597cb7b207c00decb1b493ccbac01424f48e602f813fa4f42d1ab7babd3a7
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:081f99911e0d288d6df6ada72730ffcf79158373d7e417169db9db44dd3769fc
           imagePullPolicy: IfNotPresent
           args: ["migrate"]
           securityContext:
@@ -227,6 +285,9 @@ spec:
               drop:
               - ALL
             readOnlyRootFilesystem: true
+          envFrom:
+            - configMapRef:
+                name: confidential-router-api-public
           env:
             - name: NODE_ENV
               value: "production"
@@ -278,7 +339,7 @@ spec:
               nvidia.com/gpu: "0"
       containers:
         - name: router-api
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:025597cb7b207c00decb1b493ccbac01424f48e602f813fa4f42d1ab7babd3a7
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:081f99911e0d288d6df6ada72730ffcf79158373d7e417169db9db44dd3769fc
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -290,6 +351,9 @@ spec:
             - name: http
               containerPort: 3000
               protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: confidential-router-api-public
           env:
             - name: NODE_ENV
               value: "production"
@@ -376,13 +440,24 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.6.2
+    helm.sh/chart: confidential-router-api-0.8.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.3.2"
+    app.kubernetes.io/version: "0.4.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
   annotations:
+    # The hostname is the one thing that differs between two deployments of this
+    # version, and a digest that varied with it would be a digest nobody else
+    # could ever match (SUP-211). Declared in the listing's `evidence.exclude` as
+    # well — that is what the marketplace reads to show the exclusion beside the
+    # digest.
+    #
+    # The TLS host is the same hostname again, so it is listed too when the chart
+    # terminates TLS itself. This listing does not: the cloud holds the
+    # certificate, `ingress.tls.enabled` is false, and the rendered value is the
+    # single `/spec/rules/0/host` the definition declares.
+    swarm.io/exclude-evidence-fields: "/spec/rules/0/host"
     nginx.ingress.kubernetes.io/proxy-body-size: 30m
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"

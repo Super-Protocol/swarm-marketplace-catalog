@@ -208,8 +208,10 @@ etcd:
 
   # The init container runs for a second or two and exits. It still needs a request,
   # because a cluster space's quota is a hard one and a container with no request is a
-  # container the scheduler cannot place against it. The same LimitRange also refuses
-  # anything under 100m CPU or 128Mi, with a request/limit ratio of 1.
+  # container the scheduler cannot place against it. The same cluster space carries a
+  # LimitRange that refuses anything under 100m CPU or 128Mi, with a request/limit
+  # ratio of 1 — so these are the floor, not a measurement of what etcd's bootstrap
+  # needs (SUP-238).
   bootstrapResources:
     requests:
       cpu: 100m
@@ -416,6 +418,8 @@ router:
     check: 3s
 
   # Same floor as the etcd init container: 100m CPU, 128Mi, request equal to limit.
+  # HAProxy proxies TCP and holds no buffers worth speaking of, so 64Mi would do —
+  # but a cluster space's LimitRange refuses it (SUP-238).
   resources:
     requests:
       cpu: 100m

@@ -1,0 +1,53 @@
+{{- if .Values.ingress.enabled }}
+{{- /*
+`/v1` and nothing else — `ingress.paths` says why. vLLM authenticates `/v1`,
+`/v2`, `/inference` and `/cohere`; everything else it serves, including
+`/metrics` and `/docs`, is open to whoever reaches it.
+
+Without `ingressClassName` the object is created, the cloud registers the
+hostname and writes its DNS, and nothing serves it: the controller only picks up
+what names it.
+*/ -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "swarm-model-server.fullname" . }}
+  labels:
+    {{- include "swarm-model-server.labels" . | nindent 4 }}
+  annotations:
+    {{- /*
+    The hostname is the one field that differs between two deployments of the
+    same listing, so excluding it is what makes the evidence digest a property
+    of the version rather than of the deployment. Declared here *and* in the
+    listing's `evidence.exclude`, because the listing page shows only what the
+    definition declares.
+    */}}
+    {{- /* With TLS on, the same hostname appears a second time under
+           `/spec/tls/0/hosts/0`, and one unexcluded copy is enough to make the
+           digest a property of the deployment again. */}}
+    swarm.io/exclude-evidence-fields: {{ if .Values.ingress.tls.enabled }}"/spec/rules/0/host,/spec/tls/0/hosts/0"{{ else }}"/spec/rules/0/host"{{ end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.hostname | quote }}
+      secretName: {{ .Values.ingress.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.hostname | quote }}
+      http:
+        paths:
+          {{- range .Values.ingress.paths }}
+          - path: {{ . | quote }}
+            pathType: {{ $.Values.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "swarm-model-server.fullname" $ }}
+                port:
+                  number: {{ $.Values.service.port }}
+          {{- end }}
+{{- end }}

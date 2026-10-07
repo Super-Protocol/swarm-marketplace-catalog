@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.10.4"
+  version: "0.12.1"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -372,6 +372,26 @@ parameters:
     validation:
       minLength: 32
 
+  # 43 characters, and that number is load-bearing. The router seals an upstream
+  # credential with AES-256 and accepts the key as base64url, base64 or hex —
+  # whichever spelling, it has to decode to exactly 32 bytes. The marketplace
+  # generates a value of `minLength` characters from an alphanumeric alphabet,
+  # which is a subset of base64url's, so 43 of them decode to exactly 32 bytes
+  # and any other length does not. A key the router refuses is not a boot
+  # failure: it is a deployment whose administrator can register an external
+  # endpoint and never store its API key.
+  - id: secretsKey
+    type: string
+    title: Upstream credential key
+    description: >-
+      Seals the API key of every external model endpoint an administrator registers, so the
+      plaintext is absent from SQL, from a database dump and from the log. Generated. Rotating it
+      re-encrypts nothing — the stored keys become unreadable and have to be entered again.
+    sensitive: true
+    generated: true
+    validation:
+      minLength: 43
+
 resources:
   # A cluster space is created with this quota, so it has to cover every container at once —
   # including the model server, which has no limit of its own and grows with the number of models
@@ -387,9 +407,23 @@ resources:
   # storage at all — the DCS keeps nothing it would need a volume for, so its members are
   # `emptyDir` and count against the node's ephemeral disk rather than against this quota.
   # The extra 0.1 GB is the two routers sitting on the cluster-space memory floor (128Mi each)
-  # instead of 64Mi, which that LimitRange refuses.
+  # instead of 64Mi, which that LimitRange refuses (SUP-238).
   #
   # The rendered limits of a default deployment now come to 3.85 CPU / 10.6 GB / 54 GB; what is
+  # declared here keeps the headroom the earlier numbers had, so neither minimum moves. The CPU
+  # total does not move with 0.11.1's two init-container floors: a pod's effective request is the
+  # larger of its init containers and the sum of its regular ones, and in both pods the regular
+  # container already asks for more.
+  #
+  # 0.12.0 adds one more container to the API pod — the attested egress, a ~30 MiB static binary
+  # verifying external model endpoints (ADR-008). That is +100m and +128 MB of limits, no storage
+  # and no GPU.
+  #
+  # 0.12.1 does not move the quota. It pins the Ollama chart at 1.85.0 and tells llama-server
+  # to size its thread pools from this container's CPU limit, which is the same 2 CPU already
+  # counted above.
+  #
+  # The rendered limits of a default deployment now come to 3.95 CPU / 10.7 GB / 54 GB; what is
   # declared here keeps the headroom the earlier numbers had, so neither minimum moves.
   min:
     cpu: "5"
@@ -566,10 +600,24 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-api
-      version: "0.6.1"
+      version: "0.8.0"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
-        digest: sha256:025597cb7b207c00decb1b493ccbac01424f48e602f813fa4f42d1ab7babd3a7
+        digest: sha256:081f99911e0d288d6df6ada72730ffcf79158373d7e417169db9db44dd3769fc
+      # The attested egress, a second container in the API pod (ADR-008 §2): the
+      # gatekeeper's own core, verifying an external model endpoint's evidence and
+      # pinning its TLS leaf before this deployment proxies a prompt to it. The
+      # same binary a client runs on their own machine, so the verification a user
+      # performs on this router and the one this router performs on an upstream
+      # cannot drift apart.
+      #
+      # Declared here for the reason every image is, and one more: this list is
+      # the fail-closed gate, so a sidecar nobody declared is a deployment that is
+      # refused rather than one that quietly runs an undeclared container — and
+      # the digest is what puts the egress verifier inside the snapshot a user
+      # pins.
+      - name: ghcr.io/super-protocol/confidential-router/gatekeeper
+        digest: sha256:f6f5a2344eaa572120a567cb4cba7769720965bd3a3edb9be11dd0702fd3e6cd
       # Spilo: PostgreSQL 17.5 and Patroni 4.0.4 in one image, which is what makes the
       # database three instances that elect a leader instead of one that comes back empty.
       # It replaces `bitnamilegacy/postgresql` — a mirror that receives no rebuilds, no
@@ -630,6 +678,12 @@ components:
             # asked for: the console's first administrator is that person, and a
             # parameter here would only be a second copy of an address the
             # marketplace already holds — one that drifts the moment either changes.
+            #
+            # The chart carries it to the pod in its Secret rather than as a
+            # literal in the container's env list, which is what keeps it out of
+            # the published snapshot: until chart 0.8.0 this one address was the
+            # last thing making the evidence digest a property of who deployed
+            # this listing rather than of the version (SUP-241).
             bootstrapEmail: "{{ consumer.user.email }}"
             # Who may read the campaign's own numbers — issued, redeemed,
             # activated, granted, and the fraud-watch queries behind them. Read
@@ -642,6 +696,14 @@ components:
             # this is a campaign nobody can see converting.
             adminEmails:
               - "{{ consumer.user.email }}"
+          # The attested egress (ADR-008). On, which is what ships the feature: an
+          # endpoint is registered in the console at run time, so the sidecar has
+          # to be in the pod before there is anything to register. The trust list
+          # and the endpoints themselves are not configured here and deliberately
+          # cannot be — they are admin state, not deployment state.
+          externalEndpoints:
+            enabled: true
+            secretsKey: "{{ params.secretsKey }}"
           # Nothing is for sale: checkout is refused and the console hides its buy
           # panel. The alternative the API used to fall back to was a provider
           # that mints credit from a signed link (SUP-167).
@@ -651,10 +713,10 @@ components:
           postgresql:
             persistence:
               size: "{{ params.databaseStorage }}"
-            # Chart 0.6.1 (patroni-postgresql 0.2.1) asks for less than a cluster space's
-            # LimitRange allows, so admission rejects the pods before they exist. The floor
-            # is 100m CPU and 128Mi, and the request has to equal the limit. 0.6.2 carries
-            # the same numbers as defaults; these keep a deployment of 0.6.1 admissible.
+            # A cluster space's LimitRange refuses a container under 100m CPU or 128Mi, and
+            # the request has to equal the limit (SUP-238). Chart 0.8.0 already defaults to
+            # that floor; pinning it here is what kept a deployment of chart 0.6.1 admissible
+            # and still stops a render from dropping below it.
             etcd:
               bootstrapResources:
                 requests:
@@ -792,10 +854,14 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-ui
-      version: "0.1.14"
+      version: "0.2.1"
     images:
+      # Moves with the API's digest above, from the same source revision: the
+      # admin section that registers an external endpoint and edits the trust
+      # list is a console screen over a GraphQL schema the API half ships, and
+      # the two halves of one contract are not independently pinnable.
       - name: ghcr.io/super-protocol/confidential-router/router-ui
-        digest: sha256:2c315c97b599cc57f51c7d0f0490a674bf7eb37c93b79119272a58d666413123
+        digest: sha256:475ecb21f588cca1225170f34a85a147d54a9553a2b456c5901133e23619320a
     deployment:
       values:
         base:
@@ -856,3 +922,112 @@ outputs:
     type: string
     when: "params.billingMode == 'disabled'"
     value: "This deployment sells no credit: the console has no buy panel and a checkout is refused. Credit arrives as a grant — an invitation code redeemed at sign-up, or `credits grant` from an administrator. Switch to Stripe by reconfiguring."
+
+# What a deployment of this version attests to, and what about it is left out.
+#
+# `expectedDigest` is deliberately absent. It cannot be derived from the charts —
+# a cluster defaults fields no template writes — so it has to be measured from a
+# reference deployment of exactly this version and declared afterwards. Until
+# then the cloud publishes a digest, nothing compares it to anything, and no
+# operator is shown a mismatch that is not one.
+#
+# What this version does deliver is the property that makes such a measurement
+# worth declaring: two deployments of it *with the same parameters*, under
+# different hostnames in different namespaces, render byte-identical snapshots.
+# Before it they could not — the chosen hostname reached `server.publicBaseUrl`,
+# the CORS allow-list, the checkout return URL and the attested endpoint inside
+# `router.yaml`, so the digest was a property of the hostname and no two
+# deployments could ever agree on one (SUP-210).
+#
+# The way out was not to drop `router.yaml` from the snapshot — that would have
+# hidden the router's entire configuration, which is the one thing the digest is
+# worth attesting. The hostname-derived values moved into a ConfigMap of their
+# own and `router.yaml` names them by `${…}` placeholder; the small object is
+# excluded, the configuration stays attested (SUP-211). They are not in a Secret
+# for the same reason: Secrets are lifted out wholesale, which would have hidden
+# the exclusion from this listing instead of disclosing it.
+#
+# The qualifier two paragraphs up — *with the same parameters* — is the whole of
+# what is left, and it is not a footnote: the digest is one per parameter set,
+# not one per version. What the hostname work removed was the axis no deployment
+# chooses on purpose; the parameters that change what the deployment *does*
+# still reach the attested render and still move it —
+#
+#   - `models` — the catalogue is the `models:` block of the attested
+#     `/data/router.yaml`, and with an empty selection there is no endpoint to
+#     publish either;
+#   - `inviteOnlySignup` — writes `auth.requireInviteForSignUp` into the same
+#     file, rendered only while it is on;
+#   - `gpuEnabled` — patches `runtimeClassName: nvidia`, the `nvidia.com/gpu`
+#     requests and the GPU tolerations into the attested ollama Deployment;
+#
+# and on the same footing `passwordSignup`, `billingMode` and `landingHostname`,
+# each of which makes a `router.yaml` block appear or disappear. The chart's own
+# goldens pin it: `checksum/config` is `ec9a0ec7…` for the default selection,
+# `4cfeb4f2…` for three models, `96daaf0e…` for none, `e4281aa2…` for an
+# invite-only launch with a campaign landing page
+# (`charts/tests/golden/api-*.yaml`). Parameters whose value
+# lands in the Secret — the tokens, keys and passwords — do not move it: the
+# Secret is lifted out of the snapshot wholesale, so what moves the digest is a
+# block appearing, not the credential inside one.
+#
+# None of those axes is excluded, and none should be: SUP-239 settled that
+# behaviour-bearing configuration belongs in the snapshot, because a digest that
+# says nothing about which models are served attests to nothing worth attesting.
+# They are instead the second reason `expectedDigest` is absent above — there is
+# no single value it could hold — and it stays absent until expectation profiles
+# declare one digest per parameter set (SUP-240).
+#
+# One field survived that and was found by the measurement it blocked: the
+# address of whoever deployed this, which the chart handed the API as a literal
+# in two containers' env lists. Byte-identical deployments by two different
+# marketplace accounts published two different digests, and each snapshot carried
+# a personal address nobody was told it would publish. It is in the chart's
+# Secret from 0.7.2 on (SUP-241) — and not in the exclusions below, because a
+# Secret's values are stripped by the platform rather than left out by this
+# listing, so there is no exclusion to disclose and the configuration a reviewer
+# reads is no smaller than it was.
+#
+# Each entry below is also a `swarm.io/exclude-evidence-fields` annotation on the
+# object that carries it. Repeated here because this block is what the
+# marketplace reads to show the exclusions beside the digest, and a digest
+# displayed next to "no exclusions" answers the only question that matters about
+# it wrongly.
+evidence:
+  exclude:
+    # The two published hostnames. `ingress.tls.enabled` is false for this
+    # listing — the cloud holds the certificate — so `/spec/rules/0/host` is the
+    # only pointer each Ingress renders.
+    - match: { kind: Ingress, name: confidential-router-api }
+      fields:
+        - "/spec/rules/0/host"
+    - match: { kind: Ingress, name: confidential-router-ui }
+      fields:
+        - "/spec/rules/0/host"
+
+    # The hostname-derived values themselves: the API's public base URL and
+    # attested endpoint, the browser origins allowed to call it, the checkout
+    # return URL, the campaign landing origin — and, for the console, the API
+    # origin it fetches from. Whole objects rather than fields inside them, which
+    # is what moving them out of the attested documents bought.
+    - match: { kind: ConfigMap, name: confidential-router-api-public }
+      fields:
+        - "/data"
+    - match: { kind: ConfigMap, name: confidential-router-ui-public }
+      fields:
+        - "/data"
+
+    # And the two pod-template hashes of those objects, which exist so a hostname
+    # reconfigure actually restarts the pods that read them once at start.
+    # `checksum/config` — the hash of the attested `router.yaml` — is not here,
+    # and that is the point: it no longer varies with the hostname, which is what
+    # made it worthless. It is a property of the version and the parameters now,
+    # and it does still vary with `models`, `inviteOnlySignup`, `passwordSignup`,
+    # `billingMode` and `landingHostname` — deliberately, as the block above
+    # explains.
+    - match: { kind: Deployment, name: confidential-router-api }
+      fields:
+        - "/spec/template/metadata/annotations/checksum~1public-config"
+    - match: { kind: Deployment, name: confidential-router-ui }
+      fields:
+        - "/spec/template/metadata/annotations/checksum~1public-config"

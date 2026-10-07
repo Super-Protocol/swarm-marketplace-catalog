@@ -1,14 +1,40 @@
 ---
+# Source: confidential-router-ui/templates/configmap-public.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: confidential-router-ui-public
+  labels:
+    helm.sh/chart: confidential-router-ui-0.2.1
+    app.kubernetes.io/name: confidential-router-ui
+    app.kubernetes.io/instance: cr
+    app.kubernetes.io/version: "0.4.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-router
+  annotations:
+    # Both keys are the API hostname the operator chose, so all of `/data` goes.
+    # Declared in the listing's `evidence.exclude` as well, which is what the
+    # marketplace reads to show the exclusion beside the digest.
+    swarm.io/exclude-evidence-fields: "/data"
+data:
+  # Read per request by the server and written into the document ahead of every
+  # bundle, so the browser calls the origin this deployment was given rather than
+  # one compiled into the image.
+  ROUTER_UI_API_ORIGIN: "https://api.confidential-router.example"
+  # Derived from the origin by the console itself; set here so a
+  # `kubectl exec env` says where GraphQL is without knowing that.
+  ROUTER_UI_GRAPHQL_HTTP: "https://api.confidential-router.example/graphql"
+---
 # Source: confidential-router-ui/templates/service.yaml
 apiVersion: v1
 kind: Service
 metadata:
   name: confidential-router-ui
   labels:
-    helm.sh/chart: confidential-router-ui-0.1.14
+    helm.sh/chart: confidential-router-ui-0.2.1
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.3.2"
+    app.kubernetes.io/version: "0.4.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
 spec:
@@ -28,12 +54,18 @@ kind: Deployment
 metadata:
   name: confidential-router-ui
   labels:
-    helm.sh/chart: confidential-router-ui-0.1.14
+    helm.sh/chart: confidential-router-ui-0.2.1
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.3.2"
+    app.kubernetes.io/version: "0.4.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
+  annotations:
+    # `checksum/public-config` below is a hash of the hostname-derived ConfigMap,
+    # so it varies with the hostname exactly as that object's `/data` does and is
+    # excluded for the same reason (SUP-211). `/` inside a JSON Pointer token is
+    # `~1` (RFC 6901), which is what makes this one token and not three.
+    swarm.io/exclude-evidence-fields: "/spec/template/metadata/annotations/checksum~1public-config"
 spec:
   replicas: 1
   selector:
@@ -42,6 +74,11 @@ spec:
       app.kubernetes.io/instance: cr
   template:
     metadata:
+      annotations:
+        # `envFrom` is read once, when the container starts, so without this a
+        # hostname reconfigure updates the ConfigMap and the running console keeps
+        # calling the old origin.
+        checksum/public-config: 65e40557200eaddf4dbf9db951c5d3466eb2e22ddb414b03da86da56f3ade394
       labels:
         app.kubernetes.io/name: confidential-router-ui
         app.kubernetes.io/instance: cr
@@ -52,7 +89,7 @@ spec:
         runAsUser: 1001
       containers:
         - name: router-ui
-          image: ghcr.io/super-protocol/confidential-router/router-ui@sha256:2c315c97b599cc57f51c7d0f0490a674bf7eb37c93b79119272a58d666413123
+          image: ghcr.io/super-protocol/confidential-router/router-ui@sha256:475ecb21f588cca1225170f34a85a147d54a9553a2b456c5901133e23619320a
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -64,21 +101,18 @@ spec:
             - name: http
               containerPort: 3001
               protocol: TCP
+          # `ROUTER_UI_API_ORIGIN` and `ROUTER_UI_GRAPHQL_HTTP` — the two values
+          # that carry the API hostname, and the reason they are not in the list
+          # below (SUP-211). One pinned digest still serves any hostname
+          # (SUP-100); the hostname simply no longer reaches an attested object.
+          envFrom:
+            - configMapRef:
+                name: confidential-router-ui-public
           env:
             - name: PORT
               value: "3001"
             - name: HOSTNAME
               value: 0.0.0.0
-            # Read per request by the server and written into the document
-            # ahead of every bundle, so the browser calls the origin this
-            # deployment was given rather than one compiled into the image
-            # (SUP-100). That is what lets one pinned digest serve any hostname.
-            - name: ROUTER_UI_API_ORIGIN
-              value: "https://api.confidential-router.example"
-            # Derived from the origin by the console itself; set here so a
-            # `kubectl exec env` says where GraphQL is without knowing that.
-            - name: ROUTER_UI_GRAPHQL_HTTP
-              value: "https://api.confidential-router.example/graphql"
             - name: ROUTER_UI_AUTH_CALLBACK_URL
               value: "/"
           # `/login` rather than `/`: it is the one route the console serves
@@ -129,13 +163,24 @@ kind: Ingress
 metadata:
   name: confidential-router-ui
   labels:
-    helm.sh/chart: confidential-router-ui-0.1.14
+    helm.sh/chart: confidential-router-ui-0.2.1
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.3.2"
+    app.kubernetes.io/version: "0.4.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
   annotations:
+    # The hostname is the one thing that differs between two deployments of this
+    # version, and a digest that varied with it would be a digest nobody else
+    # could ever match (SUP-211). Declared in the listing's `evidence.exclude` as
+    # well — that is what the marketplace reads to show the exclusion beside the
+    # digest.
+    #
+    # The TLS host is the same hostname again, so it is listed too when the chart
+    # terminates TLS itself. This listing does not: the cloud holds the
+    # certificate, `ingress.tls.enabled` is false, and the rendered value is the
+    # single `/spec/rules/0/host` the definition declares.
+    swarm.io/exclude-evidence-fields: "/spec/rules/0/host"
     nginx.ingress.kubernetes.io/proxy-body-size: 30m
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"

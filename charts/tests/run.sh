@@ -16,12 +16,12 @@ cd "$root"
 # One release name and namespace per listing. Neither reaches an object name in
 # these charts — they are chosen so the rendered labels say which listing a
 # golden belongs to, and nothing more.
-release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; patroni-postgresql) printf 'pg' ;; *) printf 'cr' ;; esac; }
-namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; patroni-postgresql) printf 'patroni' ;; *) printf 'confidential-router' ;; esac; }
+release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; patroni-postgresql) printf 'pg' ;; swarm-model-server) printf 'ms' ;; *) printf 'cr' ;; esac; }
+namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; patroni-postgresql) printf 'patroni' ;; swarm-model-server) printf 'model-server' ;; *) printf 'confidential-router' ;; esac; }
 
 RELEASE=cr
 NAMESPACE=confidential-router
-CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ui confidential-s3 patroni-postgresql)
+CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ui confidential-s3 patroni-postgresql swarm-model-server)
 
 update="${UPDATE:-}"
 failures=0
@@ -67,6 +67,7 @@ for chart in "${CHARTS[@]}"; do
     confidential-router-ui) values="charts/tests/cases/ui-default.yaml" ;;
     confidential-s3) values="charts/tests/cases/s3-default.yaml" ;;
     patroni-postgresql) values="charts/tests/cases/patroni-default.yaml" ;;
+    swarm-model-server) values="charts/tests/cases/model-server-llama.yaml" ;;
   esac
   if output=$(helm lint "charts/$chart" --values "$values" 2>&1); then
     pass "$chart"
@@ -107,6 +108,19 @@ while IFS=$'\t' read -r name chart repo version; do
   fi
   rm -f /tmp/chart-golden-diff.$$
 done < charts/tests/cases.tsv
+
+# A cluster space carries a LimitRange with a 100m / 128Mi floor and a
+# request/limit ratio of 1, so a container asking for less — or asking for
+# nothing, and being handed a 2:1 pair by the same LimitRange — is refused at
+# admission and the pod never exists. Nothing in a golden diff says that; the
+# render looks perfect and the deployment reads as "the app is broken" (SUP-238).
+note "every rendered container clears a cluster space's LimitRange"
+if output=$(python3 charts/tests/limitrange.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/limitrange.py"
+fi
 
 # The two charts are installed separately and have to be given the same list.
 # Nothing enforces that at deploy time, so it is enforced here: the router's
@@ -215,6 +229,32 @@ refuses "an operator name where an address belongs" "not an email address" \
 refuses "two operator addresses in one list entry" "one address per list entry" \
   "${base_api[@]}" --set 'auth.adminEmails[0]=a@example.com\,b@example.com'
 
+# The one address the first account is created under. A name here is a
+# `POST /auth/bootstrap` that creates an account nobody can sign in to — and the
+# token is spent on it, so there is no second attempt.
+refuses "a bootstrap name where an address belongs" "not an email address" \
+  "${base_api[@]}" --set auth.bootstrapToken=golden-test-bootstrap-token --set auth.bootstrapEmail=operator
+
+# The attested egress (ADR-008). Each of these renders a pod that comes up and an
+# egress that never works: an administrator who can register an upstream but
+# never store its API key, a key that is not an AES-256 key at all, a verifier
+# pulled by a tag that can move under a digest somebody pinned, and two
+# processes in one network namespace told to bind the same port.
+base_egress=("${base_api[@]}" --set externalEndpoints.enabled=true
+  --set externalEndpoints.secretsKey=goldentestsecretskeynotarealoneAAAAAAAAAAAAA)
+
+refuses "the egress switched on with no data key" "every registration is refused" \
+  "${base_api[@]}" --set externalEndpoints.enabled=true
+
+refuses "a data key that is not 32 bytes" "decode to exactly 32 bytes" \
+  "${base_api[@]}" --set externalEndpoints.enabled=true --set externalEndpoints.secretsKey=tooshort
+
+refuses "an unpinned egress verifier" "pinned by digest" \
+  "${base_egress[@]}" --set externalEndpoints.image.digest= --set externalEndpoints.image.tag=
+
+refuses "the egress admin API on the port the API itself listens on" "would fail to bind" \
+  "${base_egress[@]}" --set externalEndpoints.adminPort=3000
+
 # The console used to have its API origin compiled into its browser bundle, so
 # this chart refused to render one pointed anywhere else and the listing was
 # capped at the hostname the image was built for. The origin is resolved at run
@@ -228,6 +268,13 @@ console_for() {
 env_value() {
   printf '%s\n' "$2" | grep -A1 -- "- name: $1\$" | tail -1 | sed 's/^ *value: //; s/^"//; s/"$//'
 }
+# The console's two origin variables moved out of the env list and into the
+# ConfigMap the evidence snapshot excludes (SUP-211), so they are read from
+# `data` rather than from a `- name:` pair. The pod still gets them, through
+# `envFrom`, which `charts/tests/evidence_drift.py` and the golden both hold.
+config_value() {
+  printf '%s\n' "$2" | grep -- "^  $1: " | tail -1 | sed "s/^  $1: //; s/^\"//; s/\"$//"
+}
 
 console_images=""
 for host in api.confidential-router.example somewhere.else.example; do
@@ -236,8 +283,8 @@ for host in api.confidential-router.example somewhere.else.example; do
     printf '%s\n' "$rendered" | sed 's/^/        /'
     continue
   fi
-  origin=$(env_value ROUTER_UI_API_ORIGIN "$rendered")
-  graphql=$(env_value ROUTER_UI_GRAPHQL_HTTP "$rendered")
+  origin=$(config_value ROUTER_UI_API_ORIGIN "$rendered")
+  graphql=$(config_value ROUTER_UI_GRAPHQL_HTTP "$rendered")
   console_images="$console_images$(printf '%s\n' "$rendered" | grep -o 'image: .*' | head -1)
 "
   if [ "$origin" = "https://$host" ] && [ "$graphql" = "https://$host/graphql" ]; then
@@ -263,23 +310,51 @@ fi
 note "a campaign deployment renders its three settings, each in the right object"
 campaign=charts/tests/golden/api-campaign.yaml
 config=$(sed -n '/^  router.yaml: |/,/^---$/p' "$campaign")
+public=$(sed -n '/^  ROUTER_/p' "$campaign")
 
-for origin in \
-  https://console.confidential-router.example \
-  https://landing.confidential-router.example
-do
-  if printf '%s\n' "$config" | grep -q -- "- \"$origin\""; then
-    pass "validClientOrigins carries $origin"
-  else
-    fail "validClientOrigins does not carry $origin"
-  fi
-done
+# The two origins and the landing URL used to be literals in `router.yaml`, which
+# made the attested document — and so the evidence digest — a property of the
+# hostnames the operator chose (SUP-210). They are in the excluded public
+# ConfigMap now, and the attested document names them by placeholder; both halves
+# are asserted, because a placeholder nothing fills is a boot the router refuses.
+if printf '%s\n' "$public" | grep -q 'ROUTER_VALID_CLIENT_ORIGINS: "https://console.confidential-router.example,https://landing.confidential-router.example"'; then
+  pass "validClientOrigins carries the console and the landing page, in that order"
+else
+  fail "ROUTER_VALID_CLIENT_ORIGINS does not carry both origins"
+fi
 
-if printf '%s\n' "$config" | grep -q 'landingBaseUrl: "https://landing.confidential-router.example"'; then
+if printf '%s\n' "$config" | grep -q 'validClientOrigins: "${ROUTER_VALID_CLIENT_ORIGINS}"'; then
+  pass "the attested config refers to the origin list rather than carrying it"
+else
+  fail "the attested router.yaml does not refer to ROUTER_VALID_CLIENT_ORIGINS"
+fi
+
+if printf '%s\n' "$public" | grep -q 'ROUTER_LANDING_BASE_URL: "https://landing.confidential-router.example"'; then
   pass "invites.landingBaseUrl points at the landing page, not the schema default"
 else
-  fail "the rendered config has no invites.landingBaseUrl"
+  fail "the rendered config has no landing base URL"
 fi
+
+if printf '%s\n' "$config" | grep -q 'landingBaseUrl: "${ROUTER_LANDING_BASE_URL}"'; then
+  pass "the attested config refers to the landing origin rather than carrying it"
+else
+  fail "the attested router.yaml does not refer to ROUTER_LANDING_BASE_URL"
+fi
+
+# And the point of the whole split: no hostname of this deployment is left in the
+# document the snapshot attests. A literal that came back would render, deploy and
+# work, and silently make the digest a property of the hostname again.
+for host in \
+  api.confidential-router.example \
+  console.confidential-router.example \
+  landing.confidential-router.example
+do
+  if printf '%s\n' "$config" | grep -q -- "$host"; then
+    fail "the attested router.yaml carries $host, which makes the evidence digest a property of it"
+  else
+    pass "$host is not in the attested router.yaml"
+  fi
+done
 
 for leak in operator@confidential-router.example phc_golden_test_project_key; do
   if printf '%s\n' "$config" | grep -q -- "$leak"; then
@@ -569,9 +644,9 @@ else
 fi
 
 # The database half of this listing has to be the same for everybody, or no version of
-# it can ever declare an `expectedDigest`. The api half already is not — several fields
-# in its ConfigMap carry the hostname the operator chose — so this asks the narrower
-# question the change is responsible for.
+# it can ever declare an `expectedDigest`. This asks only about that half, by name: the
+# api half is a question of its own, and `evidence_drift.py` below asks it with the
+# chart's declared exclusions taken into account.
 note "the database attests the same thing for every consumer"
 if output=$(python3 charts/tests/database_drift.py confidential-router-api charts/tests/cases/api-one-model.yaml postgresql); then
   printf '%s\n' "$output"
@@ -590,6 +665,159 @@ else
   printf '%s\n' "$output"
   fail "charts/tests/inventory.py confidential-router-api"
 fi
+
+# The component image list is the render path's one fail-closed gate: an image in
+# the manifests that the listing does not declare refuses the whole deployment,
+# and a digest bumped in one file and not the other is a listing advertising a
+# pin the cluster never pulls. Neither is visible to a golden diff — `helm
+# template` does not read app.yaml — and the second container ADR-008 adds is
+# exactly the shape of change that walks into it.
+note "the listing declares every image its charts render, with the same digest"
+declared_images() {
+  if output=$(python3 charts/tests/declared_images.py confidential-router "$1" "$2" "charts/tests/cases/$3.yaml"); then
+    printf '%s\n' "$output" | sed "s/\$/ ($1)/"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/declared_images.py $1"
+  fi
+}
+declared_images router-api confidential-router-api api-external-endpoints
+declared_images router-ui confidential-router-ui ui-default
+declared_images litellm confidential-router-litellm litellm-one-model
+
+# The egress is two containers that have to agree about one file and one port,
+# and nothing in a cluster would say so: a sidecar watching a path router-api
+# never writes waits for a configuration for ever, serving nothing, with both
+# containers Ready. Checked on the rendered objects rather than on the values,
+# because the mount point is derived and the agreement is what matters.
+note "the egress sidecar and the API agree on the file and the socket between them"
+if output=$(python3 - charts/tests/golden/api-external-endpoints.yaml <<'PYTHON'
+import sys, yaml
+
+golden = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+deployment = next(d for d in golden if d["kind"] == "Deployment")
+pod = deployment["spec"]["template"]["spec"]
+api = next(c for c in pod["containers"] if c["name"] == "router-api")
+sidecar = next(c for c in pod["containers"] if c["name"] == "gatekeeper")
+config = yaml.safe_load(
+    next(d for d in golden if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "confidential-router-api")["data"][
+        "router.yaml"
+    ].replace("${", "placeholder-").replace("}", "")
+)
+
+failures = []
+rendered = config["externalEndpoints"]["configFile"]
+watched = next(e["value"] for e in sidecar["env"] if e["name"] == "GATEKEEPER_CONFIG")
+if rendered != watched:
+    failures.append(f"router-api renders {rendered} and the sidecar watches {watched}")
+else:
+    print(f"  ok    both name {rendered}")
+
+shared = {
+    container["name"]: next(
+        (m["mountPath"] for m in container.get("volumeMounts", []) if m["name"] == "gatekeeper-config"), None
+    )
+    for container in pod["containers"]
+}
+directory = rendered.rsplit("/", 1)[0]
+for name, path in shared.items():
+    if path != directory:
+        failures.append(f"{name} mounts the shared volume at {path}, not {directory}")
+if not failures:
+    print(f"  ok    both mount the shared emptyDir at {directory}")
+
+volume = next((v for v in pod["volumes"] if v["name"] == "gatekeeper-config"), None)
+if volume is None or "emptyDir" not in volume:
+    failures.append("the shared volume is not an emptyDir")
+else:
+    print("  ok    the shared volume is an emptyDir, so nothing of it outlives the pod")
+
+# The listeners are loopback-only, which is what makes them need no Service and
+# no NetworkPolicy. A containerPort would advertise a reachability that is not
+# there, and the admin API answers verdicts to whoever reaches it.
+if sidecar.get("ports"):
+    failures.append(f"the sidecar declares ports {sidecar['ports']}, and every listener it opens is on loopback")
+else:
+    print("  ok    the sidecar publishes no port")
+
+admin = config["externalEndpoints"]["adminListen"]
+if not admin.startswith("127.0.0.1:"):
+    failures.append(f"the admin API is told to listen on {admin}, which is not loopback")
+else:
+    print(f"  ok    the admin API is loopback-only ({admin})")
+
+if sidecar["securityContext"].get("runAsUser") != 65532 or not sidecar["securityContext"]["readOnlyRootFilesystem"]:
+    failures.append("the sidecar is not the image's non-root uid on a read-only root filesystem")
+else:
+    print("  ok    the sidecar runs as 65532 on a read-only root filesystem")
+
+# router-api writes the rendered configuration 0640, owned by its own uid and
+# gid. A sidecar with a group of its own can see that file and cannot open it,
+# which is an egress that serves nothing with both containers Ready — so the
+# group has to be the pod's, which is the API's.
+pod_group = pod["securityContext"]["runAsGroup"]
+if sidecar["securityContext"].get("runAsGroup", pod_group) != pod_group:
+    failures.append(
+        f"the sidecar runs as group {sidecar['securityContext']['runAsGroup']} and the file it reads is "
+        f"group {pod_group}, mode 0640: it could not open it"
+    )
+else:
+    print(f"  ok    the sidecar shares the writer's group ({pod_group}), which 0640 requires")
+
+# The API container has to be able to write what the sidecar reads.
+api_mount = next(m for m in api["volumeMounts"] if m["name"] == "gatekeeper-config")
+if api_mount.get("readOnly"):
+    failures.append("router-api mounts the shared volume read-only, and it is the process that renders the file")
+else:
+    print("  ok    router-api mounts it writable and the sidecar read-only")
+
+for failure in failures:
+    print(f"  FAIL  {failure}")
+sys.exit(1 if failures else 0)
+PYTHON
+); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "the egress sidecar and the API do not agree"
+fi
+
+# The one reversible credential this deployment holds. `router.yaml` is attested
+# and published inside the evidence bundle, so a data key written there would be
+# handed out with it — along with every upstream credential it opens (SUP-124,
+# ADR-008 §6).
+note "the upstream-key envelope reaches the pod from the Secret, never from the attested config"
+egress_golden=charts/tests/golden/api-external-endpoints.yaml
+egress_key=goldentestsecretskeynotarealoneAAAAAAAAAAAAA
+egress_config=$(sed -n '/^  router.yaml: |/,/^---$/p' "$egress_golden")
+
+if printf '%s\n' "$egress_config" | grep -q -- "$egress_key"; then
+  fail "the attested router.yaml carries the upstream-key envelope, which the evidence bundle publishes"
+else
+  pass "no data key in the attested router.yaml"
+fi
+if grep -q "secrets-key: \"$egress_key\"" "$egress_golden"; then
+  pass "the data key reaches the Secret"
+else
+  fail "the Secret does not carry secrets-key"
+fi
+if [ "$(grep -c -- '- name: CR_API_SECRETS_KEY$' "$egress_golden")" = "2" ]; then
+  pass "CR_API_SECRETS_KEY is read from the Secret by both the server and the migration container"
+else
+  fail "CR_API_SECRETS_KEY is read $(grep -c -- '- name: CR_API_SECRETS_KEY$' "$egress_golden") time(s), expected 2"
+fi
+
+# And none of it for a deployment that did not ask: the router's config schema is
+# strict, so `externalEndpoints` on an image that predates ADR-008 is a boot
+# refusal rather than a key it ignores.
+note "a deployment with the egress off renders none of it"
+for absent in 'externalEndpoints:' CR_API_SECRETS_KEY secrets-key gatekeeper-config; do
+  if grep -q -- "$absent" charts/tests/golden/api-one-model.yaml; then
+    fail "api-one-model renders $absent"
+  else
+    pass "no $absent"
+  fi
+done
 
 note "patroni-postgresql pins every image it ships by a real digest"
 if output=$(python3 charts/tests/digests.py patroni-postgresql); then
@@ -670,6 +898,403 @@ refuses "an unpinned bootstrap image" "etcd.bootstrapImage.digest is empty" \
 
 refuses "replacing the one-per-node rule by accident" "the one that applies" \
   "${base_pg[@]}" --set 'affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].weight=1'
+
+# Every `${…}` in the attested config is filled by something the pod is given, and
+# nothing excluded from the snapshot is dead weight. This is the failure mode the
+# hostname split introduced: a renamed variable is not a bad render, it is a
+# config loader that throws before the first listener — the whole deployment is a
+# crash loop and no golden diff would have mentioned it.
+note "every placeholder in the attested config has something that fills it"
+for case in api-one-model api-campaign api-billing-stripe api-no-models api-endpoint-hostname api-external-endpoints; do
+  if output=$(python3 charts/tests/config_placeholders.py confidential-router-api "charts/tests/cases/$case.yaml"); then
+    printf '%s\n' "$output" | sed "s/\$/ ($case)/"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/config_placeholders.py $case"
+  fi
+done
+
+# The listing/chart seam again — the one confidential-s3's check above asks — on
+# the listing that needed it most and never had it asked. `consumer_fields.py`
+# existed from confidential-s3 0.1.1 and was only ever run
+# against that listing, while `confidential-router` passed the deployer's address
+# into two chart values — one sealed, one a literal in the container's env list.
+# Four published versions later a measurement found it: two deployments identical
+# but for who clicked deploy, two digests, and a personal address inside both
+# signed snapshots (SUP-241).
+#
+# Once per case rather than once, and that is the shape of the hole: a chart
+# renders an env var only on the path that uses it, so a single set of values
+# clears the paths it happens to exercise and says nothing about the rest. The
+# deployer's address is rendered only alongside a first-sign-in token — on
+# `api-one-model` it is neither published nor probed, and `consumer_fields.py`
+# says so rather than passing.
+note "no attested object of the router carries a consumer value as a literal"
+for case in api-bootstrap-token api-campaign api-one-model; do
+  if output=$(python3 charts/tests/consumer_fields.py confidential-router \
+      "confidential-router-api=charts/tests/cases/$case.yaml"); then
+    printf '%s\n' "$output" | sed "s/\$/ ($case)/"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/consumer_fields.py confidential-router $case"
+  fi
+done
+
+# The property this listing exists to have (SUP-211): two deployments of this
+# version, under two hostnames in two namespaces, differ only in fields the chart
+# excludes and the definition declares. Field by field rather than line by line,
+# which is what catches a key that is absent on one side and a pointer that has
+# gone stale — see the module docstring.
+note "two deployments of the router differ only where the chart says they do"
+drift_case() {
+  if output=$(python3 charts/tests/evidence_drift.py "$1" "charts/tests/cases/$2.yaml" confidential-router \
+      'apiHostname=api.{t}.example' 'consoleHostname=console.{t}.example' "${@:3}"); then
+    printf '%s\n' "$output" | sed "s/\$/ ($1, $2)/"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/evidence_drift.py $1 $2"
+  fi
+}
+drift_case confidential-router-api api-one-model
+drift_case confidential-router-api api-campaign 'invites.landingHostname=landing.{t}.example'
+# The second container is in the snapshot too, and nothing about it may follow
+# the hostname: the endpoints it verifies are registered at run time, so the
+# egress a deployment attests is the same for everybody (ADR-008 §2).
+drift_case confidential-router-api api-external-endpoints
+drift_case confidential-router-ui ui-default
+
+# And the same question with the *consumer* varying, not just the hostname they
+# typed. The marketplace fills both of these from the account clicking deploy, so
+# two people deploying one version render two different values for them — which is
+# a difference no listing may declare, because declaring it admits one deployer.
+# On the bootstrap case rather than api-one-model: that is the path where the
+# address reaches a container's environment at all, and before SUP-241 it reached
+# it as a literal, on the server and on the migration container both.
+note "two people deploying the same version of the router attest the same snapshot"
+drift_case confidential-router-api api-bootstrap-token \
+  'auth.bootstrapEmail=deployer-{t}@example.test' 'auth.adminEmails[0]=deployer-{t}@example.test'
+
+# ---------------------------------------------------------------------------
+# swarm-model-server. Every one of these is a deployment that renders cleanly
+# and then serves something it should not, or nothing at all.
+# ---------------------------------------------------------------------------
+base_ms=(helm template ms charts/swarm-model-server --namespace model-server --values charts/tests/cases/model-server-llama.yaml)
+
+# The one that matters most: a public hostname in front of a GPU with no
+# credential is the deployment handed to whoever finds the name.
+refuses "an inference endpoint published with no key" "does not publish an unauthenticated" \
+  "${base_ms[@]}" --set apiKey= --set existingSecret=
+
+refuses "an ingress with no hostname" "hostname is empty" \
+  "${base_ms[@]}" --set hostname=
+
+# The weights pin. Without it the deployment serves whatever the network
+# returned, and the evidence says nothing about which bytes those were.
+refuses "a weights manifest with no files" "will not serve weights it cannot verify" \
+  "${base_ms[@]}" --set 'model.weights.files=null'
+
+refuses "a branch name where a commit belongs" "not a 40-character commit sha" \
+  "${base_ms[@]}" --set model.weights.revision=main
+
+refuses "a weight file with no sha256" "an unverifiable file is the whole problem" \
+  "${base_ms[@]}" --set 'model.weights.files[0].sha256='
+
+refuses "a totalBytes that does not match the files" "edited by hand" \
+  "${base_ms[@]}" --set model.weights.totalBytes=1234
+
+# Fails after the download rather than before it, with the volume full.
+refuses "a volume too small for the weights" "the download would fail with the volume full" \
+  "${base_ms[@]}" --set persistence.size=2Gi
+
+# An engine started with a parser it does not register exits at startup; an
+# engine started with the *wrong* parser turns every tool call into prose.
+refuses "a tool-call parser the engine does not register" "is not one of the parsers vLLM" \
+  "${base_ms[@]}" --set model.toolCalling.parser=llama3-json
+
+# The published engine image is a CUDA build. Without a card the pod starts,
+# finds no device, and restarts for ever.
+refuses "a GPU-less deployment of a CUDA-only engine" "does not serve on a CPU" \
+  "${base_ms[@]}" --set gpu.enabled=false
+
+refuses "an unpinned engine image" "pinned by digest" \
+  "${base_ms[@]}" --set image.digest= --set image.tag=
+
+# A model id travels in the connection link's fragment and in an OpenAI request
+# body; a space in it breaks both.
+refuses "a model id that would break the connection link" "limited to letters, digits" \
+  "${base_ms[@]}" --set 'model.id=my model'
+
+refuses "a model with no id at all" "model.id is empty" \
+  "${base_ms[@]}" --set model.id=
+
+refuses "TLS switched on with no certificate" "ingress.tls.secretName is empty" \
+  "${base_ms[@]}" --set ingress.tls.enabled=true
+
+# SUP-230: a chat template inlined in a listing renders here and is refused by the
+# marketplace's publish parse, a long way from whoever wrote it. The chart refuses
+# it where the message can say what to do instead.
+refuses "a chat template passed inline instead of by file name" "model.chatTemplate is gone" \
+  "${base_ms[@]}" --set 'model.chatTemplate=hello {{ bos_token }}'
+
+refuses "a chat template file the chart does not carry" "does not exist" \
+  "${base_ms[@]}" --set model.chatTemplateFile=not-here.jinja
+
+# The three things a published endpoint must not expose, asserted on the render
+# rather than trusted to the values file.
+note "swarm-model-server publishes only what authenticates"
+for case in model-server-llama model-server-gemma model-server-qwen-fp8; do
+  rendered=$(helm template ms charts/swarm-model-server --namespace model-server \
+    --values "charts/tests/cases/$case.yaml" 2>&1) || { fail "$case (render)"; continue; }
+  problems=""
+  # Every ingress path is under /v1: vLLM authenticates /v1 and leaves
+  # /metrics, /docs and /tokenize open.
+  paths=$(printf '%s\n' "$rendered" | awk '/^kind: Ingress$/,0' | grep -oE '^\s+- path: .*' | sed 's/.*path: //; s/"//g')
+  for path in $paths; do
+    case "$path" in /v1*) ;; *) problems="$problems published-path:$path" ;; esac
+  done
+  [ -n "$paths" ] || problems="$problems no-ingress-paths"
+  # The key is referenced, never written into an argument or a literal env value.
+  printf '%s\n' "$rendered" | grep -q 'secretKeyRef' || problems="$problems key-not-by-reference"
+  # A list item, not a mention: the chart's own comment explains why the flag is
+  # not used, and a bare substring match would flag that comment.
+  printf '%s\n' "$rendered" | grep -qE '^\s+- "?--api-key' && problems="$problems key-on-the-command-line"
+  # Every container that is not the engine asks for zero GPUs explicitly: a GPU
+  # space's LimitRange defaults a missing nvidia.com/gpu to the reserved count.
+  printf '%s\n' "$rendered" | grep -q 'nvidia.com/gpu: "0"' || problems="$problems fetcher-wants-a-gpu"
+  # The hostname is excluded from the evidence snapshot, or the digest is a
+  # property of the deployment rather than of the version.
+  printf '%s\n' "$rendered" | grep -q 'swarm.io/exclude-evidence-fields' || problems="$problems hostname-not-excluded"
+  if [ -z "$problems" ]; then pass "$case"; else fail "$case:$problems"; fi
+done
+
+# The same check for the model-serving family. The release name is fixed per
+# listing (`releasePrefix = shortName(listing.name)` on the marketplace side), so
+# it is held constant here and only the things a deployment really chooses — the
+# namespace, the hostname and the generated key — are varied.
+note "two deployments of a model listing differ only in the hostname"
+for case in model-server-llama model-server-gemma model-server-qwen-fp8; do
+  render_ms() {
+    helm template ms-fixed charts/swarm-model-server --namespace "$2" \
+      --values "charts/tests/cases/$case.yaml" \
+      --set "hostname=$1.conf-apps.example" \
+      --set "apiKey=$3" 2>&1 | grep -v '^  namespace:'
+  }
+  a=$(render_ms alpha space-a KEYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA)
+  b=$(render_ms beta space-b KEYBBBBBBBBBBBBBBBBBBBBBBBBBBBBB)
+  # The key is in a Secret, whose contents the platform lifts out before the
+  # snapshot is taken, so a difference there is not one this has to declare.
+  declared='alpha.conf-apps.example|beta.conf-apps.example|KEYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|KEYBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
+  undeclared=$(diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") | grep -E '^[<>]' | grep -vE "$declared" || true)
+  if [ -z "$undeclared" ]; then
+    pass "$case"
+  else
+    fail "$case: a field differs between two consumers and is not excluded:"
+    printf '%s\n' "$undeclared" | sed 's/^/        /'
+  fi
+done
+
+# The exclusion has to be declared in both places: the annotation is what the
+# cloud acts on, and `evidence.exclude` in the listing is what the marketplace
+# reads to show it beside the digest.
+note "each model listing declares the exclusion its chart annotates"
+# Each listing against its own golden. Feeding one golden to all three would
+# still check every listing's declaration, but would only ever resolve the
+# llama render's pointer — and a pointer is an index, so the whole point of
+# resolving it is that it is checked against the object it indexes.
+for pair in "llama-3-2-3b-instruct:model-server-llama" \
+            "gemma-2-2b-it:model-server-gemma" \
+            "qwen3-coder-30b-a3b-instruct-fp8:model-server-qwen-fp8"; do
+  app="${pair%%:*}"
+  case_name="${pair##*:}"
+  if output=$(python3 - "apps/$app/app.yaml" "charts/tests/golden/$case_name.yaml" <<'PYTHON'
+import sys, yaml
+definition = yaml.safe_load(open(sys.argv[1]))
+golden = [d for d in yaml.safe_load_all(open(sys.argv[2])) if d]
+ingress = next(d for d in golden if d["kind"] == "Ingress")
+annotated = ingress["metadata"]["annotations"]["swarm.io/exclude-evidence-fields"]
+pointers = [p.strip() for p in annotated.split(",") if p.strip()]
+
+# Every pointer has to resolve, and to resolve to the hostname it claims to
+# name. They are indexes, so a second rule added above would leave a
+# well-formed exclusion pointing at the wrong value and nothing else here
+# would notice.
+host = ingress["spec"]["rules"][0]["host"]
+for pointer in pointers:
+    node = ingress
+    for token in pointer.strip("/").split("/"):
+        node = node[int(token)] if isinstance(node, list) else node[token]
+    if node != host:
+        sys.exit(f"{pointer} resolves to {node!r}, not the ingress host {host!r}")
+
+# Every place the hostname appears in this object has to be one of them.
+def host_pointers(node, prefix=""):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield from host_pointers(value, f"{prefix}/{key}")
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from host_pointers(value, f"{prefix}/{index}")
+    elif node == host:
+        yield prefix
+
+found = set(host_pointers(ingress["spec"], "/spec"))
+missing = found - set(pointers)
+if missing:
+    sys.exit(f"the hostname also appears at {sorted(missing)}, which is not excluded")
+
+declared = definition.get("evidence", {}).get("exclude", [])
+fields = {f for entry in declared for f in entry.get("fields", [])}
+for pointer in pointers:
+    if pointer not in fields:
+        sys.exit(f"the listing does not declare {pointer}: {sorted(fields)}")
+names = {entry["match"].get("name") for entry in declared}
+if ingress["metadata"]["name"] not in names:
+    sys.exit(f"the listing's exclusion matches {names}, not {ingress['metadata']['name']}")
+print(f"{len(pointers)} pointer(s), all resolved and declared")
+PYTHON
+  ); then
+    pass "$app ($output)"
+  else
+    fail "$app: $output"
+  fi
+done
+
+# TLS is off in every listing because the platform terminates it, but if anyone
+# turns it on the hostname appears a second time under /spec/tls/0/hosts/0 — and
+# one unexcluded copy is enough to make the digest a property of the deployment.
+note "the hostname stays excluded when TLS is switched on"
+tls_render="$(mktemp)"
+if helm template ms charts/swarm-model-server --namespace model-server \
+      --values charts/tests/cases/model-server-llama.yaml \
+      --set ingress.tls.enabled=true --set ingress.tls.secretName=tls > "$tls_render" 2>&1 \
+   && python3 - "$tls_render" <<'PYTHON'
+import sys, yaml
+ingress = next(d for d in yaml.safe_load_all(open(sys.argv[1])) if d and d["kind"] == "Ingress")
+pointers = {p.strip() for p in
+            ingress["metadata"]["annotations"]["swarm.io/exclude-evidence-fields"].split(",")}
+host = ingress["spec"]["rules"][0]["host"]
+if ingress["spec"]["tls"][0]["hosts"] != [host]:
+    sys.exit("the TLS block does not carry the hostname this test assumes")
+for expected in ("/spec/rules/0/host", "/spec/tls/0/hosts/0"):
+    if expected not in pointers:
+        sys.exit(f"{expected} is not excluded: {sorted(pointers)}")
+PYTHON
+then
+  pass "both /spec/rules/0/host and /spec/tls/0/hosts/0 are excluded"
+else
+  fail "a TLS-enabled render leaves the hostname in the snapshot"
+  sed 's/^/        /' "$tls_render"
+fi
+rm -f "$tls_render"
+
+# The fetcher is what stands between the manifest and the GPU, so its refusals
+# are tested rather than read. It is loaded from the chart's files/ directory —
+# the same bytes the ConfigMap carries — and handed manifests it must reject.
+note "the weights fetcher refuses what the manifest should not be able to say"
+if output=$(python3 charts/tests/fetcher_guard.py 2>&1); then
+  pass "$(printf '%s' "$output" | tail -1)"
+else
+  fail "charts/tests/fetcher_guard.py"
+  printf '%s\n' "$output" | sed 's/^/        /'
+fi
+
+# `.Files.Get` must hand the template over verbatim. If Helm ever rendered it —
+# or if someone "fixed" the braces by escaping them — the model would be served a
+# template with holes in it, and nothing downstream would say so.
+note "the chat template reaches the ConfigMap unrendered"
+if output=$(python3 - <<'PYTHON'
+import subprocess, sys, yaml, pathlib
+rendered = subprocess.run(
+    ["helm", "template", "ms", "charts/swarm-model-server", "--namespace", "model-server",
+     "--values", "charts/tests/cases/model-server-gemma.yaml"],
+    capture_output=True, text=True, check=True).stdout
+docs = [d for d in yaml.safe_load_all(rendered) if d]
+cm = next((d for d in docs
+           if d["kind"] == "ConfigMap" and d["metadata"]["name"].endswith("chat-template")), None)
+if cm is None:
+    sys.exit("the gemma case rendered no chat-template ConfigMap")
+served = cm["data"]["chat-template.jinja"].rstrip("\n")
+source = pathlib.Path(
+    "charts/swarm-model-server/files/chat-templates/gemma-2.jinja").read_text().rstrip("\n")
+if served != source:
+    sys.exit("the rendered template differs from the file in the chart")
+for needed in ("{{ bos_token }}", "{%- if messages[0]['role'] == 'system' -%}"):
+    if needed not in served:
+        sys.exit(f"{needed!r} did not survive into the ConfigMap")
+# The engine has to be told to use it.
+deployment = next(d for d in docs if d["kind"] == "Deployment")
+args = deployment["spec"]["template"]["spec"]["containers"][0]["args"]
+if "--chat-template" not in args:
+    sys.exit("the ConfigMap is rendered but the engine is never pointed at it")
+print(f"{len(served)} bytes, byte-identical to the file, and the engine is pointed at it")
+PYTHON
+); then
+  pass "$output"
+else
+  fail "$output"
+fi
+
+note "the connection link matches its specification"
+if output=$(python3 charts/tests/smoke/model-server.py --self-test 2>&1); then
+  pass "docs/model-connection-link.md test vectors ($(printf '%s' "$output" | grep -c '  ok ') vectors)"
+else
+  fail "docs/model-connection-link.md test vectors"
+  printf '%s\n' "$output" | sed 's/^/        /'
+fi
+
+for app in llama-3-2-3b-instruct gemma-2-2b-it qwen3-coder-30b-a3b-instruct-fp8; do
+  if output=$(python3 - "apps/$app/app.yaml" <<'PYTHON'
+import pathlib, sys, yaml
+sys.path.insert(0, "charts/tests/smoke")
+# The checker is a script, not a module; load it by path so the parser under test
+# is literally the one the smoke run uses.
+import importlib.util
+spec = importlib.util.spec_from_file_location("ms", "charts/tests/smoke/model-server.py")
+ms = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ms)
+
+definition = yaml.safe_load(open(sys.argv[1]))
+outputs = {o["id"]: o for o in definition["outputs"]}
+link_output = outputs.get("connectionLink")
+if not link_output:
+    sys.exit("the listing emits no connectionLink output")
+if link_output.get("type") != "secret":
+    sys.exit(f"connectionLink is type {link_output.get('type')!r}, not 'secret': a link is a "
+             f"credential with a URL around it")
+
+# What the marketplace will substitute: a hostname and a generated key of the
+# shape the platform's generator emits (A-Za-z0-9, >= 32).
+key = "GENERATEDkey0123456789abcdefABCD"
+link = (link_output["value"]
+        .replace("{{ params.apiHostname }}", "m.conf-apps.example")
+        .replace("{{ params.apiKey }}", key))
+if "{{" in link:
+    sys.exit(f"an expression was left unsubstituted: {link}")
+
+base, model, parsed_key = ms.parse_connection_link(link)
+if parsed_key != key:
+    sys.exit(f"the key round-tripped as {parsed_key!r}")
+declared = definition["components"][0]["deployment"]["values"]["base"]["model"]["id"]
+if model != declared:
+    sys.exit(f"the link says model={model!r} but the chart serves {declared!r}")
+if base != "https://m.conf-apps.example/v1":
+    sys.exit(f"unexpected base URL {base!r}")
+
+# The key parameter has to constrain its alphabet, because an output template has
+# no percent-encoder: punctuation in a key would split the link on its own
+# separators.
+params = {p["id"]: p for p in definition["parameters"]}
+pattern = params["apiKey"].get("validation", {}).get("pattern")
+if pattern != "^[A-Za-z0-9]+$":
+    sys.exit(f"apiKey's pattern is {pattern!r}; the link needs a URL-safe alphabet")
+print(f"model={model} key={len(parsed_key)} chars")
+PYTHON
+  ); then
+    pass "$app emits a parseable link ($output)"
+  else
+    fail "$app: $output"
+  fi
+done
 
 note "Result"
 if [ "$failures" -eq 0 ]; then

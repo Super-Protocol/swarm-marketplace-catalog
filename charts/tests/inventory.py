@@ -45,6 +45,10 @@ EXPECTED = {
     # quietly fails to apply is a cluster that elects nobody.
     "confidential-router-api": {
         ("ConfigMap", "confidential-router-api"),
+        # The hostname-derived half of the router's configuration, kept out of the
+        # evidence snapshot so the digest is a property of the version rather than
+        # of the hostname the operator chose (SUP-211).
+        ("ConfigMap", "confidential-router-api-public"),
         ("ConfigMap", "confidential-router-postgresql-etcd"),
         ("ConfigMap", "confidential-router-postgresql-router"),
         ("ConfigMap", "confidential-router-postgresql-scripts"),
