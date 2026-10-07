@@ -109,6 +109,19 @@ while IFS=$'\t' read -r name chart repo version; do
   rm -f /tmp/chart-golden-diff.$$
 done < charts/tests/cases.tsv
 
+# A cluster space carries a LimitRange with a 100m / 128Mi floor and a
+# request/limit ratio of 1, so a container asking for less — or asking for
+# nothing, and being handed a 2:1 pair by the same LimitRange — is refused at
+# admission and the pod never exists. Nothing in a golden diff says that; the
+# render looks perfect and the deployment reads as "the app is broken" (SUP-238).
+note "every rendered container clears a cluster space's LimitRange"
+if output=$(python3 charts/tests/limitrange.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/limitrange.py"
+fi
+
 # The two charts are installed separately and have to be given the same list.
 # Nothing enforces that at deploy time, so it is enforced here: the router's
 # `litellmModel` and the proxy's `model_name` are one string, and a golden pair

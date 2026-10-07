@@ -114,13 +114,15 @@ database:
 # server process never migrates on its own.
 migrations:
   enabled: true
+  # A cluster space's LimitRange refuses a container under 100m CPU or 128Mi, and
+  # its request/limit ratio is 1, so the two have to be the same number (SUP-238).
   resources:
     requests:
-      cpu: 50m
+      cpu: 100m
       memory: 128Mi
       nvidia.com/gpu: "0"
     limits:
-      cpu: 50m
+      cpu: 100m
       memory: 128Mi
       nvidia.com/gpu: "0"
 
