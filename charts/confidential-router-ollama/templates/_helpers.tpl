@@ -41,7 +41,7 @@ one word; a name given twice would be pulled twice and served once.
 {{- define "confidential-router-ollama.models" -}}
 {{- $seen := dict -}}
 {{- range $name := .Values.models -}}
-{{- if not (regexMatch "^[a-z0-9][a-z0-9._/-]*(:[a-z0-9._-]+)?$" $name) -}}
+{{- if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._/-]*(:[A-Za-z0-9._-]+)?$" $name) -}}
 {{- fail (printf "models: %q is not an Ollama model name" $name) -}}
 {{- end -}}
 {{- if hasKey $seen $name -}}
