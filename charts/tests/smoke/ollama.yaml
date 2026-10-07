@@ -1,8 +1,6 @@
 # otwld's chart, as the listing deploys it: CPU, ClusterIP, one small model
 # pulled on first start. `gpu.enabled` is the switch the ollama-gpu-* golden
 # cases pin.
-image:
-  tag: "0.12.11"
 service:
   type: ClusterIP
 ollama:

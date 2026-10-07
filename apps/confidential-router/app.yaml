@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.12.0"
+  version: "0.12.1"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -419,6 +419,10 @@ resources:
   # verifying external model endpoints (ADR-008). That is +100m and +128 MB of limits, no storage
   # and no GPU.
   #
+  # 0.12.1 does not move the quota. It pins the Ollama chart at 1.85.0 and tells llama-server
+  # to size its thread pools from this container's CPU limit, which is the same 2 CPU already
+  # counted above.
+  #
   # The rendered limits of a default deployment now come to 3.95 CPU / 10.7 GB / 54 GB; what is
   # declared here keeps the headroom the earlier numbers had, so neither minimum moves.
   min:
@@ -457,14 +461,14 @@ components:
       type: helm
       repoUrl: https://otwld.github.io/ollama-helm/
       chart: ollama
-      version: "1.12.0"
+      version: "1.85.0"
     # This chart references `ollama/ollama` by tag and its init container by
     # bare name, and an unpinned reference makes the deployment's evidence
     # digest uncomputable (specification 2.7). Declaring them here rewrites both
     # to a digest before the manifests are sent.
     images:
       - name: ollama/ollama
-        digest: sha256:de0786b654561830021475310d61df8073797e917d006a8c6372c8548efc639b
+        digest: sha256:2a6e883b917fc543389599dae79918f5cac9e1438890506982f44aa4f5625d01
       - name: busybox
         digest: sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
     deployment:
@@ -486,6 +490,21 @@ components:
             size: 30Gi
           ingress:
             enabled: false
+          # llama-server counts the host's CPUs. This container is capped at the
+          # limit below, and a thread per host CPU is what throttles token
+          # generation. The limit is read back from the container so the two
+          # cannot drift, including when the GPU patch replaces `resources`.
+          extraEnv:
+            - name: LLAMA_ARG_THREADS
+              valueFrom:
+                resourceFieldRef:
+                  resource: limits.cpu
+                  divisor: "1"
+            - name: LLAMA_ARG_THREADS_BATCH
+              valueFrom:
+                resourceFieldRef:
+                  resource: limits.cpu
+                  divisor: "1"
           resources:
             requests:
               cpu: "2"
@@ -694,6 +713,38 @@ components:
           postgresql:
             persistence:
               size: "{{ params.databaseStorage }}"
+            # A cluster space's LimitRange refuses a container under 100m CPU or 128Mi, and
+            # the request has to equal the limit (SUP-238). Chart 0.8.0 already defaults to
+            # that floor; pinning it here is what kept a deployment of chart 0.6.1 admissible
+            # and still stops a render from dropping below it.
+            etcd:
+              bootstrapResources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                  nvidia.com/gpu: "0"
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+                  nvidia.com/gpu: "0"
+            router:
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                  nvidia.com/gpu: "0"
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+                  nvidia.com/gpu: "0"
+          migrations:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 100m
+                memory: 128Mi
         patches:
           - op: replace
             path: auth.password.enabled

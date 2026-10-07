@@ -79,7 +79,7 @@ ok "kind + ingress-nginx up, router images loaded"
 step "Install"
 helm repo add otwld https://otwld.github.io/ollama-helm/ >/dev/null 2>&1 || true
 helm repo update otwld >/dev/null
-helm upgrade --install ollama otwld/ollama --version 1.12.0 -n "$NS" \
+helm upgrade --install ollama otwld/ollama --version 1.85.0 -n "$NS" \
   -f "$here/ollama.yaml" --set "ollama.models.pull[0]=$OLLAMA_MODEL" >/dev/null
 helm dependency build charts/confidential-router-api >/dev/null
 for release in litellm api ui; do
