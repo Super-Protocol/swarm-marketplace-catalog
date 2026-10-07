@@ -323,11 +323,11 @@ spec:
               mountPath: "/var/run/gatekeeper"
           resources:
             limits:
-              cpu: 50m
+              cpu: 100m
               memory: 128Mi
               nvidia.com/gpu: "0"
             requests:
-              cpu: 50m
+              cpu: 100m
               memory: 128Mi
               nvidia.com/gpu: "0"
       containers:

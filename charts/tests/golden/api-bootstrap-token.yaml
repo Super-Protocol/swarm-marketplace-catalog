@@ -14,6 +14,7 @@ metadata:
 type: Opaque
 stringData:
   auth-secret: "golden-test-auth-secret-not-a-real-one"
+  bootstrap-email: "admin@confidential-router.example"
   bootstrap-token: "golden-test-bootstrap-token"
   password: "golden-test-password"
   postgres-password: "golden-test-password"
@@ -290,7 +291,10 @@ spec:
                   name: confidential-router-api
                   key: bootstrap-token
             - name: CR_API_AUTH__BOOTSTRAP_EMAIL
-              value: "admin@confidential-router.example"
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: bootstrap-email
           volumeMounts:
             - name: config
               mountPath: /etc/confidential-router
@@ -301,11 +305,11 @@ spec:
               mountPath: /app/data
           resources:
             limits:
-              cpu: 50m
+              cpu: 100m
               memory: 128Mi
               nvidia.com/gpu: "0"
             requests:
-              cpu: 50m
+              cpu: 100m
               memory: 128Mi
               nvidia.com/gpu: "0"
       containers:
@@ -348,7 +352,10 @@ spec:
                   name: confidential-router-api
                   key: bootstrap-token
             - name: CR_API_AUTH__BOOTSTRAP_EMAIL
-              value: "admin@confidential-router.example"
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: bootstrap-email
           # `/health` does a real database round trip, so an unready pod is one
           # that cannot serve rather than one that has merely started.
           startupProbe:

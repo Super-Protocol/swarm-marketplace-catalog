@@ -342,4 +342,14 @@ against a signed-in email and always refuses.
 {{- fail (printf "auth.adminEmails contains %q: one address per list entry, commas separate them" $email) -}}
 {{- end -}}
 {{- end -}}
+{{/*
+The same question about the one address the first account is created under. A
+name where an address was meant is a `POST /auth/bootstrap` that creates an
+account nobody can sign in to, and the token is spent on it.
+*/}}
+{{- if .Values.auth.bootstrapEmail -}}
+{{- if not (contains "@" .Values.auth.bootstrapEmail) -}}
+{{- fail (printf "auth.bootstrapEmail is %q, which is not an email address" .Values.auth.bootstrapEmail) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}

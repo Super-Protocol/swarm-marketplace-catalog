@@ -50,6 +50,14 @@ somewhere. They need network the first time, to pull the chart.
 Ten checks in `run.sh` are not a golden diff, and each exists because a golden diff
 cannot answer the question:
 
+- **Every container is admissible on a cluster space** (`limitrange.py`). A cluster space
+  carries a LimitRange the cloud writes itself: a 100m / 128Mi floor, and a request/limit
+  ratio of 1. A container under the floor, or one declaring no resources at all and handed a
+  2:1 pair by that same LimitRange, is refused at admission — so the pod never exists, and
+  nothing an operator looks at says "quota". It reads as "the app is broken". Four sub-floor
+  containers shipped that way before this check existed (SUP-238), and a golden diff held
+  every one of their numbers without a word.
+
 - **Every object, parsed as a cluster parses it** (`inventory.py`). A template that loses a
   `---` glues two objects into one document; the golden is regenerated from the same broken
   render so the diff is empty, and `helm lint` reads the merged document as the second object
@@ -69,6 +77,14 @@ cannot answer the question:
   `consumer.organization.name` straight into the control plane's environment; it rendered,
   deployed and worked, and made the evidence digest a property of who deployed it. A real
   deployment is what found it.
+
+  Run against every listing that passes one, and once per set of case values. Both halves of
+  that sentence are SUP-241: the check existed and was wired to confidential-s3 alone, while
+  `confidential-router` passed the deployer's address into two chart values — one sealed, one a
+  literal in two containers' env lists — and a chart renders an env var only on the path that
+  uses it, so a single set of values clears the paths it happens to exercise and is silent about
+  the rest. A path whose marker reaches nothing is reported rather than passed; lists are walked,
+  because an address passed as a one-entry list was invisible to the first version of this.
 - **Two consumers, one version.** The confidential-s3 chart is rendered twice, under two
   hostnames in two namespaces, and every field that differs has to be a declared exclusion.
   This is `cli/evidence-preview.js` done on the chart, and it is the only check that catches
@@ -92,6 +108,14 @@ cannot answer the question:
   happening. The second direction is invisible to the drift comparison: if the field stopped
   being rendered, nothing differs and nothing fails, while the listing goes on advertising that
   it was left out.
+
+  What varies between the two shapes is the caller's to choose, and "two consumers" means
+  everything a consumer brings rather than the hostname they typed: the router is also rendered
+  with two different deployer addresses, which is the difference that no listing may ever declare
+  because declaring it admits one deployer. Secret values are not compared — the platform's
+  canonical rules drop `/data`, `/stringData` and `/immutable` from every Secret — which is both
+  what makes a Secret the right carrier for such a value and what makes the comparison possible
+  to ask about one at all.
 - **Every placeholder has something that fills it** (`config_placeholders.py`). `router.yaml` is
   attested, so neither a secret nor a hostname is written into it — both are `${VAR}` the router's
   config loader substitutes from the environment. A placeholder with no value does not degrade:

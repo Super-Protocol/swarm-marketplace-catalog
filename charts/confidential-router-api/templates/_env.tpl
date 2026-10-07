@@ -73,9 +73,22 @@ only from SUP-95 onwards — hence the condition around it.
     secretKeyRef:
       name: {{ .Values.auth.bootstrapTokenExistingSecret | default (include "confidential-router-api.secretName" .) }}
       key: {{ if .Values.auth.bootstrapTokenExistingSecret }}{{ .Values.auth.bootstrapTokenExistingSecretKey }}{{ else }}bootstrap-token{{ end }}
-{{- if .Values.auth.bootstrapEmail }}
+{{- if or .Values.auth.bootstrapEmail .Values.auth.bootstrapEmailExistingSecret }}
+{{- /*
+Out of the Secret and not a plain `value:`, for the same reason
+`CR_API_AUTH__ADMIN_EMAILS` below is: this is the address of whoever deployed
+this, and a literal here is published. The container's env list is part of the
+attested snapshot, so the address would be readable by anyone who fetches
+`/.well-known/swarm-evidence` — and the digest would be a property of who
+deployed it rather than of the version, which is the one thing it must not be
+(SUP-241). It is the same value as the admin list, and one copy of it being
+protected while the other was published was an oversight, not a decision.
+*/}}
 - name: CR_API_AUTH__BOOTSTRAP_EMAIL
-  value: {{ .Values.auth.bootstrapEmail | quote }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.auth.bootstrapEmailExistingSecret | default (include "confidential-router-api.secretName" .) }}
+      key: {{ if .Values.auth.bootstrapEmailExistingSecret }}{{ .Values.auth.bootstrapEmailExistingSecretKey }}{{ else }}bootstrap-email{{ end }}
 {{- end }}
 {{- end }}
 {{- if or .Values.auth.adminEmails .Values.auth.adminEmailsExistingSecret }}

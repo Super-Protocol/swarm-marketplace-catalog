@@ -23,7 +23,7 @@ dependencies:
   # always was. Off for a deployment that brings its own database: set
   # `postgresql.enabled: false` and point `database.*` at it.
   - name: patroni-postgresql
-    version: 0.2.1
+    version: 0.2.2
     repository: "file://../patroni-postgresql"
     alias: postgresql
     condition: postgresql.enabled

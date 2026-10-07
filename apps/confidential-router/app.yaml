@@ -403,15 +403,23 @@ resources:
   # listing.
   #
   # 0.10.0 adds five more small pods to it: three etcd members holding Patroni's leader lock, and
-  # two routers in front of the leader (SUP-215). That is +500m and +0.7 GB of limits, and no
+  # two routers in front of the leader (SUP-215). That is +500m and +0.8 GB of limits, and no
   # storage at all — the DCS keeps nothing it would need a volume for, so its members are
   # `emptyDir` and count against the node's ephemeral disk rather than against this quota.
+  # The extra 0.1 GB is the two routers sitting on the cluster-space memory floor (128Mi each)
+  # instead of 64Mi, which that LimitRange refuses (SUP-238).
+  #
+  # The rendered limits of a default deployment now come to 3.85 CPU / 10.6 GB / 54 GB; what is
+  # declared here keeps the headroom the earlier numbers had, so neither minimum moves. The CPU
+  # total does not move with 0.11.1's two init-container floors: a pod's effective request is the
+  # larger of its init containers and the sum of its regular ones, and in both pods the regular
+  # container already asks for more.
   #
   # 0.12.0 adds one more container to the API pod — the attested egress, a ~30 MiB static binary
   # verifying external model endpoints (ADR-008). That is +100m and +128 MB of limits, no storage
   # and no GPU.
   #
-  # The rendered limits of a default deployment now come to 3.95 CPU / 10.58 GB / 54 GB; what is
+  # The rendered limits of a default deployment now come to 3.95 CPU / 10.7 GB / 54 GB; what is
   # declared here keeps the headroom the earlier numbers had, so neither minimum moves.
   min:
     cpu: "5"
@@ -651,6 +659,12 @@ components:
             # asked for: the console's first administrator is that person, and a
             # parameter here would only be a second copy of an address the
             # marketplace already holds — one that drifts the moment either changes.
+            #
+            # The chart carries it to the pod in its Secret rather than as a
+            # literal in the container's env list, which is what keeps it out of
+            # the published snapshot: until chart 0.8.0 this one address was the
+            # last thing making the evidence digest a property of who deployed
+            # this listing rather than of the version (SUP-241).
             bootstrapEmail: "{{ consumer.user.email }}"
             # Who may read the campaign's own numbers — issued, redeemed,
             # activated, granted, and the fraud-watch queries behind them. Read
@@ -867,12 +881,12 @@ outputs:
 # operator is shown a mismatch that is not one.
 #
 # What this version does deliver is the property that makes such a measurement
-# worth declaring: two deployments of it, under different hostnames in different
-# namespaces, render byte-identical snapshots. Before it they could not — the
-# chosen hostname reached `server.publicBaseUrl`, the CORS allow-list, the
-# checkout return URL and the attested endpoint inside `router.yaml`, so the
-# digest was a property of the hostname and no two deployments could ever agree
-# on one (SUP-210).
+# worth declaring: two deployments of it *with the same parameters*, under
+# different hostnames in different namespaces, render byte-identical snapshots.
+# Before it they could not — the chosen hostname reached `server.publicBaseUrl`,
+# the CORS allow-list, the checkout return URL and the attested endpoint inside
+# `router.yaml`, so the digest was a property of the hostname and no two
+# deployments could ever agree on one (SUP-210).
 #
 # The way out was not to drop `router.yaml` from the snapshot — that would have
 # hidden the router's entire configuration, which is the one thing the digest is
@@ -881,6 +895,47 @@ outputs:
 # excluded, the configuration stays attested (SUP-211). They are not in a Secret
 # for the same reason: Secrets are lifted out wholesale, which would have hidden
 # the exclusion from this listing instead of disclosing it.
+#
+# The qualifier two paragraphs up — *with the same parameters* — is the whole of
+# what is left, and it is not a footnote: the digest is one per parameter set,
+# not one per version. What the hostname work removed was the axis no deployment
+# chooses on purpose; the parameters that change what the deployment *does*
+# still reach the attested render and still move it —
+#
+#   - `models` — the catalogue is the `models:` block of the attested
+#     `/data/router.yaml`, and with an empty selection there is no endpoint to
+#     publish either;
+#   - `inviteOnlySignup` — writes `auth.requireInviteForSignUp` into the same
+#     file, rendered only while it is on;
+#   - `gpuEnabled` — patches `runtimeClassName: nvidia`, the `nvidia.com/gpu`
+#     requests and the GPU tolerations into the attested ollama Deployment;
+#
+# and on the same footing `passwordSignup`, `billingMode` and `landingHostname`,
+# each of which makes a `router.yaml` block appear or disappear. The chart's own
+# goldens pin it: `checksum/config` is `ec9a0ec7…` for the default selection,
+# `4cfeb4f2…` for three models, `96daaf0e…` for none, `e4281aa2…` for an
+# invite-only launch with a campaign landing page
+# (`charts/tests/golden/api-*.yaml`). Parameters whose value
+# lands in the Secret — the tokens, keys and passwords — do not move it: the
+# Secret is lifted out of the snapshot wholesale, so what moves the digest is a
+# block appearing, not the credential inside one.
+#
+# None of those axes is excluded, and none should be: SUP-239 settled that
+# behaviour-bearing configuration belongs in the snapshot, because a digest that
+# says nothing about which models are served attests to nothing worth attesting.
+# They are instead the second reason `expectedDigest` is absent above — there is
+# no single value it could hold — and it stays absent until expectation profiles
+# declare one digest per parameter set (SUP-240).
+#
+# One field survived that and was found by the measurement it blocked: the
+# address of whoever deployed this, which the chart handed the API as a literal
+# in two containers' env lists. Byte-identical deployments by two different
+# marketplace accounts published two different digests, and each snapshot carried
+# a personal address nobody was told it would publish. It is in the chart's
+# Secret from 0.7.2 on (SUP-241) — and not in the exclusions below, because a
+# Secret's values are stripped by the platform rather than left out by this
+# listing, so there is no exclusion to disclose and the configuration a reviewer
+# reads is no smaller than it was.
 #
 # Each entry below is also a `swarm.io/exclude-evidence-fields` annotation on the
 # object that carries it. Repeated here because this block is what the
@@ -914,7 +969,11 @@ evidence:
     # And the two pod-template hashes of those objects, which exist so a hostname
     # reconfigure actually restarts the pods that read them once at start.
     # `checksum/config` — the hash of the attested `router.yaml` — is not here,
-    # and that is the point: it no longer varies.
+    # and that is the point: it no longer varies with the hostname, which is what
+    # made it worthless. It is a property of the version and the parameters now,
+    # and it does still vary with `models`, `inviteOnlySignup`, `passwordSignup`,
+    # `billingMode` and `landingHostname` — deliberately, as the block above
+    # explains.
     - match: { kind: Deployment, name: confidential-router-api }
       fields:
         - "/spec/template/metadata/annotations/checksum~1public-config"

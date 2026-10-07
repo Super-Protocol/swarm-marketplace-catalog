@@ -352,6 +352,21 @@ example (SUP-211).
 timestamp in an annotation — each makes every deployment attest differently. Inside a `Secret` it is
 free, because Secrets are lifted out before the snapshot is taken.
 
+**And so does anything from `consumer`.** `consumer.user.email` and the rest are resolved per
+deployment, so a chart value filled from one is a chart value that differs for every person who
+deploys the listing — and the Secret is the only place it can go. An exclusion is the wrong tool
+twice over: the pointer is an `env/N` index that goes stale the moment a variable is added above it,
+and excluding it leaves a personal address attested-but-unattested rather than unpublished. There is
+a second cost that has nothing to do with the digest: a snapshot is served at
+`/.well-known/swarm-evidence` and rendered on the deployment's evidence panel, so a literal there
+publishes the deploying user's own address without telling them.
+
+`charts/tests/consumer_fields.py <app> <chart>=<values>` asks this of a listing — it follows every
+`consumer.*` expression to the chart value it lands on and fails if the value reaches an attested
+object. Run it once per set of case values that exercises a different path: a chart renders an env
+var only on the path that uses it, and `confidential-router` published the deployer's address for
+four versions because the only values it was ever probed with left that path off (SUP-241).
+
 ---
 
 ## 6. Publishing
@@ -449,8 +464,10 @@ Before opening a pull request:
 - [ ] Every Ingress names its class
 - [ ] Nothing secret outside a `Secret`
 - [ ] Nothing non-deterministic outside a `Secret`
+- [ ] Nothing from `consumer.*` outside a `Secret`
 - [ ] Nothing unauthenticated published on a hostname
 - [ ] Sensitive values that a person needs are surfaced as outputs of `type: secret`
 - [ ] `apps/tests/run.sh` and `charts/tests/run.sh` pass
-- [ ] Rendered as two consumers; the only differences are declared exclusions
+- [ ] Rendered as two consumers — two hostnames *and* two consumer identities; the only
+      differences are declared exclusions
 - [ ] README says what the listing deliberately does not do
