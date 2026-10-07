@@ -1,0 +1,12 @@
+# The same server with a GPU and three models. Both halves matter: a device
+# request without the `nvidia` runtime class, or the runtime class on a node
+# without a device, leaves the pod Pending for ever rather than falling back to CPU.
+models:
+  - "llama3.2:3b"
+  - "mistral:7b"
+  - "gemma2:2b"
+gpu:
+  enabled: true
+  count: 1
+persistence:
+  size: 30Gi

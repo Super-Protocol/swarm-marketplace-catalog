@@ -1,11 +1,27 @@
 ---
+# Source: confidential-router-litellm/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: confidential-router-litellm
+  labels:
+    helm.sh/chart: confidential-router-litellm-0.2.0
+    app.kubernetes.io/name: confidential-router-litellm
+    app.kubernetes.io/instance: cr
+    app.kubernetes.io/version: "1.80.5"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-router
+type: Opaque
+stringData:
+  master-key: "golden-test-master-key"
+---
 # Source: confidential-router-litellm/templates/configmap.yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: confidential-router-litellm
   labels:
-    helm.sh/chart: confidential-router-litellm-0.1.2
+    helm.sh/chart: confidential-router-litellm-0.2.0
     app.kubernetes.io/name: confidential-router-litellm
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "1.80.5"
@@ -17,17 +33,17 @@ data:
       - model_name: "llama3.2:3b"
         litellm_params:
           model: "ollama_chat/llama3.2:3b"
-          api_base: "http://ollama:11434"
+          api_base: "http://confidential-router-ollama:11434"
           keep_alive: "24h"
       - model_name: "mistral:7b"
         litellm_params:
           model: "ollama_chat/mistral:7b"
-          api_base: "http://ollama:11434"
+          api_base: "http://confidential-router-ollama:11434"
           keep_alive: "24h"
       - model_name: "gemma2:2b"
         litellm_params:
           model: "ollama_chat/gemma2:2b"
-          api_base: "http://ollama:11434"
+          api_base: "http://confidential-router-ollama:11434"
           keep_alive: "24h"
 
     litellm_settings:
@@ -40,7 +56,7 @@ kind: Service
 metadata:
   name: confidential-router-litellm
   labels:
-    helm.sh/chart: confidential-router-litellm-0.1.2
+    helm.sh/chart: confidential-router-litellm-0.2.0
     app.kubernetes.io/name: confidential-router-litellm
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "1.80.5"
@@ -63,7 +79,7 @@ kind: Deployment
 metadata:
   name: confidential-router-litellm
   labels:
-    helm.sh/chart: confidential-router-litellm-0.1.2
+    helm.sh/chart: confidential-router-litellm-0.2.0
     app.kubernetes.io/name: confidential-router-litellm
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "1.80.5"
@@ -78,7 +94,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: 51d875c42a547654e760ecb7101ce4c4ca599a5cec58ef15502f2e0084af16d2
+        checksum/config: 242b4cbf815e918e2ab2ee9f6e781b6f1fc68fa8dbef8d581395b41e78e7fdaa
       labels:
         app.kubernetes.io/name: confidential-router-litellm
         app.kubernetes.io/instance: cr
@@ -101,6 +117,12 @@ spec:
             - name: http
               containerPort: 4000
               protocol: TCP
+          env:
+            - name: LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-litellm
+                  key: master-key
           # `/health/liveliness` answers without touching a backend. `/health` does
           # call every model, which on a cold Ollama means loading weights on
           # every probe — not what a kubelet should be triggering.

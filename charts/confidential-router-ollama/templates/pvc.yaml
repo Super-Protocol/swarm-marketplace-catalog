@@ -1,0 +1,14 @@
+{{- if include "confidential-router-ollama.models" . | fromJsonArray }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "confidential-router-ollama.fullname" . }}
+  labels:
+    {{- include "confidential-router-ollama.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size | quote }}
+{{- end }}

@@ -1,0 +1,7 @@
+# No built-in model selected — the listing's default since 0.13.0, where the
+# router serves external endpoints only (SUP-245). The proxy is not deployed: one
+# inert ConfigMap, no Deployment, no Service, and no Secret even though the
+# listing still hands over a master key.
+ollamaUrl: http://confidential-router-ollama:11434
+masterKey: golden-test-master-key
+models: []

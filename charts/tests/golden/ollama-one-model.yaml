@@ -1,30 +1,16 @@
 ---
-# Source: ollama/templates/serviceaccount.yaml
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: cr-ollama
-  namespace: confidential-router
-  labels:
-    helm.sh/chart: ollama-1.85.0
-    app.kubernetes.io/name: ollama
-    app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.35.0"
-    app.kubernetes.io/managed-by: Helm
-automountServiceAccountToken: true
----
-# Source: ollama/templates/pvc.yaml
+# Source: confidential-router-ollama/templates/pvc.yaml
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
+  name: confidential-router-ollama
   labels:
-    helm.sh/chart: ollama-1.85.0
-    app.kubernetes.io/name: ollama
+    helm.sh/chart: confidential-router-ollama-0.1.0
+    app.kubernetes.io/name: confidential-router-ollama
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.35.0"
     app.kubernetes.io/managed-by: Helm
-  name: cr-ollama
-  namespace: confidential-router
+    app.kubernetes.io/part-of: confidential-router
 spec:
   accessModes:
     - ReadWriteOnce
@@ -32,68 +18,63 @@ spec:
     requests:
       storage: "30Gi"
 ---
-# Source: ollama/templates/service.yaml
+# Source: confidential-router-ollama/templates/service.yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: cr-ollama
-  namespace: confidential-router
+  name: confidential-router-ollama
   labels:
-    helm.sh/chart: ollama-1.85.0
-    app.kubernetes.io/name: ollama
+    helm.sh/chart: confidential-router-ollama-0.1.0
+    app.kubernetes.io/name: confidential-router-ollama
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.35.0"
     app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-router
 spec:
   type: ClusterIP
   ports:
-    - port: 11434
+    - name: http
+      port: 11434
       targetPort: http
       protocol: TCP
-      name: http
   selector:
-    app.kubernetes.io/name: ollama
+    app.kubernetes.io/name: confidential-router-ollama
     app.kubernetes.io/instance: cr
 ---
-# Source: ollama/templates/deployment.yaml
+# Source: confidential-router-ollama/templates/deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: cr-ollama
-  namespace: confidential-router
+  name: confidential-router-ollama
   labels:
-    helm.sh/chart: ollama-1.85.0
-    app.kubernetes.io/name: ollama
+    helm.sh/chart: confidential-router-ollama-0.1.0
+    app.kubernetes.io/name: confidential-router-ollama
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.35.0"
     app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-router
 spec:
   replicas: 1
-  strategy: 
+  # One volume, ReadWriteOnce: a rolling update would start the new pod on a
+  # claim the old one still holds.
+  strategy:
     type: Recreate
-  revisionHistoryLimit: 10
   selector:
     matchLabels:
-      app.kubernetes.io/name: ollama
+      app.kubernetes.io/name: confidential-router-ollama
       app.kubernetes.io/instance: cr
   template:
     metadata:
       labels:
-        helm.sh/chart: ollama-1.85.0
-        app.kubernetes.io/name: ollama
+        app.kubernetes.io/name: confidential-router-ollama
         app.kubernetes.io/instance: cr
-        app.kubernetes.io/version: "0.35.0"
-        app.kubernetes.io/managed-by: Helm
     spec:
-      serviceAccountName: cr-ollama
+      # Nothing in this pod talks to the Kubernetes API.
+      automountServiceAccountToken: false
       terminationGracePeriodSeconds: 120
-      securityContext:
-        {}
       containers:
         - name: ollama
-          securityContext:
-            {}
-          image: "ollama/ollama:0.35.0"
+          image: "ollama/ollama@sha256:2a6e883b917fc543389599dae79918f5cac9e1438890506982f44aa4f5625d01"
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -102,15 +83,28 @@ spec:
           env:
             - name: OLLAMA_HOST
               value: "0.0.0.0:11434"
-          envFrom:
-          args:
+            # llama-server counts the host's CPUs. This container is capped at its
+            # limit, and a thread per host CPU is what throttles token generation.
+            # Read back from the container so the two cannot drift.
+            - name: LLAMA_ARG_THREADS
+              valueFrom:
+                resourceFieldRef:
+                  resource: limits.cpu
+                  divisor: "1"
+            - name: LLAMA_ARG_THREADS_BATCH
+              valueFrom:
+                resourceFieldRef:
+                  resource: limits.cpu
+                  divisor: "1"
           resources:
-            limits:
-              cpu: "2"
-              memory: 4Gi
             requests:
               cpu: "2"
               memory: 4Gi
+              nvidia.com/gpu: "0"
+            limits:
+              cpu: "2"
+              memory: 4Gi
+              nvidia.com/gpu: "0"
           volumeMounts:
             - name: ollama-data
               mountPath: /root/.ollama
@@ -121,7 +115,6 @@ spec:
             initialDelaySeconds: 60
             periodSeconds: 10
             timeoutSeconds: 5
-            successThreshold: 1
             failureThreshold: 6
           readinessProbe:
             httpGet:
@@ -130,8 +123,9 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 5
             timeoutSeconds: 3
-            successThreshold: 1
             failureThreshold: 6
+          # The pull, once the server answers. Already-pulled models are a no-op,
+          # so a restart re-checks the selection rather than downloading it again.
           lifecycle:
             postStart:
               exec:
@@ -142,33 +136,8 @@ spec:
                     while ! /bin/ollama ps > /dev/null 2>&1; do
                       sleep 5
                     done
-
-                    /bin/ollama pull  llama3.2:3b
+                    /bin/ollama pull llama3.2:3b
       volumes:
         - name: ollama-data
           persistentVolumeClaim:
-            claimName: cr-ollama
----
-# Source: ollama/templates/tests/test-connection.yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: "cr-ollama-test-connection"
-  namespace: confidential-router
-  labels:
-    helm.sh/chart: ollama-1.85.0
-    app.kubernetes.io/name: ollama
-    app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.35.0"
-    app.kubernetes.io/managed-by: Helm
-  annotations:
-    "helm.sh/hook": test
-spec:
-  containers:
-    - name: wget
-      image: busybox
-      command: ['sh', '-ec']
-      args:
-        - >
-          wget -qO- "http://cr-ollama:11434" >/dev/null
-  restartPolicy: Never
+            claimName: confidential-router-ollama

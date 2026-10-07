@@ -6,6 +6,13 @@ switched on, each pointing at the same Ollama.
 `ollama_chat/` rather than `ollama/`: the former forwards to Ollama's `/api/chat`
 with the model's own chat template, the latter rebuilds a prompt from the
 messages and quietly changes what the model was asked.
+
+With nothing selected the proxy is not deployed at all (SUP-245): the router
+serves external endpoints only and has nothing to proxy to. This ConfigMap is
+then the one object the chart renders — inert, nothing mounts it — because the
+cloud refuses a component with no manifests and the specification has no way to
+leave a component out. Being attested, it also says in the evidence that this
+deployment runs no proxy.
 */ -}}
 apiVersion: v1
 kind: ConfigMap
@@ -14,8 +21,10 @@ metadata:
   labels:
     {{- include "confidential-router-litellm.labels" . | nindent 4 }}
 data:
+  {{- if not $modelNames }}
+  models: "[]"
+  {{- else }}
   config.yaml: |
-    {{- if $modelNames }}
     model_list:
       {{- range $name := $modelNames }}
       - model_name: {{ $name | quote }}
@@ -26,10 +35,6 @@ data:
           keep_alive: {{ $.Values.keepAlive | quote }}
           {{- end }}
       {{- end }}
-    {{- else }}
-    # Every model is switched off; the proxy starts and serves an empty catalogue.
-    model_list: []
-    {{- end }}
 
     litellm_settings:
       {{- toYaml .Values.litellmSettings | nindent 6 }}
@@ -38,3 +43,4 @@ data:
     general_settings:
       {{- toYaml . | nindent 6 }}
     {{- end }}
+  {{- end }}

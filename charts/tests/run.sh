@@ -21,7 +21,7 @@ namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; patr
 
 RELEASE=cr
 NAMESPACE=confidential-router
-CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ui confidential-s3 patroni-postgresql swarm-model-server)
+CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ollama confidential-router-ui confidential-s3 patroni-postgresql swarm-model-server)
 
 update="${UPDATE:-}"
 failures=0
@@ -64,6 +64,7 @@ for chart in "${CHARTS[@]}"; do
   case "$chart" in
     confidential-router-api) values="charts/tests/cases/api-one-model.yaml" ;;
     confidential-router-litellm) values="charts/tests/cases/litellm-one-model.yaml" ;;
+    confidential-router-ollama) values="charts/tests/cases/ollama-one-model.yaml" ;;
     confidential-router-ui) values="charts/tests/cases/ui-default.yaml" ;;
     confidential-s3) values="charts/tests/cases/s3-default.yaml" ;;
     patroni-postgresql) values="charts/tests/cases/patroni-default.yaml" ;;
@@ -684,6 +685,45 @@ declared_images() {
 declared_images router-api confidential-router-api api-external-endpoints
 declared_images router-ui confidential-router-ui ui-default
 declared_images litellm confidential-router-litellm litellm-one-model
+declared_images ollama confidential-router-ollama ollama-gpu
+
+# The local inference stack is optional from listing 0.13.0 (SUP-245): an empty
+# `models` selection deploys no model server and no proxy, and the router serves
+# only the external endpoints an administrator registers. The listing cannot skip
+# a component — the specification has no `when:` on one and forbids an array in a
+# condition — so the two charts decide it themselves, and each has two shapes.
+note "the local inference stack renders all of itself or none of itself"
+inventory_shape() {
+  if output=$(python3 charts/tests/inventory.py "$1" "charts/tests/cases/$2.yaml" "$3"); then
+    printf '%s\n' "$output" | sed "s/\$/ ($2)/"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/inventory.py $1 $2"
+  fi
+}
+inventory_shape confidential-router-ollama ollama-one-model confidential-router-ollama
+inventory_shape confidential-router-ollama ollama-gpu confidential-router-ollama
+inventory_shape confidential-router-ollama ollama-no-models confidential-router-ollama:none
+inventory_shape confidential-router-litellm litellm-three-models confidential-router-litellm
+inventory_shape confidential-router-litellm litellm-no-models confidential-router-litellm:none
+
+# And the four components together, as the listing renders them with the form
+# left as it arrives: api, console, database and egress, and nothing else running.
+note "a router with no built-in model runs the API, the console, the database and the egress — nothing else"
+if output=$(python3 charts/tests/local_stack.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/local_stack.py"
+fi
+
+refuses "a model name a shell would read as more than one word" "is not an Ollama model name" \
+  helm template "$RELEASE" charts/confidential-router-ollama --namespace "$NAMESPACE" \
+    --set 'models[0]=llama3.2:3b; rm -rf /'
+
+refuses "the same model twice, on the model server" "twice" \
+  helm template "$RELEASE" charts/confidential-router-ollama --namespace "$NAMESPACE" \
+    --set 'models[0]=llama3.2:3b' --set 'models[1]=llama3.2:3b'
 
 # The egress is two containers that have to agree about one file and one port,
 # and nothing in a cluster would say so: a sidecar watching a path router-api

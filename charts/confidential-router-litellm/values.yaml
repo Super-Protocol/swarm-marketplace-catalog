@@ -17,9 +17,10 @@ fullnameOverride: ""
 
 replicaCount: 1
 
-# The model server this proxy fronts. The listing deploys otwld's `ollama` chart
-# as a sibling component; this is the name of the service it creates.
-ollamaUrl: http://ollama:11434
+# The model server this proxy fronts. The listing deploys the
+# confidential-router-ollama chart as a sibling component, whose service name is
+# fixed rather than release-derived.
+ollamaUrl: http://confidential-router-ollama:11434
 
 # ClusterIP and nothing else, deliberately. This proxy has no authentication
 # worth the name in front of a GPU, and it is not what a client talks to: the
@@ -40,6 +41,9 @@ existingSecretKey: master-key
 # same list, or the router will advertise a model this proxy cannot serve —
 # there is no catalogue here to disagree with, because the list entry *is* the
 # Ollama model name and therefore also the name LiteLLM publishes.
+#
+# An empty list renders no proxy — one inert ConfigMap, because a marketplace
+# component has to render something (see templates/configmap.yaml).
 models:
   - "llama3.2:3b"
 

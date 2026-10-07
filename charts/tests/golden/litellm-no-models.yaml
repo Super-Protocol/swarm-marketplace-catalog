@@ -1,0 +1,15 @@
+---
+# Source: confidential-router-litellm/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: confidential-router-litellm
+  labels:
+    helm.sh/chart: confidential-router-litellm-0.2.0
+    app.kubernetes.io/name: confidential-router-litellm
+    app.kubernetes.io/instance: cr
+    app.kubernetes.io/version: "1.80.5"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-router
+data:
+  models: "[]"

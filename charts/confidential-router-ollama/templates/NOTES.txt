@@ -1,0 +1,5 @@
+{{- if .Values.models }}
+Ollama serves {{ join ", " .Values.models }} at http://{{ include "confidential-router-ollama.fullname" . }}:{{ .Values.service.port }}, inside the namespace only.
+{{- else }}
+No built-in models selected: no model server is deployed.
+{{- end }}

@@ -1,0 +1,110 @@
+{{- $models := include "confidential-router-ollama.models" . | fromJsonArray -}}
+{{- if $models }}
+{{- $gpu := ternary (int .Values.gpu.count) 0 .Values.gpu.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "confidential-router-ollama.fullname" . }}
+  labels:
+    {{- include "confidential-router-ollama.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # One volume, ReadWriteOnce: a rolling update would start the new pod on a
+  # claim the old one still holds.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "confidential-router-ollama.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "confidential-router-ollama.selectorLabels" . | nindent 8 }}
+    spec:
+      # Nothing in this pod talks to the Kubernetes API.
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      {{- if .Values.gpu.enabled }}
+      runtimeClassName: nvidia
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      {{- end }}
+      containers:
+        - name: ollama
+          image: {{ include "confidential-router-ollama.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 11434
+              protocol: TCP
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0:11434"
+            {{- if .Values.gpu.enabled }}
+            # Where the NVIDIA runtime mounts the driver's binaries.
+            - name: PATH
+              value: /usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+            {{- end }}
+            # llama-server counts the host's CPUs. This container is capped at its
+            # limit, and a thread per host CPU is what throttles token generation.
+            # Read back from the container so the two cannot drift.
+            - name: LLAMA_ARG_THREADS
+              valueFrom:
+                resourceFieldRef:
+                  resource: limits.cpu
+                  divisor: "1"
+            - name: LLAMA_ARG_THREADS_BATCH
+              valueFrom:
+                resourceFieldRef:
+                  resource: limits.cpu
+                  divisor: "1"
+          resources:
+            requests:
+              cpu: {{ .Values.resources.cpu | quote }}
+              memory: {{ .Values.resources.memory }}
+              nvidia.com/gpu: {{ $gpu | quote }}
+            limits:
+              cpu: {{ .Values.resources.cpu | quote }}
+              memory: {{ .Values.resources.memory }}
+              nvidia.com/gpu: {{ $gpu | quote }}
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          # The pull, once the server answers. Already-pulled models are a no-op,
+          # so a restart re-checks the selection rather than downloading it again.
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    while ! /bin/ollama ps > /dev/null 2>&1; do
+                      sleep 5
+                    done
+                    {{- range $models }}
+                    /bin/ollama pull {{ . }}
+                    {{- end }}
+      volumes:
+        - name: ollama-data
+          persistentVolumeClaim:
+            claimName: {{ include "confidential-router-ollama.fullname" . }}
+{{- end }}

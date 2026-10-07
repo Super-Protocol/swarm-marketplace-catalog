@@ -1,0 +1,153 @@
+---
+# Source: confidential-router-ollama/templates/pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: confidential-router-ollama
+  labels:
+    helm.sh/chart: confidential-router-ollama-0.1.0
+    app.kubernetes.io/name: confidential-router-ollama
+    app.kubernetes.io/instance: cr
+    app.kubernetes.io/version: "0.35.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-router
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: "30Gi"
+---
+# Source: confidential-router-ollama/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: confidential-router-ollama
+  labels:
+    helm.sh/chart: confidential-router-ollama-0.1.0
+    app.kubernetes.io/name: confidential-router-ollama
+    app.kubernetes.io/instance: cr
+    app.kubernetes.io/version: "0.35.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-router
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 11434
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: confidential-router-ollama
+    app.kubernetes.io/instance: cr
+---
+# Source: confidential-router-ollama/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: confidential-router-ollama
+  labels:
+    helm.sh/chart: confidential-router-ollama-0.1.0
+    app.kubernetes.io/name: confidential-router-ollama
+    app.kubernetes.io/instance: cr
+    app.kubernetes.io/version: "0.35.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-router
+spec:
+  replicas: 1
+  # One volume, ReadWriteOnce: a rolling update would start the new pod on a
+  # claim the old one still holds.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: confidential-router-ollama
+      app.kubernetes.io/instance: cr
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: confidential-router-ollama
+        app.kubernetes.io/instance: cr
+    spec:
+      # Nothing in this pod talks to the Kubernetes API.
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      runtimeClassName: nvidia
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: ollama
+          image: "ollama/ollama@sha256:2a6e883b917fc543389599dae79918f5cac9e1438890506982f44aa4f5625d01"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 11434
+              protocol: TCP
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0:11434"
+            # Where the NVIDIA runtime mounts the driver's binaries.
+            - name: PATH
+              value: /usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+            # llama-server counts the host's CPUs. This container is capped at its
+            # limit, and a thread per host CPU is what throttles token generation.
+            # Read back from the container so the two cannot drift.
+            - name: LLAMA_ARG_THREADS
+              valueFrom:
+                resourceFieldRef:
+                  resource: limits.cpu
+                  divisor: "1"
+            - name: LLAMA_ARG_THREADS_BATCH
+              valueFrom:
+                resourceFieldRef:
+                  resource: limits.cpu
+                  divisor: "1"
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "2"
+              memory: 4Gi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          # The pull, once the server answers. Already-pulled models are a no-op,
+          # so a restart re-checks the selection rather than downloading it again.
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    while ! /bin/ollama ps > /dev/null 2>&1; do
+                      sleep 5
+                    done
+                    /bin/ollama pull llama3.2:3b
+                    /bin/ollama pull mistral:7b
+                    /bin/ollama pull gemma2:2b
+      volumes:
+        - name: ollama-data
+          persistentVolumeClaim:
+            claimName: confidential-router-ollama
