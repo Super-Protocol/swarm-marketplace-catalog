@@ -817,12 +817,12 @@ outputs:
 # operator is shown a mismatch that is not one.
 #
 # What this version does deliver is the property that makes such a measurement
-# worth declaring: two deployments of it, under different hostnames in different
-# namespaces, render byte-identical snapshots. Before it they could not — the
-# chosen hostname reached `server.publicBaseUrl`, the CORS allow-list, the
-# checkout return URL and the attested endpoint inside `router.yaml`, so the
-# digest was a property of the hostname and no two deployments could ever agree
-# on one (SUP-210).
+# worth declaring: two deployments of it *with the same parameters*, under
+# different hostnames in different namespaces, render byte-identical snapshots.
+# Before it they could not — the chosen hostname reached `server.publicBaseUrl`,
+# the CORS allow-list, the checkout return URL and the attested endpoint inside
+# `router.yaml`, so the digest was a property of the hostname and no two
+# deployments could ever agree on one (SUP-210).
 #
 # The way out was not to drop `router.yaml` from the snapshot — that would have
 # hidden the router's entire configuration, which is the one thing the digest is
@@ -831,6 +831,37 @@ outputs:
 # excluded, the configuration stays attested (SUP-211). They are not in a Secret
 # for the same reason: Secrets are lifted out wholesale, which would have hidden
 # the exclusion from this listing instead of disclosing it.
+#
+# The qualifier two paragraphs up — *with the same parameters* — is the whole of
+# what is left, and it is not a footnote: the digest is one per parameter set,
+# not one per version. What the hostname work removed was the axis no deployment
+# chooses on purpose; the parameters that change what the deployment *does*
+# still reach the attested render and still move it —
+#
+#   - `models` — the catalogue is the `models:` block of the attested
+#     `/data/router.yaml`, and with an empty selection there is no endpoint to
+#     publish either;
+#   - `inviteOnlySignup` — writes `auth.requireInviteForSignUp` into the same
+#     file, rendered only while it is on;
+#   - `gpuEnabled` — patches `runtimeClassName: nvidia`, the `nvidia.com/gpu`
+#     requests and the GPU tolerations into the attested ollama Deployment;
+#
+# and on the same footing `passwordSignup`, `billingMode` and `landingHostname`,
+# each of which makes a `router.yaml` block appear or disappear. The chart's own
+# goldens pin it: `checksum/config` is `ec9a0ec7…` for the default selection,
+# `4cfeb4f2…` for three models, `96daaf0e…` for none, `e4281aa2…` for an
+# invite-only launch with a campaign landing page
+# (`charts/tests/golden/api-*.yaml`). Parameters whose value
+# lands in the Secret — the tokens, keys and passwords — do not move it: the
+# Secret is lifted out of the snapshot wholesale, so what moves the digest is a
+# block appearing, not the credential inside one.
+#
+# None of those axes is excluded, and none should be: SUP-239 settled that
+# behaviour-bearing configuration belongs in the snapshot, because a digest that
+# says nothing about which models are served attests to nothing worth attesting.
+# They are instead the second reason `expectedDigest` is absent above — there is
+# no single value it could hold — and it stays absent until expectation profiles
+# declare one digest per parameter set (SUP-240).
 #
 # Each entry below is also a `swarm.io/exclude-evidence-fields` annotation on the
 # object that carries it. Repeated here because this block is what the
@@ -864,7 +895,11 @@ evidence:
     # And the two pod-template hashes of those objects, which exist so a hostname
     # reconfigure actually restarts the pods that read them once at start.
     # `checksum/config` — the hash of the attested `router.yaml` — is not here,
-    # and that is the point: it no longer varies.
+    # and that is the point: it no longer varies with the hostname, which is what
+    # made it worthless. It is a property of the version and the parameters now,
+    # and it does still vary with `models`, `inviteOnlySignup`, `passwordSignup`,
+    # `billingMode` and `landingHostname` — deliberately, as the block above
+    # explains.
     - match: { kind: Deployment, name: confidential-router-api }
       fields:
         - "/spec/template/metadata/annotations/checksum~1public-config"
