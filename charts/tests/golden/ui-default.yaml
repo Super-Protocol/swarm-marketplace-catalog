@@ -5,10 +5,10 @@ kind: ConfigMap
 metadata:
   name: confidential-router-ui-public
   labels:
-    helm.sh/chart: confidential-router-ui-0.2.0
+    helm.sh/chart: confidential-router-ui-0.2.1
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.3.2"
+    app.kubernetes.io/version: "0.4.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
   annotations:
@@ -31,10 +31,10 @@ kind: Service
 metadata:
   name: confidential-router-ui
   labels:
-    helm.sh/chart: confidential-router-ui-0.2.0
+    helm.sh/chart: confidential-router-ui-0.2.1
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.3.2"
+    app.kubernetes.io/version: "0.4.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
 spec:
@@ -54,10 +54,10 @@ kind: Deployment
 metadata:
   name: confidential-router-ui
   labels:
-    helm.sh/chart: confidential-router-ui-0.2.0
+    helm.sh/chart: confidential-router-ui-0.2.1
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.3.2"
+    app.kubernetes.io/version: "0.4.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
   annotations:
@@ -78,7 +78,7 @@ spec:
         # `envFrom` is read once, when the container starts, so without this a
         # hostname reconfigure updates the ConfigMap and the running console keeps
         # calling the old origin.
-        checksum/public-config: 4857144c5d6ea68d511256cdd5d44e59a981a8dc4542a2958cf35ff31dd2d459
+        checksum/public-config: 65e40557200eaddf4dbf9db951c5d3466eb2e22ddb414b03da86da56f3ade394
       labels:
         app.kubernetes.io/name: confidential-router-ui
         app.kubernetes.io/instance: cr
@@ -89,7 +89,7 @@ spec:
         runAsUser: 1001
       containers:
         - name: router-ui
-          image: ghcr.io/super-protocol/confidential-router/router-ui@sha256:2c315c97b599cc57f51c7d0f0490a674bf7eb37c93b79119272a58d666413123
+          image: ghcr.io/super-protocol/confidential-router/router-ui@sha256:475ecb21f588cca1225170f34a85a147d54a9553a2b456c5901133e23619320a
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -163,10 +163,10 @@ kind: Ingress
 metadata:
   name: confidential-router-ui
   labels:
-    helm.sh/chart: confidential-router-ui-0.2.0
+    helm.sh/chart: confidential-router-ui-0.2.1
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.3.2"
+    app.kubernetes.io/version: "0.4.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
   annotations:

@@ -235,6 +235,26 @@ refuses "two operator addresses in one list entry" "one address per list entry" 
 refuses "a bootstrap name where an address belongs" "not an email address" \
   "${base_api[@]}" --set auth.bootstrapToken=golden-test-bootstrap-token --set auth.bootstrapEmail=operator
 
+# The attested egress (ADR-008). Each of these renders a pod that comes up and an
+# egress that never works: an administrator who can register an upstream but
+# never store its API key, a key that is not an AES-256 key at all, a verifier
+# pulled by a tag that can move under a digest somebody pinned, and two
+# processes in one network namespace told to bind the same port.
+base_egress=("${base_api[@]}" --set externalEndpoints.enabled=true
+  --set externalEndpoints.secretsKey=goldentestsecretskeynotarealoneAAAAAAAAAAAAA)
+
+refuses "the egress switched on with no data key" "every registration is refused" \
+  "${base_api[@]}" --set externalEndpoints.enabled=true
+
+refuses "a data key that is not 32 bytes" "decode to exactly 32 bytes" \
+  "${base_api[@]}" --set externalEndpoints.enabled=true --set externalEndpoints.secretsKey=tooshort
+
+refuses "an unpinned egress verifier" "pinned by digest" \
+  "${base_egress[@]}" --set externalEndpoints.image.digest= --set externalEndpoints.image.tag=
+
+refuses "the egress admin API on the port the API itself listens on" "would fail to bind" \
+  "${base_egress[@]}" --set externalEndpoints.adminPort=3000
+
 # The console used to have its API origin compiled into its browser bundle, so
 # this chart refused to render one pointed anywhere else and the listing was
 # capped at the hostname the image was built for. The origin is resolved at run
@@ -646,6 +666,159 @@ else
   fail "charts/tests/inventory.py confidential-router-api"
 fi
 
+# The component image list is the render path's one fail-closed gate: an image in
+# the manifests that the listing does not declare refuses the whole deployment,
+# and a digest bumped in one file and not the other is a listing advertising a
+# pin the cluster never pulls. Neither is visible to a golden diff — `helm
+# template` does not read app.yaml — and the second container ADR-008 adds is
+# exactly the shape of change that walks into it.
+note "the listing declares every image its charts render, with the same digest"
+declared_images() {
+  if output=$(python3 charts/tests/declared_images.py confidential-router "$1" "$2" "charts/tests/cases/$3.yaml"); then
+    printf '%s\n' "$output" | sed "s/\$/ ($1)/"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/declared_images.py $1"
+  fi
+}
+declared_images router-api confidential-router-api api-external-endpoints
+declared_images router-ui confidential-router-ui ui-default
+declared_images litellm confidential-router-litellm litellm-one-model
+
+# The egress is two containers that have to agree about one file and one port,
+# and nothing in a cluster would say so: a sidecar watching a path router-api
+# never writes waits for a configuration for ever, serving nothing, with both
+# containers Ready. Checked on the rendered objects rather than on the values,
+# because the mount point is derived and the agreement is what matters.
+note "the egress sidecar and the API agree on the file and the socket between them"
+if output=$(python3 - charts/tests/golden/api-external-endpoints.yaml <<'PYTHON'
+import sys, yaml
+
+golden = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+deployment = next(d for d in golden if d["kind"] == "Deployment")
+pod = deployment["spec"]["template"]["spec"]
+api = next(c for c in pod["containers"] if c["name"] == "router-api")
+sidecar = next(c for c in pod["containers"] if c["name"] == "gatekeeper")
+config = yaml.safe_load(
+    next(d for d in golden if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "confidential-router-api")["data"][
+        "router.yaml"
+    ].replace("${", "placeholder-").replace("}", "")
+)
+
+failures = []
+rendered = config["externalEndpoints"]["configFile"]
+watched = next(e["value"] for e in sidecar["env"] if e["name"] == "GATEKEEPER_CONFIG")
+if rendered != watched:
+    failures.append(f"router-api renders {rendered} and the sidecar watches {watched}")
+else:
+    print(f"  ok    both name {rendered}")
+
+shared = {
+    container["name"]: next(
+        (m["mountPath"] for m in container.get("volumeMounts", []) if m["name"] == "gatekeeper-config"), None
+    )
+    for container in pod["containers"]
+}
+directory = rendered.rsplit("/", 1)[0]
+for name, path in shared.items():
+    if path != directory:
+        failures.append(f"{name} mounts the shared volume at {path}, not {directory}")
+if not failures:
+    print(f"  ok    both mount the shared emptyDir at {directory}")
+
+volume = next((v for v in pod["volumes"] if v["name"] == "gatekeeper-config"), None)
+if volume is None or "emptyDir" not in volume:
+    failures.append("the shared volume is not an emptyDir")
+else:
+    print("  ok    the shared volume is an emptyDir, so nothing of it outlives the pod")
+
+# The listeners are loopback-only, which is what makes them need no Service and
+# no NetworkPolicy. A containerPort would advertise a reachability that is not
+# there, and the admin API answers verdicts to whoever reaches it.
+if sidecar.get("ports"):
+    failures.append(f"the sidecar declares ports {sidecar['ports']}, and every listener it opens is on loopback")
+else:
+    print("  ok    the sidecar publishes no port")
+
+admin = config["externalEndpoints"]["adminListen"]
+if not admin.startswith("127.0.0.1:"):
+    failures.append(f"the admin API is told to listen on {admin}, which is not loopback")
+else:
+    print(f"  ok    the admin API is loopback-only ({admin})")
+
+if sidecar["securityContext"].get("runAsUser") != 65532 or not sidecar["securityContext"]["readOnlyRootFilesystem"]:
+    failures.append("the sidecar is not the image's non-root uid on a read-only root filesystem")
+else:
+    print("  ok    the sidecar runs as 65532 on a read-only root filesystem")
+
+# router-api writes the rendered configuration 0640, owned by its own uid and
+# gid. A sidecar with a group of its own can see that file and cannot open it,
+# which is an egress that serves nothing with both containers Ready — so the
+# group has to be the pod's, which is the API's.
+pod_group = pod["securityContext"]["runAsGroup"]
+if sidecar["securityContext"].get("runAsGroup", pod_group) != pod_group:
+    failures.append(
+        f"the sidecar runs as group {sidecar['securityContext']['runAsGroup']} and the file it reads is "
+        f"group {pod_group}, mode 0640: it could not open it"
+    )
+else:
+    print(f"  ok    the sidecar shares the writer's group ({pod_group}), which 0640 requires")
+
+# The API container has to be able to write what the sidecar reads.
+api_mount = next(m for m in api["volumeMounts"] if m["name"] == "gatekeeper-config")
+if api_mount.get("readOnly"):
+    failures.append("router-api mounts the shared volume read-only, and it is the process that renders the file")
+else:
+    print("  ok    router-api mounts it writable and the sidecar read-only")
+
+for failure in failures:
+    print(f"  FAIL  {failure}")
+sys.exit(1 if failures else 0)
+PYTHON
+); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "the egress sidecar and the API do not agree"
+fi
+
+# The one reversible credential this deployment holds. `router.yaml` is attested
+# and published inside the evidence bundle, so a data key written there would be
+# handed out with it — along with every upstream credential it opens (SUP-124,
+# ADR-008 §6).
+note "the upstream-key envelope reaches the pod from the Secret, never from the attested config"
+egress_golden=charts/tests/golden/api-external-endpoints.yaml
+egress_key=goldentestsecretskeynotarealoneAAAAAAAAAAAAA
+egress_config=$(sed -n '/^  router.yaml: |/,/^---$/p' "$egress_golden")
+
+if printf '%s\n' "$egress_config" | grep -q -- "$egress_key"; then
+  fail "the attested router.yaml carries the upstream-key envelope, which the evidence bundle publishes"
+else
+  pass "no data key in the attested router.yaml"
+fi
+if grep -q "secrets-key: \"$egress_key\"" "$egress_golden"; then
+  pass "the data key reaches the Secret"
+else
+  fail "the Secret does not carry secrets-key"
+fi
+if [ "$(grep -c -- '- name: CR_API_SECRETS_KEY$' "$egress_golden")" = "2" ]; then
+  pass "CR_API_SECRETS_KEY is read from the Secret by both the server and the migration container"
+else
+  fail "CR_API_SECRETS_KEY is read $(grep -c -- '- name: CR_API_SECRETS_KEY$' "$egress_golden") time(s), expected 2"
+fi
+
+# And none of it for a deployment that did not ask: the router's config schema is
+# strict, so `externalEndpoints` on an image that predates ADR-008 is a boot
+# refusal rather than a key it ignores.
+note "a deployment with the egress off renders none of it"
+for absent in 'externalEndpoints:' CR_API_SECRETS_KEY secrets-key gatekeeper-config; do
+  if grep -q -- "$absent" charts/tests/golden/api-one-model.yaml; then
+    fail "api-one-model renders $absent"
+  else
+    pass "no $absent"
+  fi
+done
+
 note "patroni-postgresql pins every image it ships by a real digest"
 if output=$(python3 charts/tests/digests.py patroni-postgresql); then
   printf '%s\n' "$output"
@@ -732,7 +905,7 @@ refuses "replacing the one-per-node rule by accident" "the one that applies" \
 # config loader that throws before the first listener — the whole deployment is a
 # crash loop and no golden diff would have mentioned it.
 note "every placeholder in the attested config has something that fills it"
-for case in api-one-model api-campaign api-billing-stripe api-no-models api-endpoint-hostname; do
+for case in api-one-model api-campaign api-billing-stripe api-no-models api-endpoint-hostname api-external-endpoints; do
   if output=$(python3 charts/tests/config_placeholders.py confidential-router-api "charts/tests/cases/$case.yaml"); then
     printf '%s\n' "$output" | sed "s/\$/ ($case)/"
   else
@@ -784,6 +957,10 @@ drift_case() {
 }
 drift_case confidential-router-api api-one-model
 drift_case confidential-router-api api-campaign 'invites.landingHostname=landing.{t}.example'
+# The second container is in the snapshot too, and nothing about it may follow
+# the hostname: the endpoints it verifies are registered at run time, so the
+# egress a deployment attests is the same for everybody (ADR-008 §2).
+drift_case confidential-router-api api-external-endpoints
 drift_case confidential-router-ui ui-default
 
 # And the same question with the *consumer* varying, not just the hostname they

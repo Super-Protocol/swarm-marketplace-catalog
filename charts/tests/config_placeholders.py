@@ -38,6 +38,12 @@ def render(chart: str, values: str) -> list[dict]:
     return [document for document in yaml.safe_load_all(manifests) if document]
 
 
+def names_the_config(container: dict) -> bool:
+    """Whether this container is pointed at `router.yaml` — the only ones the placeholders are
+    a contract with."""
+    return any(entry["name"] == "CR_API_CONFIG_FILE" for entry in container.get("env", []))
+
+
 def main(chart: str, values: str) -> int:
     documents = render(chart, values)
     by_name = {(d["kind"], d["metadata"]["name"]): d for d in documents}
@@ -51,7 +57,17 @@ def main(chart: str, values: str) -> int:
     deployment = by_name[("Deployment", chart)]
     failures = 0
 
-    for container in deployment["spec"]["template"]["spec"]["containers"] + deployment["spec"]["template"]["spec"].get("initContainers", []):
+    pod = deployment["spec"]["template"]["spec"]
+    # Only the containers that load `router.yaml`, named by the one thing that says
+    # so: `CR_API_CONFIG_FILE`. Since ADR-008 the pod also runs the egress sidecar,
+    # which reads a configuration of its own out of a shared volume and would fail
+    # every assertion below for not needing any of it.
+    readers = [c for c in pod["containers"] + pod.get("initContainers", []) if names_the_config(c)]
+    if not readers:
+        print(f"  FAIL  no container in {deployment['metadata']['name']} is given CR_API_CONFIG_FILE")
+        return 1
+
+    for container in readers:
         label = f"{deployment['metadata']['name']}/{container['name']}"
         from_env = {entry["name"] for entry in container.get("env", [])}
         from_config_maps = set()

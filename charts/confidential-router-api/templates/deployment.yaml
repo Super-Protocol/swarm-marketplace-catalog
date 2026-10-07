@@ -105,6 +105,61 @@ spec:
             {{- include "confidential-router-api.volumeMounts" . | nindent 12 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+        {{- if .Values.externalEndpoints.enabled }}
+        # The attested egress (ADR-008 §2): the gatekeeper's own core, verifying
+        # an external model endpoint's evidence and pinning its TLS leaf before
+        # the container above proxies a prompt to it. A second container rather
+        # than a second implementation — the user-side gatekeeper and this run
+        # the same binary, so there is no verification logic that can diverge.
+        #
+        # It is driven through a file and read back over loopback, and that is
+        # the whole seam. It needs no Service (the listeners are on 127.0.0.1,
+        # which only this pod has), no kube-apiserver access (the confinement
+        # that cost the database an election is not in play here — SUP-215), and
+        # nothing writable: a static binary on a read-only root filesystem,
+        # running as the image's own non-root uid rather than the API's.
+        - name: gatekeeper
+          image: {{ include "confidential-router-api.sidecarImage" . }}
+          imagePullPolicy: {{ .Values.externalEndpoints.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+            # 65532, the conventional "nonroot" id this image creates and `USER`s
+            # to. The pod-wide 1001 is the API image's user and does not exist
+            # here.
+            #
+            # The *group* stays the pod's, and that is load-bearing rather than
+            # an omission: router-api writes the rendered configuration 0640,
+            # owned by its own uid and gid, so sharing the group is the only
+            # thing that lets this container read it. Give it a group of its own
+            # and the egress comes up, waits for a file it can see and cannot
+            # open, and serves nothing — with both containers Ready.
+            runAsUser: 65532
+          env:
+            # Not a mount of its own: the entrypoint waits for this path to
+            # appear, so starting before router-api has rendered anything is the
+            # expected order rather than a crash loop.
+            - name: GATEKEEPER_CONFIG
+              value: {{ .Values.externalEndpoints.configPath | quote }}
+            - name: GATEKEEPER_WATCH_INTERVAL
+              value: {{ .Values.externalEndpoints.watchInterval | quote }}
+          # No ports, and that is the point: every listener this process opens —
+          # the per-endpoint egress ones and the admin API — is bound to
+          # loopback, which is shared with the container above and with nothing
+          # else. A containerPort here would advertise a reachability that does
+          # not exist.
+          #
+          # No probe either. "Is it serving?" is not a question this container
+          # can answer about itself without a verdict, and a probe that reported
+          # healthy while every endpoint was fail-closed would be worse than
+          # none; the API polls the admin socket for exactly that and shows it in
+          # the console.
+          volumeMounts:
+            - name: gatekeeper-config
+              mountPath: {{ include "confidential-router-api.sidecarConfigDir" . | quote }}
+              readOnly: true
+          resources:
+            {{- toYaml .Values.externalEndpoints.resources | nindent 12 }}
+        {{- end }}
       volumes:
         - name: config
           configMap:
@@ -116,6 +171,16 @@ spec:
           emptyDir: {}
         - name: data
           emptyDir: {}
+        {{- if .Values.externalEndpoints.enabled }}
+        # The rendered sidecar configuration, and nothing else. router-api writes
+        # it — atomically, into a temporary file in this directory and then a
+        # rename — on boot and after every admin mutation; the sidecar reads it
+        # and SIGHUPs itself when the bytes actually change. It holds no secret:
+        # an upstream's API key stays sealed in the database and is injected on
+        # the egress leg one request at a time.
+        - name: gatekeeper-config
+          emptyDir: {}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

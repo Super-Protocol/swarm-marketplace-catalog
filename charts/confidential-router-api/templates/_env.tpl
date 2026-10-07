@@ -106,6 +106,23 @@ refers to.
       name: {{ .Values.auth.adminEmailsExistingSecret | default (include "confidential-router-api.secretName" .) }}
       key: {{ if .Values.auth.adminEmailsExistingSecret }}{{ .Values.auth.adminEmailsExistingSecretKey }}{{ else }}admin-emails{{ end }}
 {{- end }}
+{{- if .Values.externalEndpoints.enabled }}
+{{- /*
+`CR_API_SECRETS_KEY` — the AES-256 data key an external endpoint's upstream API
+key is sealed under. Outside the `CR_API_*` configuration tree in the router's
+own code as well: it is read straight from the environment and never becomes a
+config key, because the rendered `router.yaml` is attested and readable inside
+the published evidence bundle (ADR-008 §6, SUP-124).
+
+The migration container gets it too, for no reason of its own — this list is one
+list — and reads nothing with it.
+*/}}
+- name: CR_API_SECRETS_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.externalEndpoints.existingSecret | default (include "confidential-router-api.secretName" .) }}
+      key: {{ if .Values.externalEndpoints.existingSecret }}{{ .Values.externalEndpoints.existingSecretKey }}{{ else }}secrets-key{{ end }}
+{{- end }}
 {{- if or .Values.analytics.posthog.projectKey .Values.analytics.posthog.existingSecret }}
 {{- /*
 `POSTHOG_PROJECT_KEY` and `POSTHOG_HOST`, not `CR_API_ANALYTICS__*`: the two names
@@ -167,4 +184,14 @@ ever started.
   mountPath: /tmp
 - name: data
   mountPath: /app/data
+{{- if .Values.externalEndpoints.enabled }}
+{{- /*
+The one path this container shares with the sidecar, and the only one it writes
+that another process reads. The migration container mounts it for the same
+reason it loads the same config file — this list is one list — and writes
+nothing to it.
+*/}}
+- name: gatekeeper-config
+  mountPath: {{ include "confidential-router-api.sidecarConfigDir" . | quote }}
+{{- end }}
 {{- end -}}
