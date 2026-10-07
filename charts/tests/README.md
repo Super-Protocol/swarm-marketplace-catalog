@@ -46,8 +46,16 @@ somewhere. They need network the first time, to pull the chart.
 
 ## Beyond lint and goldens
 
-Eight checks in `run.sh` are not a golden diff, and each exists because a golden diff
+Nine checks in `run.sh` are not a golden diff, and each exists because a golden diff
 cannot answer the question:
+
+- **Every container is admissible on a cluster space** (`limitrange.py`). A cluster space
+  carries a LimitRange the cloud writes itself: a 100m / 128Mi floor, and a request/limit
+  ratio of 1. A container under the floor, or one declaring no resources at all and handed a
+  2:1 pair by that same LimitRange, is refused at admission — so the pod never exists, and
+  nothing an operator looks at says "quota". It reads as "the app is broken". Four sub-floor
+  containers shipped that way before this check existed (SUP-238), and a golden diff held
+  every one of their numbers without a word.
 
 - **Every object, parsed as a cluster parses it** (`inventory.py`). A template that loses a
   `---` glues two objects into one document; the golden is regenerated from the same broken

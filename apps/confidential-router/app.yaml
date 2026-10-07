@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.11.0"
+  version: "0.11.1"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -383,12 +383,17 @@ resources:
   # listing.
   #
   # 0.10.0 adds five more small pods to it: three etcd members holding Patroni's leader lock, and
-  # two routers in front of the leader (SUP-215). That is +500m and +0.7 GB of limits, and no
+  # two routers in front of the leader (SUP-215). That is +500m and +0.8 GB of limits, and no
   # storage at all — the DCS keeps nothing it would need a volume for, so its members are
   # `emptyDir` and count against the node's ephemeral disk rather than against this quota.
+  # The extra 0.1 GB is the two routers sitting on the cluster-space memory floor (128Mi each)
+  # instead of 64Mi, which that LimitRange refuses (SUP-238).
   #
-  # The rendered limits of a default deployment now come to 3.85 CPU / 10.45 GB / 54 GB; what is
-  # declared here keeps the headroom the earlier numbers had, so neither minimum moves.
+  # The rendered limits of a default deployment now come to 3.85 CPU / 10.6 GB / 54 GB; what is
+  # declared here keeps the headroom the earlier numbers had, so neither minimum moves. The CPU
+  # total does not move with 0.11.1's two init-container floors: a pod's effective request is the
+  # larger of its init containers and the sum of its regular ones, and in both pods the regular
+  # container already asks for more.
   min:
     cpu: "5"
     memory: "14Gi"
@@ -549,7 +554,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-api
-      version: "0.7.0"
+      version: "0.7.1"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
         digest: sha256:025597cb7b207c00decb1b493ccbac01424f48e602f813fa4f42d1ab7babd3a7

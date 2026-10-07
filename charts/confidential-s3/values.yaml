@@ -238,13 +238,16 @@ bootstrapJob:
   # script needs, and an image the deployment does not otherwise pull would be a
   # fourth digest to declare and keep current.
   backoffLimit: 12
+  # A cluster space's LimitRange refuses a container under 100m CPU or 128Mi, and
+  # allows a request/limit ratio of 1 — so 100m is the floor, not a measurement of
+  # what the script needs (SUP-238).
   resources:
     requests:
-      cpu: 50m
+      cpu: 100m
       memory: 256Mi
       nvidia.com/gpu: "0"
     limits:
-      cpu: 50m
+      cpu: 100m
       memory: 256Mi
       nvidia.com/gpu: "0"
 
