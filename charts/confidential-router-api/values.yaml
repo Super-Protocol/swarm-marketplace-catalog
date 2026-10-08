@@ -375,10 +375,15 @@ externalEndpoints:
   # rendered config and SIGHUPs the gatekeeper in place. Pinned by digest for the
   # reason every image here is: it is inside the snapshot a user verifies, so the
   # egress verifier is part of what they pin.
+  #
+  # The build has to be one whose supervisor *waits* while the rendered file has
+  # no endpoint (confidential-router SUP-229, `main-481445c` or later): a fresh
+  # deployment renders exactly that, and an older build exits on it and keeps
+  # the API pod un-Ready (SUP-248). `charts/tests/sidecar_boot.sh` checks it.
   image:
     registry: ghcr.io
     repository: super-protocol/confidential-router/gatekeeper
-    digest: sha256:f6f5a2344eaa572120a567cb4cba7769720965bd3a3edb9be11dd0702fd3e6cd
+    digest: sha256:15e1691a39e124fc9888ff6f41763cf577939b69557c7e7148b2563f1772412a
     tag: ""
     pullPolicy: IfNotPresent
 

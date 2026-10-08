@@ -31,7 +31,7 @@ The release name and namespace are fixed per listing (`cr` / `confidential-route
 | `api-password-off` | passwords off: the `auth.password` block is absent rather than `enabled: false`, so the chart stays bootable on an image that predates the key |
 | `api-invite-only` | the SUP-173 auth seam: `requireInviteForSignUp` rendered only while it is on, so the chart stays bootable on an image that predates the key |
 | `api-endpoint-hostname` | an endpoint that names a hostname of its own: a parameter, so it is rendered as a literal rather than as `${ROUTER_PUBLIC_HOSTNAME}`, and the public ConfigMap does not carry that key at all (SUP-211) |
-| `api-external-only` | what the listing renders by default from 0.13.0 (SUP-245): no built-in model and the egress on — a router that serves only the external endpoints an administrator registers |
+| `api-external-only` | what the listing renders by default from 0.13.0 (SUP-245): no built-in model and the egress on — a router that serves only the external endpoints an administrator registers. With the listing's auth block, so `local_stack.py` also pins the API Ingress and password sign-in on this shape (SUP-248) |
 | `api-external-endpoints` | the attested egress on (ADR-008): the gatekeeper as a second container, the shared `emptyDir` they talk through, and `CR_API_SECRETS_KEY` in the Secret rather than in the attested `router.yaml`. Every other `api-*` case has it off, which is the other half — a chart that still boots an image predating the key |
 | `ui-default` | the console's env and ingress; run.sh renders it against a second hostname as well, because one pinned image has to serve any API origin |
 | `ollama-one-model` / `ollama-gpu` | the model server and its GPU switch: an explicit zero device request without one; the device count, the `nvidia` runtime class and the GPU toleration together with one |
@@ -142,6 +142,14 @@ cannot answer the question:
 - **Misconfigurations are refused at render time.** Each one is a mistake that would deploy
   cleanly and then not work: an unpinned image, an Ingress with no class, a Garage key in a
   shape Garage refuses, a master key that is not 32 bytes, an AES key that is not 32 bytes.
+
+- **The egress sidecar the listing declares boots on an empty endpoint list**
+  (`sidecar_boot.sh`, its own CI job because it needs docker). Every fresh deployment's
+  sidecar first reads `endpoints: []`, and an endpoint can only be registered through the
+  API in the same pod. Listing 0.13.0 declared a build that exited 4 on that document, so
+  the pod never became Ready and the API hostname answered 503 on every path — the admin
+  page included (SUP-248). A digest is a property of the binary behind it; nothing
+  rendered could see it.
 
 ## Smoke
 

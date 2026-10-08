@@ -13,7 +13,11 @@ would run:
     nothing from either of them besides its one inert ConfigMap;
   - the API pod carrying both the router and the attested egress, because an
     external endpoint is the only thing this deployment can serve;
-  - no GPU requested by anything.
+  - no GPU requested by anything;
+  - the API published: its Ingress routing `/v1`, `/graphql` and `/auth` to the
+    API Service, and password sign-in on in the attested `router.yaml` — the two
+    things a person needs to create the first account on such a deployment
+    (SUP-248).
 
     charts/tests/local_stack.py
 """
@@ -61,6 +65,35 @@ def pod_spec(document: dict) -> dict:
     return spec["template"]["spec"]
 
 
+# The paths the console and an OpenAI client call on the API hostname.
+API_PATHS = {"/v1", "/graphql", "/auth"}
+
+
+def api_published(documents: list[dict]) -> list[str]:
+    """What stops a person signing up on the API's own render, as failure lines."""
+    failures = []
+    ingress = next((d for d in documents if d["kind"] == "Ingress"
+                    and d["metadata"]["name"] == "confidential-router-api"), None)
+    if ingress is None:
+        failures.append("router-api renders no Ingress/confidential-router-api")
+    else:
+        routed = {
+            path["path"]
+            for rule in ingress["spec"].get("rules") or []
+            for path in (rule.get("http") or {}).get("paths") or []
+            if path["backend"]["service"]["name"] == "confidential-router-api"
+        }
+        for missing in sorted(API_PATHS - routed):
+            failures.append(f"Ingress/confidential-router-api does not route {missing} to the API")
+
+    config = next((d for d in documents if d["kind"] == "ConfigMap"
+                   and d["metadata"]["name"] == "confidential-router-api"), None)
+    router = yaml.safe_load(config["data"]["router.yaml"]) if config else {}
+    if not ((router.get("auth") or {}).get("password") or {}).get("enabled"):
+        failures.append("router.yaml does not enable password sign-in")
+    return failures
+
+
 def gpu_requested(pod: dict) -> bool:
     for container in (pod.get("containers") or []) + (pod.get("initContainers") or []):
         for bound in ("requests", "limits"):
@@ -81,6 +114,10 @@ def main() -> int:
             # is a deployment that cannot be created at all.
             print(f"  FAIL  {component} renders nothing, which the cloud refuses")
             failures += 1
+        if component == "router-api":
+            for line in api_published(documents):
+                print(f"  FAIL  {line}")
+                failures += 1
         for document in documents:
             name = document["metadata"]["name"]
             if component in ("ollama", "litellm") and (document["kind"], name) != ("ConfigMap", chart):
@@ -109,6 +146,7 @@ def main() -> int:
         return 1
     for name in sorted(running):
         print(f"  ok    {name}: {', '.join(sorted(running[name]))}")
+    print(f"  ok    confidential-router-api published on {', '.join(sorted(API_PATHS))}, password sign-in on")
     return 0
 
 
