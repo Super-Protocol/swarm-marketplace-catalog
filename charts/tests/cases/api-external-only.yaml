@@ -1,0 +1,16 @@
+# What the listing renders for the API when the form is left as it arrives
+# (0.13.0, SUP-245): no built-in model, the attested egress on. The router comes
+# up with an empty local catalogue and serves whatever an administrator registers
+# as an external endpoint; `litellmUrl` still names the proxy's service, which
+# this deployment does not run — nothing is routed to it, because no catalogue
+# entry points there, and the API's health check never calls it.
+apiHostname: api.confidential-router.example
+consoleHostname: console.confidential-router.example
+auth:
+  secret: golden-test-auth-secret-not-a-real-one
+database:
+  password: golden-test-password
+models: []
+externalEndpoints:
+  enabled: true
+  secretsKey: goldentestsecretskeynotarealoneAAAAAAAAAAAAA

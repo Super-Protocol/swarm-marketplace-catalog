@@ -77,10 +77,8 @@ kubectl create namespace "$NS" >/dev/null
 ok "kind + ingress-nginx up, router images loaded"
 
 step "Install"
-helm repo add otwld https://otwld.github.io/ollama-helm/ >/dev/null 2>&1 || true
-helm repo update otwld >/dev/null
-helm upgrade --install ollama otwld/ollama --version 1.85.0 -n "$NS" \
-  -f "$here/ollama.yaml" --set "ollama.models.pull[0]=$OLLAMA_MODEL" >/dev/null
+helm upgrade --install confidential-router-ollama charts/confidential-router-ollama -n "$NS" \
+  -f "$here/ollama.yaml" --set "models[0]=$OLLAMA_MODEL" >/dev/null
 helm dependency build charts/confidential-router-api >/dev/null
 for release in litellm api ui; do
   case $release in
@@ -97,7 +95,7 @@ done
 ok "four releases installed"
 
 step "Everything becomes ready"
-for deploy in ollama confidential-router-litellm confidential-router-api confidential-router-ui; do
+for deploy in confidential-router-ollama confidential-router-litellm confidential-router-api confidential-router-ui; do
   kubectl rollout status "deploy/$deploy" -n "$NS" --timeout=600s >/dev/null || die "$deploy never became ready"
   ok "$deploy"
 done

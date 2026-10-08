@@ -42,7 +42,5 @@ jobs:
       # lands on the field it names is not a question `grep` can answer.
       - run: pip install --quiet pyyaml
 
-      # The GPU cases render otwld's ollama chart from its repository, which is
-      # the same reference the listing's component uses.
       - name: Lint, render, diff
         run: charts/tests/run.sh

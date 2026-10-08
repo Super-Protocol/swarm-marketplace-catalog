@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.12.1"
+  version: "0.13.0"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -21,8 +21,10 @@ metadata:
 ui:
   sections:
     # Ordered so that a deployment can be reached from the top of the form: the two
-    # hostnames arrive filled in, the models have a default and the GPU is off, which
-    # leaves nothing above Advanced that has to be typed before Deploy.
+    # hostnames arrive filled in and no built-in model is selected, which leaves
+    # nothing above Advanced that has to be typed or chosen before Deploy. Models are
+    # external since ADR-008, so a router serving only the endpoints an administrator
+    # registers after deploy is the configuration the form arrives at (SUP-245).
     - id: access
       title: Access
       description: >-
@@ -38,23 +40,16 @@ ui:
           widget: hostname
 
     - id: models
-      title: Models
+      title: Built-in models
       description: >-
-        Downloaded on first start, which takes a few minutes per model, and served from then on.
-        Every one you pick is advertised by the API and listed in the console; sizes below are what
-        is pulled onto the model volume.
+        Optional. Leave this empty and the deployment runs no model of its own — no model server,
+        no model volume — and serves the external endpoints you register in the console's admin
+        section after deploy, each verified by its attestation before a prompt reaches it. Pick
+        some and they are downloaded on first start, a few minutes per model, then served beside
+        the external ones; sizes below are what is pulled onto the model volume.
       fields:
         - parameterId: models
           widget: multiselect
-
-    - id: compute
-      title: Compute
-      fields:
-        - parameterId: gpuEnabled
-          widget: switch
-        - parameterId: gpuCount
-          widget: number
-          visible: "params.gpuEnabled == true"
 
     # A campaign is a different thing from a deployment, and the two fields only a
     # campaign wants belong together rather than among the answered ones below: both
@@ -80,10 +75,24 @@ ui:
       title: Advanced
       description: >-
         Every field below is already answered — the volumes are sized for the models above, the
-        deployment sells no credit, and the first sign-in token is generated and shown with the
-        deployment's outputs. Open this to size a volume differently, to take real payments, or to
-        bring your own token; skip it otherwise.
+        built-in models run on CPU, the deployment sells no credit, and the first sign-in token is
+        generated and shown with the deployment's outputs. Open this to give built-in models a GPU,
+        to size a volume differently, to take real payments, or to bring your own token; skip it
+        otherwise.
       fields:
+        # The GPU belongs to the built-in model server and to nothing else, so it
+        # sits here rather than in a section of its own. It cannot be hidden while
+        # no model is selected: `visible` cannot test an array parameter (spec
+        # §7.4), and adding a boolean beside `models` just to hide it would give
+        # the form two answers to one question. With no model selected it reaches
+        # no manifest — the model server is not rendered — but the marketplace
+        # still reserves the card for the space, which is what its description
+        # says.
+        - parameterId: gpuEnabled
+          widget: switch
+        - parameterId: gpuCount
+          widget: number
+          visible: "params.gpuEnabled == true"
         - parameterId: modelStorage
           widget: select
         - parameterId: databaseStorage
@@ -168,15 +177,19 @@ parameters:
     type: array
     items:
       type: string
-    title: Models
+    title: Built-in models
     description: >-
-      Pick one or more. Every model you pick is pulled onto the model volume, kept resident, and
-      advertised under its own name and price in the console — so the storage and the memory this
-      deployment needs are a function of this list.
-    required: true
-    default: ["llama3.2:3b"]
-    validation:
-      minItems: 1
+      Empty means no built-in models: nothing is downloaded and no model server runs — add
+      external ones in the admin console after deploy. Every model you pick is pulled onto the
+      model volume, kept resident, and advertised under its own name and price in the console
+      beside the external ones.
+    # Empty by default and allowed to stay empty: the charts read the list and
+    # render no model server and no proxy without one (SUP-245). That decision
+    # cannot live here — there is no `when:` on a component, and an array cannot
+    # be tested in a condition — so it lives in confidential-router-ollama and
+    # confidential-router-litellm, which are ours.
+    required: false
+    default: []
     options:
       source:
         type: static
@@ -220,17 +233,20 @@ parameters:
 
   - id: gpuEnabled
     type: boolean
-    title: Use a GPU
+    title: Run built-in models on a GPU
     description: >-
-      Off by default, because a cluster space without GPUs schedules nothing at all when it is on:
-      the pod asks for a device and a runtime class that are not there, and waits forever. On CPU
-      these models answer, slowly — turn this on where the space actually has one.
+      Only for the built-in models above — external endpoints run on their own hardware. With
+      none selected, leave this off: nothing here would use the card, but the cluster space is
+      still created with one reserved. Off by default for a second reason, because a space
+      without GPUs schedules nothing at all when it is on: the model server asks for a device and
+      a runtime class that are not there, and waits forever. On CPU the built-in models answer,
+      slowly — turn this on where the space actually has one.
     default: false
 
   - id: gpuCount
     type: integer
     title: GPUs
-    description: How many to allocate to the model server.
+    description: How many to allocate to the built-in model server.
     default: 1
     validation:
       min: 1
@@ -240,8 +256,9 @@ parameters:
     type: string
     title: Model storage
     description: >-
-      Holds the downloaded weights. All five models together are under 12 GB, so the default has
-      room for every one of them — which is why this is not asked for, only offered.
+      Holds the downloaded weights of the built-in models; not created when none is selected. All
+      five models together are under 12 GB, so the default has room for every one of them — which
+      is why this is not asked for, only offered.
     required: false
     default: "30Gi"
     options:
@@ -425,6 +442,22 @@ resources:
   #
   # The rendered limits of a default deployment now come to 3.95 CPU / 10.7 GB / 54 GB; what is
   # declared here keeps the headroom the earlier numbers had, so neither minimum moves.
+  #
+  # 0.13.0 makes the built-in models optional and selects none by default (SUP-245). With none,
+  # the model server and its proxy are not rendered, and the rendered limits come to
+  # 1.70 CPU / 4.7 GB / 24 GB — the ollama container (2 CPU, 4 GB), its 30 GB volume and the
+  # litellm proxy (250m, 2 GB) less than the 3.95 / 10.7 / 54 above, which still describe a
+  # deployment with one model on the default volume.
+  #
+  # The minimum stays where it is anyway, and that is a decision, not an oversight: an external-
+  # only deployment reserves about 3.3 CPU, 9 GB and 36 GB it does not use. `min` is the quota the
+  # cluster space is created with, the specification has no way to make it depend on a
+  # parameter, and a reconfigure re-renders into the same space without resizing it — so a
+  # minimum sized for the empty selection would leave a later reconfigure that picks a model
+  # with a model server that cannot be admitted, which reads as "the app is broken". Keeping the
+  # headroom is what keeps "add a built-in model later" a reconfigure rather than a redeploy.
+  # If that is not worth the reservation, the alternative is a smaller minimum and a form that
+  # says picking a model needs a fresh deployment; it is a product call, not a chart one.
   min:
     cpu: "5"
     memory: "14Gi"
@@ -450,122 +483,59 @@ resources:
 
 components:
   # ---------------------------------------------------------------------------
-  # The model server. Reachable inside the cluster space and nowhere else: an
-  # Ollama endpoint has no authentication of its own, and publishing one would
-  # hand the deployment's GPU and models to whoever found the name. Everything
-  # that reaches it goes through the proxy and then the router, which is where
-  # keys, credit and metering live.
+  # The built-in model server. Reachable inside the cluster space and nowhere
+  # else: an Ollama endpoint has no authentication of its own, and publishing
+  # one would hand the deployment's GPU and models to whoever found the name.
+  # Everything that reaches it goes through the proxy and then the router,
+  # which is where keys, credit and metering live.
+  #
+  # Optional from 0.13.0 (SUP-245). A component cannot be left out of a
+  # deployment — the specification has no `when:` on one, and an array
+  # parameter cannot be tested in any condition — so this chart is ours rather
+  # than otwld's and reads `models` itself: with none selected it renders no
+  # Deployment, no Service and no volume, only one inert ConfigMap, because the
+  # cloud refuses a component with nothing in it.
   # ---------------------------------------------------------------------------
   - name: ollama
     source:
       type: helm
-      repoUrl: https://otwld.github.io/ollama-helm/
-      chart: ollama
-      version: "1.85.0"
-    # This chart references `ollama/ollama` by tag and its init container by
-    # bare name, and an unpinned reference makes the deployment's evidence
-    # digest uncomputable (specification 2.7). Declaring them here rewrites both
-    # to a digest before the manifests are sent.
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: confidential-router-ollama
+      version: "0.1.0"
+    # The same server image 0.12.x pulled through otwld's chart. Its `busybox`
+    # went with that chart: it was the image of a `helm test` Pod the
+    # marketplace never ran.
     images:
       - name: ollama/ollama
         digest: sha256:2a6e883b917fc543389599dae79918f5cac9e1438890506982f44aa4f5625d01
-      - name: busybox
-        digest: sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
     deployment:
       values:
         base:
-          service:
-            type: ClusterIP
-          ollama:
-            gpu:
-              enabled: false
-              type: nvidia
-              number: 0
-            models:
-              pull: []
-              run: []
-          runtimeClassName: ""
-          persistentVolume:
-            enabled: true
-            size: 30Gi
-          ingress:
-            enabled: false
-          # llama-server counts the host's CPUs. This container is capped at the
-          # limit below, and a thread per host CPU is what throttles token
-          # generation. The limit is read back from the container so the two
-          # cannot drift, including when the GPU patch replaces `resources`.
-          extraEnv:
-            - name: LLAMA_ARG_THREADS
-              valueFrom:
-                resourceFieldRef:
-                  resource: limits.cpu
-                  divisor: "1"
-            - name: LLAMA_ARG_THREADS_BATCH
-              valueFrom:
-                resourceFieldRef:
-                  resource: limits.cpu
-                  divisor: "1"
-          resources:
-            requests:
-              cpu: "2"
-              memory: 4Gi
-              # Explicit zero, not an omitted field. A GPU cluster space's LimitRange
-              # defaults a missing nvidia.com/gpu to the reserved count.
-              nvidia.com/gpu: "0"
-            limits:
-              cpu: "2"
-              memory: 4Gi
-              nvidia.com/gpu: "0"
-        patches:
           # The whole selection, as a list: a value that is exactly one
           # placeholder is interpolated in its native type, so this reaches the
           # chart as a YAML sequence rather than as one string naming five
-          # models.
-          - op: replace
-            path: ollama.models.pull
-            value: "{{ params.models }}"
-
-          - op: replace
-            path: ollama.gpu.enabled
-            value: true
-            when: "params.gpuEnabled == true"
-
-          - op: replace
-            path: ollama.gpu.number
-            value: "{{ params.gpuCount }}"
-            when: "params.gpuEnabled == true"
-
-          # A device request without the runtime class leaves the pod Pending
-          # forever rather than falling back to CPU, so the two move together.
-          - op: replace
-            path: runtimeClassName
-            value: nvidia
-            when: "params.gpuEnabled == true"
-
-          # `nvidia.com/gpu` is not a dotted path, so the count cannot be set beside the
-          # CPU and memory above. The whole resources object is replaced, and those two
-          # are repeated.
-          - op: replace
-            path: resources
-            value:
-              requests:
-                cpu: "2"
-                memory: 4Gi
-                nvidia.com/gpu: "{{ params.gpuCount }}"
-              limits:
-                cpu: "2"
-                memory: 4Gi
-                nvidia.com/gpu: "{{ params.gpuCount }}"
-            when: "params.gpuEnabled == true"
-
-          - op: replace
-            path: persistentVolume.size
-            value: "{{ params.modelStorage }}"
+          # models. Empty is the external-only router.
+          models: "{{ params.models }}"
+          gpu:
+            enabled: "{{ params.gpuEnabled }}"
+            count: "{{ params.gpuCount }}"
+          persistence:
+            size: "{{ params.modelStorage }}"
+          # llama-server's thread pools are sized from this CPU limit by the
+          # chart, and the GPU count is added to both requests and limits there
+          # — explicitly zero without one, because a GPU cluster space's
+          # LimitRange defaults a missing `nvidia.com/gpu` to the reserved count.
+          resources:
+            cpu: "2"
+            memory: 4Gi
 
   # ---------------------------------------------------------------------------
   # The OpenAI-compatible face on Ollama. It publishes one model name per
   # selected model — the same strings the router advertises, because the Ollama
-  # name *is* the catalogue key on both sides.
+  # name *is* the catalogue key on both sides. With none selected it is not
+  # deployed either: one inert ConfigMap, for the same reason as above. External
+  # endpoints never pass through it; the router proxies to them through the
+  # attested egress in its own pod.
   # ---------------------------------------------------------------------------
   - name: litellm
     dependsOn:
@@ -574,14 +544,16 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-litellm
-      version: "0.1.2"
+      version: "0.2.0"
     images:
       - name: ghcr.io/berriai/litellm
         digest: sha256:e9711f484c7c8462c028803130afef546aa54c8d2fc11120242c01bbadc12e65
     deployment:
       values:
         base:
-          ollamaUrl: "http://{{ components.ollama.release }}:11434"
+          # The model server's service name is fixed by its chart, as this
+          # proxy's is, rather than derived from the release.
+          ollamaUrl: http://confidential-router-ollama:11434
           models: "{{ params.models }}"
           masterKey: "{{ params.litellmKey }}"
           service:
@@ -955,11 +927,14 @@ outputs:
 #
 #   - `models` — the catalogue is the `models:` block of the attested
 #     `/data/router.yaml`, and with an empty selection there is no endpoint to
-#     publish either;
+#     publish either; from 0.13.0 an empty selection also leaves the model
+#     server and its proxy out of the snapshot entirely, each replaced by one
+#     ConfigMap that says so;
 #   - `inviteOnlySignup` — writes `auth.requireInviteForSignUp` into the same
 #     file, rendered only while it is on;
-#   - `gpuEnabled` — patches `runtimeClassName: nvidia`, the `nvidia.com/gpu`
-#     requests and the GPU tolerations into the attested ollama Deployment;
+#   - `gpuEnabled` — renders `runtimeClassName: nvidia`, the `nvidia.com/gpu`
+#     requests and the GPU tolerations into the attested ollama Deployment, and
+#     moves nothing when no model is selected, because there is none;
 #
 # and on the same footing `passwordSignup`, `billingMode` and `landingHostname`,
 # each of which makes a `router.yaml` block appear or disappear. The chart's own
