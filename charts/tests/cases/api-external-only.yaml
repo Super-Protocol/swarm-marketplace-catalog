@@ -6,8 +6,14 @@
 # entry points there, and the API's health check never calls it.
 apiHostname: api.confidential-router.example
 consoleHostname: console.confidential-router.example
+# The auth block as the listing's base sets it, so the golden also pins that an
+# external-only deployment offers password sign-up (SUP-248).
 auth:
   secret: golden-test-auth-secret-not-a-real-one
+  magicLink:
+    mailer: none
+  password:
+    enabled: true
 database:
   password: golden-test-password
 models: []

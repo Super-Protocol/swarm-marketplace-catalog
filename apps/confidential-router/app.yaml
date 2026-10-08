@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.13.0"
+  version: "0.13.1"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -572,7 +572,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-api
-      version: "0.8.0"
+      version: "0.8.1"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
         digest: sha256:081f99911e0d288d6df6ada72730ffcf79158373d7e417169db9db44dd3769fc
@@ -588,8 +588,14 @@ components:
       # refused rather than one that quietly runs an undeclared container — and
       # the digest is what puts the egress verifier inside the snapshot a user
       # pins.
+      #
+      # 0.13.1 re-pins it (SUP-248): the build 0.13.0 declared exited on the
+      # `endpoints: []` document every fresh deployment starts from, so the API
+      # pod never became Ready and no endpoint could ever be registered. This one
+      # waits for a runnable configuration instead (`main-481445c`);
+      # `charts/tests/sidecar_boot.sh` boots the declared digest on that document.
       - name: ghcr.io/super-protocol/confidential-router/gatekeeper
-        digest: sha256:f6f5a2344eaa572120a567cb4cba7769720965bd3a3edb9be11dd0702fd3e6cd
+        digest: sha256:15e1691a39e124fc9888ff6f41763cf577939b69557c7e7148b2563f1772412a
       # Spilo: PostgreSQL 17.5 and Patroni 4.0.4 in one image, which is what makes the
       # database three instances that elect a leader instead of one that comes back empty.
       # It replaces `bitnamilegacy/postgresql` — a mirror that receives no rebuilds, no

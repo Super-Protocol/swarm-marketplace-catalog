@@ -10,11 +10,13 @@ on:
   pull_request:
     paths:
       - 'charts/**'
+      - 'apps/confidential-router/**'
       - '.github/workflows/chart-tests.yml'
   push:
     branches: [main]
     paths:
       - 'charts/**'
+      - 'apps/confidential-router/**'
       - '.github/workflows/chart-tests.yml'
   workflow_dispatch:
 
@@ -44,3 +46,23 @@ jobs:
 
       - name: Lint, render, diff
         run: charts/tests/run.sh
+
+  # A digest is a property of the binary behind it, not of anything rendered, so
+  # no golden can say whether the egress sidecar the listing declares survives the
+  # document every fresh deployment starts from. One that exits on it keeps the
+  # API pod un-Ready and the API hostname at 503 (SUP-248). This boots it.
+  sidecar:
+    name: egress sidecar boots on an empty endpoint list
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install --quiet pyyaml
+
+      - name: Boot the declared sidecar
+        run: charts/tests/sidecar_boot.sh

@@ -6,7 +6,13 @@ type: application
 # gatekeeper's own core, verifying an external model endpoint before anything is
 # proxied to it (ADR-008). Off unless `externalEndpoints.enabled` says otherwise,
 # and a re-pin rollout for anyone pinning this deployment's digest when it is on.
-version: 0.8.0
+#
+# 0.8.1 re-pins that sidecar to the build whose supervisor waits for a runnable
+# configuration. The 0.8.0 build handed router-api's first render — `endpoints: []`,
+# which every fresh deployment starts from — straight to `gatekeeper run`, which
+# exits 4 on it: the API pod never became Ready and its hostname answered 503 on
+# every path, the admin page that registers an endpoint included (SUP-248).
+version: 0.8.1
 appVersion: "0.4.0"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous
