@@ -15,7 +15,12 @@ type: application
 #
 # 0.9.0 adds `billing.signupGrantUsd` — credit granted to every new account at
 # registration (SUP-249), rendered into `router.yaml` only when above zero.
-version: 0.9.0
+#
+# 0.9.1 re-pins the router API and its egress sidecar to `main-5efa452`: the
+# sidecar verifies roots enrolled on Azure confidential VMs (SUP-251) and the API
+# drives two-factor endpoint trust — cloud measurement and pinned digest
+# (SUP-252). No values change.
+version: 0.9.1
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous

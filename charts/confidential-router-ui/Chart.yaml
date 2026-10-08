@@ -5,5 +5,9 @@ type: application
 # 0.2.1 is the same chart with a newer console pinned: the admin section for
 # external endpoints and the trust list (ADR-008 §7). The chart repository is
 # append-only, so a default that moves moves the version with it.
-version: 0.2.2
+#
+# 0.2.3 pins the console from `main-5efa452` (SUP-251, SUP-252): the trust-list
+# form asks for a cloud launch measurement, and the endpoint dossier offers
+# copy-measurement, a Registry-signed badge and the two-factor approvals.
+version: 0.2.3
 appVersion: "0.4.1"
