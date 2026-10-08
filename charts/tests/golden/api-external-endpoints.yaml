@@ -8,7 +8,7 @@ metadata:
     helm.sh/chart: confidential-router-api-0.9.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.4.0"
+    app.kubernetes.io/version: "0.4.1"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
 type: Opaque
@@ -28,7 +28,7 @@ metadata:
     helm.sh/chart: confidential-router-api-0.9.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.4.0"
+    app.kubernetes.io/version: "0.4.1"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
   annotations:
@@ -66,7 +66,7 @@ metadata:
     helm.sh/chart: confidential-router-api-0.9.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.4.0"
+    app.kubernetes.io/version: "0.4.1"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
 data:
@@ -209,7 +209,7 @@ metadata:
     helm.sh/chart: confidential-router-api-0.9.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.4.0"
+    app.kubernetes.io/version: "0.4.1"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
 spec:
@@ -232,7 +232,7 @@ metadata:
     helm.sh/chart: confidential-router-api-0.9.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.4.0"
+    app.kubernetes.io/version: "0.4.1"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
   annotations:
@@ -256,12 +256,12 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: 2c973a6102f4e4d3d4439ceddef4069690350411837bfda2792d2344e7bd859a
+        checksum/config: a92d3be0657acf904e44d243884c57fbf2ce3d6eda2008d95002877478e3778b
         # And a hostname reconfigure is a config change the pod cannot see at all:
         # `envFrom` is read once, when the container starts, so without this the
         # ConfigMap is updated and the running router keeps advertising the old
         # origin.
-        checksum/public-config: 1ac32ae313d7ce5c72b82f1073e73f3390d02c8b92e07d8b865efe707ae8df4e
+        checksum/public-config: e18d55c487d2e8e52d3f244807c9d8f0f93c7afabeabdf9edb42de974be1fd66
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr
@@ -277,7 +277,7 @@ spec:
         # PostgreSQL accepts connections, which is exactly the wait this pod needs
         # and is why there is no separate wait-for-database container.
         - name: migrate
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:081f99911e0d288d6df6ada72730ffcf79158373d7e417169db9db44dd3769fc
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:84fc96b9b775696971cc6d406666a6ac85f90801d6166ecb82824a15de886f01
           imagePullPolicy: IfNotPresent
           args: ["migrate"]
           securityContext:
@@ -332,7 +332,7 @@ spec:
               nvidia.com/gpu: "0"
       containers:
         - name: router-api
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:081f99911e0d288d6df6ada72730ffcf79158373d7e417169db9db44dd3769fc
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:84fc96b9b775696971cc6d406666a6ac85f90801d6166ecb82824a15de886f01
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -500,7 +500,7 @@ metadata:
     helm.sh/chart: confidential-router-api-0.9.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
-    app.kubernetes.io/version: "0.4.0"
+    app.kubernetes.io/version: "0.4.1"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: confidential-router
   annotations:

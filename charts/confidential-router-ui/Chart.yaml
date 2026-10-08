@@ -5,5 +5,5 @@ type: application
 # 0.2.1 is the same chart with a newer console pinned: the admin section for
 # external endpoints and the trust list (ADR-008 §7). The chart repository is
 # append-only, so a default that moves moves the version with it.
-version: 0.2.1
-appVersion: "0.4.0"
+version: 0.2.2
+appVersion: "0.4.1"
