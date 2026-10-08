@@ -6,7 +6,7 @@
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-router/router-api
-  digest: sha256:84fc96b9b775696971cc6d406666a6ac85f90801d6166ecb82824a15de886f01
+  digest: sha256:fd1505a7af47c8c3380b3eeaa85b608ef599616367a6bea421dee1b496108d11
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -383,13 +383,14 @@ externalEndpoints:
   # egress verifier is part of what they pin.
   #
   # The build has to be one whose supervisor *waits* while the rendered file has
-  # no endpoint (confidential-router SUP-229, `main-481445c` or later): a fresh
+  # no endpoint (confidential-router SUP-229, `main-481445c` or later; pinned:
+  # `main-5efa452`, which also verifies Azure CVM roots, SUP-251): a fresh
   # deployment renders exactly that, and an older build exits on it and keeps
   # the API pod un-Ready (SUP-248). `charts/tests/sidecar_boot.sh` checks it.
   image:
     registry: ghcr.io
     repository: super-protocol/confidential-router/gatekeeper
-    digest: sha256:15e1691a39e124fc9888ff6f41763cf577939b69557c7e7148b2563f1772412a
+    digest: sha256:be14d1db005f7e71966993fd551db587904df584ee2827256ec0bbd0ec6c8584
     tag: ""
     pullPolicy: IfNotPresent
 
