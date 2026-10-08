@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.14.0"
+  version: "0.14.1"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -157,7 +157,7 @@ parameters:
     description: >-
       On, because the token above claims exactly one account and this deployment has no mailbox to
       send an invitation from: without it nobody but the first administrator can ever sign in.
-      Each account that signs up gets its own empty workspace and no credit, and can read nobody
+      Each account that signs up gets its own empty workspace and the sign-up credit set under Campaign (none at 0), and can read nobody
       else's keys — but anyone who can reach the console can create one, so turn this off where the
       console is reachable by people this deployment is not for. There is no password reset either
       way; that would need the mail delivery this deployment does without.
@@ -888,7 +888,7 @@ outputs:
     title: Everyone else
     type: string
     when: "params.passwordSignup == true && params.inviteOnlySignup == false"
-    value: "https://{{ params.consoleHostname }}/signup — an email address and a password, with nothing to deliver and nothing to verify. Each account arrives with its own empty workspace and no credit: anyone who can reach the console can create one, so turn \"Allow sign-up with a password\" off by reconfiguring if this console is reachable by people it is not for. There is no password reset — it would need the mail delivery this deployment does without."
+    value: "https://{{ params.consoleHostname }}/signup — an email address and a password, with nothing to deliver and nothing to verify. Each account arrives with its own empty workspace and ${{ params.signupGrantUsd }} of sign-up credit: anyone who can reach the console can create one, and each such account collects that credit, so turn \"Allow sign-up with a password\" off by reconfiguring if this console is reachable by people it is not for. There is no password reset — it would need the mail delivery this deployment does without."
 
   - id: invitedSignUp
     title: Everyone else
@@ -920,7 +920,7 @@ outputs:
     title: Credit
     type: string
     when: "params.billingMode == 'disabled'"
-    value: "This deployment sells no credit: the console has no buy panel and a checkout is refused. Credit arrives as a grant — an invitation code redeemed at sign-up, or `credits grant` from an administrator. Switch to Stripe by reconfiguring."
+    value: "This deployment sells no credit: the console has no buy panel and a checkout is refused. Credit arrives as a grant — the ${{ params.signupGrantUsd }} every new account starts with (the sign-up credit, 0 for none), an invitation code redeemed at sign-up, or `credits grant` from an administrator. Switch to Stripe by reconfiguring."
 
 # What a deployment of this version attests to, and what about it is left out.
 #
