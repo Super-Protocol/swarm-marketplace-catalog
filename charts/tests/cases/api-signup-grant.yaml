@@ -1,0 +1,12 @@
+# The sign-up grant (SUP-249): what the listing deploys by default, $20 of credit
+# for every new account, rendered as `billing.signupGrantMicros`. Every other
+# `api-*` case leaves it at 0, which is the other half — no key at all, so the
+# chart still boots an image that predates it.
+apiHostname: api.confidential-router.example
+consoleHostname: console.confidential-router.example
+auth:
+  secret: golden-test-auth-secret-not-a-real-one
+database:
+  password: golden-test-password
+billing:
+  signupGrantUsd: 20

@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.13.1"
+  version: "0.14.0"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -67,6 +67,8 @@ ui:
           widget: password
         - parameterId: inviteOnlySignup
           widget: switch
+        - parameterId: signupGrantUsd
+          widget: number
 
     # There is no collapsed-section or group concept in the specification, so "advanced"
     # is expressed the only way the form can express it: one section, last, holding every
@@ -172,6 +174,22 @@ parameters:
       account that already exists is unaffected, and so is the first-sign-in token above. Turn this on
       only once the campaign's codes have been generated: with none issued, nobody can register.
     default: false
+
+  - id: signupGrantUsd
+    type: integer
+    title: Sign-up credit, USD
+    description: >-
+      Credit every new account starts with, granted once at registration and shown on its Credits
+      screen as a sign-up credit. It stacks with an invitation: $20 here and a $100 code start the
+      account at $120. 0 grants nothing. This is your decision about your own deployment, fixed when
+      you deploy — no one signing up can raise it, and it is not a way to buy credit. It is granted
+      per account, and password sign-up does not verify the address, so on an open deployment each
+      throwaway account collects it too: keep it an evaluation allowance, or turn on invite-only
+      sign-up above. A launch whose credit should come only from invitations sets it to 0.
+    default: 20
+    validation:
+      min: 0
+      max: 1000
 
   - id: models
     type: array
@@ -572,10 +590,10 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-api
-      version: "0.8.1"
+      version: "0.9.0"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
-        digest: sha256:081f99911e0d288d6df6ada72730ffcf79158373d7e417169db9db44dd3769fc
+        digest: sha256:84fc96b9b775696971cc6d406666a6ac85f90801d6166ecb82824a15de886f01
       # The attested egress, a second container in the API pod (ADR-008 §2): the
       # gatekeeper's own core, verifying an external model endpoint's evidence and
       # pinning its TLS leaf before this deployment proxies a prompt to it. The
@@ -687,6 +705,9 @@ components:
           # that mints credit from a signed link (SUP-167).
           billing:
             mode: disabled
+            # Credit for every new account (SUP-249). Always passed: the chart
+            # renders `signupGrantMicros` only when it is above zero.
+            signupGrantUsd: "{{ params.signupGrantUsd }}"
           # Per instance, and there are three.
           postgresql:
             persistence:
@@ -832,14 +853,14 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-ui
-      version: "0.2.1"
+      version: "0.2.2"
     images:
       # Moves with the API's digest above, from the same source revision: the
       # admin section that registers an external endpoint and edits the trust
       # list is a console screen over a GraphQL schema the API half ships, and
       # the two halves of one contract are not independently pinnable.
       - name: ghcr.io/super-protocol/confidential-router/router-ui
-        digest: sha256:475ecb21f588cca1225170f34a85a147d54a9553a2b456c5901133e23619320a
+        digest: sha256:1c22e654bf5259671330511464ba023f861c9ddf204d0c46e5529ebd84aaeebb
     deployment:
       values:
         base:
@@ -938,6 +959,10 @@ outputs:
 #     ConfigMap that says so;
 #   - `inviteOnlySignup` — writes `auth.requireInviteForSignUp` into the same
 #     file, rendered only while it is on;
+#   - `signupGrantUsd` — writes `billing.signupGrantMicros` into the same file,
+#     rendered only while it is above zero, and its value with it: a deployment
+#     granting $20 and one granting $50 publish different digests, which is the
+#     point — what an account starts with is behaviour (SUP-249);
 #   - `gpuEnabled` — renders `runtimeClassName: nvidia`, the `nvidia.com/gpu`
 #     requests and the GPU tolerations into the attested ollama Deployment, and
 #     moves nothing when no model is selected, because there is none;

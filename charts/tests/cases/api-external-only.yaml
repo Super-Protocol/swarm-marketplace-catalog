@@ -20,3 +20,7 @@ models: []
 externalEndpoints:
   enabled: true
   secretsKey: goldentestsecretskeynotarealoneAAAAAAAAAAAAA
+# The listing's sign-up credit default (SUP-249), so this case keeps rendering
+# what the form deploys as it arrives.
+billing:
+  signupGrantUsd: 20

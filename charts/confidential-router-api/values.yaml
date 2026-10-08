@@ -6,7 +6,7 @@
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-router/router-api
-  digest: sha256:081f99911e0d288d6df6ada72730ffcf79158373d7e417169db9db44dd3769fc
+  digest: sha256:84fc96b9b775696971cc6d406666a6ac85f90801d6166ecb82824a15de886f01
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -144,6 +144,12 @@ billing:
   maxTopUpMicros: 10000000000
   allowOverdraftMicros: 0
   autoTopUpCooldown: 1h
+  # Whole USD every new account is credited at registration, as a ledger grant
+  # referenced `signup` (SUP-249). Stacks with an invitation grant: $20 here and a
+  # $100 code start an account at $120. 0 renders nothing, which keeps the chart
+  # bootable on a router image that predates the key; the listing sets its own
+  # default. A production launch whose credit comes only from invitations sets 0.
+  signupGrantUsd: 0
   stripe:
     secretKey: ""
     webhookSecret: ""

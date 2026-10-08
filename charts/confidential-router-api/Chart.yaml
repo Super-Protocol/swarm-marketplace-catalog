@@ -12,8 +12,11 @@ type: application
 # which every fresh deployment starts from — straight to `gatekeeper run`, which
 # exits 4 on it: the API pod never became Ready and its hostname answered 503 on
 # every path, the admin page that registers an endpoint included (SUP-248).
-version: 0.8.1
-appVersion: "0.4.0"
+#
+# 0.9.0 adds `billing.signupGrantUsd` — credit granted to every new account at
+# registration (SUP-249), rendered into `router.yaml` only when above zero.
+version: 0.9.0
+appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous
   # replication — because a tenant volume on this platform lives on the node's
