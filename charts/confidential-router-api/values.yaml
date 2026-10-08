@@ -144,6 +144,12 @@ billing:
   maxTopUpMicros: 10000000000
   allowOverdraftMicros: 0
   autoTopUpCooldown: 1h
+  # Whole USD every new account is credited at registration, as a ledger grant
+  # referenced `signup` (SUP-249). Stacks with an invitation grant: $20 here and a
+  # $100 code start an account at $120. 0 renders nothing, which keeps the chart
+  # bootable on a router image that predates the key; the listing sets its own
+  # default. A production launch whose credit comes only from invitations sets 0.
+  signupGrantUsd: 0
   stripe:
     secretKey: ""
     webhookSecret: ""

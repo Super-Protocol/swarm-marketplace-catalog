@@ -41,6 +41,12 @@ data:
   # advertises itself with the first, and the two disagreeing is a sign-in that
   # returns the browser somewhere nothing serves.
   ROUTER_PUBLIC_BASE_URL: "https://api.confidential-router.example"
+  # `endpoints[].hostname` for an endpoint that did not name one — this
+  # deployment's own API hostname, which is where its evidence bundle is fetched
+  # from. A hostname, not a URL, which is what that field is. Absent when every
+  # endpoint named its own, and when there are no endpoints because every model
+  # is switched off.
+  ROUTER_PUBLIC_HOSTNAME: "api.confidential-router.example"
   # `server.validClientOrigins`, comma-separated: the router's schema splits a
   # string back into the list, so the whole allow-list travels as one value
   # rather than as a placeholder per index that would have to be rendered — and
@@ -96,7 +102,7 @@ data:
 
     endpoints:
       - name: "confidential-router"
-        hostname: "inference.elsewhere.example"
+        hostname: "${ROUTER_PUBLIC_HOSTNAME}"
         tee: "Intel TDX + H100 CC"
 
     # `litellmModel` is the catalogue key, which is the Ollama model name and the
@@ -152,6 +158,12 @@ data:
       allowOverdraftMicros: 0
       checkoutReturnUrl: "${ROUTER_CHECKOUT_RETURN_URL}"
       autoTopUpCooldown: "1h"
+      # Credit every new account is granted at registration (SUP-249): the
+      # operator's deploy-time decision, written through the ledger as a `grant`
+      # once per account — not a purchase, so nothing above about minting moves.
+      # Rendered only when non-zero, so a router image that predates the key
+      # still boots on a chart that does not use it.
+      signupGrantMicros: 20000000
 
     log:
       level: "info"
@@ -227,12 +239,12 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: c98db4a97bec267ec2e72902ae0142e552c381a49acf6e29e996149c7940452e
+        checksum/config: 68ab5c97ad1cfac71c69be973f298a351ecc4d0304f8a07ec2969aaa6184f2c5
         # And a hostname reconfigure is a config change the pod cannot see at all:
         # `envFrom` is read once, when the container starts, so without this the
         # ConfigMap is updated and the running router keeps advertising the old
         # origin.
-        checksum/public-config: 92443c4708e06730ec112e184d15ba0215d0dbc7bed2c0b6822f9b2cbf0f1ba2
+        checksum/public-config: 1ac32ae313d7ce5c72b82f1073e73f3390d02c8b92e07d8b865efe707ae8df4e
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr

@@ -201,6 +201,18 @@ data:
       allowOverdraftMicros: {{ .Values.billing.allowOverdraftMicros | int64 }}
       checkoutReturnUrl: "${ROUTER_CHECKOUT_RETURN_URL}"
       autoTopUpCooldown: {{ .Values.billing.autoTopUpCooldown | quote }}
+      {{- $signupGrantUsd := int64 (.Values.billing.signupGrantUsd | default 0) }}
+      {{- if lt $signupGrantUsd 0 }}
+      {{- fail "billing.signupGrantUsd must not be negative" }}
+      {{- end }}
+      {{- if gt $signupGrantUsd 0 }}
+      # Credit every new account is granted at registration (SUP-249): the
+      # operator's deploy-time decision, written through the ledger as a `grant`
+      # once per account — not a purchase, so nothing above about minting moves.
+      # Rendered only when non-zero, so a router image that predates the key
+      # still boots on a chart that does not use it.
+      signupGrantMicros: {{ mul $signupGrantUsd 1000000 }}
+      {{- end }}
       {{- if eq .Values.billing.mode "stripe" }}
       stripe:
         secretKey: ${ROUTER_STRIPE_SECRET_KEY}

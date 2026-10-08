@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.8.1
+    helm.sh/chart: confidential-router-api-0.9.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.0"
@@ -27,7 +27,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api-public
   labels:
-    helm.sh/chart: confidential-router-api-0.8.1
+    helm.sh/chart: confidential-router-api-0.9.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.0"
@@ -65,7 +65,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.8.1
+    helm.sh/chart: confidential-router-api-0.9.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.0"
@@ -205,7 +205,7 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.8.1
+    helm.sh/chart: confidential-router-api-0.9.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.0"
@@ -228,7 +228,7 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.8.1
+    helm.sh/chart: confidential-router-api-0.9.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.0"
@@ -255,12 +255,12 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: 408ea76e99ae13d89230bdc5a8cc7097b8b6cb75f8ba75ba850d41cc1eaffbc9
+        checksum/config: d4ac855e5fdad87c1e0adb766cc9c0a4bcb08732bb3e7b519a5df3c30d47d02e
         # And a hostname reconfigure is a config change the pod cannot see at all:
         # `envFrom` is read once, when the container starts, so without this the
         # ConfigMap is updated and the running router keeps advertising the old
         # origin.
-        checksum/public-config: 055349c8d1bb1a518f5c8d769432abad883117b8561c3b75dcde763e305676c5
+        checksum/public-config: 1ac32ae313d7ce5c72b82f1073e73f3390d02c8b92e07d8b865efe707ae8df4e
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr
@@ -440,7 +440,7 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.8.1
+    helm.sh/chart: confidential-router-api-0.9.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.0"
