@@ -190,9 +190,9 @@ auth:
   # bootstrap token below creates exactly one account, and before this everyone
   # after that was offered a magic link nobody could deliver.
   #
-  # There is no email verification and no password reset: both are a mail round
-  # trip, and a deployment that has a mailer would be signing in with the link
-  # instead. Rendered **only when it is enabled**, so the same chart still boots
+  # There is no email verification. Password reset is offered by the router
+  # only once `mail` below can deliver the link (SUP-269); without it there is
+  # none. Rendered **only when it is enabled**, so the same chart still boots
   # an image that predates the key — the same rule `bootstrapToken` follows.
   #
   # Anyone who can reach the console can create an account while this is on. The
@@ -274,6 +274,50 @@ auth:
   adminEmails: []
   adminEmailsExistingSecret: ""
   adminEmailsExistingSecretKey: admin-emails
+
+# Outbound mail (SUP-269): sign-in links, password reset and the welcome mail,
+# all sent through one provider. Needs a router image from SUP-269 on.
+#
+# `provider` empty (the default) or `none` renders nothing at all, and the
+# router keeps reading `auth.magicLink` above — which is how a deployment that
+# predates this section, and the Stripe path that sets a Resend key there, keep
+# working unchanged. `smtp` needs `smtp.host`; `resend` needs `resendApiKey`.
+#
+# **Every value here reaches the pod out of the Secret, never the rendered
+# `router.yaml` or a literal in the env list.** Both of those are attested, so
+# an SMTP host or a sender address there would make the evidence digest a
+# property of the operator's mail setup — two deployments of one version that
+# differed only in where their mail goes would publish two digests (SUP-269,
+# the SUP-241 rule). The container's env list names every key with
+# `optional: true`, so it is the same list whatever is configured, and a key
+# that is not set is simply absent from the Secret.
+#
+# The sender domain needs SPF and DKIM records that cover the provider, or mail
+# lands in spam or nowhere. That is the operator's DNS.
+#
+# Reachability: a cluster space admits egress to public addresses and not to
+# private ranges, so the SMTP host has to resolve publicly. The router checks
+# the connection at boot and reports it as `mail` in `/health`.
+mail:
+  # "" | none | smtp | resend
+  provider: ""
+  from: ""
+  # Display name in front of `from`; the router's default is "Confidential Router".
+  fromName: ""
+  resendApiKey: ""
+  smtp:
+    host: ""
+    # Empty for the default of the security mode: 587 starttls, 465 tls, 25 none.
+    port: ""
+    # starttls (upgrade required) | tls (implicit, port 465) | none (cleartext)
+    security: starttls
+    user: ""
+    password: ""
+  # Read every key above from a Secret of your own instead — the same key names
+  # this chart writes (`mail-provider`, `mail-from`, `mail-from-name`,
+  # `mail-resend-api-key`, `smtp-host`, `smtp-port`, `smtp-security`,
+  # `smtp-user`, `smtp-password`).
+  existingSecret: ""
 
 # Which models this deployment serves: a plain list of Ollama model names. This
 # is the array the listing's multiselect parameter hands over (spec extension

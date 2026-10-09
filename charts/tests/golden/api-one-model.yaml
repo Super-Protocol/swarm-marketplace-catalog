@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.10.1
+    helm.sh/chart: confidential-router-api-0.11.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -24,7 +24,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api-public
   labels:
-    helm.sh/chart: confidential-router-api-0.10.1
+    helm.sh/chart: confidential-router-api-0.11.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -64,7 +64,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.10.1
+    helm.sh/chart: confidential-router-api-0.11.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -185,7 +185,7 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.10.1
+    helm.sh/chart: confidential-router-api-0.11.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -208,7 +208,7 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.10.1
+    helm.sh/chart: confidential-router-api-0.11.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -223,7 +223,11 @@ metadata:
     # `checksum/config` is deliberately *not* excluded: `router.yaml` carries no
     # hostname any more, so that hash is a property of the version and the
     # parameters — which is precisely what the digest should attest.
-    swarm.io/exclude-evidence-fields: "/spec/template/metadata/annotations/checksum~1public-config"
+    #
+    # `checksum/mail` is a hash of the mail settings, which live in the Secret
+    # and nowhere attested (SUP-269); it varies with them and is excluded so the
+    # digest does not.
+    swarm.io/exclude-evidence-fields: "/spec/template/metadata/annotations/checksum~1public-config,/spec/template/metadata/annotations/checksum~1mail"
 spec:
   replicas: 1
   selector:
@@ -235,12 +239,16 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: 11080a6946cf818b730a8669f14d0ee8afd4f6c5eed5a68c6005a30d855ac3c2
+        checksum/config: 8c9df216af6098c310ad37ea36795331ebacd27378f13196808d5d31b3f3ed5d
         # And a hostname reconfigure is a config change the pod cannot see at all:
         # `envFrom` is read once, when the container starts, so without this the
         # ConfigMap is updated and the running router keeps advertising the old
         # origin.
-        checksum/public-config: 3c6b3d92161bda7ebe79e522811a25616205529deb4109e3502ce2b7ea925bc9
+        checksum/public-config: c5c7462a3c95dbb7a979c5648a914584c4508a32a3240b1a883309a52fe5516b
+        # The mail settings reach the container as env read from the Secret, once,
+        # at start — so a reconfigured SMTP server or a rotated password would
+        # otherwise sit in the Secret while the router keeps the old one (SUP-269).
+        checksum/mail: cbc69deff9783b3456ace5a2a5efad25cc6afe2c3f2de85bf65c78e22bae4bee
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr
@@ -285,6 +293,60 @@ spec:
                 secretKeyRef:
                   name: confidential-router-api
                   key: auth-secret
+            - name: CR_API_MAIL__FROM
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-from
+                  optional: true
+            - name: CR_API_MAIL__FROM_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-from-name
+                  optional: true
+            - name: CR_API_MAIL__PROVIDER
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-provider
+                  optional: true
+            - name: CR_API_MAIL__RESEND_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-resend-api-key
+                  optional: true
+            - name: CR_API_MAIL__SMTP__HOST
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-host
+                  optional: true
+            - name: CR_API_MAIL__SMTP__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-password
+                  optional: true
+            - name: CR_API_MAIL__SMTP__PORT
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-port
+                  optional: true
+            - name: CR_API_MAIL__SMTP__SECURITY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-security
+                  optional: true
+            - name: CR_API_MAIL__SMTP__USER
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-user
+                  optional: true
           volumeMounts:
             - name: config
               mountPath: /etc/confidential-router
@@ -336,6 +398,60 @@ spec:
                 secretKeyRef:
                   name: confidential-router-api
                   key: auth-secret
+            - name: CR_API_MAIL__FROM
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-from
+                  optional: true
+            - name: CR_API_MAIL__FROM_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-from-name
+                  optional: true
+            - name: CR_API_MAIL__PROVIDER
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-provider
+                  optional: true
+            - name: CR_API_MAIL__RESEND_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-resend-api-key
+                  optional: true
+            - name: CR_API_MAIL__SMTP__HOST
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-host
+                  optional: true
+            - name: CR_API_MAIL__SMTP__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-password
+                  optional: true
+            - name: CR_API_MAIL__SMTP__PORT
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-port
+                  optional: true
+            - name: CR_API_MAIL__SMTP__SECURITY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-security
+                  optional: true
+            - name: CR_API_MAIL__SMTP__USER
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-user
+                  optional: true
           # `/health` does a real database round trip, so an unready pod is one
           # that cannot serve rather than one that has merely started.
           startupProbe:
@@ -390,7 +506,7 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.10.1
+    helm.sh/chart: confidential-router-api-0.11.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"

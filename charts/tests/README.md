@@ -29,6 +29,7 @@ The release name and namespace are fixed per listing (`cr` / `confidential-route
 | `api-bootstrap-token` | the SUP-95 auth seam: the one `CR_API_*` env var, rendered only when a token is set |
 | `api-password-no-mailer` | what the listing deploys (SUP-112): passwords on with `mailer: none`, which has to render a config the router boots on |
 | `api-password-off` | passwords off: the `auth.password` block is absent rather than `enabled: false`, so the chart stays bootable on an image that predates the key |
+| `api-mail-smtp` | SMTP mail configured (SUP-269): every mail value — provider, sender, host, port, security, user, password — in the Secret, and the attested env list the same `optional` references every other case renders |
 | `api-invite-only` | the SUP-173 auth seam: `requireInviteForSignUp` rendered only while it is on, so the chart stays bootable on an image that predates the key |
 | `api-signup-grant` | the SUP-249 billing seam: `signupGrantMicros` rendered from whole USD only while it is above zero, so the chart stays bootable on an image that predates the key |
 | `api-endpoint-hostname` | an endpoint that names a hostname of its own: a parameter, so it is rendered as a literal rather than as `${ROUTER_PUBLIC_HOSTNAME}`, and the public ConfigMap does not carry that key at all (SUP-211) |
@@ -51,7 +52,7 @@ be skipped by the listing — so the chart decides from the `models` list itself
 
 ## Beyond lint and goldens
 
-Ten checks in `run.sh` are not a golden diff, and each exists because a golden diff
+The checks below in `run.sh` are not a golden diff, and each exists because a golden diff
 cannot answer the question:
 
 - **Every container is admissible on a cluster space** (`limitrange.py`). A cluster space
@@ -120,6 +121,12 @@ cannot answer the question:
   canonical rules drop `/data`, `/stringData` and `/immutable` from every Secret — which is both
   what makes a Secret the right carrier for such a value and what makes the comparison possible
   to ask about one at all.
+- **Mail configuration moves nothing attested** (`mail_invariance.py`). The router case is
+  rendered with no mail, with SMTP under two different hosts, senders and credentials, and with
+  Resend, and every attested field has to be identical across all four — not merely excluded:
+  an exclusion is still something a pinned digest has to be told about, and no part of a mail
+  setup has a reason to reach an attested object. The SMTP password and the Resend key have to
+  be in the Secret and in no other rendered object (SUP-269).
 - **Every placeholder has something that fills it** (`config_placeholders.py`). `router.yaml` is
   attested, so neither a secret nor a hostname is written into it — both are `${VAR}` the router's
   config loader substitutes from the environment. A placeholder with no value does not degrade:

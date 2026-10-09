@@ -267,10 +267,34 @@ not what you want. Switching it off leaves the administrator's own way back in a
 API log, which is where sign-in links went before this existed — or as real mail, on a Stripe
 deployment, since that one configures Resend.
 
-**There is no password reset**, either way round. Sending one is the mail delivery this deployment
-exists without; an administrator can create a fresh account, and a lost one is a lost workspace.
-Magic-link and OAuth sign-in are still there for a deployment that configures a Resend key or a
-GitHub/Google application — but neither is needed to use this one.
+**Password reset needs a mail provider.** Without one there is none: an administrator can create a
+fresh account, and a lost one is a lost workspace. Set one under *Mail* (next section) and the
+sign-in screen offers *Forgot password?*, and a one-time sign-in link besides.
+
+## Mail
+
+Optional, and off by default. *Mail provider* is `None`, `SMTP` or `Resend`. With one set:
+
+- a forgotten password is reset from the sign-in screen — the link works once, expires in an hour,
+  and signs the account out everywhere else; the request answers the same whether or not the
+  address has an account, and is rate-limited;
+- every new account gets a welcome email (Super Protocol logo, the console address, the credit it
+  started with);
+- the sign-in screen also offers a one-time link mailed to the address.
+
+**Deliverability is yours.** Mail reaches inboxes only if the sender address's domain publishes SPF
+and DKIM records covering the server that sends it (for Resend, a domain verified there). That is
+DNS this deployment cannot write.
+
+**Reachability is reported.** The API checks the SMTP server at start-up without sending anything,
+and every send after that updates the `mail` field of `https://<API hostname>/health`: `ok`, or
+`failing` with `unreachable` (no connection from this cloud — a cluster space admits outbound
+connections to public addresses only, and some clouds block port 25) or `auth_failed`.
+
+**Nothing about it is attested.** Every mail setting — the provider included — reaches the API out
+of the deployment's Secret, so two deployments of one version that differ only in their mail setup
+publish the same evidence digest, and the SMTP password is in no log, configuration or snapshot.
+Reconfiguring them restarts the API: the pod template carries a hash of the mail settings, excluded from the snapshot like the hostname hash.
 
 ## Billing
 
@@ -284,8 +308,8 @@ reach: this listing's previous default shipped a working, unbounded, free-credit
 account holder of a public deployment (SUP-167). The chart refuses to render it and there is no form
 field for it.
 
-**Stripe** takes real payments. A Resend API key and a sender address are part of the same choice,
-not extras, and the render refuses without them: the container runs in production mode, where a
+**Stripe** takes real payments. With no mail provider chosen, a Resend API key and a sender address
+are part of the same choice, not extras, and the render refuses without them: the container runs in production mode, where a
 sign-in link written to the container log would be a sign-in link for anyone who can read logs. Point
 a Stripe webhook at `https://<API hostname>/billing`, or a completed payment never becomes credit.
 

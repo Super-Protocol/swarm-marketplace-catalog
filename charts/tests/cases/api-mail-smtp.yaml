@@ -1,0 +1,24 @@
+# The listing with SMTP configured (SUP-269): passwords on, no built-in model,
+# and every mail value set. What the golden pins is where each one lands — all of
+# them in the Secret, and the env list identical to a deployment with no mail.
+apiHostname: api.confidential-router.example
+consoleHostname: console.confidential-router.example
+auth:
+  secret: golden-test-auth-secret-not-a-real-one
+  magicLink:
+    mailer: none
+  password:
+    enabled: true
+database:
+  password: golden-test-password
+models: []
+mail:
+  provider: smtp
+  from: no-reply@confidential-router.example
+  fromName: Confidential Router
+  smtp:
+    host: smtp.confidential-router.example
+    port: 587
+    security: starttls
+    user: no-reply@confidential-router.example
+    password: golden-smtp-password-not-a-real-one

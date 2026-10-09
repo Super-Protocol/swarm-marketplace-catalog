@@ -6,6 +6,7 @@
   Models     {{ include "confidential-router-api.selectedModels" . | fromJsonArray | join ", " | default "none — /v1 answers model_not_found" }}
   Mode       NODE_ENV={{ include "confidential-router-api.nodeEnv" . }}, billing={{ .Values.billing.mode }}
   Egress     {{ if .Values.externalEndpoints.enabled }}attested, re-verified every {{ .Values.externalEndpoints.reattestInterval }}{{ else }}off — no external model endpoints{{ end }}
+  Mail       {{ if include "confidential-router-api.mailSends" . }}{{ .Values.mail.provider }}{{ if eq .Values.mail.provider "smtp" }} via {{ .Values.mail.smtp.host }}{{ end }} — reachability is `mail` in {{ include "confidential-router-api.apiUrl" . }}/health{{ else }}none — no password reset, no welcome email{{ end }}
 
 {{ if eq .Values.billing.mode "disabled" }}
 This deployment sells no credit: the console has no buy panel and a checkout is
@@ -20,8 +21,12 @@ Sign-in links are written to the API log, not sent:
 {{- end }}
 {{- if .Values.auth.password.enabled }}
 Email and password sign-in is on: anyone who can reach the console can create an
-account there, with its own empty workspace and no credit. There is no password
-reset — it would need the mail delivery this path exists to do without.
+account there, with its own empty workspace and no credit.
+{{- if include "confidential-router-api.mailSends" . }} A forgotten password is
+reset by mail from the sign-in screen.
+{{- else }} There is no password
+reset — it would need a mail provider (`mail.provider`).
+{{- end }}
 {{- end }}
 {{- if .Values.invites.landingHostname }}
 Invitation codes are handed out at {{ include "confidential-router-api.landingUrl" . }}, which is the

@@ -168,6 +168,21 @@ refuses "the console mailer, whose links land in the pod log" "written to the lo
 # The launch blocker this pair of refusals exists for (SUP-167). `mode: manual`
 # mints credit from a signed link; the chart used to deploy it by default and hand
 # the container NODE_ENV=development so the API would bind it.
+refuses "an SMTP provider with no host" "set mail.smtp.host" \
+  "${base_api[@]}" --set mail.provider=smtp
+
+refuses "a Resend provider with no key" "set mail.resendApiKey" \
+  "${base_api[@]}" --set mail.provider=resend
+
+refuses "a mail provider the router does not have" "mail.provider must be" \
+  "${base_api[@]}" --set mail.provider=sendmail
+
+refuses "an SMTP security mode the router does not have" "mail.smtp.security must be" \
+  "${base_api[@]}" --set mail.provider=smtp --set mail.smtp.host=smtp.example.com --set mail.smtp.security=ssl
+
+refuses "a sender that is not an address" "mail.from is" \
+  "${base_api[@]}" --set mail.provider=smtp --set mail.smtp.host=smtp.example.com --set mail.from=no-reply
+
 refuses "manual billing, which mints credit from a signed link" "mints credit" \
   "${base_api[@]}" --set billing.mode=manual
 
@@ -211,7 +226,7 @@ refuses "a bundled database that requires TLS the API never negotiates" "TypeORM
 refuses "an auth secret too short to sign with" "at least 32 characters" \
   "${base_api[@]}" --set auth.secret=short
 
-refuses "the unimplemented smtp mailer" "not implemented" \
+refuses "SMTP under the legacy mailer key, which points at mail.provider" "mail.provider: smtp" \
   "${base_api[@]}" --set auth.magicLink.mailer=smtp
 
 refuses "a password floor the router's schema would reject" "between 8 and 128" \
@@ -1008,6 +1023,21 @@ drift_case confidential-router-api api-campaign 'invites.landingHostname=landing
 # egress a deployment attests is the same for everybody (ADR-008 §2).
 drift_case confidential-router-api api-external-endpoints
 drift_case confidential-router-ui ui-default
+
+# Where a deployment's mail goes is a property of its Secret and of nothing it
+# attests (SUP-269): no mail, SMTP under two different hosts and senders, and
+# Resend all have to render byte-identical attested objects, or two deployments
+# of one version that differ only in their mail setup publish two digests. And
+# the SMTP password and the Resend key are in the Secret and nowhere else.
+note "mail configuration moves nothing a deployment attests"
+for case in api-external-only api-one-model api-password-no-mailer; do
+  if output=$(python3 charts/tests/mail_invariance.py "charts/tests/cases/$case.yaml"); then
+    printf '%s\n' "$output" | sed "s/\$/ ($case)/"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/mail_invariance.py $case"
+  fi
+done
 
 # And the same question with the *consumer* varying, not just the hostname they
 # typed. The marketplace fills both of these from the account clicking deploy, so

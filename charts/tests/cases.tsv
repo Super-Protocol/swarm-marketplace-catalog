@@ -11,6 +11,7 @@ api-external-postgres	confidential-router-api
 api-bootstrap-token	confidential-router-api		
 api-password-no-mailer	confidential-router-api		
 api-password-off	confidential-router-api		
+api-mail-smtp	confidential-router-api		
 api-campaign	confidential-router-api		
 api-invite-only	confidential-router-api		
 api-signup-grant	confidential-router-api		

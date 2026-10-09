@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.16.3"
+  version: "0.17.0"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -70,6 +70,42 @@ ui:
         - parameterId: signupGrantUsd
           widget: number
 
+    # Mail (SUP-269). Its own section rather than more of Advanced, because the
+    # answer changes what the console offers — password reset and the welcome
+    # mail exist only with a provider — and because SMTP is five fields that only
+    # mean anything together.
+    - id: mail
+      title: Mail
+      description: >-
+        Optional. With a mail provider, a forgotten password can be reset from the sign-in screen and
+        every new account gets a welcome email; without one, neither exists and nothing is ever sent.
+        Mail only reaches inboxes if the sender's domain publishes SPF and DKIM records that cover the
+        server sending it — that is your DNS, and the deployment cannot write it for you.
+      fields:
+        - parameterId: mailProvider
+          widget: select
+        - parameterId: mailFrom
+          widget: text
+          visible: "params.mailProvider != 'none' || params.billingMode == 'stripe'"
+        - parameterId: smtpHost
+          widget: text
+          visible: "params.mailProvider == 'smtp'"
+        - parameterId: smtpPort
+          widget: number
+          visible: "params.mailProvider == 'smtp'"
+        - parameterId: smtpSecurity
+          widget: select
+          visible: "params.mailProvider == 'smtp'"
+        - parameterId: smtpUser
+          widget: text
+          visible: "params.mailProvider == 'smtp'"
+        - parameterId: smtpPassword
+          widget: password
+          visible: "params.mailProvider == 'smtp'"
+        - parameterId: resendApiKey
+          widget: password
+          visible: "params.mailProvider == 'resend' || params.billingMode == 'stripe'"
+
     # There is no collapsed-section or group concept in the specification, so "advanced"
     # is expressed the only way the form can express it: one section, last, holding every
     # field that already has an answer. Nothing in here has to be opened to deploy.
@@ -111,12 +147,6 @@ ui:
         - parameterId: stripeWebhookSecret
           widget: password
           visible: "params.billingMode == 'stripe'"
-        - parameterId: mailFrom
-          widget: text
-          visible: "params.billingMode == 'stripe'"
-        - parameterId: resendApiKey
-          widget: password
-          visible: "params.billingMode == 'stripe'"
 
 parameters:
   - id: consoleHostname
@@ -155,12 +185,13 @@ parameters:
     type: boolean
     title: Allow sign-up with a password
     description: >-
-      On, because the token above claims exactly one account and this deployment has no mailbox to
-      send an invitation from: without it nobody but the first administrator can ever sign in.
+      On, because the token above claims exactly one account and, without a mail provider, this
+      deployment has no mailbox to send an invitation from: without it nobody but the first
+      administrator can ever sign in.
       Each account that signs up gets its own empty workspace and the sign-up credit set under Campaign (none at 0), and can read nobody
       else's keys — but anyone who can reach the console can create one, so turn this off where the
-      console is reachable by people this deployment is not for. There is no password reset either
-      way; that would need the mail delivery this deployment does without.
+      console is reachable by people this deployment is not for. A forgotten password can be reset
+      only when a mail provider is set under Mail.
     default: true
 
   - id: inviteOnlySignup
@@ -354,21 +385,105 @@ parameters:
       Without it a completed payment never becomes credit.
     sensitive: true
 
+  # Mail (SUP-269). Every value below reaches the API out of its Secret — the
+  # provider name included — so two deployments of this version that differ only
+  # in their mail setup attest the same objects and publish one digest
+  # (`charts/tests/mail_invariance.py`).
+  - id: mailProvider
+    type: string
+    title: Mail provider
+    description: >-
+      `None` sends nothing: no password reset, no welcome email, and the sign-in screen offers
+      neither. `SMTP` is any mail server you have an account on; `Resend` is the Resend API. With
+      either, a person can also sign in with a one-time link mailed to them. The server is checked
+      when the API starts, and the result is the `mail` field of `https://<API hostname>/health` —
+      `ok`, or `failing` with `unreachable` or `auth_failed` — so mail that cannot get out is
+      visible rather than silently lost.
+    required: false
+    default: "none"
+    options:
+      source:
+        type: static
+        values:
+          - value: "none"
+            label: None
+          - value: "smtp"
+            label: SMTP
+          - value: "resend"
+            label: Resend
+
   - id: mailFrom
     type: string
     title: Sender address
     description: >-
-      Where sign-in links come from. Only used with Stripe billing, and it has to be on a domain
-      verified with Resend, or the mail is refused.
+      The address every email comes from — reset links, the welcome email, sign-in links. Its domain
+      needs SPF and DKIM records covering the mail server (or Resend, where it has to be a verified
+      domain), or the mail lands in spam or nowhere.
     default: "no-reply@confidential-router.local"
+
+  - id: smtpHost
+    type: string
+    title: SMTP server
+    description: >-
+      The mail server's hostname, e.g. `smtp.gmail.com` or `email-smtp.eu-west-1.amazonaws.com`. It
+      has to resolve to a public address: a cluster space admits outbound connections to the
+      internet and not to private ranges.
+    validation:
+      pattern: "^$|^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+
+  - id: smtpPort
+    type: integer
+    title: SMTP port
+    description: >-
+      587 for STARTTLS, 465 for TLS. Many clouds block outbound port 25, which is why it is not the
+      default.
+    required: false
+    default: 587
+    validation:
+      min: 1
+      max: 65535
+
+  - id: smtpSecurity
+    type: string
+    title: SMTP encryption
+    description: >-
+      `STARTTLS` connects in the clear and refuses to go on unless the server upgrades to TLS — what
+      port 587 speaks. `TLS` is encrypted from the first byte — port 465. `None` sends credentials
+      and mail in the clear, and is only for a relay inside your own network.
+    required: false
+    default: "starttls"
+    options:
+      source:
+        type: static
+        values:
+          - value: "starttls"
+            label: STARTTLS
+          - value: "tls"
+            label: TLS
+          - value: "none"
+            label: None
+
+  - id: smtpUser
+    type: string
+    title: SMTP user
+    description: The account the server authenticates. Leave it empty for a relay that needs no login.
+
+  - id: smtpPassword
+    type: string
+    title: SMTP password
+    description: >-
+      The account's password, or an app password where the provider issues those. Kept in the
+      deployment's Secret: it is never written to a log, the configuration or the published evidence.
+    sensitive: true
 
   - id: resendApiKey
     type: string
     title: Resend API key
     description: >-
-      Needed with Stripe billing and nothing else. Stripe puts the API into production mode, and in
-      production a sign-in link written to the container log would be a sign-in link anyone with
-      log access could use — so a real mail provider becomes mandatory at the same moment.
+      Needed with Resend as the mail provider — and with Stripe billing while no mail provider is
+      chosen, which is how sign-in links were sent before this section existed: Stripe puts the API
+      into production mode, where a sign-in link written to the container log would be one anyone
+      with log access could use.
     sensitive: true
 
   # ---------------------------------------------------------------------------
@@ -602,7 +717,9 @@ components:
       # 0.10.1 (SUP-266) re-pins the API to `main-9e86c41`, which lands SUP-267:
       # an account with no password (the bootstrapped first admin) can set one.
       # GraphQL only, no migration, no template change.
-      version: "0.10.1"
+      # 0.11.0 adds `mail` (SUP-269): every mail value through the Secret, so the
+      # digest does not move with the operator's mail setup.
+      version: "0.11.0"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
         digest: sha256:4ce9dd805f079e67835ea300934c35a2287f916cda1401ff2ad19c4e4f37ff97
@@ -827,6 +944,50 @@ components:
             value: "{{ params.resendApiKey }}"
             when: "params.billingMode == 'stripe'"
 
+          # Mail (SUP-269). `add`, and nothing in the base: with no provider the
+          # chart's `mail` stays empty and writes nothing to the Secret, so the
+          # router keeps reading `auth.magicLink` above — the Stripe path's Resend
+          # key included. A provider here wins over that block in the router.
+          - op: add
+            path: mail.provider
+            value: "{{ params.mailProvider }}"
+            when: "params.mailProvider != 'none'"
+
+          - op: add
+            path: mail.from
+            value: "{{ params.mailFrom }}"
+            when: "params.mailProvider != 'none'"
+
+          - op: add
+            path: mail.smtp.host
+            value: "{{ params.smtpHost }}"
+            when: "params.mailProvider == 'smtp'"
+
+          - op: add
+            path: mail.smtp.port
+            value: "{{ params.smtpPort }}"
+            when: "params.mailProvider == 'smtp'"
+
+          - op: add
+            path: mail.smtp.security
+            value: "{{ params.smtpSecurity }}"
+            when: "params.mailProvider == 'smtp'"
+
+          - op: add
+            path: mail.smtp.user
+            value: "{{ params.smtpUser }}"
+            when: "params.mailProvider == 'smtp'"
+
+          - op: add
+            path: mail.smtp.password
+            value: "{{ params.smtpPassword }}"
+            when: "params.mailProvider == 'smtp'"
+
+          - op: add
+            path: mail.resendApiKey
+            value: "{{ params.resendApiKey }}"
+            when: "params.mailProvider == 'resend'"
+
           # The campaign, when there is one. `add` for both, and nothing in the
           # base: a deployment running no campaign has to render no landing
           # origin and no analytics key at all, because the router's config
@@ -917,8 +1078,20 @@ outputs:
   - id: signUp
     title: Everyone else
     type: string
-    when: "params.passwordSignup == true && params.inviteOnlySignup == false"
+    when: "params.passwordSignup == true && params.inviteOnlySignup == false && params.mailProvider == 'none'"
     value: "https://{{ params.consoleHostname }}/signup — an email address and a password, with nothing to deliver and nothing to verify. Each account arrives with its own empty workspace and ${{ params.signupGrantUsd }} of sign-up credit: anyone who can reach the console can create one, and each such account collects that credit, so turn \"Allow sign-up with a password\" off by reconfiguring if this console is reachable by people it is not for. There is no password reset — it would need the mail delivery this deployment does without."
+
+  - id: signUpWithMail
+    title: Everyone else
+    type: string
+    when: "params.passwordSignup == true && params.inviteOnlySignup == false && params.mailProvider != 'none'"
+    value: "https://{{ params.consoleHostname }}/signup — an email address and a password. Each account arrives with its own empty workspace, ${{ params.signupGrantUsd }} of sign-up credit and a welcome email: anyone who can reach the console can create one, and each such account collects that credit, so turn \"Allow sign-up with a password\" off by reconfiguring if this console is reachable by people it is not for. A forgotten password is reset by mail from the sign-in screen."
+
+  - id: mailStatus
+    title: Mail
+    type: string
+    when: "params.mailProvider != 'none'"
+    value: "Sent from {{ params.mailFrom }}. Whether the server accepted the connection and credentials is the `mail` field of https://{{ params.apiHostname }}/health — `ok`, or `failing` with `unreachable` (the server could not be reached from this cloud) or `auth_failed`. Mail reaches inboxes only if the sender's domain publishes SPF and DKIM records for the server sending it."
 
   - id: invitedSignUp
     title: Everyone else
@@ -1066,9 +1239,14 @@ evidence:
     # and it does still vary with `models`, `inviteOnlySignup`, `passwordSignup`,
     # `billingMode` and `landingHostname` — deliberately, as the block above
     # explains.
+    #
+    # `checksum/mail` is the same mechanism for the mail settings (SUP-269): they
+    # live in the Secret, whose `/data` the snapshot drops, and this hash is what
+    # restarts the API when they are reconfigured.
     - match: { kind: Deployment, name: confidential-router-api }
       fields:
         - "/spec/template/metadata/annotations/checksum~1public-config"
+        - "/spec/template/metadata/annotations/checksum~1mail"
     - match: { kind: Deployment, name: confidential-router-ui }
       fields:
         - "/spec/template/metadata/annotations/checksum~1public-config"
