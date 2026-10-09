@@ -865,7 +865,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-ui
-      version: "0.2.6"
+      version: "0.2.7"
     images:
       # Moves with the API's digest above, from the same source revision: the
       # admin section that registers an external endpoint and edits the trust
@@ -882,9 +882,9 @@ components:
       #
       # 0.16.3 (SUP-266) is that same change, actually shipped: 0.16.2 merged
       # with the 0.16.1 digest still pinned, so it rendered the old console.
-      # This is the post-merge main build of confidential-router#97.
+      # This is `main-8b5d61f`, the post-merge main build of confidential-router#97.
       - name: ghcr.io/super-protocol/confidential-router/router-ui
-        digest: sha256:0d4b3065292907640b347291139dbd49dca2299e191cd5dfa7f987c5f5be346c
+        digest: sha256:85be83eb9fd6cba450aa4379b28cf2980e7dd2474f48d23dd7f46f258b69261a
     deployment:
       values:
         base:
