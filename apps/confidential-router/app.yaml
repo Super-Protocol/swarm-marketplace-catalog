@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.16.2"
+  version: "0.16.3"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -879,6 +879,10 @@ components:
       # 0.16.2 moves only this one again (SUP-263): the theme menu loses the
       # mockup accent switcher, the header gains the Super Protocol logo and
       # the tab its favicon — no query, no API code.
+      #
+      # 0.16.3 (SUP-266) is that same change, actually shipped: 0.16.2 merged
+      # with the 0.16.1 digest still pinned, so it rendered the old console.
+      # This is the post-merge main build of confidential-router#97.
       - name: ghcr.io/super-protocol/confidential-router/router-ui
         digest: sha256:0d4b3065292907640b347291139dbd49dca2299e191cd5dfa7f987c5f5be346c
     deployment:
