@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.16.0"
+  version: "0.16.1"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -865,12 +865,16 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-ui
-      version: "0.2.4"
+      version: "0.2.5"
     images:
       # Moves with the API's digest above, from the same source revision: the
       # admin section that registers an external endpoint and edits the trust
       # list is a console screen over a GraphQL schema the API half ships, and
       # the two halves of one contract are not independently pinnable.
+      #
+      # 0.16.1 moves only this one (SUP-262): the console layout pass — chat
+      # toolbar, popovers, footers — touches no query and no API code, so the
+      # API and the sidecar stay on `main-f23d2d6`.
       - name: ghcr.io/super-protocol/confidential-router/router-ui
         digest: sha256:097b8d87e83fe2d21fc12ad357aefcb78188d9a36e7274fe8c7a82ca32be7bf3
     deployment:

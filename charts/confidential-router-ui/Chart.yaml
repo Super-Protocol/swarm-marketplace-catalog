@@ -14,5 +14,10 @@ type: application
 # user surfaces, a green "Verified by this router", hex-only digests everywhere,
 # and the Gatekeeper screen folded into "How to connect" on API Keys (with VS Code
 # and OpenCode examples); `/gatekeeper` redirects there.
-version: 0.2.4
+#
+# 0.2.5 pins the console carrying SUP-262: the chat toolbar is one row of
+# controls with the tier caveat and the external-model note behind popovers, the
+# Models count is a table footer, "How to connect" steps lead with one line, the
+# dossier's explainers sit behind ⓘ and its pinned certificate renders as hex.
+version: 0.2.5
 appVersion: "0.4.1"
