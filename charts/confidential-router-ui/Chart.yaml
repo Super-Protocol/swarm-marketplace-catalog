@@ -22,6 +22,6 @@ type: application
 #
 # 0.2.6 pins the console carrying SUP-263: the theme menu offers Light / Dark /
 # System only (the mockup's accent switcher is gone, indigo fixed) and the header
-# leads with the Super Protocol logo.
+# leads with the Super Protocol logo; the tab carries the Super Protocol favicon.
 version: 0.2.6
 appVersion: "0.4.1"
