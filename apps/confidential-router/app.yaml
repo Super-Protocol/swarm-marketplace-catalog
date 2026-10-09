@@ -418,7 +418,8 @@ parameters:
     description: >-
       The address every email comes from — reset links, the welcome email, sign-in links. Its domain
       needs SPF and DKIM records covering the mail server (or Resend, where it has to be a verified
-      domain), or the mail lands in spam or nowhere.
+      domain), or the mail lands in spam or nowhere. Change it whenever a mail provider is chosen: the
+      default is a `.local` address no server delivers from, and the deployment refuses it.
     default: "no-reply@confidential-router.local"
 
   - id: smtpHost

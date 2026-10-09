@@ -408,6 +408,9 @@ provider needs, because what it holds is not visible from here.
 {{- if and (include "confidential-router-api.mailSends" .) $mail.from (not (contains "@" $mail.from)) -}}
 {{- fail (printf "mail.from is %q, which is not an email address" $mail.from) -}}
 {{- end -}}
+{{- if and (include "confidential-router-api.mailSends" .) (or (not $mail.from) (hasSuffix ".local" (lower $mail.from))) -}}
+{{- fail (printf "mail.from is %q: a provider is configured, so set a sender on a domain you control — no server delivers mail from a .local address, and the router's default is one" ($mail.from | default "unset")) -}}
+{{- end -}}
 {{- if and (eq $mail.provider "smtp") (not (has $mail.smtp.security (list "starttls" "tls" "none"))) -}}
 {{- fail (printf "mail.smtp.security must be starttls, tls or none, not %q" $mail.smtp.security) -}}
 {{- end -}}

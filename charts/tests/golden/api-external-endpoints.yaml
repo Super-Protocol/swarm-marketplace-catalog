@@ -271,7 +271,11 @@ spec:
         # The mail settings reach the container as env read from the Secret, once,
         # at start — so a reconfigured SMTP server or a rotated password would
         # otherwise sit in the Secret while the router keeps the old one (SUP-269).
-        checksum/mail: cbc69deff9783b3456ace5a2a5efad25cc6afe2c3f2de85bf65c78e22bae4bee
+        #
+        # Keyed with `auth.secret`: everything else in the pre-image is either
+        # known or guessable, so a bare hash of it would be an offline oracle for
+        # the SMTP password to anyone who can read the Deployment.
+        checksum/mail: 7e54497ae94e1e16acb7be6ebd5a310b4382b026ddee618456dffaa65bc30bfe
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr

@@ -178,7 +178,13 @@ refuses "a mail provider the router does not have" "mail.provider must be" \
   "${base_api[@]}" --set mail.provider=sendmail
 
 refuses "an SMTP security mode the router does not have" "mail.smtp.security must be" \
-  "${base_api[@]}" --set mail.provider=smtp --set mail.smtp.host=smtp.example.com --set mail.smtp.security=ssl
+  "${base_api[@]}" --set mail.provider=smtp --set mail.smtp.host=smtp.example.com --set mail.from=no-reply@example.com --set mail.smtp.security=ssl
+
+refuses "a provider still sending from the .local default" "no server delivers mail from a .local address" \
+  "${base_api[@]}" --set mail.provider=smtp --set mail.smtp.host=smtp.example.com --set mail.from=no-reply@confidential-router.local
+
+refuses "a provider with no sender at all" "no server delivers mail from a .local address" \
+  "${base_api[@]}" --set mail.provider=smtp --set mail.smtp.host=smtp.example.com
 
 refuses "a sender that is not an address" "mail.from is" \
   "${base_api[@]}" --set mail.provider=smtp --set mail.smtp.host=smtp.example.com --set mail.from=no-reply

@@ -38,7 +38,11 @@ spec:
         # The mail settings reach the container as env read from the Secret, once,
         # at start — so a reconfigured SMTP server or a rotated password would
         # otherwise sit in the Secret while the router keeps the old one (SUP-269).
-        checksum/mail: {{ toJson .Values.mail | sha256sum }}
+        #
+        # Keyed with `auth.secret`: everything else in the pre-image is either
+        # known or guessable, so a bare hash of it would be an offline oracle for
+        # the SMTP password to anyone who can read the Deployment.
+        checksum/mail: {{ printf "%s\n%s" .Values.auth.secret (toJson .Values.mail) | sha256sum }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
