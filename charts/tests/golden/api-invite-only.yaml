@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.9.1
+    helm.sh/chart: confidential-router-api-0.10.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -24,7 +24,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api-public
   labels:
-    helm.sh/chart: confidential-router-api-0.9.1
+    helm.sh/chart: confidential-router-api-0.10.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -43,9 +43,11 @@ data:
   ROUTER_PUBLIC_BASE_URL: "https://api.confidential-router.example"
   # `endpoints[].hostname` for an endpoint that did not name one — this
   # deployment's own API hostname, which is where its evidence bundle is fetched
-  # from. A hostname, not a URL, which is what that field is. Absent when every
-  # endpoint named its own, and when there are no endpoints because every model
-  # is switched off.
+  # from, and the value the router matches against `server.publicBaseUrl` to
+  # know which endpoint is its own (SUP-255). A hostname, not a URL, which is
+  # what that field is. Present on every render the listing produces, because
+  # the deployment's own endpoint is rendered whatever `models` says; absent
+  # only when every rendered endpoint named a hostname of its own.
   ROUTER_PUBLIC_HOSTNAME: "api.confidential-router.example"
   # `server.validClientOrigins`, comma-separated: the router's schema splits a
   # string back into the list, so the whole allow-list travels as one value
@@ -66,7 +68,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.9.1
+    helm.sh/chart: confidential-router-api-0.10.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -202,7 +204,7 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.9.1
+    helm.sh/chart: confidential-router-api-0.10.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -225,7 +227,7 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.9.1
+    helm.sh/chart: confidential-router-api-0.10.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -252,12 +254,12 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: 364ef5a8674bb05353cdaac98ff392819905efd0b5011523421c8bff07cb8797
+        checksum/config: eb15fbf22c44f9da228cb35f2a2581897ad06722a631bc89ec08317fb5163280
         # And a hostname reconfigure is a config change the pod cannot see at all:
         # `envFrom` is read once, when the container starts, so without this the
         # ConfigMap is updated and the running router keeps advertising the old
         # origin.
-        checksum/public-config: 80253e8a2c288b573a6d0ef6735cdfed3088e63f445d7359ab5b7bc94d966328
+        checksum/public-config: 543fc7a6f2e80bd2339e06c125d67edf4c553dfb031d414f600c05557057b33f
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr
@@ -273,7 +275,7 @@ spec:
         # PostgreSQL accepts connections, which is exactly the wait this pod needs
         # and is why there is no separate wait-for-database container.
         - name: migrate
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:fd1505a7af47c8c3380b3eeaa85b608ef599616367a6bea421dee1b496108d11
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:14346b456061b80527b2c80c082bd934c53eeba4911b06bab542ce627e05086c
           imagePullPolicy: IfNotPresent
           args: ["migrate"]
           securityContext:
@@ -321,7 +323,7 @@ spec:
               nvidia.com/gpu: "0"
       containers:
         - name: router-api
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:fd1505a7af47c8c3380b3eeaa85b608ef599616367a6bea421dee1b496108d11
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:14346b456061b80527b2c80c082bd934c53eeba4911b06bab542ce627e05086c
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -407,7 +409,7 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.9.1
+    helm.sh/chart: confidential-router-api-0.10.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"

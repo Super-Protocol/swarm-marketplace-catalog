@@ -6,7 +6,7 @@
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-router/router-api
-  digest: sha256:fd1505a7af47c8c3380b3eeaa85b608ef599616367a6bea421dee1b496108d11
+  digest: sha256:14346b456061b80527b2c80c082bd934c53eeba4911b06bab542ce627e05086c
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -341,11 +341,12 @@ modelCatalog:
       promptPer1mMicros: 30000
       completionPer1mMicros: 50000
 
-# The endpoints the catalogue entries name. Only those an enabled model refers to
-# are rendered, so turning every model off renders no endpoints at all. An empty
-# `hostname` means `apiHostname`: in this listing every model is served by the
-# one confidential deployment this chart is part of, and that is the host the
-# platform publishes evidence for.
+# The endpoints the catalogue entries name, plus this deployment's own. An
+# endpoint is rendered when an enabled model refers to it, or when it is the one
+# `ownEndpoint` names — so turning every model off still renders exactly one. An
+# empty `hostname` means `apiHostname`: in this listing every built-in model is
+# served by the one confidential deployment this chart is part of, and that is
+# the host the platform publishes evidence for.
 #
 # `tee` is an operator-declared label. It is what the console prints next to a
 # model; it is never a verdict, and nothing verifies it (ADR-002).
@@ -356,6 +357,21 @@ endpoints:
     # An operator-only override for where the evidence bundle is fetched from.
     # Empty means `https://<hostname>/.well-known/swarm-evidence`.
     evidenceUrl: ""
+
+# Which of the endpoints above *is* this deployment. Always rendered, whatever
+# `models` says, because the router's own channel is what the chat verifies
+# before a prompt leaves the browser (ADR-008 §1): the API resolves its own
+# endpoint by matching its public hostname against the rendered `endpoints[]`,
+# and a deployment that published none — which is what an empty selection used
+# to render — locked the chat composer with a message asking the user to name
+# the endpoint themselves (SUP-255). An external-only deployment is the shape
+# the listing's form arrives at since 0.13.0, so it cannot be the one that does
+# not work.
+#
+# Empty opts out, and is the only way to render `endpoints: []`: a deployment
+# whose evidence is published under some other name entirely, which this listing
+# never is.
+ownEndpoint: confidential-router
 
 # The attesting egress (ADR-008). A model may live in **another** deployment or
 # another swarm cloud: an administrator registers it in the console at run time,
@@ -384,13 +400,14 @@ externalEndpoints:
   #
   # The build has to be one whose supervisor *waits* while the rendered file has
   # no endpoint (confidential-router SUP-229, `main-481445c` or later; pinned:
-  # `main-5efa452`, which also verifies Azure CVM roots, SUP-251): a fresh
+  # `main-f23d2d6`, which also verifies Azure CVM roots, SUP-251, and looks
+  # measurements up in the real registry layout, SUP-255): a fresh
   # deployment renders exactly that, and an older build exits on it and keeps
   # the API pod un-Ready (SUP-248). `charts/tests/sidecar_boot.sh` checks it.
   image:
     registry: ghcr.io
     repository: super-protocol/confidential-router/gatekeeper
-    digest: sha256:be14d1db005f7e71966993fd551db587904df584ee2827256ec0bbd0ec6c8584
+    digest: sha256:56158ed17a2f7f9124d30215472ea0fe2ac3dc56974eb0e6808ba0aced11e7d8
     tag: ""
     pullPolicy: IfNotPresent
 

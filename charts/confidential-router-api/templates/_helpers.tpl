@@ -187,16 +187,43 @@ values mistake that would otherwise render a catalogue nobody asked for.
 {{- end -}}
 
 {{/*
+The endpoint names `router.yaml` carries: this deployment's own, and the ones the
+selected models refer to. Deduplicated, sorted.
+
+The own endpoint is in the list whatever `models` says. The router resolves "which
+endpoint am I" by matching its public hostname against `endpoints[]`, and the chat
+verifies that endpoint's channel before a prompt leaves the browser (ADR-008 §1) — so
+a deployment that published no endpoint, which is what an empty selection rendered
+until chart 0.10.0, had a locked chat composer and a message telling the user to name
+the endpoint in the router configuration themselves (SUP-255). An external-only
+deployment is what the listing's form arrives at since 0.13.0; it cannot be the one
+shape that does not work. `ownEndpoint: ""` opts out and is the only way to render
+`endpoints: []`.
+*/}}
+{{- define "confidential-router-api.renderedEndpoints" -}}
+{{- $seen := dict -}}
+{{- if .Values.ownEndpoint -}}
+{{- $_ := set $seen .Values.ownEndpoint true -}}
+{{- end -}}
+{{- range $name := (include "confidential-router-api.referencedEndpoints" . | fromJsonArray) -}}
+{{- $_ := set $seen $name true -}}
+{{- end -}}
+{{- keys $seen | sortAlpha | toJson -}}
+{{- end -}}
+
+{{/*
 Does any attested endpoint fall back to this deployment's own API hostname?
 
-Non-empty when at least one referenced endpoint named no hostname of its own, which is
-what makes `${ROUTER_PUBLIC_HOSTNAME}` appear in the rendered config. The public
-ConfigMap renders that key only then: a key nothing refers to would be a field excluded
-from the evidence snapshot for no reason, and `charts/tests/config_placeholders.py`
-fails on it. A deployment with every model switched off has no endpoints at all.
+Non-empty when at least one rendered endpoint — the deployment's own included — named
+no hostname of its own, which is what makes `${ROUTER_PUBLIC_HOSTNAME}` appear in the
+rendered config. The public ConfigMap renders that key only then: a key nothing refers
+to would be a field excluded from the evidence snapshot for no reason, and
+`charts/tests/config_placeholders.py` fails on it. Since the own endpoint is rendered
+whatever `models` says, this is empty only when every endpoint named a hostname, or
+when `ownEndpoint` opted out and no model is selected.
 */}}
 {{- define "confidential-router-api.endpointsUsePublicHostname" -}}
-{{- range $name := (include "confidential-router-api.referencedEndpoints" . | fromJsonArray) -}}
+{{- range $name := (include "confidential-router-api.renderedEndpoints" . | fromJsonArray) -}}
 {{- if not (get $.Values.endpoints $name).hostname -}}
 {{- "yes" -}}
 {{- end -}}
@@ -289,6 +316,16 @@ nothing is `mode: disabled`, which refuses checkout instead of minting.
 {{- end -}}
 {{- if and (eq .Values.billing.mode "stripe") (ne (include "confidential-router-api.nodeEnv" .) "production") -}}
 {{- fail "billing.mode is stripe but nodeEnv is not production: real card payments must not run in a mode that relaxes the checks around them" -}}
+{{- end -}}
+{{/*
+The deployment's own endpoint has to be one the chart knows how to render: a name
+`endpoints` does not define would be a nil the templates dereference, which fails
+somewhere inside the endpoint loop with a message that names no value at all.
+*/}}
+{{- if .Values.ownEndpoint -}}
+{{- if not (hasKey .Values.endpoints .Values.ownEndpoint) -}}
+{{- fail (printf "ownEndpoint is %q, which endpoints does not define. Known: %s" .Values.ownEndpoint (join ", " (keys .Values.endpoints | sortAlpha))) -}}
+{{- end -}}
 {{- end -}}
 {{- if eq .Values.auth.magicLink.mailer "resend" -}}
 {{- if not (or .Values.auth.magicLink.resendApiKey .Values.auth.magicLink.resendApiKeyExistingSecret) -}}

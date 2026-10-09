@@ -20,7 +20,24 @@ type: application
 # sidecar verifies roots enrolled on Azure confidential VMs (SUP-251) and the API
 # drives two-factor endpoint trust — cloud measurement and pinned digest
 # (SUP-252). No values change.
-version: 0.9.1
+#
+# 0.10.0 always renders the deployment's own endpoint (`ownEndpoint`, new), not
+# only the ones a selected model refers to. An empty model selection rendered
+# `endpoints: []`, so the API could not tell which endpoint was its own and the
+# chat composer stayed locked, asking the user to name it in the router
+# configuration — on exactly the shape the listing's form arrives at since
+# 0.13.0 (SUP-255). The hostname stays the `${ROUTER_PUBLIC_HOSTNAME}`
+# placeholder (SUP-211), so the snapshot is still hostname-independent — but it
+# does gain a block: `checksum/config` moves for every no-model and external-only
+# render, and anyone pinning such a deployment's digest re-pins. Renders with a
+# model selected are unchanged.
+#
+# 0.10.0 also re-pins the router API and its egress sidecar to `main-f23d2d6`,
+# the build that lands the rest of SUP-255: hex-only digests in the console's
+# upstream dialog and verdict timeline (with the API sending the hex twins), the
+# "How to connect" page, and the gatekeeper's registry lookup proven against the
+# real signatures layout.
+version: 0.10.0
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous
