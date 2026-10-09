@@ -1,6 +1,6 @@
 {{- include "confidential-router-api.validate" . -}}
 {{- $modelNames := include "confidential-router-api.selectedModels" . | fromJsonArray -}}
-{{- $endpointNames := include "confidential-router-api.referencedEndpoints" . | fromJsonArray -}}
+{{- $endpointNames := include "confidential-router-api.renderedEndpoints" . | fromJsonArray -}}
 {{- /*
 `conf/router.yaml` for the router API, rendered from this chart's values.
 
@@ -71,10 +71,12 @@ data:
       - name: {{ $name | quote }}
         {{- /*
         This deployment's own API hostname unless the endpoint named another: the
-        router fetches an endpoint's evidence bundle from it. The default is the
-        placeholder rather than the value, so an endpoint that did not name a
-        hostname does not put one in an attested document; an endpoint that did
-        is a parameter, and parameters belong in the digest.
+        router fetches an endpoint's evidence bundle from it, and matches it
+        against its own public hostname to know which endpoint it is — which is
+        what the chat verifies before a prompt leaves the browser (ADR-008 §1).
+        The default is the placeholder rather than the value, so an endpoint that
+        did not name a hostname does not put one in an attested document; an
+        endpoint that did is a parameter, and parameters belong in the digest.
         */}}
         hostname: {{ $endpoint.hostname | default "${ROUTER_PUBLIC_HOSTNAME}" | quote }}
         tee: {{ required (printf "endpoints.%s.tee must be set" $name) $endpoint.tee | quote }}
@@ -84,8 +86,11 @@ data:
       {{- end }}
     {{- else }}
 
-    # Every model is switched off, so there is nothing to attest and nothing to
-    # serve: /v1 answers model_not_found until one is turned on.
+    # `ownEndpoint` opted out and every model is switched off. Not what an empty
+    # model selection renders: the deployment's own endpoint is published whatever
+    # `models` says, because the chat verifies this router's channel and locks
+    # without it (SUP-255). A router with this document has nothing to serve and
+    # nothing a browser can verify.
     endpoints: []
     {{- end }}
 

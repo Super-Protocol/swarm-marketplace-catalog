@@ -190,6 +190,12 @@ refuses "the same model twice, on the proxy" "twice" \
   helm template "$RELEASE" charts/confidential-router-litellm --namespace "$NAMESPACE" \
     --set 'models[0]=llama3.2:3b' --set 'models[1]=llama3.2:3b'
 
+# The deployment's own endpoint is rendered whatever `models` says (SUP-255), so
+# a name `endpoints` does not define is not a model-less render with nothing to
+# publish — it is a nil the endpoint loop dereferences.
+refuses "an own endpoint the endpoints map does not define" "which endpoints does not define" \
+  "${base_api[@]}" --set ownEndpoint=elsewhere
+
 refuses "an unpinned image" "pinned by digest" \
   "${base_api[@]}" --set image.digest= --set image.tag=
 
@@ -945,7 +951,7 @@ refuses "replacing the one-per-node rule by accident" "the one that applies" \
 # config loader that throws before the first listener — the whole deployment is a
 # crash loop and no golden diff would have mentioned it.
 note "every placeholder in the attested config has something that fills it"
-for case in api-one-model api-campaign api-billing-stripe api-no-models api-endpoint-hostname api-external-endpoints; do
+for case in api-one-model api-campaign api-billing-stripe api-no-models api-external-only api-endpoint-hostname api-external-endpoints; do
   if output=$(python3 charts/tests/config_placeholders.py confidential-router-api "charts/tests/cases/$case.yaml"); then
     printf '%s\n' "$output" | sed "s/\$/ ($case)/"
   else

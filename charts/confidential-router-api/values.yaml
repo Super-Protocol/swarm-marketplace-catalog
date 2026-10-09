@@ -341,11 +341,12 @@ modelCatalog:
       promptPer1mMicros: 30000
       completionPer1mMicros: 50000
 
-# The endpoints the catalogue entries name. Only those an enabled model refers to
-# are rendered, so turning every model off renders no endpoints at all. An empty
-# `hostname` means `apiHostname`: in this listing every model is served by the
-# one confidential deployment this chart is part of, and that is the host the
-# platform publishes evidence for.
+# The endpoints the catalogue entries name, plus this deployment's own. An
+# endpoint is rendered when an enabled model refers to it, or when it is the one
+# `ownEndpoint` names — so turning every model off still renders exactly one. An
+# empty `hostname` means `apiHostname`: in this listing every built-in model is
+# served by the one confidential deployment this chart is part of, and that is
+# the host the platform publishes evidence for.
 #
 # `tee` is an operator-declared label. It is what the console prints next to a
 # model; it is never a verdict, and nothing verifies it (ADR-002).
@@ -356,6 +357,21 @@ endpoints:
     # An operator-only override for where the evidence bundle is fetched from.
     # Empty means `https://<hostname>/.well-known/swarm-evidence`.
     evidenceUrl: ""
+
+# Which of the endpoints above *is* this deployment. Always rendered, whatever
+# `models` says, because the router's own channel is what the chat verifies
+# before a prompt leaves the browser (ADR-008 §1): the API resolves its own
+# endpoint by matching its public hostname against the rendered `endpoints[]`,
+# and a deployment that published none — which is what an empty selection used
+# to render — locked the chat composer with a message asking the user to name
+# the endpoint themselves (SUP-255). An external-only deployment is the shape
+# the listing's form arrives at since 0.13.0, so it cannot be the one that does
+# not work.
+#
+# Empty opts out, and is the only way to render `endpoints: []`: a deployment
+# whose evidence is published under some other name entirely, which this listing
+# never is.
+ownEndpoint: confidential-router
 
 # The attesting egress (ADR-008). A model may live in **another** deployment or
 # another swarm cloud: an administrator registers it in the console at run time,

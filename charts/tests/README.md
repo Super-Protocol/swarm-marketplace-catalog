@@ -22,7 +22,7 @@ The release name and namespace are fixed per listing (`cr` / `confidential-route
 | --- | --- |
 | `api-one-model` / `api-three-models` | the `models` list: `models[]` and `endpoints[]` in the rendered `router.yaml` are built from it |
 | `api-billing-disabled` / `api-billing-stripe` | the billing mode: no purchases at all, versus real card payments. The third provider, `manual`, mints credit from a signed link and the chart refuses it (SUP-167) |
-| `api-no-models` | an empty selection: an empty catalogue renders, rather than a chart that cannot be installed |
+| `api-no-models` | an empty selection: an empty catalogue renders, rather than a chart that cannot be installed — and the deployment's own endpoint still does, because the chat verifies this router's channel and locks without it (SUP-255) |
 | `api-external-postgres` | `postgresql.enabled: false` with a DSN of the deployment's own |
 | `litellm-one-model` / `litellm-three-models` | the same list on the other side, so the two charts' model names can be diffed against each other |
 | `litellm-no-models` | an empty selection: no proxy at all — one inert ConfigMap, because a marketplace component has to render something for the cloud to accept it (SUP-245) |
@@ -32,7 +32,7 @@ The release name and namespace are fixed per listing (`cr` / `confidential-route
 | `api-invite-only` | the SUP-173 auth seam: `requireInviteForSignUp` rendered only while it is on, so the chart stays bootable on an image that predates the key |
 | `api-signup-grant` | the SUP-249 billing seam: `signupGrantMicros` rendered from whole USD only while it is above zero, so the chart stays bootable on an image that predates the key |
 | `api-endpoint-hostname` | an endpoint that names a hostname of its own: a parameter, so it is rendered as a literal rather than as `${ROUTER_PUBLIC_HOSTNAME}`, and the public ConfigMap does not carry that key at all (SUP-211) |
-| `api-external-only` | what the listing renders by default from 0.13.0 (SUP-245): no built-in model and the egress on — a router that serves only the external endpoints an administrator registers. With the listing's auth block, so `local_stack.py` also pins the API Ingress and password sign-in on this shape (SUP-248) |
+| `api-external-only` | what the listing renders by default from 0.13.0 (SUP-245): no built-in model and the egress on — a router that serves only the external endpoints an administrator registers, and still publishes its own endpoint under `${ROUTER_PUBLIC_HOSTNAME}` (SUP-255). With the listing's auth block, so `local_stack.py` also pins the API Ingress and password sign-in on this shape (SUP-248) |
 | `api-external-endpoints` | the attested egress on (ADR-008): the gatekeeper as a second container, the shared `emptyDir` they talk through, and `CR_API_SECRETS_KEY` in the Secret rather than in the attested `router.yaml`. Every other `api-*` case has it off, which is the other half — a chart that still boots an image predating the key |
 | `ui-default` | the console's env and ingress; run.sh renders it against a second hostname as well, because one pinned image has to serve any API origin |
 | `ollama-one-model` / `ollama-gpu` | the model server and its GPU switch: an explicit zero device request without one; the device count, the `nvidia` runtime class and the GPU toleration together with one |

@@ -1,5 +1,7 @@
 # An empty selection. The chart still installs; /v1 answers model_not_found until
-# a model is chosen, and there is no endpoint to publish evidence for.
+# a model is chosen. The deployment's own endpoint is rendered all the same — it
+# is what the chat verifies before a prompt leaves the browser, and a render
+# without it locked the composer (SUP-255).
 apiHostname: api.confidential-router.example
 consoleHostname: console.confidential-router.example
 auth:
