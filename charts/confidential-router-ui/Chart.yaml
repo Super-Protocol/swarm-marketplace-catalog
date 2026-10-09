@@ -9,5 +9,10 @@ type: application
 # 0.2.3 pins the console from `main-5efa452` (SUP-251, SUP-252): the trust-list
 # form asks for a cloud launch measurement, and the endpoint dossier offers
 # copy-measurement, a Registry-signed badge and the two-factor approvals.
-version: 0.2.3
+#
+# 0.2.4 pins the console from `main-f23d2d6` (SUP-255): no "External" tag on
+# user surfaces, a green "Verified by this router", hex-only digests everywhere,
+# and the Gatekeeper screen folded into "How to connect" on API Keys (with VS Code
+# and OpenCode examples); `/gatekeeper` redirects there.
+version: 0.2.4
 appVersion: "0.4.1"

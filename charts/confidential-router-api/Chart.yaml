@@ -31,6 +31,12 @@ type: application
 # does gain a block: `checksum/config` moves for every no-model and external-only
 # render, and anyone pinning such a deployment's digest re-pins. Renders with a
 # model selected are unchanged.
+#
+# 0.10.0 also re-pins the router API and its egress sidecar to `main-f23d2d6`,
+# the build that lands the rest of SUP-255: hex-only digests in the console's
+# upstream dialog and verdict timeline (with the API sending the hex twins), the
+# "How to connect" page, and the gatekeeper's registry lookup proven against the
+# real signatures layout.
 version: 0.10.0
 appVersion: "0.4.1"
 dependencies:

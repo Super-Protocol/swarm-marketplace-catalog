@@ -601,7 +601,7 @@ components:
       version: "0.10.0"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
-        digest: sha256:fd1505a7af47c8c3380b3eeaa85b608ef599616367a6bea421dee1b496108d11
+        digest: sha256:14346b456061b80527b2c80c082bd934c53eeba4911b06bab542ce627e05086c
       # The attested egress, a second container in the API pod (ADR-008 §2): the
       # gatekeeper's own core, verifying an external model endpoint's evidence and
       # pinning its TLS leaf before this deployment proxies a prompt to it. The
@@ -620,10 +620,12 @@ components:
       # pod never became Ready and no endpoint could ever be registered. This one
       # waits for a runnable configuration instead (`main-481445c`). 0.15.0 moves
       # it to `main-5efa452`, which also verifies Azure confidential-VM roots
-      # (SUP-251) and evaluates two-factor endpoint trust (SUP-252);
+      # (SUP-251) and evaluates two-factor endpoint trust (SUP-252); 0.16.0 to
+      # `main-f23d2d6`, whose registry lookup is proven against the real
+      # `sp-vm/signatures` layout, Azure folders included (SUP-255);
       # `charts/tests/sidecar_boot.sh` boots the declared digest on that document.
       - name: ghcr.io/super-protocol/confidential-router/gatekeeper
-        digest: sha256:be14d1db005f7e71966993fd551db587904df584ee2827256ec0bbd0ec6c8584
+        digest: sha256:56158ed17a2f7f9124d30215472ea0fe2ac3dc56974eb0e6808ba0aced11e7d8
       # Spilo: PostgreSQL 17.5 and Patroni 4.0.4 in one image, which is what makes the
       # database three instances that elect a leader instead of one that comes back empty.
       # It replaces `bitnamilegacy/postgresql` — a mirror that receives no rebuilds, no
@@ -863,14 +865,14 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-ui
-      version: "0.2.3"
+      version: "0.2.4"
     images:
       # Moves with the API's digest above, from the same source revision: the
       # admin section that registers an external endpoint and edits the trust
       # list is a console screen over a GraphQL schema the API half ships, and
       # the two halves of one contract are not independently pinnable.
       - name: ghcr.io/super-protocol/confidential-router/router-ui
-        digest: sha256:6abda08179f8e75f0533186e4d15746504dfc6a17970af927248465742e7edc6
+        digest: sha256:097b8d87e83fe2d21fc12ad357aefcb78188d9a36e7274fe8c7a82ca32be7bf3
     deployment:
       values:
         base:

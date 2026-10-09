@@ -274,7 +274,7 @@ spec:
         # PostgreSQL accepts connections, which is exactly the wait this pod needs
         # and is why there is no separate wait-for-database container.
         - name: migrate
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:fd1505a7af47c8c3380b3eeaa85b608ef599616367a6bea421dee1b496108d11
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:14346b456061b80527b2c80c082bd934c53eeba4911b06bab542ce627e05086c
           imagePullPolicy: IfNotPresent
           args: ["migrate"]
           securityContext:
@@ -329,7 +329,7 @@ spec:
               nvidia.com/gpu: "0"
       containers:
         - name: router-api
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:fd1505a7af47c8c3380b3eeaa85b608ef599616367a6bea421dee1b496108d11
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:14346b456061b80527b2c80c082bd934c53eeba4911b06bab542ce627e05086c
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -417,7 +417,7 @@ spec:
         # nothing writable: a static binary on a read-only root filesystem,
         # running as the image's own non-root uid rather than the API's.
         - name: gatekeeper
-          image: ghcr.io/super-protocol/confidential-router/gatekeeper@sha256:be14d1db005f7e71966993fd551db587904df584ee2827256ec0bbd0ec6c8584
+          image: ghcr.io/super-protocol/confidential-router/gatekeeper@sha256:56158ed17a2f7f9124d30215472ea0fe2ac3dc56974eb0e6808ba0aced11e7d8
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
