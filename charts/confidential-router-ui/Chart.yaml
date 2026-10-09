@@ -26,6 +26,7 @@ type: application
 #
 # 0.2.7 (SUP-266) pins what 0.2.6 only described: 0.2.6 shipped the 0.16.1
 # console digest, the SUP-263 change had not been built yet. This is
-# `main-8b5d61f`, the post-merge main build of confidential-router#97.
+# `main-9e86c41` (confidential-router#98, containing #97), which also carries the
+# Profile screen's set-password card (SUP-267).
 version: 0.2.7
 appVersion: "0.4.1"

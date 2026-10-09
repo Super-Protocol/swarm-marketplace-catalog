@@ -598,10 +598,14 @@ components:
       # placeholder filled from the excluded ConfigMap (SUP-211); what moves is
       # `checksum/config` for every external-only render, so a pinned digest of
       # one re-pins.
-      version: "0.10.0"
+      #
+      # 0.10.1 (SUP-266) re-pins the API to `main-9e86c41`, which lands SUP-267:
+      # an account with no password (the bootstrapped first admin) can set one.
+      # GraphQL only, no migration, no template change.
+      version: "0.10.1"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
-        digest: sha256:14346b456061b80527b2c80c082bd934c53eeba4911b06bab542ce627e05086c
+        digest: sha256:4ce9dd805f079e67835ea300934c35a2287f916cda1401ff2ad19c4e4f37ff97
       # The attested egress, a second container in the API pod (ADR-008 §2): the
       # gatekeeper's own core, verifying an external model endpoint's evidence and
       # pinning its TLS leaf before this deployment proxies a prompt to it. The
@@ -882,9 +886,11 @@ components:
       #
       # 0.16.3 (SUP-266) is that same change, actually shipped: 0.16.2 merged
       # with the 0.16.1 digest still pinned, so it rendered the old console.
-      # This is `main-8b5d61f`, the post-merge main build of confidential-router#97.
+      # Both halves move to `main-9e86c41` (confidential-router#98, which
+      # contains #97): the Profile screen's set-password card (SUP-267) calls
+      # the mutation the API above ships in the same revision.
       - name: ghcr.io/super-protocol/confidential-router/router-ui
-        digest: sha256:85be83eb9fd6cba450aa4379b28cf2980e7dd2474f48d23dd7f46f258b69261a
+        digest: sha256:2322434d1fc1d07f218828e9fd33c9a8d1751ea67fcf92d4944d6622a5865f88
     deployment:
       values:
         base:

@@ -37,7 +37,11 @@ type: application
 # upstream dialog and verdict timeline (with the API sending the hex twins), the
 # "How to connect" page, and the gatekeeper's registry lookup proven against the
 # real signatures layout.
-version: 0.10.0
+#
+# 0.10.1 (SUP-266) re-pins the router API to `main-9e86c41`, which lands SUP-267:
+# an account without a password — the bootstrapped first admin — can set one.
+# No template change; the egress sidecar keeps its pin.
+version: 0.10.1
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous

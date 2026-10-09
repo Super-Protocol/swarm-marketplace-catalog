@@ -89,7 +89,7 @@ spec:
         runAsUser: 1001
       containers:
         - name: router-ui
-          image: ghcr.io/super-protocol/confidential-router/router-ui@sha256:85be83eb9fd6cba450aa4379b28cf2980e7dd2474f48d23dd7f46f258b69261a
+          image: ghcr.io/super-protocol/confidential-router/router-ui@sha256:2322434d1fc1d07f218828e9fd33c9a8d1751ea67fcf92d4944d6622a5865f88
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
