@@ -41,7 +41,12 @@ type: application
 # 0.10.1 (SUP-266) re-pins the router API to `main-9e86c41`, which lands SUP-267:
 # an account without a password — the bootstrapped first admin — can set one.
 # No template change; the egress sidecar keeps its pin.
-version: 0.10.1
+#
+# 0.10.2 (SUP-268) re-pins the router API to `main-b885b86`: the admin
+# Invitations API (mint, list, attribution, statistics) and the TEE label read
+# from published evidence (SUP-270). No template change; the egress sidecar keeps
+# its pin.
+version: 0.10.2
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous

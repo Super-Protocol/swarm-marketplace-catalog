@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.16.3"
+  version: "0.17.0"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -602,10 +602,16 @@ components:
       # 0.10.1 (SUP-266) re-pins the API to `main-9e86c41`, which lands SUP-267:
       # an account with no password (the bootstrapped first admin) can set one.
       # GraphQL only, no migration, no template change.
-      version: "0.10.1"
+      #
+      # 0.10.2 (SUP-268) re-pins the API to `main-b885b86`: the admin Invitations
+      # API — the console can now mint codes, which a published space with no
+      # shell for `invites generate` could not do at all — and the TEE label read
+      # from published evidence (SUP-270). One additive, nullable migration
+      # (`invite_codes.issuedByUserId`); no template change.
+      version: "0.10.2"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
-        digest: sha256:4ce9dd805f079e67835ea300934c35a2287f916cda1401ff2ad19c4e4f37ff97
+        digest: sha256:cd0bc5e232504bf173122c4ef78194e5caa6281998f645288f9326568d31c7b5
       # The attested egress, a second container in the API pod (ADR-008 §2): the
       # gatekeeper's own core, verifying an external model endpoint's evidence and
       # pinning its TLS leaf before this deployment proxies a prompt to it. The
@@ -869,7 +875,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-ui
-      version: "0.2.7"
+      version: "0.2.8"
     images:
       # Moves with the API's digest above, from the same source revision: the
       # admin section that registers an external endpoint and edits the trust
@@ -889,8 +895,12 @@ components:
       # Both halves move to `main-9e86c41` (confidential-router#98, which
       # contains #97): the Profile screen's set-password card (SUP-267) calls
       # the mutation the API above ships in the same revision.
+      #
+      # 0.17.0 (SUP-268) moves both to `main-b885b86`: Administration →
+      # Invitations (issue, codes, sign-ups, statistics) and the Overview's TEE
+      # column from evidence (SUP-270) call fields that API revision ships.
       - name: ghcr.io/super-protocol/confidential-router/router-ui
-        digest: sha256:2322434d1fc1d07f218828e9fd33c9a8d1751ea67fcf92d4944d6622a5865f88
+        digest: sha256:c647f3dfd4b7227042a4a4600087cce3a5008ed37226660c84290b9ec38c19ae
     deployment:
       values:
         base:
@@ -924,7 +934,7 @@ outputs:
     title: Everyone else
     type: string
     when: "params.inviteOnlySignup == true"
-    value: "https://{{ params.consoleHostname }}/signup — but only with an invitation. Every sign-up path is refused unless the request carries a code that is valid and has not been redeemed, and the refusal says which of the three it is: no code, already claimed, or expired. Generate the codes with `invites generate` before handing the hostname out; with none issued nobody can register, including you — claim the administrator account with the first-sign-in token above first."
+    value: "https://{{ params.consoleHostname }}/signup — but only with an invitation. Every sign-up path is refused unless the request carries a code that is valid and has not been redeemed, and the refusal says which of the three it is: no code, already claimed, or expired. Issue the codes in the console under Administration → Invitations before handing the hostname out; with none issued nobody can register, including you — claim the administrator account with the first-sign-in token above first."
 
   - id: bootstrapToken
     title: First sign-in token
