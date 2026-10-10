@@ -14,6 +14,7 @@ metadata:
 type: Opaque
 stringData:
   auth-secret: "golden-test-auth-secret-not-a-real-one"
+  bootstrap-token: "golden-test-bootstrap-token"
   password: "golden-test-password"
   postgres-password: "golden-test-password"
   replication-password: "golden-test-password"
@@ -125,7 +126,7 @@ data:
     # published. The upstream credentials are sealed in the database under
     # CR_API_SECRETS_KEY, which arrives from the Secret.
     #
-    # Rendered only while the egress is on, the same seam rule `auth.password`
+    # Rendered only while the egress is on, the same seam rule `auth.requireInviteForSignUp`
     # follows: the router's config schema is strict, so an image that predates
     # ADR-008 would refuse to boot on this key rather than ignore it.
     externalEndpoints:
@@ -143,16 +144,14 @@ data:
     auth:
       baseUrl: "${ROUTER_PUBLIC_BASE_URL}"
       secret: ${ROUTER_AUTH_SECRET}
-      sessionMaxAge: "720h"
+      sessionMaxAge: "2160h"
       magicLink:
+        # The emailed code is the only mail sign-in (SUP-269). Rendered only
+        # when switched off: an image that predates the key would refuse to
+        # boot on it rather than ignore it.
+        enabled: false
         mailer: "none"
         from: "no-reply@confidential-router.local"
-      # Rendered only while it is on, for the same reason `bootstrapToken` is:
-      # the router's config schema is strict, so an image that predates SUP-112
-      # would refuse to boot on the key rather than ignore it.
-      password:
-        enabled: true
-        minLength: 12
 
     # This section is the one place the chart does *not* keep itself bootable on an
     # older image. `maxTopUpMicros` is unconditional, so on a router that predates
@@ -257,7 +256,7 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: fc7a4cef1a630a88bf1d2692002cdca5031f5693ab40c55c6785e46ab544375c
+        checksum/config: 3a1cdd9c5936921bb81f4ddd84ee64856c9a0d9f65d631f49c9d3cd2941b5e3d
         # And a hostname reconfigure is a config change the pod cannot see at all:
         # `envFrom` is read once, when the container starts, so without this the
         # ConfigMap is updated and the running router keeps advertising the old
@@ -286,7 +285,7 @@ spec:
         # PostgreSQL accepts connections, which is exactly the wait this pod needs
         # and is why there is no separate wait-for-database container.
         - name: migrate
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:4ce9dd805f079e67835ea300934c35a2287f916cda1401ff2ad19c4e4f37ff97
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:cd0bc5e232504bf173122c4ef78194e5caa6281998f645288f9326568d31c7b5
           imagePullPolicy: IfNotPresent
           args: ["migrate"]
           securityContext:
@@ -315,6 +314,11 @@ spec:
                 secretKeyRef:
                   name: confidential-router-api
                   key: auth-secret
+            - name: CR_API_AUTH__BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: bootstrap-token
             - name: CR_API_SECRETS_KEY
               valueFrom:
                 secretKeyRef:
@@ -395,7 +399,7 @@ spec:
               nvidia.com/gpu: "0"
       containers:
         - name: router-api
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:4ce9dd805f079e67835ea300934c35a2287f916cda1401ff2ad19c4e4f37ff97
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:cd0bc5e232504bf173122c4ef78194e5caa6281998f645288f9326568d31c7b5
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -427,6 +431,11 @@ spec:
                 secretKeyRef:
                   name: confidential-router-api
                   key: auth-secret
+            - name: CR_API_AUTH__BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: bootstrap-token
             - name: CR_API_SECRETS_KEY
               valueFrom:
                 secretKeyRef:

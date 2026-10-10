@@ -6,7 +6,7 @@
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-router/router-api
-  digest: sha256:4ce9dd805f079e67835ea300934c35a2287f916cda1401ff2ad19c4e4f37ff97
+  digest: sha256:cd0bc5e232504bf173122c4ef78194e5caa6281998f645288f9326568d31c7b5
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -168,44 +168,38 @@ auth:
   secret: ""
   existingSecret: ""
   existingSecretKey: auth-secret
-  sessionMaxAge: 720h
+  # How long a session lives without being used; one in use is extended. Ninety
+  # days, because sign-in is a code mailed to the address (SUP-269) and asking
+  # for one every few weeks would be a cost with no security in it.
+  #
+  # `sessionDays` is the same setting in whole days and wins when set — it is
+  # what a listing parameter can fill, since a listing cannot multiply by 24.
+  sessionMaxAge: 2160h
+  sessionDays: ""
   magicLink:
-    # `none` switches magic-link sign-in off altogether, which is the honest
-    # setting for a deployment with nowhere to send mail: the console then stops
-    # offering a link it cannot deliver. It is the default because the container
-    # runs in production mode and `password.enabled` below already gives everyone
-    # a way in. `console` writes the link to the API log, where anyone with log
-    # access can use it, so it is refused in production — deliberate readers of
-    # the pod log set `nodeEnv: development` as well. `resend` is the only
-    # implemented mailer that sends anything; `smtp` is in the config schema but
-    # not implemented.
+    # Whether a one-time sign-in *link* is offered beside the one-time code.
+    # Empty leaves the router's default, which is "while it can send mail";
+    # `false` makes the code the only mail sign-in, and is what the marketplace
+    # listing sets. Rendered **only when it is `false`**, so the same chart still
+    # boots an image that predates the key.
+    enabled: ""
+    # The mail provider, from before `mail` below had a section of its own, and
+    # still what the router reads while `mail.provider` is unset. `none` is the
+    # default: nowhere to send mail, so no code and no link, and the deployment
+    # signs in with the bootstrap token alone. `console` writes codes and links
+    # to the API log, where anyone with log access can use them, so it is
+    # refused in production — deliberate readers of the pod log set
+    # `nodeEnv: development` as well. `resend` sends through Resend. For SMTP
+    # use `mail.provider: smtp`.
     mailer: none
     from: no-reply@confidential-router.local
     resendApiKey: ""
     resendApiKeyExistingSecret: ""
     resendApiKeyExistingSecretKey: resend-api-key
-  # Email and password — the one sign-in path that needs nothing outside the
-  # cluster (SUP-112). On by default, because that is what makes a deployment
-  # with no mail provider usable by anyone but its first administrator: the
-  # bootstrap token below creates exactly one account, and before this everyone
-  # after that was offered a magic link nobody could deliver.
-  #
-  # There is no email verification. Password reset is offered by the router
-  # only once `mail` below can deliver the link (SUP-269); without it there is
-  # none. Rendered **only when it is enabled**, so the same chart still boots
-  # an image that predates the key — the same rule `bootstrapToken` follows.
-  #
-  # Anyone who can reach the console can create an account while this is on. The
-  # account arrives with its own empty workspace, no credit and no access to
-  # anyone else's keys, but it is a row in the database: turn this off on a
-  # deployment whose console is reachable by people it is not for.
-  password:
-    enabled: true
-    # Better Auth hashes with scrypt, so length is the rule worth having;
-    # composition rules buy less than the characters they cost. 8–128; the
-    # console reads it back from the API and enforces the same number.
-    minLength: 12
-  # Invite-only registration: while this is on, **no** sign-up path — password,
+  # There is no `password` here any more (SUP-269): the router signs accounts
+  # in with a code mailed to their address and stores no hash. A values file
+  # that still sets `auth.password.*` renders exactly as if it did not.
+  # Invite-only registration: while this is on, **no** sign-up path — emailed code,
   # magic link or OAuth — creates an account unless the request carries an
   # invitation code that is valid and unredeemed at that moment. Sign-in to an
   # existing account is unaffected, and so is the first-sign-in token below:
@@ -216,7 +210,7 @@ auth:
   # running grants-only, where an account that cannot be credited is an account
   # that should not exist.
   #
-  # Rendered **only when it is on**, the same seam rule `password` and
+  # Rendered **only when it is on**, the same seam rule `magicLink.enabled` and
   # `bootstrapToken` follow: the router's config schema is strict, so an image
   # that predates the key would refuse to boot on it.
   #
@@ -275,7 +269,7 @@ auth:
   adminEmailsExistingSecret: ""
   adminEmailsExistingSecretKey: admin-emails
 
-# Outbound mail (SUP-269): sign-in links, password reset and the welcome mail,
+# Outbound mail (SUP-269): sign-in codes and the welcome mail,
 # all sent through one provider. Needs a router image from SUP-269 on.
 #
 # `provider` empty (the default) or `none` renders nothing at all, and the
@@ -424,7 +418,7 @@ ownEndpoint: confidential-router
 # container in this pod rather than ported into the API — one verification
 # pipeline, the same binary a client runs on their own machine.
 #
-# Off by default, the same seam rule `auth.password` and `auth.bootstrapToken`
+# Off by default, the same seam rule `auth.requireInviteForSignUp` and `auth.bootstrapToken`
 # follow: `externalEndpoints` is a key the router's strict config schema has only
 # from the image this chart version pins, so an older image would refuse to boot
 # on it rather than ignore it. A deployment that registers no external endpoint

@@ -285,20 +285,21 @@ config does not set — so this refuses rather than papering over it.
 {{- if not (has .Values.auth.magicLink.mailer (list "none" "console" "resend")) -}}
 {{- fail (printf "auth.magicLink.mailer must be none, console or resend, not %q" .Values.auth.magicLink.mailer) -}}
 {{- end -}}
-{{- if .Values.auth.password.enabled -}}
-{{- $minLength := .Values.auth.password.minLength | int -}}
-{{- if or (lt $minLength 8) (gt $minLength 128) -}}
-{{- fail (printf "auth.password.minLength must be between 8 and 128, not %d" $minLength) -}}
-{{- end -}}
-{{- end -}}
 {{/*
-Every sign-in path off at once deploys cleanly and answers nothing but 404: the
-bootstrap token lets exactly one account in and then stops existing, so a
-deployment that has no mailer, no OAuth app and no password has no second way in
-even for the administrator who claimed it.
+No way in at all deploys cleanly and answers nothing but 404. Sign-in is a code
+mailed to the address, OAuth, or the bootstrap token (SUP-269) — there are no
+passwords — so a deployment with no mail, no OAuth app and no token is one
+nobody can ever claim. A token alone is enough to render: that is the
+bootstrap-token-only deployment, where the administrator is the only account.
 */}}
-{{- if not (or .Values.auth.password.enabled .Values.auth.github.clientId .Values.auth.google.clientId (ne .Values.auth.magicLink.mailer "none") (include "confidential-router-api.mailSends" .)) -}}
-{{- fail "no sign-in path is configured: auth.magicLink.mailer is none, auth.password.enabled is false and neither auth.github nor auth.google is set. The bootstrap token creates one account and then stops existing, so nobody could sign in afterwards" -}}
+{{- if not (or .Values.auth.bootstrapToken .Values.auth.bootstrapTokenExistingSecret .Values.auth.github.clientId .Values.auth.google.clientId (ne .Values.auth.magicLink.mailer "none") (include "confidential-router-api.mailSends" .) .Values.mail.existingSecret) -}}
+{{- fail "no sign-in path is configured: there is no mail provider (mail.provider, or auth.magicLink.mailer), neither auth.github nor auth.google is set, and there is no auth.bootstrapToken. Nobody could ever sign in" -}}
+{{- end -}}
+{{- if .Values.auth.sessionDays -}}
+{{- $days := .Values.auth.sessionDays | int -}}
+{{- if or (lt $days 1) (gt $days 365) -}}
+{{- fail (printf "auth.sessionDays must be between 1 and 365, not %v" .Values.auth.sessionDays) -}}
+{{- end -}}
 {{- end -}}
 {{/*
 The manual provider mints credit from a signed link. It exists for a laptop, and
@@ -435,4 +436,16 @@ The Secret a mail value is read from: the operator's own, or this chart's.
 */}}
 {{- define "confidential-router-api.mailSecretName" -}}
 {{- .Values.mail.existingSecret | default (include "confidential-router-api.secretName" .) -}}
+{{- end -}}
+
+{{/*
+The session lifetime the router is given: `auth.sessionDays` as hours when it is
+set, `auth.sessionMaxAge` as written otherwise.
+*/}}
+{{- define "confidential-router-api.sessionMaxAge" -}}
+{{- if .Values.auth.sessionDays -}}
+{{- printf "%dh" (mul (int .Values.auth.sessionDays) 24) -}}
+{{- else -}}
+{{- .Values.auth.sessionMaxAge -}}
+{{- end -}}
 {{- end -}}

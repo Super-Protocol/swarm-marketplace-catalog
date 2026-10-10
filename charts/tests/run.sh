@@ -235,14 +235,14 @@ refuses "an auth secret too short to sign with" "at least 32 characters" \
 refuses "SMTP under the legacy mailer key, which points at mail.provider" "mail.provider: smtp" \
   "${base_api[@]}" --set auth.magicLink.mailer=smtp
 
-refuses "a password floor the router's schema would reject" "between 8 and 128" \
-  "${base_api[@]}" --set auth.password.minLength=6
+# Sign-in is a mailed code, OAuth or the first-sign-in token (SUP-269). With none
+# of the three there is no account anybody could ever create or open — a
+# deployment that renders, deploys and answers 404 to everyone.
+refuses "a deployment with no mail, no OAuth app and no first-sign-in token" "no sign-in path is configured" \
+  "${base_api[@]}" --set auth.magicLink.mailer=none --set auth.bootstrapToken=
 
-# The bootstrap token creates exactly one account and then stops existing, so a
-# deployment with nothing else configured strands even the administrator who
-# claimed it — behind a console whose sign-in screen offers nothing.
-refuses "every sign-in path switched off at once" "no sign-in path is configured" \
-  "${base_api[@]}" --set auth.magicLink.mailer=none --set auth.password.enabled=false
+refuses "a session length outside a year" "auth.sessionDays must be between 1 and 365" \
+  "${base_api[@]}" --set auth.sessionDays=400
 
 # A URL where a hostname belongs renders `https://https://…` into the CORS list,
 # which no browser origin matches: the landing page loads and quietly does
@@ -1036,7 +1036,7 @@ drift_case confidential-router-ui ui-default
 # of one version that differ only in their mail setup publish two digests. And
 # the SMTP password and the Resend key are in the Secret and nowhere else.
 note "mail configuration moves nothing a deployment attests"
-for case in api-external-only api-one-model api-password-no-mailer; do
+for case in api-external-only api-one-model api-bootstrap-token; do
   if output=$(python3 charts/tests/mail_invariance.py "charts/tests/cases/$case.yaml"); then
     printf '%s\n' "$output" | sed "s/\$/ ($case)/"
   else

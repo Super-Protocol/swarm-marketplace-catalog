@@ -194,7 +194,8 @@ The form is five sections, and only the first three are on the way to Deploy:
 | Campaign | Only invited people can create an account | Off. An invitation then decides whether $100 comes with an account, not whether the account can exist. |
 | Advanced | Model storage, Database storage | 30 GB and 8 GB, sized for all five models and an evaluation's worth of metering. The database size is per instance, and there are three. |
 | Advanced | First sign-in token | Generated, and shown once with the deployment's outputs. Set one to bring your own. |
-| Advanced | Allow sign-up with a password | On. It is what lets a second person in, since this deployment cannot send an invitation. |
+| Mail | Mail provider | `None`. People sign in with a code mailed to their address, so until a provider is set only the administrator can sign in, with the first-sign-in token. |
+| Advanced | Stay signed in for, days | 90. How long a browser stays signed in without visiting. |
 | Advanced | Billing, Stripe keys, Resend key, Sender address | No purchases. The rest appear only if you switch to Stripe. |
 
 Nothing above Advanced has to be typed: a deployment reaches Deploy on the offered hostnames and
@@ -228,7 +229,7 @@ published inside the evidence bundle and readable by anyone.
 **Only invited people can create an account** is the switch that turns a campaign into a closed
 launch. Off, this deployment's sign-up is open and a code only decides whether the $100 comes with
 the account — a wrong or spent code costs the credit and never the registration. On, the code
-decides whether the account exists: every sign-up path — password, magic link, an OAuth callback —
+decides whether the account exists: every sign-up path — emailed code, an OAuth callback —
 is refused, before anything is created, unless the request carries a code that is valid and has not
 been redeemed. The visitor is told which of three it was: no code at all, already claimed, or
 expired-or-unknown, that last one deliberately merging "withdrawn" and "never issued" so the
@@ -248,48 +249,57 @@ readable by more than one person, they read them through that account.
 
 ## Signing in
 
-This deployment has no mailbox and no OAuth application, so nobody here is ever *invited*. Two
-paths replace that, and both work with nothing but the cluster:
+There are no passwords. A person signs in with a **one-time code mailed to their address**, and the
+same step creates the account the first time — so who can sign in at all depends on whether this
+deployment can send mail.
 
-**The first account is claimed.** The marketplace generates a first-sign-in token, shows it once
-with the deployment's outputs, and the console trades it plus your own address for the
-administrator account — the outputs name the exact address it was created for. From that moment
-the endpoint that accepts it returns 404. Claim the deployment before you publish its hostname:
-the token is spent by the *first* account, whoever creates it.
+**The first account is claimed with a token.** The marketplace generates a first-sign-in token, shows
+it with the deployment's outputs, and the console trades it for the administrator account, created
+for the address of the marketplace account that deployed this. Claim the deployment before you
+publish its hostname.
 
-**Everyone after that signs up.** `https://<console hostname>/signup` takes an email address and a
-password, and answers with a session — there is nothing to deliver and nothing to verify. Each
-account arrives with its own empty workspace and no credit; it can read nobody else's keys,
-generations or balance. What it does mean is that **anyone who can reach the console can create an
-account** — unless *Only invited people can create an account* is on, which is what a closed launch
-wants; otherwise switch *Allow sign-up with a password* off in Advanced where open registration is
-not what you want. Switching it off leaves the administrator's own way back in as a magic link written to the
-API log, which is where sign-in links went before this existed — or as real mail, on a Stripe
-deployment, since that one configures Resend.
+**The token stays the administrator's key.** After the claim it signs back into that one account and
+no other. That is what gets the administrator in whenever a code cannot be mailed — before a mail
+provider is set, or while the mail server is down — so keep it like a password. It creates nothing
+and opens nobody else's account.
 
-**Password reset needs a mail provider.** Without one there is none: an administrator can create a
-fresh account, and a lost one is a lost workspace. Set one under *Mail* (next section) and the
-sign-in screen offers *Forgot password?*, and a one-time sign-in link besides.
+**Everyone else needs a mail provider.** With *Mail provider* left at `None`, nobody can be mailed a
+code: the deployment is first-sign-in-token-only, which is enough to evaluate it alone and nothing
+more. Set a provider (next section) and `https://<console hostname>/signup` takes an email address
+and the six-digit code mailed to it. The code works once and expires in ten minutes. Each account
+arrives with its own empty workspace and the sign-up credit; it can read nobody else's keys,
+generations or balance. **Anyone who can reach the console can then create an account** — unless
+*Only invited people can create an account* is on, which is what a closed launch wants: a new
+address then needs a valid, unredeemed invitation *and* the mailed code, and an existing account
+needs only the code.
+
+**People stay signed in for 90 days** without visiting (*Stay signed in for, days*); every visit
+starts the count again.
+
+Upgrading from a version that had passwords: the stored password hashes are deleted, accounts are
+untouched, and each address signs in with a mailed code from then on. Make sure the administrator's
+address is a mailbox somebody reads.
 
 ## Mail
 
-Optional, and off by default. *Mail provider* is `None`, `SMTP` or `Resend`. With one set:
+Off by default, and the difference between a deployment one person can use and one anybody can.
+*Mail provider* is `None`, `SMTP` or `Resend`. With one set:
 
-- a forgotten password is reset from the sign-in screen — the link works once, expires in an hour,
-  and signs the account out everywhere else; the request answers the same whether or not the
-  address has an account, and is rate-limited;
+- anyone signs in, and signs up, with a one-time code mailed to their address — requests answer the
+  same whether or not the address has an account, and are rate-limited;
 - every new account gets a welcome email (Super Protocol logo, the console address, the credit it
-  started with);
-- the sign-in screen also offers a one-time link mailed to the address.
+  started with).
 
 **Deliverability is yours.** Mail reaches inboxes only if the sender address's domain publishes SPF
 and DKIM records covering the server that sends it (for Resend, a domain verified there). That is
-DNS this deployment cannot write.
+DNS this deployment cannot write. The sender has to be changed from its `.local` default, which no
+server delivers from — the deployment refuses it.
 
 **Reachability is reported.** The API checks the SMTP server at start-up without sending anything,
 and every send after that updates the `mail` field of `https://<API hostname>/health`: `ok`, or
 `failing` with `unreachable` (no connection from this cloud — a cluster space admits outbound
-connections to public addresses only, and some clouds block port 25) or `auth_failed`.
+connections to public addresses only, and some clouds block port 25) or `auth_failed`. While it is
+failing nobody receives a code, and the administrator signs in with the first-sign-in token.
 
 **Nothing about it is attested.** Every mail setting — the provider included — reaches the API out
 of the deployment's Secret, so two deployments of one version that differ only in their mail setup

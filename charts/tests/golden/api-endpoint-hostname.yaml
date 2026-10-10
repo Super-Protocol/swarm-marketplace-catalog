@@ -14,6 +14,7 @@ metadata:
 type: Opaque
 stringData:
   auth-secret: "golden-test-auth-secret-not-a-real-one"
+  bootstrap-token: "golden-test-bootstrap-token"
   password: "golden-test-password"
   postgres-password: "golden-test-password"
   replication-password: "golden-test-password"
@@ -123,16 +124,10 @@ data:
     auth:
       baseUrl: "${ROUTER_PUBLIC_BASE_URL}"
       secret: ${ROUTER_AUTH_SECRET}
-      sessionMaxAge: "720h"
+      sessionMaxAge: "2160h"
       magicLink:
         mailer: "none"
         from: "no-reply@confidential-router.local"
-      # Rendered only while it is on, for the same reason `bootstrapToken` is:
-      # the router's config schema is strict, so an image that predates SUP-112
-      # would refuse to boot on the key rather than ignore it.
-      password:
-        enabled: true
-        minLength: 12
 
     # This section is the one place the chart does *not* keep itself bootable on an
     # older image. `maxTopUpMicros` is unconditional, so on a router that predates
@@ -231,7 +226,7 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: 1d5282c6c6a9665774635f7a90e9e33d03c3ecdcb8bac78787dd7e9e5dfe62f1
+        checksum/config: 57658b304ef184b75d922d34a829e67b8b5b3c58c9177e959493b614eb143f6c
         # And a hostname reconfigure is a config change the pod cannot see at all:
         # `envFrom` is read once, when the container starts, so without this the
         # ConfigMap is updated and the running router keeps advertising the old
@@ -260,7 +255,7 @@ spec:
         # PostgreSQL accepts connections, which is exactly the wait this pod needs
         # and is why there is no separate wait-for-database container.
         - name: migrate
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:4ce9dd805f079e67835ea300934c35a2287f916cda1401ff2ad19c4e4f37ff97
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:cd0bc5e232504bf173122c4ef78194e5caa6281998f645288f9326568d31c7b5
           imagePullPolicy: IfNotPresent
           args: ["migrate"]
           securityContext:
@@ -289,6 +284,11 @@ spec:
                 secretKeyRef:
                   name: confidential-router-api
                   key: auth-secret
+            - name: CR_API_AUTH__BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: bootstrap-token
             - name: CR_API_MAIL__FROM
               valueFrom:
                 secretKeyRef:
@@ -362,7 +362,7 @@ spec:
               nvidia.com/gpu: "0"
       containers:
         - name: router-api
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:4ce9dd805f079e67835ea300934c35a2287f916cda1401ff2ad19c4e4f37ff97
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:cd0bc5e232504bf173122c4ef78194e5caa6281998f645288f9326568d31c7b5
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -394,6 +394,11 @@ spec:
                 secretKeyRef:
                   name: confidential-router-api
                   key: auth-secret
+            - name: CR_API_AUTH__BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: bootstrap-token
             - name: CR_API_MAIL__FROM
               valueFrom:
                 secretKeyRef:

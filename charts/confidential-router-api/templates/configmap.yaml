@@ -133,7 +133,7 @@ data:
     # published. The upstream credentials are sealed in the database under
     # CR_API_SECRETS_KEY, which arrives from the Secret.
     #
-    # Rendered only while the egress is on, the same seam rule `auth.password`
+    # Rendered only while the egress is on, the same seam rule `auth.requireInviteForSignUp`
     # follows: the router's config schema is strict, so an image that predates
     # ADR-008 would refuse to boot on this key rather than ignore it.
     externalEndpoints:
@@ -152,7 +152,7 @@ data:
     auth:
       baseUrl: "${ROUTER_PUBLIC_BASE_URL}"
       secret: ${ROUTER_AUTH_SECRET}
-      sessionMaxAge: {{ .Values.auth.sessionMaxAge | quote }}
+      sessionMaxAge: {{ include "confidential-router-api.sessionMaxAge" . | quote }}
       {{- if .Values.auth.github.clientId }}
       github:
         clientId: {{ .Values.auth.github.clientId | quote }}
@@ -164,23 +164,21 @@ data:
         clientSecret: ${ROUTER_GOOGLE_CLIENT_SECRET}
       {{- end }}
       magicLink:
+        {{- if eq (toString .Values.auth.magicLink.enabled) "false" }}
+        # The emailed code is the only mail sign-in (SUP-269). Rendered only
+        # when switched off: an image that predates the key would refuse to
+        # boot on it rather than ignore it.
+        enabled: false
+        {{- end }}
         mailer: {{ .Values.auth.magicLink.mailer | quote }}
         from: {{ .Values.auth.magicLink.from | quote }}
         {{- if eq .Values.auth.magicLink.mailer "resend" }}
         resendApiKey: ${ROUTER_RESEND_API_KEY}
         {{- end }}
-      {{- if .Values.auth.password.enabled }}
-      # Rendered only while it is on, for the same reason `bootstrapToken` is:
-      # the router's config schema is strict, so an image that predates SUP-112
-      # would refuse to boot on the key rather than ignore it.
-      password:
-        enabled: true
-        minLength: {{ .Values.auth.password.minLength | int64 }}
-      {{- end }}
       {{- if .Values.auth.requireInviteForSignUp }}
       # Invite-only registration (SUP-173): no sign-up path creates an account
       # without an invitation code that is valid and unredeemed. Rendered only
-      # while it is on, the same seam rule as `password` above — an image that
+      # while it is on, the same seam rule as `magicLink.enabled` above — an image that
       # predates the key would refuse to boot on it rather than ignore it, and an
       # explicit `false` would buy nothing the default does not.
       requireInviteForSignUp: true

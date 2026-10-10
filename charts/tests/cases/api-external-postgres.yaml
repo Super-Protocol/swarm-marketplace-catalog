@@ -5,6 +5,10 @@ consoleHostname: console.confidential-router.example
 auth:
   existingSecret: confidential-router-secrets
   existingSecretKey: auth-secret
+  # The token too comes from the deployment's own Secret: nothing here is the
+  # chart's to write, and with no token, no mail and no OAuth app it would
+  # refuse to render a deployment nobody could claim.
+  bootstrapTokenExistingSecret: confidential-router-secrets
 database:
   url: postgres://router:golden-test-password@db.internal:5432/router?sslmode=require
 postgresql:
