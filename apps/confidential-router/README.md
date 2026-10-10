@@ -254,9 +254,11 @@ same step creates the account the first time — so who can sign in at all depen
 deployment can send mail.
 
 **The first account is claimed with a token.** The marketplace generates a first-sign-in token, shows
-it with the deployment's outputs, and the console trades it for the administrator account, created
-for the address of the marketplace account that deployed this. Claim the deployment before you
-publish its hostname.
+it with the deployment's outputs, and the console trades it for the administrator account. That
+account is created for *Administrator email* when it is set, and otherwise for the address of the
+marketplace account that deployed this. The administrator signs in with a code mailed to that
+address from then on, so set *Administrator email* whenever the deploying account's address is not
+a mailbox somebody reads. Claim the deployment before you publish its hostname.
 
 **The token stays the administrator's key.** After the claim it signs back into that one account and
 no other. That is what gets the administrator in whenever a code cannot be mailed — before a mail
@@ -295,11 +297,12 @@ and DKIM records covering the server that sends it (for Resend, a domain verifie
 DNS this deployment cannot write. The sender has to be changed from its `.local` default, which no
 server delivers from — the deployment refuses it.
 
-**Reachability is reported.** The API checks the SMTP server at start-up without sending anything,
-and every send after that updates the `mail` field of `https://<API hostname>/health`: `ok`, or
-`failing` with `unreachable` (no connection from this cloud — a cluster space admits outbound
-connections to public addresses only, and some clouds block port 25) or `auth_failed`. While it is
-failing nobody receives a code, and the administrator signs in with the first-sign-in token.
+**Test it once it is deployed.** Ask for a sign-in code for an address you can read: a code that
+arrives is the proof that mail leaves this cloud. The API does check the SMTP server at start-up and
+records every failed send — `unreachable` (a cluster space admits outbound connections to public
+addresses only, and some clouds block port 25) or `auth_failed` — but only in its own health report
+and log, and a published deployment exposes neither. While mail is failing nobody receives a code,
+and the administrator signs in with the first-sign-in token.
 
 **Nothing about it is attested.** Every mail setting — the provider included — reaches the API out
 of the deployment's Secret, so two deployments of one version that differ only in their mail setup
