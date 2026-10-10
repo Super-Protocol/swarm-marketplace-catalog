@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.18.1"
+  version: "0.18.2"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -778,7 +778,14 @@ components:
       # export and import (SUP-272, #103) and the super-admin data export/import
       # bundle (SUP-271, #102). Migrations in that range are additive; the one
       # destructive step is deliberate — stored password hashes are deleted.
-      version: "0.11.0"
+      #
+      # 0.11.1 (SUP-275) routes `/admin` on the API's Ingress. The two file
+      # features that build carries mount under `/admin/data` and
+      # `/admin/invite-codes`, which 0.11.0 did not route: Export & import and
+      # the Codes tab's CSV buttons were on screen in every 0.18.0 and 0.18.1
+      # deployment and answered 404 from nginx. Same image; the attested Ingress
+      # gains a path, so a pinned digest re-pins.
+      version: "0.11.1"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
         digest: sha256:3e1600b0b820bf0a048582c2f8e403a06e991873e38348c8278508416b346954
@@ -1240,9 +1247,9 @@ outputs:
 #
 # and on the same footing `sessionDays`, `billingMode` and `landingHostname`,
 # each of which makes a `router.yaml` block appear or disappear. The chart's own
-# goldens pin it: `checksum/config` is `3a1cdd9c…` for the form as it arrives
-# (no built-in model, the egress on), `61d8a4b7…` for one built-in model,
-# `c8a962d7…` for three, `f9d1dd5e…` for none with the egress off, `db340fcf…`
+# goldens pin it: `checksum/config` is `6c8f8512…` for the form as it arrives
+# (no built-in model, the egress on), `212fab38…` for one built-in model,
+# `cfe015a7…` for three, `81a2129b…` for none with the egress off, `1f51762a…`
 # for an invite-only launch
 # (`charts/tests/golden/api-*.yaml`; the label inside the hashed ConfigMap
 # carries the chart version, so every chart release moves all of them).

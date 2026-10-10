@@ -119,6 +119,14 @@ cannot answer the question:
   canonical rules drop `/data`, `/stringData` and `/immutable` from every Secret — which is both
   what makes a Secret the right carrier for such a value and what makes the comparison possible
   to ask about one at all.
+- **Every route the router API serves is published or kept inside, on purpose**
+  (`api_routes.py`). A controller answers in-process whatever its prefix is; on a deployment it
+  answers only if `ingress.paths` routes that prefix, and the Ingress renders exactly what it is
+  given. The data export/import and the invitation codes CSV shipped under `/admin`, which was
+  not on the list, and were a 404 from nginx on every deployment (SUP-275). The check holds a
+  list of every route the pinned API mounts, each marked published or internal, against the
+  rendered Ingress. The router's source is not here, so when bumping the API image run it with
+  `ROUTER_SRC=<checkout>`: a controller route the list does not name fails.
 - **Mail configuration moves nothing attested** (`mail_invariance.py`). The router case is
   rendered with no mail, with SMTP under two different hosts, senders and credentials, and with
   Resend, and every attested field has to be identical across all four — not merely excluded:

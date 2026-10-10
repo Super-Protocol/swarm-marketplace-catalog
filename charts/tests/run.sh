@@ -744,6 +744,17 @@ else
   fail "charts/tests/local_stack.py"
 fi
 
+# A controller answers in-process whatever its prefix is; on a deployment it
+# answers only if the Ingress routes that prefix. The export/import and codes CSV
+# routes shipped without theirs and were a 404 from nginx everywhere (SUP-275).
+note "every route the router API serves is published or kept inside, on purpose"
+if output=$(python3 charts/tests/api_routes.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/api_routes.py"
+fi
+
 refuses "a model name a shell would read as more than one word" "is not an Ollama model name" \
   helm template "$RELEASE" charts/confidential-router-ollama --namespace "$NAMESPACE" \
     --set 'models[0]=llama3.2:3b; rm -rf /'

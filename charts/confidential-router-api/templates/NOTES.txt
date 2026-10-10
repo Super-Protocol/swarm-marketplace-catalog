@@ -6,7 +6,7 @@
   Models     {{ include "confidential-router-api.selectedModels" . | fromJsonArray | join ", " | default "none — /v1 answers model_not_found" }}
   Mode       NODE_ENV={{ include "confidential-router-api.nodeEnv" . }}, billing={{ .Values.billing.mode }}
   Egress     {{ if .Values.externalEndpoints.enabled }}attested, re-verified every {{ .Values.externalEndpoints.reattestInterval }}{{ else }}off — no external model endpoints{{ end }}
-  Mail       {{ if include "confidential-router-api.mailSends" . }}{{ .Values.mail.provider }}{{ if eq .Values.mail.provider "smtp" }} via {{ .Values.mail.smtp.host }}{{ end }} — reachability is `mail` in {{ include "confidential-router-api.apiUrl" . }}/health{{ else }}none — no sign-in codes, no welcome email{{ end }}
+  Mail       {{ if include "confidential-router-api.mailSends" . }}{{ .Values.mail.provider }}{{ if eq .Values.mail.provider "smtp" }} via {{ .Values.mail.smtp.host }}{{ end }} — reachability is `mail` in the pod's /health, which the Ingress does not route{{ else }}none — no sign-in codes, no welcome email{{ end }}
 
 {{ if eq .Values.billing.mode "disabled" }}
 This deployment sells no credit: the console has no buy panel and a checkout is
