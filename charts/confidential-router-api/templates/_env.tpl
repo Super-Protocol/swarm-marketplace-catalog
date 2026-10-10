@@ -142,6 +142,23 @@ two are simply not read.
   value: {{ .Values.analytics.posthog.host | quote }}
 {{- end }}
 {{- end }}
+{{- /*
+Mail (SUP-269): the router's `mail` section, as `CR_API_MAIL__*` variables read
+out of the Secret. Rendered unconditionally and every one `optional`, which is
+the point: the list is identical whether this deployment mails through SMTP,
+Resend or nothing, so the attested env list — and the evidence digest — says
+nothing about the operator's mail setup. A key the Secret does not carry leaves
+its variable unset, and a deployment with no mail sets none of them, which is
+also what keeps an image older than the `mail` section booting.
+*/}}
+{{- range $variable, $key := dict "CR_API_MAIL__PROVIDER" "mail-provider" "CR_API_MAIL__FROM" "mail-from" "CR_API_MAIL__FROM_NAME" "mail-from-name" "CR_API_MAIL__RESEND_API_KEY" "mail-resend-api-key" "CR_API_MAIL__SMTP__HOST" "smtp-host" "CR_API_MAIL__SMTP__PORT" "smtp-port" "CR_API_MAIL__SMTP__SECURITY" "smtp-security" "CR_API_MAIL__SMTP__USER" "smtp-user" "CR_API_MAIL__SMTP__PASSWORD" "smtp-password" }}
+- name: {{ $variable }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "confidential-router-api.mailSecretName" $ }}
+      key: {{ $key }}
+      optional: true
+{{- end }}
 {{- if .Values.auth.github.clientId }}
 - name: ROUTER_GITHUB_CLIENT_SECRET
   valueFrom:

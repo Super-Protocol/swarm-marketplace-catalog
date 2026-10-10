@@ -11,6 +11,9 @@ apiHostname: api.confidential-router.example
 consoleHostname: console.confidential-router.example
 auth:
   secret: golden-test-auth-secret-not-a-real-one
+  # The way in that needs nothing outside the cluster: with no token, no mail
+  # and no OAuth app the chart refuses to render a deployment nobody could claim.
+  bootstrapToken: golden-test-bootstrap-token
   adminEmails:
     - operator@confidential-router.example
     - second.operator@confidential-router.example

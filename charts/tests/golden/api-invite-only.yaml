@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.10.2
+    helm.sh/chart: confidential-router-api-0.11.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -14,6 +14,7 @@ metadata:
 type: Opaque
 stringData:
   auth-secret: "golden-test-auth-secret-not-a-real-one"
+  bootstrap-token: "golden-test-bootstrap-token"
   password: "golden-test-password"
   postgres-password: "golden-test-password"
   replication-password: "golden-test-password"
@@ -24,7 +25,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api-public
   labels:
-    helm.sh/chart: confidential-router-api-0.10.2
+    helm.sh/chart: confidential-router-api-0.11.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -68,7 +69,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.10.2
+    helm.sh/chart: confidential-router-api-0.11.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -135,19 +136,13 @@ data:
     auth:
       baseUrl: "${ROUTER_PUBLIC_BASE_URL}"
       secret: ${ROUTER_AUTH_SECRET}
-      sessionMaxAge: "720h"
+      sessionMaxAge: "2160h"
       magicLink:
         mailer: "none"
         from: "no-reply@confidential-router.local"
-      # Rendered only while it is on, for the same reason `bootstrapToken` is:
-      # the router's config schema is strict, so an image that predates SUP-112
-      # would refuse to boot on the key rather than ignore it.
-      password:
-        enabled: true
-        minLength: 12
       # Invite-only registration (SUP-173): no sign-up path creates an account
       # without an invitation code that is valid and unredeemed. Rendered only
-      # while it is on, the same seam rule as `password` above — an image that
+      # while it is on, the same seam rule as `magicLink.enabled` above — an image that
       # predates the key would refuse to boot on it rather than ignore it, and an
       # explicit `false` would buy nothing the default does not.
       requireInviteForSignUp: true
@@ -204,7 +199,7 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.10.2
+    helm.sh/chart: confidential-router-api-0.11.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -227,7 +222,7 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.10.2
+    helm.sh/chart: confidential-router-api-0.11.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -242,7 +237,11 @@ metadata:
     # `checksum/config` is deliberately *not* excluded: `router.yaml` carries no
     # hostname any more, so that hash is a property of the version and the
     # parameters — which is precisely what the digest should attest.
-    swarm.io/exclude-evidence-fields: "/spec/template/metadata/annotations/checksum~1public-config"
+    #
+    # `checksum/mail` is a hash of the mail settings, which live in the Secret
+    # and nowhere attested (SUP-269); it varies with them and is excluded so the
+    # digest does not.
+    swarm.io/exclude-evidence-fields: "/spec/template/metadata/annotations/checksum~1public-config,/spec/template/metadata/annotations/checksum~1mail"
 spec:
   replicas: 1
   selector:
@@ -254,12 +253,20 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: 5f2a2a5e3c416916548c66af3cf9760849e04a3c38f13c2bc43e1083a07f290c
+        checksum/config: db340fcf6ec9c21891af27332032e3e9509ca245169a184f6528a61fa5415395
         # And a hostname reconfigure is a config change the pod cannot see at all:
         # `envFrom` is read once, when the container starts, so without this the
         # ConfigMap is updated and the running router keeps advertising the old
         # origin.
-        checksum/public-config: 31714fcfc8b0d4533b2e34545165adf2d0e5afe81f9fcec4ac89c6e880b0579f
+        checksum/public-config: 1b1276ffad9a5d16059c9786e059ab8102d30391fbd37bc262c87c4e1d67e0aa
+        # The mail settings reach the container as env read from the Secret, once,
+        # at start — so a reconfigured SMTP server or a rotated password would
+        # otherwise sit in the Secret while the router keeps the old one (SUP-269).
+        #
+        # Keyed with `auth.secret`: everything else in the pre-image is either
+        # known or guessable, so a bare hash of it would be an offline oracle for
+        # the SMTP password to anyone who can read the Deployment.
+        checksum/mail: 7e54497ae94e1e16acb7be6ebd5a310b4382b026ddee618456dffaa65bc30bfe
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr
@@ -275,7 +282,7 @@ spec:
         # PostgreSQL accepts connections, which is exactly the wait this pod needs
         # and is why there is no separate wait-for-database container.
         - name: migrate
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:cd0bc5e232504bf173122c4ef78194e5caa6281998f645288f9326568d31c7b5
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:3e1600b0b820bf0a048582c2f8e403a06e991873e38348c8278508416b346954
           imagePullPolicy: IfNotPresent
           args: ["migrate"]
           securityContext:
@@ -304,6 +311,65 @@ spec:
                 secretKeyRef:
                   name: confidential-router-api
                   key: auth-secret
+            - name: CR_API_AUTH__BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: bootstrap-token
+            - name: CR_API_MAIL__FROM
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-from
+                  optional: true
+            - name: CR_API_MAIL__FROM_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-from-name
+                  optional: true
+            - name: CR_API_MAIL__PROVIDER
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-provider
+                  optional: true
+            - name: CR_API_MAIL__RESEND_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-resend-api-key
+                  optional: true
+            - name: CR_API_MAIL__SMTP__HOST
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-host
+                  optional: true
+            - name: CR_API_MAIL__SMTP__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-password
+                  optional: true
+            - name: CR_API_MAIL__SMTP__PORT
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-port
+                  optional: true
+            - name: CR_API_MAIL__SMTP__SECURITY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-security
+                  optional: true
+            - name: CR_API_MAIL__SMTP__USER
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-user
+                  optional: true
           volumeMounts:
             - name: config
               mountPath: /etc/confidential-router
@@ -323,7 +389,7 @@ spec:
               nvidia.com/gpu: "0"
       containers:
         - name: router-api
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:cd0bc5e232504bf173122c4ef78194e5caa6281998f645288f9326568d31c7b5
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:3e1600b0b820bf0a048582c2f8e403a06e991873e38348c8278508416b346954
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -355,6 +421,65 @@ spec:
                 secretKeyRef:
                   name: confidential-router-api
                   key: auth-secret
+            - name: CR_API_AUTH__BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: bootstrap-token
+            - name: CR_API_MAIL__FROM
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-from
+                  optional: true
+            - name: CR_API_MAIL__FROM_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-from-name
+                  optional: true
+            - name: CR_API_MAIL__PROVIDER
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-provider
+                  optional: true
+            - name: CR_API_MAIL__RESEND_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-resend-api-key
+                  optional: true
+            - name: CR_API_MAIL__SMTP__HOST
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-host
+                  optional: true
+            - name: CR_API_MAIL__SMTP__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-password
+                  optional: true
+            - name: CR_API_MAIL__SMTP__PORT
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-port
+                  optional: true
+            - name: CR_API_MAIL__SMTP__SECURITY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-security
+                  optional: true
+            - name: CR_API_MAIL__SMTP__USER
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: smtp-user
+                  optional: true
           # `/health` does a real database round trip, so an unready pod is one
           # that cannot serve rather than one that has merely started.
           startupProbe:
@@ -409,7 +534,7 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.10.2
+    helm.sh/chart: confidential-router-api-0.11.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"

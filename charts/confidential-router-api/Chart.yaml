@@ -46,7 +46,26 @@ type: application
 # Invitations API (mint, list, attribution, statistics) and the TEE label read
 # from published evidence (SUP-270). No template change; the egress sidecar keeps
 # its pin.
-version: 0.10.2
+#
+# 0.11.0 is SUP-269: sign-in by a code mailed to the address, and the mail to
+# send it with. `auth.password` is gone from the values and from the rendered
+# config — the router stores no hash — `auth.sessionDays` sets how long a browser
+# stays signed in (90), `auth.magicLink.enabled: false` leaves the code as the
+# only mail sign-in, and a deployment with no mail, no OAuth app and no
+# first-sign-in token is refused at render time because nobody could enter it.
+#
+# It pins the router API to `main-44708f9`, which also carries the invitation
+# codes CSV export/import (SUP-272) and the data export/import bundle (SUP-271);
+# the egress sidecar keeps its pin — nothing under `apps/gatekeeper` changed.
+#
+# It adds `mail`: SMTP or Resend for sign-in codes and the welcome email. Every mail value reaches the pod out of the Secret as a
+# `CR_API_MAIL__*` variable, and the env list names all of them `optional`
+# whatever is configured — so the attested objects, and the evidence digest, are
+# the same for every mail setup (`charts/tests/mail_invariance.py`). The env list
+# itself grows by those nine entries for everyone, so anyone pinning a digest
+# re-pins once. It needs a router image from SUP-269 on: an older one has no
+# code sign-in, and with the password block gone it would have no sign-in at all.
+version: 0.11.0
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous

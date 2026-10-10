@@ -8,14 +8,17 @@
 # calls it.
 apiHostname: api.confidential-router.example
 consoleHostname: console.confidential-router.example
-# The auth block as the listing's base sets it, so the golden also pins that an
-# external-only deployment offers password sign-up (SUP-248).
+# The auth block as the listing's base sets it: the first-sign-in token, no
+# mailer, and the emailed code as the only mail sign-in once one is configured
+# (SUP-269) — so the golden pins what a deployment left as the form arrives is.
 auth:
   secret: golden-test-auth-secret-not-a-real-one
+  # The way in that needs nothing outside the cluster: with no token, no mail
+  # and no OAuth app the chart refuses to render a deployment nobody could claim.
+  bootstrapToken: golden-test-bootstrap-token
   magicLink:
+    enabled: false
     mailer: none
-  password:
-    enabled: true
 database:
   password: golden-test-password
 models: []

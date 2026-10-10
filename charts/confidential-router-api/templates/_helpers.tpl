@@ -280,25 +280,26 @@ config does not set — so this refuses rather than papering over it.
 {{- end -}}
 {{- end -}}
 {{- if eq .Values.auth.magicLink.mailer "smtp" -}}
-{{- fail "auth.magicLink.mailer \"smtp\" is in the config schema but not implemented: use \"resend\", or \"console\" outside production" -}}
+{{- fail "auth.magicLink.mailer \"smtp\" was never implemented under that key: configure SMTP with mail.provider: smtp and mail.smtp.* instead (SUP-269)" -}}
 {{- end -}}
 {{- if not (has .Values.auth.magicLink.mailer (list "none" "console" "resend")) -}}
 {{- fail (printf "auth.magicLink.mailer must be none, console or resend, not %q" .Values.auth.magicLink.mailer) -}}
 {{- end -}}
-{{- if .Values.auth.password.enabled -}}
-{{- $minLength := .Values.auth.password.minLength | int -}}
-{{- if or (lt $minLength 8) (gt $minLength 128) -}}
-{{- fail (printf "auth.password.minLength must be between 8 and 128, not %d" $minLength) -}}
-{{- end -}}
-{{- end -}}
 {{/*
-Every sign-in path off at once deploys cleanly and answers nothing but 404: the
-bootstrap token lets exactly one account in and then stops existing, so a
-deployment that has no mailer, no OAuth app and no password has no second way in
-even for the administrator who claimed it.
+No way in at all deploys cleanly and answers nothing but 404. Sign-in is a code
+mailed to the address, OAuth, or the bootstrap token (SUP-269) — there are no
+passwords — so a deployment with no mail, no OAuth app and no token is one
+nobody can ever claim. A token alone is enough to render: that is the
+bootstrap-token-only deployment, where the administrator is the only account.
 */}}
-{{- if not (or .Values.auth.password.enabled .Values.auth.github.clientId .Values.auth.google.clientId (ne .Values.auth.magicLink.mailer "none")) -}}
-{{- fail "no sign-in path is configured: auth.magicLink.mailer is none, auth.password.enabled is false and neither auth.github nor auth.google is set. The bootstrap token creates one account and then stops existing, so nobody could sign in afterwards" -}}
+{{- if not (or .Values.auth.bootstrapToken .Values.auth.bootstrapTokenExistingSecret .Values.auth.github.clientId .Values.auth.google.clientId (ne .Values.auth.magicLink.mailer "none") (include "confidential-router-api.mailSends" .) .Values.mail.existingSecret) -}}
+{{- fail "no sign-in path is configured: there is no mail provider (mail.provider, or auth.magicLink.mailer), neither auth.github nor auth.google is set, and there is no auth.bootstrapToken. Nobody could ever sign in" -}}
+{{- end -}}
+{{- if .Values.auth.sessionDays -}}
+{{- $days := .Values.auth.sessionDays | int -}}
+{{- if or (lt $days 1) (gt $days 365) -}}
+{{- fail (printf "auth.sessionDays must be between 1 and 365, not %v" .Values.auth.sessionDays) -}}
+{{- end -}}
 {{- end -}}
 {{/*
 The manual provider mints credit from a signed link. It exists for a laptop, and
@@ -388,5 +389,63 @@ account nobody can sign in to, and the token is spent on it.
 {{- if not (contains "@" .Values.auth.bootstrapEmail) -}}
 {{- fail (printf "auth.bootstrapEmail is %q, which is not an email address" .Values.auth.bootstrapEmail) -}}
 {{- end -}}
+{{- end -}}
+{{/*
+Mail (SUP-269). Each of these renders, deploys, and then sends nothing: the
+router refuses to boot on the first two, and a sender that is not an address is
+a mail every server rejects. An `existingSecret` is trusted to hold what the
+provider needs, because what it holds is not visible from here.
+*/}}
+{{- $mail := .Values.mail -}}
+{{- if not (has $mail.provider (list "" "none" "smtp" "resend")) -}}
+{{- fail (printf "mail.provider must be none, smtp or resend, not %q" $mail.provider) -}}
+{{- end -}}
+{{- if and (eq $mail.provider "smtp") (not $mail.existingSecret) (not $mail.smtp.host) -}}
+{{- fail "mail.provider is smtp: set mail.smtp.host" -}}
+{{- end -}}
+{{- if and (eq $mail.provider "resend") (not $mail.existingSecret) (not $mail.resendApiKey) -}}
+{{- fail "mail.provider is resend: set mail.resendApiKey" -}}
+{{- end -}}
+{{- if and (include "confidential-router-api.mailSends" .) $mail.from (not (contains "@" $mail.from)) -}}
+{{- fail (printf "mail.from is %q, which is not an email address" $mail.from) -}}
+{{- end -}}
+{{- if and (include "confidential-router-api.mailSends" .) (or (not $mail.from) (hasSuffix ".local" (lower $mail.from))) -}}
+{{- fail (printf "mail.from is %q: a provider is configured, so set a sender on a domain you control — no server delivers mail from a .local address, and the router's default is one" ($mail.from | default "unset")) -}}
+{{- end -}}
+{{- if and (eq $mail.provider "smtp") (not (has $mail.smtp.security (list "starttls" "tls" "none"))) -}}
+{{- fail (printf "mail.smtp.security must be starttls, tls or none, not %q" $mail.smtp.security) -}}
+{{- end -}}
+{{- if and (eq $mail.provider "smtp") $mail.smtp.port -}}
+{{- $port := $mail.smtp.port | int -}}
+{{- if or (lt $port 1) (gt $port 65535) -}}
+{{- fail (printf "mail.smtp.port must be between 1 and 65535, not %v" $mail.smtp.port) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+"true" when `mail` configures a provider that actually sends, empty otherwise —
+the shape `if` reads as a boolean.
+*/}}
+{{- define "confidential-router-api.mailSends" -}}
+{{- if has .Values.mail.provider (list "smtp" "resend") -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+The Secret a mail value is read from: the operator's own, or this chart's.
+*/}}
+{{- define "confidential-router-api.mailSecretName" -}}
+{{- .Values.mail.existingSecret | default (include "confidential-router-api.secretName" .) -}}
+{{- end -}}
+
+{{/*
+The session lifetime the router is given: `auth.sessionDays` as hours when it is
+set, `auth.sessionMaxAge` as written otherwise.
+*/}}
+{{- define "confidential-router-api.sessionMaxAge" -}}
+{{- if .Values.auth.sessionDays -}}
+{{- printf "%dh" (mul (int .Values.auth.sessionDays) 24) -}}
+{{- else -}}
+{{- .Values.auth.sessionMaxAge -}}
 {{- end -}}
 {{- end -}}

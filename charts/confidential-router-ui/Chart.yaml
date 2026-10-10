@@ -31,5 +31,9 @@ type: application
 #
 # 0.2.8 (SUP-268) pins `main-b885b86`: the Administration → Invitations section
 # and the evidence-derived TEE label (SUP-270). No template change.
-version: 0.2.8
+#
+# 0.2.9 (SUP-269) pins `main-44708f9`: sign-in and sign-up by emailed code — no
+# password screens — the invitation codes CSV export/import (SUP-272) and the
+# data migration screen (SUP-271). No template change.
+version: 0.2.9
 appVersion: "0.4.1"

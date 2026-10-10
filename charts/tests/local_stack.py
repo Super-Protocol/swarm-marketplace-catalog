@@ -15,9 +15,9 @@ would run:
     external endpoint is the only thing this deployment can serve;
   - no GPU requested by anything;
   - the API published: its Ingress routing `/v1`, `/graphql` and `/auth` to the
-    API Service, and password sign-in on in the attested `router.yaml` — the two
-    things a person needs to create the first account on such a deployment
-    (SUP-248).
+    API Service, and the first-sign-in token given to the API — the two things
+    a person needs to claim such a deployment, which has no mail to send a
+    sign-in code with until a provider is configured (SUP-248, SUP-269).
 
     charts/tests/local_stack.py
 """
@@ -89,8 +89,18 @@ def api_published(documents: list[dict]) -> list[str]:
     config = next((d for d in documents if d["kind"] == "ConfigMap"
                    and d["metadata"]["name"] == "confidential-router-api"), None)
     router = yaml.safe_load(config["data"]["router.yaml"]) if config else {}
-    if not ((router.get("auth") or {}).get("password") or {}).get("enabled"):
-        failures.append("router.yaml does not enable password sign-in")
+    auth = router.get("auth") or {}
+    if "password" in auth:
+        failures.append("router.yaml still carries auth.password: sign-in is by emailed code (SUP-269)")
+    deployment = next((d for d in documents if d["kind"] == "Deployment"
+                       and d["metadata"]["name"] == "confidential-router-api"), None)
+    variables = {
+        variable["name"]
+        for container in (deployment["spec"]["template"]["spec"]["containers"] if deployment else [])
+        for variable in container.get("env") or []
+    }
+    if "CR_API_AUTH__BOOTSTRAP_TOKEN" not in variables:
+        failures.append("the API is not given the first-sign-in token, the only way into a deployment with no mail")
     return failures
 
 
@@ -146,7 +156,7 @@ def main() -> int:
         return 1
     for name in sorted(running):
         print(f"  ok    {name}: {', '.join(sorted(running[name]))}")
-    print(f"  ok    confidential-router-api published on {', '.join(sorted(API_PATHS))}, password sign-in on")
+    print(f"  ok    confidential-router-api published on {', '.join(sorted(API_PATHS))}, first-sign-in token given")
     return 0
 
 
