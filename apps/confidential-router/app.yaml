@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.18.0"
+  version: "0.18.1"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -138,6 +138,8 @@ ui:
           widget: select
         - parameterId: bootstrapToken
           widget: password
+        - parameterId: adminEmail
+          widget: text
         - parameterId: sessionDays
           widget: number
         - parameterId: billingMode
@@ -170,12 +172,34 @@ parameters:
     validation:
       pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
 
+  # The administrator's address (0.18.1, SUP-269). Until sign-in became a code
+  # mailed to the address, the account deploying this was a good enough answer
+  # and no parameter existed. It no longer is: the administrator has to be able
+  # to *receive* that code, and the marketplace account that clicks Deploy is
+  # often a service or shared login whose address is not a mailbox anyone reads.
+  # Empty keeps the old behaviour, so nothing changes for a deployment that does
+  # not set it. It reaches the pod in the Secret, like the address it replaces,
+  # so it moves no digest.
+  - id: adminEmail
+    type: string
+    title: Administrator email
+    description: >-
+      The address the administrator account is created for — the one the first-sign-in token claims,
+      and the one allowed into Administration. Sign-in is a one-time code mailed to it, so make it a
+      mailbox you read. Leave it empty to use the address of the marketplace account deploying
+      this; set it when that account's address is not a real inbox.
+    required: false
+    default: ""
+    validation:
+      pattern: "^$|^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+
   - id: bootstrapToken
     type: string
     title: First sign-in token
     description: >-
       The administrator's own key to this deployment. It claims the administrator account, once, for
-      the address of the marketplace account deploying this — nobody is asked to retype it — and
+      the administrator email below — or, when that is empty, for the address of the marketplace
+      account deploying this — and
       afterwards signs back into that account and no other. That second half is what gets the
       administrator in when no sign-in code can be mailed: no mail provider yet, or one that is down.
       Generated if left blank and shown below after this is deployed. Keep it like a password.
@@ -416,10 +440,10 @@ parameters:
       deployment first-sign-in-token-only: the administrator gets in with the token, and nobody else
       can sign in or sign up at all. `SMTP` is any mail server you have an account on; `Resend` is
       the Resend API. With either, anyone signs in — and signs up — with a one-time code, and new
-      accounts get a welcome email. The server is checked
-      when the API starts, and the result is the `mail` field of `https://<API hostname>/health` —
-      `ok`, or `failing` with `unreachable` or `auth_failed` — so mail that cannot get out is
-      visible rather than silently lost.
+      accounts get a welcome email. Test it right after deploying:
+      ask for a sign-in code for an address you can read. The API checks the server when it starts
+      and records every failed send, but only in its own health report and log, which a published
+      deployment does not expose — so an arriving code is the proof that mail gets out.
     required: false
     default: "none"
     options:
@@ -953,6 +977,22 @@ components:
             value: "{{ params.resendApiKey }}"
             when: "params.billingMode == 'stripe'"
 
+          # The administrator's address, when one is given (0.18.1). `replace` for
+          # both: the base above names the deploying account, and a deployment
+          # that sets `adminEmail` means "this address instead", not "as well" —
+          # leaving the deployer on the admin list would keep an address nobody
+          # may be able to read as a second way into Administration.
+          - op: replace
+            path: auth.bootstrapEmail
+            value: "{{ params.adminEmail }}"
+            when: 'params.adminEmail != ""'
+
+          - op: replace
+            path: auth.adminEmails
+            value:
+              - "{{ params.adminEmail }}"
+            when: 'params.adminEmail != ""'
+
           # Mail (SUP-269). `add`, and nothing in the base: with no provider the
           # chart's `mail` stays empty and writes nothing to the Secret, so the
           # router keeps reading `auth.magicLink` above — the Stripe path's Resend
@@ -1091,7 +1131,14 @@ outputs:
   - id: firstSignIn
     title: First sign-in
     type: string
+    when: 'params.adminEmail == ""'
     value: "Open the console, choose \"Have a bootstrap token?\", and enter the token below — the administrator account is created for {{ consumer.user.email }}. Claim the deployment before its hostname is handed out. The token keeps working afterwards, for that one account only: it is the administrator's way back in whenever a sign-in code cannot be mailed, so keep it like a password."
+
+  - id: firstSignInAsAdmin
+    title: First sign-in
+    type: string
+    when: 'params.adminEmail != ""'
+    value: "Open the console, choose \"Have a bootstrap token?\", and enter the token below — the administrator account is created for {{ params.adminEmail }}, which afterwards signs in with a code mailed to it. Claim the deployment before its hostname is handed out. The token keeps working afterwards, for that one account only: it is the administrator's way back in whenever a sign-in code cannot be mailed, so keep it like a password."
 
   - id: signInNoMail
     title: Everyone else
@@ -1109,7 +1156,7 @@ outputs:
     title: Mail
     type: string
     when: "params.mailProvider != 'none'"
-    value: "Sent from {{ params.mailFrom }}. Whether the server accepted the connection and credentials is the `mail` field of https://{{ params.apiHostname }}/health — `ok`, or `failing` with `unreachable` (the server could not be reached from this cloud) or `auth_failed`. Mail reaches inboxes only if the sender's domain publishes SPF and DKIM records for the server sending it."
+    value: "Sent from {{ params.mailFrom }}. Check it now: ask for a sign-in code at https://{{ params.consoleHostname }}/login for an address you can read — a code that arrives is the proof mail gets out of this cloud. If none does, the administrator still gets in with the first-sign-in token. Mail reaches inboxes only if the sender's domain publishes SPF and DKIM records for the server sending it."
 
   - id: invitedSignUp
     title: Everyone else
