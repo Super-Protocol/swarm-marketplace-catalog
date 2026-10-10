@@ -28,5 +28,8 @@ type: application
 # console digest, the SUP-263 change had not been built yet. This is
 # `main-9e86c41` (confidential-router#98, containing #97), which also carries the
 # Profile screen's set-password card (SUP-267).
-version: 0.2.7
+#
+# 0.2.8 (SUP-268) pins `main-b885b86`: the Administration → Invitations section
+# and the evidence-derived TEE label (SUP-270). No template change.
+version: 0.2.8
 appVersion: "0.4.1"
