@@ -748,11 +748,16 @@ components:
       #
       # 0.11.0 (SUP-269) adds `mail` — every mail value through the Secret, so the
       # digest does not move with the operator's mail setup — and drops the
-      # password settings: sign-in is a code mailed to the address.
+      # password settings: sign-in is a code mailed to the address. It pins the
+      # API to `main-44708f9`, the one build that carries the whole train:
+      # emailed-code sign-in and mail (SUP-269, #100), the invitation codes CSV
+      # export and import (SUP-272, #103) and the super-admin data export/import
+      # bundle (SUP-271, #102). Migrations in that range are additive; the one
+      # destructive step is deliberate — stored password hashes are deleted.
       version: "0.11.0"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
-        digest: sha256:cd0bc5e232504bf173122c4ef78194e5caa6281998f645288f9326568d31c7b5
+        digest: sha256:3e1600b0b820bf0a048582c2f8e403a06e991873e38348c8278508416b346954
       # The attested egress, a second container in the API pod (ADR-008 §2): the
       # gatekeeper's own core, verifying an external model endpoint's evidence and
       # pinning its TLS leaf before this deployment proxies a prompt to it. The
@@ -1034,7 +1039,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-ui
-      version: "0.2.8"
+      version: "0.2.9"
     images:
       # Moves with the API's digest above, from the same source revision: the
       # admin section that registers an external endpoint and edits the trust
@@ -1058,8 +1063,13 @@ components:
       # 0.17.0 (SUP-268) moves both to `main-b885b86`: Administration →
       # Invitations (issue, codes, sign-ups, statistics) and the Overview's TEE
       # column from evidence (SUP-270) call fields that API revision ships.
+      #
+      # 0.18.0 moves both to `main-44708f9`: the sign-in and sign-up screens ask
+      # for a mailed code instead of a password (SUP-269), and Administration
+      # gains the codes CSV export/import (SUP-272) and the data migration
+      # screen (SUP-271) — all over fields and routes that API revision ships.
       - name: ghcr.io/super-protocol/confidential-router/router-ui
-        digest: sha256:c647f3dfd4b7227042a4a4600087cce3a5008ed37226660c84290b9ec38c19ae
+        digest: sha256:fdd529f1751de8dcdc10821a54cff328e8d88915d6523c1ff3dc39359056a503
     deployment:
       values:
         base:

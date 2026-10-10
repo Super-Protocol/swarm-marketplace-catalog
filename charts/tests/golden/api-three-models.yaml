@@ -281,7 +281,7 @@ spec:
         # PostgreSQL accepts connections, which is exactly the wait this pod needs
         # and is why there is no separate wait-for-database container.
         - name: migrate
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:cd0bc5e232504bf173122c4ef78194e5caa6281998f645288f9326568d31c7b5
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:3e1600b0b820bf0a048582c2f8e403a06e991873e38348c8278508416b346954
           imagePullPolicy: IfNotPresent
           args: ["migrate"]
           securityContext:
@@ -388,7 +388,7 @@ spec:
               nvidia.com/gpu: "0"
       containers:
         - name: router-api
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:cd0bc5e232504bf173122c4ef78194e5caa6281998f645288f9326568d31c7b5
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:3e1600b0b820bf0a048582c2f8e403a06e991873e38348c8278508416b346954
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

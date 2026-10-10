@@ -54,6 +54,10 @@ type: application
 # only mail sign-in, and a deployment with no mail, no OAuth app and no
 # first-sign-in token is refused at render time because nobody could enter it.
 #
+# It pins the router API to `main-44708f9`, which also carries the invitation
+# codes CSV export/import (SUP-272) and the data export/import bundle (SUP-271);
+# the egress sidecar keeps its pin — nothing under `apps/gatekeeper` changed.
+#
 # It adds `mail`: SMTP or Resend for sign-in codes and the welcome email. Every mail value reaches the pod out of the Secret as a
 # `CR_API_MAIL__*` variable, and the env list names all of them `optional`
 # whatever is configured — so the attested objects, and the evidence digest, are
