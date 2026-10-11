@@ -65,7 +65,14 @@ type: application
 # itself grows by those nine entries for everyone, so anyone pinning a digest
 # re-pins once. It needs a router image from SUP-269 on: an older one has no
 # code sign-in, and with the password block gone it would have no sign-in at all.
-version: 0.11.0
+#
+# 0.11.1 (SUP-275) routes `/admin` on the API's Ingress. 0.11.0 pinned the build
+# with the data export/import and the invitation codes CSV and left their
+# controllers — `admin/data`, `admin/invite-codes` — off `ingress.paths`, so all
+# four routes answered 404 from nginx on every deployment and neither screen
+# could work. One more path in the attested Ingress: anyone pinning a digest
+# re-pins. No image change.
+version: 0.11.1
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous

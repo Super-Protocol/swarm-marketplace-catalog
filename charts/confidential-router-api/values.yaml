@@ -42,6 +42,15 @@ service:
 #   /billing   Stripe's webhook, and the manual provider's checkout return link
 #   /activity  the Logs screen's CSV download, a browser navigation
 #   /exports   the evidence zip, opened from a signed link that may be handed on
+#   /admin     the operator's file transfers, called from the browser with the
+#              operator's session: the deployment export and its import
+#              (`/admin/data`) and the invitation codes CSV (`/admin/invite-codes`)
+#
+# A controller the console calls and this list does not name answers 404 from the
+# ingress on every deployment, however green it is in-process — which is how the
+# two under `/admin` shipped unreachable in 0.11.0 (SUP-275).
+# `charts/tests/api_routes.py` holds every REST route the pinned API mounts
+# against this list, so a new one is a decision made here.
 #
 # `/health` is for the kubelet and `/docs` is Swagger: neither belongs on a
 # public hostname, and leaving them off is what keeps this list a decision rather
@@ -56,6 +65,7 @@ ingress:
     - /billing
     - /activity
     - /exports
+    - /admin
   pathType: Prefix
   annotations:
     # Chat completions stream token by token over a long-lived connection, which
