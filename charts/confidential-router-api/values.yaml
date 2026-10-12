@@ -396,12 +396,18 @@ modelCatalog:
 # served by the one confidential deployment this chart is part of, and that is
 # the host the platform publishes evidence for.
 #
-# `tee` is an operator-declared label. It is what the console prints next to a
-# model; it is never a verdict, and nothing verifies it (ADR-002).
+# No TEE label is declared here. Until chart 0.12.0 an `endpoints.<name>.tee`
+# string was rendered into the attested config and printed by the console beside
+# the endpoint, and this file could only ever hold one value for it — so every
+# deployment of this listing claimed "Intel TDX + H100 CC", including the Azure
+# clouds running on AMD SEV-SNP and the pure-TDX one with no GPU at all
+# (SUP-260). One listing deploys to both, so no string written here can be right
+# for all of them. The router names the TEE from the hardware branch of the
+# `TeeEvidence` in the root certificate of the evidence each endpoint publishes
+# — read, never verified (ADR-002) — on every surface that shows one.
 endpoints:
   confidential-router:
     hostname: ""
-    tee: Intel TDX + H100 CC
     # An operator-only override for where the evidence bundle is fetched from.
     # Empty means `https://<hostname>/.well-known/swarm-evidence`.
     evidenceUrl: ""

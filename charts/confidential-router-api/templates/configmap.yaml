@@ -79,7 +79,16 @@ data:
         endpoint that did is a parameter, and parameters belong in the digest.
         */}}
         hostname: {{ $endpoint.hostname | default "${ROUTER_PUBLIC_HOSTNAME}" | quote }}
-        tee: {{ required (printf "endpoints.%s.tee must be set" $name) $endpoint.tee | quote }}
+        {{- /*
+        No `tee`. The key was an operator-declared label, and one chart renders
+        one value of it for every deployment — so it claimed "Intel TDX + H100
+        CC" on the SEV-SNP clouds and on the pure-TDX one with no GPU (SUP-260).
+        The router reads the TEE off the root certificate of the evidence an
+        endpoint publishes instead, which is the only source that differs per
+        deployment because it *is* the deployment. The API accepts and ignores
+        the key, so dropping it here needs an image from that change on; the
+        digest below is one.
+        */}}
         {{- if $endpoint.evidenceUrl }}
         evidenceUrl: {{ $endpoint.evidenceUrl | quote }}
         {{- end }}
