@@ -66,13 +66,24 @@ type: application
 # re-pins once. It needs a router image from SUP-269 on: an older one has no
 # code sign-in, and with the password block gone it would have no sign-in at all.
 #
+# 0.11.2 (SUP-300) re-pins the router API and its egress sidecar to
+# `main-82769ff`, the head that carries the whole test-group train: every TEE
+# label read from published evidence rather than from the declared string
+# (SUP-260), the sidecar no longer reusing an upstream connection the far end
+# has already closed — which turned the first request after an idle gap into a
+# 502 (SUP-289), the installer's PATH line, field-level sign-up refusals and a
+# non-empty external evidence export (SUP-295), and CLI messages that confirm
+# what happened, where, and what to run next, with no hardcoded configuration
+# path on any surface (SUP-300). No template change and no values change: the
+# two digests move, and anyone pinning a deployment's evidence digest re-pins.
+#
 # 0.11.1 (SUP-275) routes `/admin` on the API's Ingress. 0.11.0 pinned the build
 # with the data export/import and the invitation codes CSV and left their
 # controllers — `admin/data`, `admin/invite-codes` — off `ingress.paths`, so all
 # four routes answered 404 from nginx on every deployment and neither screen
 # could work. One more path in the attested Ingress: anyone pinning a digest
 # re-pins. No image change.
-version: 0.11.1
+version: 0.11.2
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous

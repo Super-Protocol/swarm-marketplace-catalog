@@ -24,18 +24,24 @@ surface, no "verified" badge, no registry of who attested it and no record that 
 question belongs to whoever is about to send a prompt, and it is answered on their machine:
 
 ```bash
-gatekeeper endpoint add router --listen 127.0.0.1:8443 --upstream https://<API hostname>
+gatekeeper init                              # writes the config, and prints where
+gatekeeper endpoint add router --upstream https://<API hostname> --listen 127.0.0.1:8787
 gatekeeper endpoint discover router          # read what the endpoint publishes
 gatekeeper endpoint trust add router --from-upstream   # pin it, after review
 gatekeeper run
 ```
+
+`init` is not optional and was missing from this block: without it every other
+command exits 4 with "no configuration at …". Each step now prints the next one,
+and the path it writes — the configuration directory is the OS's own, so no
+instruction here can name it in advance (SUP-300).
 
 The [Gatekeeper](https://github.com/Super-Protocol/confidential-router) is a forward proxy that
 runs on the client's own machine. It fetches the published bundle, checks the signature chain
 against the clouds its operator trusts, matches it against the digests they pinned, and only then
 lets traffic through — re-checking in the background and failing closed when a snapshot goes stale.
 The router never learns whether, when, or by whom this happened. The client's base URL becomes
-`http://127.0.0.1:8443/v1` and nothing else about the integration changes.
+`http://127.0.0.1:8787/v1` and nothing else about the integration changes.
 
 Pinning is always explicit. `--from-upstream` prints the full report and asks before it writes;
 there is no trust-on-first-use anywhere in this product.
