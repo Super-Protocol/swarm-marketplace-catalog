@@ -3,6 +3,16 @@
 # reference that stays computable from what the cluster actually pulled
 # (marketplace spec §2.7). `tag` exists for a development build and is ignored
 # whenever `digest` is set.
+#
+# ⚠ 0.12.0 has not re-pinned this yet, and must before it is published. The
+# rendered `router.yaml` stopped setting `endpoints[].tee` (SUP-260), and the
+# digest below is the 0.11.x build, which declares that key **required** and
+# refuses to boot without it. So this chart version does not currently install
+# on its own defaults. The digest has to move to a router image built from
+# confidential-router#107 on, in the same change that publishes 0.12.0.
+#
+# A listing overriding `image.digest` is why *a listing* would be safe; it is
+# not why the *chart* is, and the chart is published as an artefact of its own.
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-router/router-api

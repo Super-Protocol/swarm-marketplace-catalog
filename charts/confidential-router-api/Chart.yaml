@@ -85,10 +85,15 @@ type: application
 # the only source that differs per deployment because it *is* the deployment.
 #
 # One line leaves the attested document, so `checksum/config` moves on every
-# render and anyone pinning a digest re-pins once. It needs a router image from
-# confidential-router#107 on: that build accepts and ignores the key, and an
-# older one has it as a required field and refuses to boot without it. A listing
-# must therefore move to this chart version and to such an image together.
+# render and anyone pinning a digest re-pins once.
+#
+# ⚠ Not publishable as it stands: `image.digest` is still the 0.11.x build,
+# which declares `endpoints[].tee` required and therefore refuses to boot on
+# the document this version renders — so 0.12.0 would ship as a chart that
+# cannot install on its own defaults. Re-pin `image.digest` to a router image
+# built from confidential-router#107 on, in the change that publishes this
+# version. A listing must move to this chart version and to such an image
+# together, and its own `image.digest` override does not make the chart safe.
 version: 0.12.0
 appVersion: "0.4.1"
 dependencies:
