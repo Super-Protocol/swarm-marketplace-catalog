@@ -786,15 +786,24 @@ components:
       # deployment and answered 404 from nginx. Same image; the attested Ingress
       # gains a path, so a pinned digest re-pins.
       #
-      # 0.11.2 (SUP-300) re-pins the API and its egress sidecar to
-      # `main-82769ff`, the head of the test-group train: every TEE label read
-      # from published evidence (SUP-260), field-level sign-up refusals and a
-      # non-empty external evidence export (SUP-295), and the sidecar that no
-      # longer reuses an upstream connection the far end has already closed —
-      # the 502 on the first request after an idle gap (SUP-289). No template
-      # change and no values change; both digests move, so a pinned deployment
-      # re-pins.
-      version: "0.11.2"
+      # 0.12.0 (SUP-260) drops `endpoints.<name>.tee` from the attested
+      # `router.yaml`. One chart held one label, so every deployment of this
+      # listing claimed "Intel TDX + H100 CC" — including the AMD SEV-SNP clouds
+      # and the GPU-less production one, which is where the test group read it
+      # off the screen. The router names the TEE from the evidence each endpoint
+      # publishes instead. No listing version shipped 0.12.0: it renders a
+      # document the 0.11.x image refuses to boot on, so the chart was published
+      # with that warning and left for the change that re-pins the image.
+      #
+      # 0.12.1 (SUP-300) is that change, and this is the listing that carries
+      # it. The API and its egress sidecar move to `main-82769ff`, the head of
+      # the test-group train: the evidence-derived TEE label the 0.12.0 document
+      # requires (SUP-260), field-level sign-up refusals and a non-empty
+      # external evidence export (SUP-295), and the sidecar that no longer
+      # reuses an upstream connection the far end has already closed — the 502
+      # on the first request after an idle gap (SUP-289). The two must move
+      # together, and they do here.
+      version: "0.12.1"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
         digest: sha256:367aab943e948fb5443e6839212bdb5965a9d3791966626eadede79c44ec7ab0

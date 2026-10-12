@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.11.2
+    helm.sh/chart: confidential-router-api-0.12.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -25,7 +25,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api-public
   labels:
-    helm.sh/chart: confidential-router-api-0.11.2
+    helm.sh/chart: confidential-router-api-0.12.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -65,7 +65,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.11.2
+    helm.sh/chart: confidential-router-api-0.12.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -106,7 +106,6 @@ data:
     endpoints:
       - name: "confidential-router"
         hostname: "${ROUTER_PUBLIC_HOSTNAME}"
-        tee: "Intel TDX + H100 CC"
 
     # `litellmModel` is the catalogue key, which is the Ollama model name and the
     # name LiteLLM publishes: one string, all the way down.
@@ -198,7 +197,7 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.11.2
+    helm.sh/chart: confidential-router-api-0.12.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -221,7 +220,7 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.11.2
+    helm.sh/chart: confidential-router-api-0.12.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -252,12 +251,12 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: a67bef357eddf71d82761b356d4a7f634fb9f81c17b69466f635160058daca67
+        checksum/config: 880faa11806a24c178a47332eb3fc1a378ea38b0ae02d855523f8fb870bca576
         # And a hostname reconfigure is a config change the pod cannot see at all:
         # `envFrom` is read once, when the container starts, so without this the
         # ConfigMap is updated and the running router keeps advertising the old
         # origin.
-        checksum/public-config: c7e4b20d712689deb8f7c7fa19aaf1d29acee5f9092c788f7d9b6cb1e68759dd
+        checksum/public-config: 8a6c8ab80f05d300b1081557112033b28ecc30ff875377c9bfd5dd5cec01d16b
         # The mail settings reach the container as env read from the Secret, once,
         # at start — so a reconfigured SMTP server or a rotated password would
         # otherwise sit in the Secret while the router keeps the old one (SUP-269).
@@ -281,7 +280,7 @@ spec:
         # PostgreSQL accepts connections, which is exactly the wait this pod needs
         # and is why there is no separate wait-for-database container.
         - name: migrate
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:367aab943e948fb5443e6839212bdb5965a9d3791966626eadede79c44ec7ab0
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:3e1600b0b820bf0a048582c2f8e403a06e991873e38348c8278508416b346954
           imagePullPolicy: IfNotPresent
           args: ["migrate"]
           securityContext:
@@ -388,7 +387,7 @@ spec:
               nvidia.com/gpu: "0"
       containers:
         - name: router-api
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:367aab943e948fb5443e6839212bdb5965a9d3791966626eadede79c44ec7ab0
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:3e1600b0b820bf0a048582c2f8e403a06e991873e38348c8278508416b346954
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -533,7 +532,7 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.11.2
+    helm.sh/chart: confidential-router-api-0.12.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"

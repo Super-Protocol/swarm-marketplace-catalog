@@ -79,7 +79,20 @@ data:
         endpoint that did is a parameter, and parameters belong in the digest.
         */}}
         hostname: {{ $endpoint.hostname | default "${ROUTER_PUBLIC_HOSTNAME}" | quote }}
-        tee: {{ required (printf "endpoints.%s.tee must be set" $name) $endpoint.tee | quote }}
+        {{- /*
+        No `tee`. The key was an operator-declared label, and one chart renders
+        one value of it for every deployment — so it claimed "Intel TDX + H100
+        CC" on the SEV-SNP clouds and on the pure-TDX one with no GPU (SUP-260).
+        The router reads the TEE off the root certificate of the evidence an
+        endpoint publishes instead, which is the only source that differs per
+        deployment because it *is* the deployment.
+
+        Omitting it is only safe on a router image that accepts the key's
+        absence, which means one built from confidential-router#107 on; an
+        older image declares `endpoints[].tee` required and refuses to boot on
+        this document. `image.digest` in values.yaml is what has to carry such
+        a build — see the note there, which is the gate on publishing 0.12.0.
+        */}}
         {{- if $endpoint.evidenceUrl }}
         evidenceUrl: {{ $endpoint.evidenceUrl | quote }}
         {{- end }}
