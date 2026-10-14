@@ -32,6 +32,12 @@ direction or not at all.
    subchart naming its own image by tag is the vendor's contract and the listing rewrites
    it, so that shape is reported rather than failed.
 
+   A pin written as one string — `image: ghcr.io/super-protocol/…/router-ui:main-deadbeef`
+   — counts as a pin, not only a mapping with `repository`. Recognising only mappings let
+   that form through with the job green and the chart simply absent from the verdict, which
+   is this check failing by not looking. Four charts here write their third-party images
+   that way, so the form is in use and not hypothetical.
+
 2. **The attestation verifies, for this digest.** `gh attestation verify
    oci://<registry>/<repository>@<digest> --repo <source repository>` must exit 0, and the
    attestation's subject must be the declared digest under the declared name. The source
@@ -59,6 +65,14 @@ direction or not at all.
    populates from the OIDC token. The same commit also appears in the SLSA predicate,
    which the attested workflow can set. Both are read and a disagreement fails, so reading
    the convenient one is not what the verdict rests on.
+
+   Every entry of `resolvedDependencies` is scanned, and an attestation naming no
+   `gitCommit` anywhere fails. Reading `resolvedDependencies[0]` and skipping the
+   comparison when it held no commit made this guarantee switch itself off: one decoy
+   entry ahead of the git dependency, and a forged commit behind it passes. Every release
+   workflow puts the git dependency first today, so that was latent — but an upstream
+   predicate change would have disabled an advertised check with no signal. `subject` is
+   searched the same way and for the same reason.
 
 5. **The attestation names a revision at all.** A signing certificate without
    `sourceRepositoryDigest` fails rather than being reported as attested beside an empty
@@ -98,7 +112,7 @@ for the pins on `main`, trimmed to the fields a verdict reads. Each case under `
 is a small repository tree — one listing, two charts — read with that recording overlaid by
 the case's own `attestations.json`.
 
-Recordings rather than live lookups, because four of these shapes cannot be produced live
+Recordings rather than live lookups, because most of these shapes cannot be produced live
 at all: nobody can push an image to `ghcr.io/super-protocol` that has no attestation, or
 an attestation whose predicate disagrees with its own signing certificate. Those are
 exactly the paths a provenance gate has to get right and exactly the ones that otherwise
@@ -113,7 +127,10 @@ never run.
 | `split-train` | the half-rebased listing: two real digests, two valid attestations, two commits |
 | `forged-predicate` | the SLSA predicate's commit against the signing certificate's |
 | `no-source-commit` | a certificate naming no source revision, with the predicate's right there to be read instead |
-| `subject-mismatch` | an attestation that verifies, for an image other than the one pinned |
+| `subject-mismatch` | an attestation that verifies, for an image other than the one pinned, with a decoy subject ahead of ours |
+| `string-form-pin` | the pin written as one string, which recognising only mappings made invisible |
+| `decoy-dependency` | a decoy resolved dependency ahead of the git one, with the commit behind it forged |
+| `no-predicate-commit` | a predicate resolving no commit at all, where skipping the cross-check is the convenient reading |
 
 Re-record when a listing re-pins, from a tree where the live gate passes:
 
@@ -127,10 +144,27 @@ carries that train's digests.
 
 ## What this does not do
 
+It does not constrain **which workflow, on which ref** built the image. `--repo` pins the
+source repository and nothing else, so what a green verdict actually says is "built by some
+workflow on some ref in `Super-Protocol/<repo>`" — not "built by a release workflow on a
+release branch". Anyone who can run any workflow in that repository can mint an attestation
+this gate accepts. The run prints the signer workflow and its ref in every row, so the
+difference is visible; it is not enforced. Tightening it means `--signer-workflow` or
+`--cert-identity`, and the signer set is genuinely plural today — `release-router.yml` and
+`release-gatekeeper.yml` on `main`, `release-images.yml` on `develop` — so it needs the
+per-repository allow-list this deliberately avoids. Worth revisiting once the release
+workflows settle.
+
 It does not make the check **required**. `main` in this repository carries no branch
 protection, no rulesets and no CODEOWNERS, so a red `verify-pins` blocks nothing — it
 replaces a claim with machine output, which is worth having, and it is not yet a gate.
-Making it required is a repository-admin change (SUP-318).
+Making it required is a repository-admin change (SUP-318), and it has a trap in it worth
+knowing before that moment: **a path-filtered workflow cannot be a required status check.**
+A pull request touching neither `charts/**` nor `apps/**` — a README fix — never starts
+`digest provenance` at all, so a ruleset requiring it leaves that pull request pending
+forever. Every check in this repository has that shape. The answers are either an
+always-running job that short-circuits green, or a ruleset that accounts for skipped checks;
+neither is a change to this job.
 
 It also does not replace a reviewer. The job answers "which revision is this, and does the
 bundle agree about it" — not whether that revision is the one the listing's notes describe.
@@ -142,3 +176,11 @@ chart render is held to it by `charts/tests/declared_images.py`. Where a listing
 no `images:` at all — `conversational-analyst` today — its charts' tag pins are reported
 here and enforced nowhere, which is a real gap in a different check's territory and not one
 this job can close by failing the catalog as it stands.
+
+One shape of pin is still unresolved rather than checked: a mapping under an `…image` key
+that declares a `digest` or `tag` but no `repository`, which is how a chart overrides only
+part of a vendored subchart's default — `conversational-analyst-gateway` does it with a bare
+`image.tag`. The repository then lives in `charts/vendor/**`, which this does not read, so
+the pin cannot be named and is not reported. It cannot hide one of ours today, because every
+vendored default here is third-party; a first-party image introduced that way would be
+invisible, and resolving it means reading the vendored chart's own values.

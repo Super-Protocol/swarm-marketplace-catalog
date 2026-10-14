@@ -59,10 +59,11 @@ jobs:
 
       - run: pip install --quiet pyyaml
 
-      # The gate's own behaviour, against recorded attestations and offline. Four of
+      # The gate's own behaviour, against recorded attestations and offline. Most of
       # these shapes cannot be produced live — nobody can push an unattested image
-      # to ghcr.io/super-protocol — so a gate without them is a gate whose failure
-      # paths have never run.
+      # to ghcr.io/super-protocol, or one whose attestation disagrees with its own
+      # signing certificate — so a gate without them is a gate whose failure paths
+      # have never run.
       - name: The gate behaves as it should
         run: scripts/verify-pins/run.sh
 

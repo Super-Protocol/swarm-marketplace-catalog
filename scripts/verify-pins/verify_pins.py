@@ -148,12 +148,18 @@ class Pin:
 
 @dataclass
 class Attestation:
-    """The fields a provenance verdict is made of, normalised out of `gh --format json`."""
+    """The fields a provenance verdict is made of, normalised out of `gh --format json`.
 
-    subject_name: str
-    subject_digest: str
+    Both arrays are read whole rather than at index 0. An attestation may name several
+    subjects and several resolved dependencies, and the order is the producing
+    workflow's to choose: reading `[0]` makes a check that one decoy entry ahead of the
+    real one turns off, which for the predicate comparison means an advertised guarantee
+    disabled with no signal at all.
+    """
+
+    subjects: list[tuple[str, str]]  # (name, digest) of every subject
     commit: str  # certificate sourceRepositoryDigest — from the OIDC token
-    predicate_commit: str  # the SLSA predicate's gitCommit — the workflow's own claim
+    predicate_commits: list[str]  # every gitCommit in the predicate — the workflow's own claim
     workflow: str  # certificate buildConfigURI, which carries the ref as well
 
 
@@ -184,24 +190,76 @@ def split_reference(name: str) -> tuple[str, str]:
     return DEFAULT_REGISTRY, name
 
 
+def parse_image_string(value: str) -> dict:
+    """`ghcr.io/super-protocol/x/y:main-abc@sha256:…` → the same four fields a block spells out.
+
+    The order is forced: the digest comes off at the last `@`, then the tag at the
+    last `:` *after* the last `/` — so `localhost:5000/x` keeps its registry port
+    and `python:3.12-slim` does not keep its tag as part of the repository — and only
+    what is left is split into registry and repository.
+    """
+    rest, _, digest = value.partition("@")
+    tag = ""
+    if ":" in rest.rsplit("/", 1)[-1]:
+        rest, _, tag = rest.rpartition(":")
+    registry, repository = split_reference(rest)
+    return {
+        "registry": registry,
+        "repository": repository,
+        "digest": digest,
+        "tag": tag,
+        "declares_digest": bool(digest),
+    }
+
+
 def image_blocks(node: object, path: list[str]) -> list[tuple[str, dict]]:
-    """Every mapping in a values tree that pins an image.
+    """Every pin in a values tree, normalised to registry / repository / digest / tag.
 
-    Keyed on `repository` rather than on a key named `image`, because the key is
-    not always that: patroni-postgresql pins its etcd bootstrap under
-    `etcd.bootstrapImage`, and a nested one — the API chart's egress gatekeeper
-    under `externalEndpoints.image` — is exactly the pin a flat read misses.
+    A mapping is a pin when it has a `repository`, keyed on that rather than on a key
+    named `image`, because the key is not always that: patroni-postgresql pins its etcd
+    bootstrap under `etcd.bootstrapImage`, and a nested one — the API chart's egress
+    gatekeeper under `externalEndpoints.image` — is exactly the pin a flat read misses.
+    A `repository` is enough; neither `digest` nor `tag` is required to notice the block,
+    because a first-party image declaring neither — a chart leaving the pin to its
+    listing — would otherwise pass by being invisible rather than by being pinned.
 
-    A `repository` is enough; neither `digest` nor `tag` is required to notice the
-    block. Requiring one would let a first-party image declaring neither — a chart
-    that leaves the pin entirely to its listing — pass by being invisible, which is
-    the one way an unpinned image of ours could get through.
+    A **string** under a key named `…image` is a pin too, and the same reasoning one
+    level up: `image: ghcr.io/super-protocol/confidential-router/router-ui:main-deadbeef`
+    is a first-party image pinned by tag, and recognising only mappings let it through
+    with the job green and that chart simply absent from the verdict. Four charts write
+    their third-party images this way today, so the form is in use here and not
+    hypothetical; the existing first-party charts are safe from it only because their
+    templates read `.Values.image.repository` and the string form breaks a golden — and a
+    new chart brings its own goldens.
     """
     found: list[tuple[str, dict]] = []
     if isinstance(node, dict):
         if isinstance(node.get("repository"), str):
-            found.append((".".join(path) or ".", node))
+            # conversational-analyst-agent writes the host into `repository` and
+            # declares no `registry` at all, which is the vendored chart's own
+            # convention — so the split has to be read out of the repository when
+            # the key is missing, or that image is reported under a registry it does
+            # not come from.
+            registry, repository = (
+                (node["registry"], node["repository"])
+                if node.get("registry")
+                else split_reference(node["repository"])
+            )
+            found.append(
+                (
+                    ".".join(path) or ".",
+                    {
+                        "registry": registry,
+                        "repository": repository,
+                        "digest": (node.get("digest") or "").strip(),
+                        "tag": str(node.get("tag") or ""),
+                        "declares_digest": "digest" in node,
+                    },
+                )
+            )
         for key, value in node.items():
+            if isinstance(value, str) and str(key).lower().endswith("image"):
+                found.append((".".join(path + [str(key)]), parse_image_string(value)))
             found += image_blocks(value, path + [str(key)])
     elif isinstance(node, list):
         for index, value in enumerate(node):
@@ -215,28 +273,8 @@ def chart_pins(root: Path, chart: str) -> list[Pin]:
         return []
     values = yaml.safe_load(values_path.read_text()) or {}
     pins = []
-    for key, block in image_blocks(values, []):
-        # Most charts split the two keys. conversational-analyst-agent writes the
-        # host into `repository` and declares no `registry` at all, which is the
-        # vendored chart's own convention — so the split has to be read out of the
-        # repository when the key is missing, or that image is reported under a
-        # registry it does not come from.
-        registry, repository = (
-            (block["registry"], block["repository"])
-            if block.get("registry")
-            else split_reference(block["repository"])
-        )
-        pins.append(
-            Pin(
-                origin=f"charts/{chart}/values.yaml",
-                key=key,
-                registry=registry,
-                repository=repository,
-                digest=(block.get("digest") or "").strip(),
-                tag=str(block.get("tag") or ""),
-                declares_digest="digest" in block,
-            )
-        )
+    for key, pin in image_blocks(values, []):
+        pins.append(Pin(origin=f"charts/{chart}/values.yaml", key=key, **pin))
     return pins
 
 
@@ -252,14 +290,17 @@ def listing_pins(listing: str, definition: dict) -> list[Pin]:
     pins = []
     for component in definition.get("components") or []:
         for index, image in enumerate(component.get("images") or []):
-            registry, repository = split_reference(str(image.get("name") or ""))
+            # `name` is a repository in the specification, but parsing it the same way
+            # a chart's string pin is parsed costs nothing and keeps a stray tag or
+            # digest in it from becoming part of the repository.
+            named = parse_image_string(str(image.get("name") or ""))
             pins.append(
                 Pin(
                     origin=f"apps/{listing}/app.yaml",
                     key=f"components[{component.get('name')}].images[{index}]",
-                    registry=registry,
-                    repository=repository,
-                    digest=(image.get("digest") or "").strip(),
+                    registry=named["registry"],
+                    repository=named["repository"],
+                    digest=(image.get("digest") or named["digest"] or "").strip(),
                     tag="",
                     declares_digest=True,  # the specification has no tag here: an entry is a digest
                 )
@@ -309,14 +350,19 @@ def parse_attestations(payload: list) -> list[Attestation]:
         result = entry["verificationResult"]
         certificate = result["signature"]["certificate"]
         statement = result["statement"]
-        subject = (statement.get("subject") or [{}])[0]
-        dependencies = statement["predicate"]["buildDefinition"].get("resolvedDependencies") or [{}]
+        dependencies = statement["predicate"]["buildDefinition"].get("resolvedDependencies") or []
         parsed.append(
             Attestation(
-                subject_name=subject.get("name", ""),
-                subject_digest="sha256:" + (subject.get("digest") or {}).get("sha256", ""),
+                subjects=[
+                    (subject.get("name", ""), "sha256:" + (subject.get("digest") or {}).get("sha256", ""))
+                    for subject in statement.get("subject") or []
+                ],
                 commit=certificate.get("sourceRepositoryDigest", ""),
-                predicate_commit=(dependencies[0].get("digest") or {}).get("gitCommit", ""),
+                predicate_commits=[
+                    commit
+                    for dependency in dependencies
+                    if (commit := (dependency.get("digest") or {}).get("gitCommit"))
+                ],
                 workflow=certificate.get("buildConfigURI", ""),
             )
         )
@@ -467,25 +513,36 @@ def verify_pin(pin: Pin, verifier: Verifier) -> Verdict:
             # a verdict that says "attested" beside an empty commit is worse than
             # one that says it could not tell.
             return Verdict(pin, "FAIL", detail="the attestation's signing certificate names no source commit")
-        if attestation.subject_digest != pin.digest:
+        # The subject the pin names has to be among them, under the name the pin
+        # declares. Searching rather than reading `subject[0]` so an attestation over
+        # several artefacts cannot be rejected for listing ours second — and cannot be
+        # accepted for listing something else first.
+        if (reference.name, pin.digest) not in attestation.subjects:
+            carried = ", ".join(f"{name}@{digest}" for name, digest in attestation.subjects) or "nothing"
             return Verdict(
                 pin,
                 "FAIL",
-                detail=f"attestation subject is {attestation.subject_digest}, the pin declares {pin.digest}",
+                detail=f"the attestation's subject is {carried}, the pin declares {reference.name}@{pin.digest}",
             )
-        if attestation.subject_name != reference.name:
+
+        # The predicate's own account of the commit, every entry of it. An
+        # attestation that names no `gitCommit` anywhere fails rather than skipping
+        # the comparison: a guarantee that turns itself off when the field it reads
+        # moves is not one.
+        if not attestation.predicate_commits:
             return Verdict(
                 pin,
                 "FAIL",
-                detail=f"attestation subject is named {attestation.subject_name}, the pin declares {reference.name}",
+                detail="the attestation's predicate resolves no source commit, so there is nothing to cross-check",
             )
-        if attestation.predicate_commit and attestation.predicate_commit != attestation.commit:
+        disagreeing = sorted({commit for commit in attestation.predicate_commits if commit != attestation.commit})
+        if disagreeing:
             return Verdict(
                 pin,
                 "FAIL",
                 detail=(
                     f"the signing certificate attests commit {attestation.commit} and the build's own "
-                    f"predicate claims {attestation.predicate_commit}"
+                    f"predicate claims {', '.join(disagreeing)}"
                 ),
             )
 

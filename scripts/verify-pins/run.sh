@@ -109,6 +109,30 @@ case_run first-party-tag-only 1 \
   "charts/confidential-router-api/values.yaml: image" \
   "is first-party and declares no digest"
 
+# The pin written as one string. Recognising only mappings made this chart vanish
+# from the verdict: exit 0, "every first-party pin traces to an attested commit",
+# over a first-party image pinned by tag. The listing beside it still declares the
+# right digest, which is the realistic shape — the listing moved, the chart did not.
+case_run string-form-pin 1 \
+  "charts/confidential-router-ui/values.yaml: image" \
+  "is first-party and declares no digest"
+
+# A decoy resolved dependency ahead of the git one, with the commit behind it
+# forged. Reading resolvedDependencies[0] finds no gitCommit there, skips the
+# comparison and passes — an advertised guarantee turned off by the order of an
+# array the attested workflow writes.
+case_run decoy-dependency 1 \
+  "charts/confidential-router-api/values.yaml: image" \
+  "the signing certificate attests commit 82769ff3fc764ab9c6e176280874175a4e5c09b4" \
+  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+# Nothing in the predicate resolves a commit at all, which is what an upstream
+# predicate change looks like from here. Skipping the cross-check would be the
+# convenient reading and would leave the guarantee advertised and absent.
+case_run no-predicate-commit 1 \
+  "charts/confidential-router-api/values.yaml: image" \
+  "resolves no source commit"
+
 # A digest nothing attests. The realistic cause is a digest copied from a local
 # build or from a registry the release workflow never pushed to; the failure has
 # to name the digest, because the next question is always "which one".
@@ -141,12 +165,15 @@ case_run no-source-commit 1 \
   "charts/confidential-router-api/values.yaml: image" \
   "signing certificate names no source commit"
 
-# An attestation that verifies, for a different image than the one pinned. `gh`
-# rejects this itself today; the check stays because the bundle a future offline
-# or registry-fetched verification hands back is not guaranteed to.
+# An attestation that verifies, for a different image than the one pinned, with a
+# decoy subject ahead of ours so the match has to be searched for rather than read
+# off index 0. `gh` rejects the mismatch itself today; the check stays because the
+# bundle a future offline or registry-fetched verification hands back is not
+# guaranteed to.
 case_run subject-mismatch 1 \
   "charts/confidential-router-api/values.yaml: image" \
-  "attestation subject is sha256:dddd"
+  "the pin declares ghcr.io/super-protocol/confidential-router/router-api@sha256:367aab94" \
+  "router-api@sha256:dddd"
 
 if [ "${1:-}" = "--live" ]; then
   echo

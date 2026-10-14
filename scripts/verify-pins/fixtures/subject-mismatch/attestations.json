@@ -15,14 +15,26 @@
             "predicateType": "https://slsa.dev/provenance/v1",
             "subject": [
               {
+                "name": "ghcr.io/super-protocol/confidential-router/router-ui",
+                "digest": {
+                  "sha256": "af8ea605f79472d9d74806fac154a390fe1fae8c4b3277d83ec412d6b9d93fbf"
+                }
+              },
+              {
                 "name": "ghcr.io/super-protocol/confidential-router/router-api",
-                "digest": { "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" }
+                "digest": {
+                  "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                }
               }
             ],
             "predicate": {
               "buildDefinition": {
                 "resolvedDependencies": [
-                  { "digest": { "gitCommit": "82769ff3fc764ab9c6e176280874175a4e5c09b4" } }
+                  {
+                    "digest": {
+                      "gitCommit": "82769ff3fc764ab9c6e176280874175a4e5c09b4"
+                    }
+                  }
                 ]
               }
             }
