@@ -16,7 +16,7 @@
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-router/router-api
-  digest: sha256:3e1600b0b820bf0a048582c2f8e403a06e991873e38348c8278508416b346954
+  digest: sha256:367aab943e948fb5443e6839212bdb5965a9d3791966626eadede79c44ec7ab0
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -464,14 +464,15 @@ externalEndpoints:
   #
   # The build has to be one whose supervisor *waits* while the rendered file has
   # no endpoint (confidential-router SUP-229, `main-481445c` or later; pinned:
-  # `main-f23d2d6`, which also verifies Azure CVM roots, SUP-251, and looks
-  # measurements up in the real registry layout, SUP-255): a fresh
-  # deployment renders exactly that, and an older build exits on it and keeps
-  # the API pod un-Ready (SUP-248). `charts/tests/sidecar_boot.sh` checks it.
+  # `main-82769ff`, which also verifies Azure CVM roots, SUP-251, looks
+  # measurements up in the real registry layout, SUP-255, and closes an idle
+  # upstream connection before it is reused, SUP-289): a fresh deployment
+  # renders exactly that, and an older build exits on it and keeps the API pod
+  # un-Ready (SUP-248). `charts/tests/sidecar_boot.sh` checks it.
   image:
     registry: ghcr.io
     repository: super-protocol/confidential-router/gatekeeper
-    digest: sha256:56158ed17a2f7f9124d30215472ea0fe2ac3dc56974eb0e6808ba0aced11e7d8
+    digest: sha256:e57e4f2f1952d6b369086a72e28ea42f7d8ac93f4dc39b76217bfb8bf9c1958b
     tag: ""
     pullPolicy: IfNotPresent
 

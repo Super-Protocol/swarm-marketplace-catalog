@@ -35,5 +35,13 @@ type: application
 # 0.2.9 (SUP-269) pins `main-44708f9`: sign-in and sign-up by emailed code — no
 # password screens — the invitation codes CSV export/import (SUP-272) and the
 # data migration screen (SUP-271). No template change.
-version: 0.2.9
+#
+# 0.2.10 (SUP-300) pins `main-82769ff`: the console's gatekeeper setup block no
+# longer promises `~/.config/confidential-gatekeeper/config.yaml`, which is not
+# where the file lands on macOS or Windows — the step says "your user
+# configuration directory" and the CLI prints the path it actually resolved
+# (SUP-300). It also carries the field-level sign-up refusals and the key-form
+# copy (SUP-295) and the evidence-derived TEE label everywhere it is shown
+# (SUP-260). No template change.
+version: 0.2.10
 appVersion: "0.4.1"

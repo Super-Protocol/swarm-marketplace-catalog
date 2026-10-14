@@ -94,7 +94,19 @@ type: application
 # built from confidential-router#107 on, in the change that publishes this
 # version. A listing must move to this chart version and to such an image
 # together, and its own `image.digest` override does not make the chart safe.
-version: 0.12.0
+#
+# 0.12.1 (SUP-300) is that change: it re-pins the router API and its egress
+# sidecar to `main-82769ff`, so the ⚠ above is cleared and 0.12.x becomes
+# installable on its own defaults. That head carries the whole test-group
+# train — the TEE label read from published evidence (SUP-260, the build
+# 0.12.0's document requires), the sidecar that no longer reuses an upstream
+# connection the far end has closed (SUP-289), the installer's PATH line,
+# field-level sign-up refusals and a non-empty external evidence export
+# (SUP-295), and CLI messages that confirm what happened, where and what to run
+# next (SUP-300). No template change on top of 0.12.0 and no values change
+# besides the two digests; anyone pinning a deployment's evidence digest
+# re-pins once for 0.12.0's dropped line and the new images together.
+version: 0.12.1
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous
