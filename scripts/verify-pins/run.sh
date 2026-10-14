@@ -133,6 +133,14 @@ case_run forged-predicate 1 \
   "charts/confidential-router-api/values.yaml: image" \
   "the signing certificate attests commit 82769ff3fc764ab9c6e176280874175a4e5c09b4"
 
+# An attestation whose signing certificate names no source revision. The commit in
+# the predicate is there and is right — reading that one and calling it provenance
+# is the shortcut this refuses, so the verdict is "could not tell" rather than a
+# commit taken from the field the attested workflow writes.
+case_run no-source-commit 1 \
+  "charts/confidential-router-api/values.yaml: image" \
+  "signing certificate names no source commit"
+
 # An attestation that verifies, for a different image than the one pinned. `gh`
 # rejects this itself today; the check stays because the bundle a future offline
 # or registry-fetched verification hands back is not guaranteed to.

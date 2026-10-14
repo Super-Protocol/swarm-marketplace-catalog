@@ -51,7 +51,12 @@ direction or not at all.
    which the attested workflow can set. Both are read and a disagreement fails, so reading
    the convenient one is not what the verdict rests on.
 
-5. **One digest, one revision.** A digest carrying attestations from two different commits
+5. **The attestation names a revision at all.** A signing certificate without
+   `sourceRepositoryDigest` fails rather than being reported as attested beside an empty
+   commit — and rather than falling back to the predicate's copy, which is the field the
+   attested workflow writes.
+
+6. **One digest, one revision.** A digest carrying attestations from two different commits
    fails: whichever rebuild or re-push produced it, "the revision this digest came from"
    then has no single answer, and the claim a reviewer would read cannot be made.
 
@@ -98,6 +103,7 @@ never run.
 | `no-attestation` | a digest nothing attests — a local build, or a registry the release workflow never pushed to |
 | `split-train` | the half-rebased listing: two real digests, two valid attestations, two commits |
 | `forged-predicate` | the SLSA predicate's commit against the signing certificate's |
+| `no-source-commit` | a certificate naming no source revision, with the predicate's right there to be read instead |
 | `subject-mismatch` | an attestation that verifies, for an image other than the one pinned |
 
 Re-record when a listing re-pins, from a tree where the live gate passes:

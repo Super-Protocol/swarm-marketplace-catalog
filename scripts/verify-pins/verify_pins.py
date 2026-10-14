@@ -30,6 +30,8 @@ What is checked, per pin:
      train is one source revision; a half-rebased re-pin — one chart moved, its
      sibling left behind — is the realistic mistake, and it renders, lints and
      deploys.
+  4. The attestation names a revision at all, and one digest carrying attestations
+     from two commits fails: the claim a reviewer reads then has no single answer.
 
 Third-party images are reported, not attested: nothing in Super-Protocol signs
 `ollama/ollama`. They appear in the table marked as such, so the verdict says
@@ -133,9 +135,7 @@ class Attestation:
     subject_digest: str
     commit: str  # certificate sourceRepositoryDigest — from the OIDC token
     predicate_commit: str  # the SLSA predicate's gitCommit — the workflow's own claim
-    workflow: str  # certificate buildConfigURI
-    source_repository: str
-    source_ref: str
+    workflow: str  # certificate buildConfigURI, which carries the ref as well
 
 
 @dataclass
@@ -172,10 +172,15 @@ def image_blocks(node: object, path: list[str]) -> list[tuple[str, dict]]:
     not always that: patroni-postgresql pins its etcd bootstrap under
     `etcd.bootstrapImage`, and a nested one — the API chart's egress gatekeeper
     under `externalEndpoints.image` — is exactly the pin a flat read misses.
+
+    A `repository` is enough; neither `digest` nor `tag` is required to notice the
+    block. Requiring one would let a first-party image declaring neither — a chart
+    that leaves the pin entirely to its listing — pass by being invisible, which is
+    the one way an unpinned image of ours could get through.
     """
     found: list[tuple[str, dict]] = []
     if isinstance(node, dict):
-        if isinstance(node.get("repository"), str) and ("digest" in node or "tag" in node):
+        if isinstance(node.get("repository"), str):
             found.append((".".join(path) or ".", node))
         for key, value in node.items():
             found += image_blocks(value, path + [str(key)])
@@ -294,8 +299,6 @@ def parse_attestations(payload: list) -> list[Attestation]:
                 commit=certificate.get("sourceRepositoryDigest", ""),
                 predicate_commit=(dependencies[0].get("digest") or {}).get("gitCommit", ""),
                 workflow=certificate.get("buildConfigURI", ""),
-                source_repository=certificate.get("sourceRepositoryURI", ""),
-                source_ref=certificate.get("sourceRepositoryRef", ""),
             )
         )
     return parsed
@@ -433,6 +436,11 @@ def verify_pin(pin: Pin, verifier: Verifier) -> Verdict:
         return Verdict(pin, "FAIL", detail=f"no attestation for {reference} in {reference.source_repository}")
 
     for attestation in attestations:
+        if not attestation.commit:
+            # Without `sourceRepositoryDigest` there is no revision to report, and
+            # a verdict that says "attested" beside an empty commit is worse than
+            # one that says it could not tell.
+            return Verdict(pin, "FAIL", detail="the attestation's signing certificate names no source commit")
         if attestation.subject_digest != pin.digest:
             return Verdict(
                 pin,
