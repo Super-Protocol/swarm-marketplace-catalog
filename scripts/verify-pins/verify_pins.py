@@ -25,7 +25,9 @@ What is checked, per pin:
      own images are digest-pinned or they are not pinned.
   2. `gh attestation verify oci://<registry>/<repository>@<digest>` against the
      source repository derived from the image path exits 0, and the attestation's
-     subject is the declared digest under the declared name.
+     subject is the declared digest under the declared name. The signed bundle is
+     fetched from the registry first and from the GitHub API second — see
+     TRANSPORTS, where the private-source-repository problem is written down.
   3. Every first-party pin a listing bundles agrees about the source commit. A
      train is one source revision; a half-rebased re-pin — one chart moved, its
      sibling left behind — is the realistic mistake, and it renders, lints and
@@ -79,6 +81,23 @@ FIRST_PARTY_OWNER = "super-protocol"
 FIRST_PARTY_SOURCE_OWNER = "Super-Protocol"
 
 DEFAULT_REGISTRY = "docker.io"
+
+# Where to look for the signed bundle, in order. The registry first, because the
+# attestations of a **private** source repository are not readable through the
+# GitHub API by this repository's workflow token — confidential-s3 is private, and
+# its three digests came back HTTP 404 on the first CI run of this job while the
+# public router's verified fine. The bundle in the registry needs no such access,
+# and trusting it no more: it is verified against the same Sigstore certificate
+# identity and the same subject digest, so the registry is transport and not an
+# authority. A withheld or swapped bundle is a verification failure, never a pass.
+#
+# The API stays as the fallback, for an image whose release workflow does not push
+# its bundle to the registry (`actions/attest-build-provenance` only does with
+# `push-to-registry: true`).
+TRANSPORTS = (
+    ("registry", ["--bundle-from-oci"]),
+    ("GitHub API", []),
+)
 
 
 @dataclass(frozen=True)
@@ -360,32 +379,39 @@ class Verifier:
                 return None, entry["error"]
             return parse_attestations(entry["attestations"]), ""
 
+        errors = []
+        for transport, flags in TRANSPORTS:
+            payload, error = self.run_gh(reference, flags)
+            if payload is None:
+                errors.append(f"via the {transport}: {error}")
+                continue
+            try:
+                parsed = parse_attestations(payload)
+            except (KeyError, IndexError) as problem:
+                errors.append(f"via the {transport}: unreadable attestation output: {problem}")
+                continue
+            self.raw[str(reference)] = {"attestations": trim(payload)}
+            return parsed, ""
+
+        error = "; ".join(errors)
+        self.raw[str(reference)] = {"error": error}
+        return None, error
+
+    @staticmethod
+    def run_gh(reference: Reference, flags: list[str]) -> tuple[list | None, str]:
         completed = subprocess.run(
-            [
-                "gh",
-                "attestation",
-                "verify",
-                f"oci://{reference}",
-                "--repo",
-                reference.source_repository,
-                "--format",
-                "json",
-            ],
+            ["gh", "attestation", "verify", f"oci://{reference}", "--repo", reference.source_repository,
+             "--format", "json", *flags],
             capture_output=True,
             text=True,
         )
         if completed.returncode != 0:
             message = (completed.stderr or completed.stdout).strip().splitlines()
-            error = message[-1].strip() if message else "gh attestation verify failed"
-            self.raw[str(reference)] = {"error": error}
-            return None, error
+            return None, (message[-1].strip() if message else "gh attestation verify failed")
         try:
-            payload = json.loads(completed.stdout)
-            parsed = parse_attestations(payload)
-        except (json.JSONDecodeError, KeyError, IndexError) as error:
-            return None, f"unreadable attestation output: {error}"
-        self.raw[str(reference)] = {"attestations": trim(payload)}
-        return parsed, ""
+            return json.loads(completed.stdout), ""
+        except json.JSONDecodeError as problem:
+            return None, f"unreadable attestation output: {problem}"
 
     def record(self) -> dict:
         """The lookups this run made, as a replay file."""

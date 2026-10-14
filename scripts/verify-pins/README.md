@@ -39,6 +39,15 @@ direction or not at all.
    built by `Super-Protocol/<repo>` — rather than from a table, which would be one more
    thing to forget to extend when a chart gains an image.
 
+   The bundle is fetched from the registry (`--bundle-from-oci`) first and from the GitHub
+   API second. That order is not a preference: `Super-Protocol/confidential-s3` is private,
+   so this repository's workflow token cannot read its attestations through the API, and the
+   first CI run of this job returned HTTP 404 for all three of its digests while the public
+   router's verified fine. The registry copy needs no such access and is trusted no more —
+   it is checked against the same Sigstore certificate identity and the same subject digest,
+   so a withheld or swapped bundle is a verification failure rather than a pass. The API
+   fallback is there for an image whose release workflow pushes no bundle to the registry.
+
 3. **One bundle, one source revision.** Every first-party pin a listing bundles has to
    agree about the commit, per source repository. A half-rebased re-pin — the API moved,
    the console left on the revision before it — renders, lints, passes every golden and

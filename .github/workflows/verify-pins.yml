@@ -36,9 +36,12 @@ on:
 
 permissions:
   contents: read
-  # The attestations are read through the API of the repository that signed them —
-  # ours are public, so the default token reaches them. A first-party image built
-  # in a private repository would need a token that can read it.
+  # The signed bundle is fetched from the registry first, which needs no access to
+  # the repository that signed it: confidential-s3 is private, and reading its
+  # attestations through the GitHub API with this repository's token is an HTTP 404
+  # (the first run of this job found that). `attestations: read` is here for the
+  # API fallback, which serves an image whose release workflow pushes no bundle to
+  # the registry.
   attestations: read
   packages: read
 
