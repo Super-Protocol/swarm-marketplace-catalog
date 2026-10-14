@@ -1,0 +1,18 @@
+# A fixture, not a chart. scripts/verify-pins/run.sh renders no templates from this —
+# only the image pins are read. See ../README.md.
+apiVersion: swarm.cloud/v1alpha1
+kind: AppDefinition
+metadata:
+  name: confidential-router
+  version: "0.18.3"
+components:
+  - name: router-api
+    source:
+      type: helm
+      chart: confidential-router-api
+
+  - name: router-ui
+    source:
+      type: helm
+      chart: confidential-router-ui
+

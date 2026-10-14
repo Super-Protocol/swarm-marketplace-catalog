@@ -1,0 +1,7 @@
+# A fixture, not a chart. scripts/verify-pins/run.sh renders no templates from this —
+# only the image pins are read. See ../README.md.
+#
+# The pin as one string, which is the form that used to be invisible: a mapping was
+# what made a block a pin, so this chart dropped out of the verdict entirely and the
+# job stayed green over a first-party image pinned by tag.
+image: ghcr.io/super-protocol/confidential-router/router-ui:main-deadbeef

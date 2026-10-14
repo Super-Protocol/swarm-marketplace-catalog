@@ -1,0 +1,13 @@
+# A fixture, not a chart. scripts/verify-pins/run.sh renders no templates from this —
+# only the image pins are read. See ../README.md.
+image:
+  registry: ghcr.io
+  repository: super-protocol/confidential-router/router-api
+  digest: sha256:367aab943e948fb5443e6839212bdb5965a9d3791966626eadede79c44ec7ab0
+  tag: ""
+externalEndpoints:
+  image:
+    registry: ghcr.io
+    repository: super-protocol/confidential-router/gatekeeper
+    digest: sha256:e57e4f2f1952d6b369086a72e28ea42f7d8ac93f4dc39b76217bfb8bf9c1958b
+    tag: ""
