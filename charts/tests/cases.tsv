@@ -31,6 +31,7 @@ s3-large-volumes	confidential-s3
 model-server-llama	swarm-model-server		
 model-server-gemma	swarm-model-server		
 model-server-qwen-fp8	swarm-model-server		
+model-server-qwen-next-fp8	swarm-model-server		
 ollama-one-model	confidential-router-ollama		
 ollama-gpu	confidential-router-ollama		
 ollama-no-models	confidential-router-ollama		

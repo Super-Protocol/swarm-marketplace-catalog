@@ -1135,7 +1135,7 @@ refuses "a chat template file the chart does not carry" "does not exist" \
 # The three things a published endpoint must not expose, asserted on the render
 # rather than trusted to the values file.
 note "swarm-model-server publishes only what authenticates"
-for case in model-server-llama model-server-gemma model-server-qwen-fp8; do
+for case in model-server-llama model-server-gemma model-server-qwen-fp8 model-server-qwen-next-fp8; do
   rendered=$(helm template ms charts/swarm-model-server --namespace model-server \
     --values "charts/tests/cases/$case.yaml" 2>&1) || { fail "$case (render)"; continue; }
   problems=""
@@ -1165,7 +1165,7 @@ done
 # it is held constant here and only the things a deployment really chooses — the
 # namespace, the hostname and the generated key — are varied.
 note "two deployments of a model listing differ only in the hostname"
-for case in model-server-llama model-server-gemma model-server-qwen-fp8; do
+for case in model-server-llama model-server-gemma model-server-qwen-fp8 model-server-qwen-next-fp8; do
   render_ms() {
     helm template ms-fixed charts/swarm-model-server --namespace "$2" \
       --values "charts/tests/cases/$case.yaml" \
@@ -1190,13 +1190,14 @@ done
 # cloud acts on, and `evidence.exclude` in the listing is what the marketplace
 # reads to show it beside the digest.
 note "each model listing declares the exclusion its chart annotates"
-# Each listing against its own golden. Feeding one golden to all three would
+# Each listing against its own golden. Feeding one golden to all of them would
 # still check every listing's declaration, but would only ever resolve the
 # llama render's pointer — and a pointer is an index, so the whole point of
 # resolving it is that it is checked against the object it indexes.
 for pair in "llama-3-2-3b-instruct:model-server-llama" \
             "gemma-2-2b-it:model-server-gemma" \
-            "qwen3-coder-30b-a3b-instruct-fp8:model-server-qwen-fp8"; do
+            "qwen3-coder-30b-a3b-instruct-fp8:model-server-qwen-fp8" \
+            "qwen3-coder-next-fp8:model-server-qwen-next-fp8"; do
   app="${pair%%:*}"
   case_name="${pair##*:}"
   if output=$(python3 - "apps/$app/app.yaml" "charts/tests/golden/$case_name.yaml" <<'PYTHON'
@@ -1335,7 +1336,7 @@ else
   printf '%s\n' "$output" | sed 's/^/        /'
 fi
 
-for app in llama-3-2-3b-instruct gemma-2-2b-it qwen3-coder-30b-a3b-instruct-fp8; do
+for app in llama-3-2-3b-instruct gemma-2-2b-it qwen3-coder-30b-a3b-instruct-fp8 qwen3-coder-next-fp8; do
   if output=$(python3 - "apps/$app/app.yaml" <<'PYTHON'
 import pathlib, sys, yaml
 sys.path.insert(0, "charts/tests/smoke")

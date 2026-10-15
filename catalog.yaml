@@ -44,6 +44,8 @@ apps:
     organization: platform-team
   - path: apps/qwen3-coder-30b-a3b-instruct-fp8
     organization: platform-team
+  - path: apps/qwen3-coder-next-fp8
+    organization: platform-team
   - path: apps/confidential-s3
     organization: acme-corp
   - path: apps/rag-agent
