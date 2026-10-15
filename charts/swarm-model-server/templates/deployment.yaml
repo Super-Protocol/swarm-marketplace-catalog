@@ -1,4 +1,9 @@
 {{- $name := include "swarm-model-server.fullname" . -}}
+{{- $e := dict -}}
+{{- include "swarm-model-server.engines" (dict "ctx" . "out" $e) -}}
+{{- $engines := $e.engines -}}
+{{- $multi := $e.multi -}}
+{{- $weightsMount := ternary "/models" (first $engines).dir $multi -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -49,56 +54,88 @@ spec:
         # It runs the engine image rather than a Python base, because the script
         # is stdlib-only and a second image would be a second digest to keep
         # true and a second registry to trust.
+        #
+        # One per engine, in the order the values name them: init containers run
+        # sequentially, so two models are fetched one after the other rather
+        # than two streams competing for the same link, and each one prunes
+        # inside its own directory.
         # ---------------------------------------------------------------------
-        - name: fetch-weights
-          image: {{ include "swarm-model-server.image" . }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+        {{- range $engine := $engines }}
+        - name: {{ $engine.fetcher }}
+          image: {{ include "swarm-model-server.image" $ }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
           command:
             - python3
+            {{- if $multi }}
+            - /opt/engines/fetch-weights.py
+            {{- else }}
             - /opt/weights/fetch-weights.py
+            {{- end }}
           env:
             - name: WEIGHTS_MANIFEST
-              value: /etc/model/manifest.json
+              value: {{ $engine.manifestPath | quote }}
             - name: WEIGHTS_DIR
-              value: {{ .Values.model.dir | quote }}
+              value: {{ $engine.dir | quote }}
             - name: WEIGHTS_REPO
-              value: {{ .Values.model.weights.repo | quote }}
+              value: {{ $engine.model.weights.repo | quote }}
             - name: HF_ENDPOINT
-              value: {{ .Values.model.weights.endpoint | quote }}
-          {{- with .Values.securityContext }}
+              value: {{ $engine.model.weights.endpoint | default $.Values.model.weights.endpoint | quote }}
+          {{- with $.Values.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:
             - name: weights
-              mountPath: {{ .Values.model.dir }}
+              mountPath: {{ $weightsMount }}
+            {{- if $multi }}
+            - name: engines
+              mountPath: /opt/engines
+              readOnly: true
+            {{- else }}
             - name: weights-config
               mountPath: /etc/model
               readOnly: true
             - name: fetcher
               mountPath: /opt/weights
               readOnly: true
+            {{- end }}
           resources:
             requests:
-              cpu: {{ .Values.fetcher.resources.cpu | quote }}
-              memory: {{ .Values.fetcher.resources.memory | quote }}
+              cpu: {{ $.Values.fetcher.resources.cpu | quote }}
+              memory: {{ $.Values.fetcher.resources.memory | quote }}
               # Explicit zero, not an omitted field. A GPU cluster space's
               # LimitRange defaults a missing `nvidia.com/gpu` to the reserved
               # count, so this container would ask for the card the engine needs
               # and the pod would never schedule.
               nvidia.com/gpu: "0"
             limits:
-              cpu: {{ .Values.fetcher.resources.cpu | quote }}
-              memory: {{ .Values.fetcher.resources.memory | quote }}
+              cpu: {{ $.Values.fetcher.resources.cpu | quote }}
+              memory: {{ $.Values.fetcher.resources.memory | quote }}
               nvidia.com/gpu: "0"
+        {{- end }}
       containers:
+        # ---------------------------------------------------------------------
+        # The container that holds the card. One for however many engines are
+        # served from it: Kubernetes allocates a GPU to a container rather than
+        # to a pod, so a second container asking for the same `nvidia.com/gpu: 1`
+        # stays Pending for ever and engines that share a device share a process
+        # tree instead (SUP-332). `files/run-engines.py` is that process tree —
+        # it starts what the attested engines.json names and nothing else.
+        # ---------------------------------------------------------------------
         - name: vllm
           image: {{ include "swarm-model-server.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if $multi }}
+          command:
+            - python3
+            - /opt/engines/run-engines.py
+            - /opt/engines/engines.json
+          {{- else }}
           args:
-            {{- range (include "swarm-model-server.engineArgs" . | fromJsonArray) }}
+            {{- range (include "swarm-model-server.engineArgs" (dict "ctx" . "engine" (first $engines)) | fromJsonArray) }}
             - {{ . | quote }}
             {{- end }}
+          {{- end }}
           env:
             # The key the engine demands on every `/v1` request, by reference.
             # The engine's equivalent command-line flag is deliberately unused:
@@ -126,12 +163,18 @@ spec:
               value: /cache/huggingface
             - name: XDG_CACHE_HOME
               value: /cache/xdg
+            {{- if $multi }}
+            # Each engine's compile and Triton caches are per-engine, set by the
+            # supervisor from engines.json: two engines compiling into one
+            # directory is a race whose loser recompiles on every restart.
+            {{- else }}
             - name: VLLM_CACHE_ROOT
               value: /cache/vllm
             - name: TRITON_CACHE_DIR
               value: /cache/triton
             - name: TORCHINDUCTOR_CACHE_DIR
               value: /cache/inductor
+            {{- end }}
             # Telemetry off: this endpoint serves prompts inside an enclave and
             # should not be reporting anything about itself to a third party.
             - name: VLLM_NO_USAGE_STATS
@@ -143,14 +186,38 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           ports:
-            - name: http
-              containerPort: {{ .Values.service.targetPort }}
+            {{- range $engine := $engines }}
+            - name: {{ $engine.portName }}
+              containerPort: {{ $engine.port }}
               protocol: TCP
+            {{- end }}
           # `/health` is outside the engine's authentication middleware, which is
           # what makes it usable as a probe at all. It answers only once the
           # model is loaded, and loading 29 GiB of weights and compiling the
           # graphs takes minutes — hence a startup probe with room rather than a
           # liveness probe that would restart the pod halfway through.
+          {{- if $multi }}
+          #
+          # Ready means *every* engine is ready. One Service and one Ingress
+          # front all of them, so a pod marked Ready while the second model is
+          # still loading publishes a path that answers 502 for minutes — and an
+          # HTTP probe can ask about one port only.
+          startupProbe:
+            exec:
+              command: [python3, /opt/engines/engine-health.py, /opt/engines/engines.json]
+            periodSeconds: 10
+            failureThreshold: 180
+          readinessProbe:
+            exec:
+              command: [python3, /opt/engines/engine-health.py, /opt/engines/engines.json]
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: [python3, /opt/engines/engine-health.py, /opt/engines/engines.json]
+            periodSeconds: 30
+            failureThreshold: 5
+          {{- else }}
           startupProbe:
             httpGet:
               path: /health
@@ -169,15 +236,20 @@ spec:
               port: http
             periodSeconds: 30
             failureThreshold: 5
+          {{- end }}
           volumeMounts:
             - name: weights
-              mountPath: {{ .Values.model.dir }}
+              mountPath: {{ $weightsMount }}
               readOnly: true
             - name: cache
               mountPath: /cache
             - name: shm
               mountPath: /dev/shm
-            {{- if .Values.model.chatTemplateFile }}
+            {{- if $multi }}
+            - name: engines
+              mountPath: /opt/engines
+              readOnly: true
+            {{- else if .Values.model.chatTemplateFile }}
             - name: chat-template
               mountPath: /etc/model
               readOnly: true
@@ -200,6 +272,11 @@ spec:
           emptyDir:
             sizeLimit: {{ .Values.persistence.size }}
           {{- end }}
+        {{- if $multi }}
+        - name: engines
+          configMap:
+            name: {{ $name }}-engines
+        {{- else }}
         - name: weights-config
           configMap:
             name: {{ $name }}-weights
@@ -209,6 +286,7 @@ spec:
             items:
               - key: fetch-weights.py
                 path: fetch-weights.py
+        {{- end }}
         - name: cache
           emptyDir:
             sizeLimit: {{ .Values.cache.size }}
@@ -219,7 +297,7 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: {{ .Values.shm.size }}
-        {{- if .Values.model.chatTemplateFile }}
+        {{- if and (not $multi) .Values.model.chatTemplateFile }}
         - name: chat-template
           configMap:
             name: {{ $name }}-chat-template

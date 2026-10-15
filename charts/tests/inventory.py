@@ -94,6 +94,35 @@ EXPECTED = {
     "confidential-router-litellm:none": {
         ("ConfigMap", "confidential-router-litellm"),
     },
+    # The model server in its three shapes. The `engines` shape renders a
+    # different ConfigMap from a different branch of the same template, which is
+    # exactly where a lost `---` would glue two objects into one document and a
+    # golden diff would say nothing (SUP-332).
+    "swarm-model-server": {
+        ("ConfigMap", "swarm-model-server-weights"),
+        ("Deployment", "swarm-model-server"),
+        ("Ingress", "swarm-model-server"),
+        ("PersistentVolumeClaim", "swarm-model-server-weights"),
+        ("Secret", "swarm-model-server"),
+        ("Service", "swarm-model-server"),
+    },
+    "swarm-model-server:template": {
+        ("ConfigMap", "swarm-model-server-chat-template"),
+        ("ConfigMap", "swarm-model-server-weights"),
+        ("Deployment", "swarm-model-server"),
+        ("Ingress", "swarm-model-server"),
+        ("PersistentVolumeClaim", "swarm-model-server-weights"),
+        ("Secret", "swarm-model-server"),
+        ("Service", "swarm-model-server"),
+    },
+    "swarm-model-server:shared": {
+        ("ConfigMap", "swarm-model-server-engines"),
+        ("Deployment", "swarm-model-server"),
+        ("Ingress", "swarm-model-server"),
+        ("PersistentVolumeClaim", "swarm-model-server-weights"),
+        ("Secret", "swarm-model-server"),
+        ("Service", "swarm-model-server"),
+    },
     "confidential-s3": {
         ("ConfigMap", "confidential-s3-bootstrap"),
         ("ConfigMap", "confidential-s3-garage"),

@@ -92,9 +92,15 @@ model:
   maxModelLen: 32768
 
   # --gpu-memory-utilization: the fraction of the card vLLM claims for weights
-  # plus KV cache. It is a fraction of the *whole* card, so the right value
-  # depends on the model and the card, and a 3B model given 0.9 of an H200 NVL
-  # reserves 127 GiB to hold 6.
+  # plus KV cache. It is a fraction of the card's *total* memory, not of what is
+  # free, so the right value depends on the model and the card — a 3B model
+  # given 0.9 of an H200 NVL reserves 127 GiB to hold 6 — and the engine refuses
+  # to start when the card has less free than its fraction asks for.
+  #
+  # That last sentence is why `engines` below exists rather than two deployments:
+  # with one engine this is the whole card's worth of room to choose from, and
+  # with several on one card the fractions are a budget that has to add up
+  # (checked at render time, see `swarm-model-server.validate`).
   gpuMemoryUtilization: 0.9
 
   # --quantization. Empty means "whatever the checkpoint says", which is right
@@ -133,6 +139,56 @@ model:
   # Appended to the engine command line verbatim, last, so a listing can reach a
   # flag this chart has no opinion about.
   extraArgs: []
+
+# ---------------------------------------------------------------------------
+# Several models on one card (SUP-332).
+#
+# `model` above is one engine with the device to itself, which is what the
+# listings in this repository deploy. `engines` is the other shape: one entry per
+# engine *sharing* the single `nvidia.com/gpu: 1` this pod holds. Set one or the
+# other — a render that sets both is refused.
+#
+# Why they share a container rather than a pod: Kubernetes allocates a GPU to a
+# container, so a second container asking for the same device leaves the pod
+# Pending for ever. The container holding the card runs `files/run-engines.py`,
+# which starts one `vllm serve` per entry from the attested `engines.json` and
+# exits as soon as any of them does.
+#
+# What an entry owns, and what it does not:
+#
+#   name          lower-case, at most 15 characters. It is the URL prefix the
+#                 model is served under (`https://<hostname>/<name>/v1`, via the
+#                 engine's own `--root-path`, which authenticates the prefixed
+#                 path rather than merely routing it), the container and Service
+#                 port name, and the directory under /models its weights land in.
+#   model         the same block as `model` above, minus `dir`. Its
+#                 `gpuMemoryUtilization` and `maxModelLen` are required here:
+#                 a share nobody chose is a share that collides with the other
+#                 engine's, and an unset context length makes vLLM take the
+#                 model's own maximum and then refuse to start.
+#   port          optional; `service.targetPort` + the entry's index by default.
+#
+#   resources, persistence, shm, cache, apiKey, hostname, ingress: one each for
+#   the pod, as above. `resources` is the one container every engine runs in, so
+#   it covers all of them; `persistence.size` holds every manifest's bytes; and
+#   one key authenticates every engine, because they are one endpoint with
+#   several models on it.
+#
+# engines:
+#   - name: coder
+#     model:
+#       id: qwen3-coder-next
+#       maxModelLen: 65536
+#       gpuMemoryUtilization: 0.6
+#       weights: { ... }
+#   - name: chat
+#     model:
+#       id: qwen3.8-27b
+#       maxModelLen: 65536
+#       gpuMemoryUtilization: 0.3
+#       weights: { ... }
+# ---------------------------------------------------------------------------
+engines: []
 
 # The key the engine demands on every `/v1` request. It reaches the container
 # through a Secret as `VLLM_API_KEY` — never as an argument, because arguments

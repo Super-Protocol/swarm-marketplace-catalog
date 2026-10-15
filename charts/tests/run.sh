@@ -78,6 +78,17 @@ for chart in "${CHARTS[@]}"; do
   fi
 done
 
+# The model server has a second values shape — `engines`, several models on one
+# card — and lint is per values file, so the shape the loop above does not reach
+# is linted here rather than being covered by the golden alone.
+if output=$(helm lint charts/swarm-model-server \
+      --values charts/tests/cases/model-server-two-engines.yaml 2>&1); then
+  pass "swarm-model-server (engines)"
+else
+  fail "swarm-model-server (engines)"
+  printf '%s\n' "$output" | sed 's/^/        /'
+fi
+
 note "helm template goldens"
 while IFS=$'\t' read -r name chart repo version; do
   case "$name" in ''|\#*) continue ;; esac
@@ -1132,18 +1143,79 @@ refuses "a chat template passed inline instead of by file name" "model.chatTempl
 refuses "a chat template file the chart does not carry" "does not exist" \
   "${base_ms[@]}" --set model.chatTemplateFile=not-here.jinja
 
+# Published paths are composed with each engine's prefix, so a path outside /v1
+# would publish /metrics under every engine rather than under one.
+refuses "an ingress path outside /v1" "publishes paths under /v1 only" \
+  "${base_ms[@]}" --set 'ingress.paths[0]=/metrics'
+
+# ---------------------------------------------------------------------------
+# Several engines on one card (SUP-332). Each of these renders a deployment that
+# starts, passes a probe for one model and is broken for the other — or does not
+# start at all, after the 12 GiB download it needed to find out.
+# ---------------------------------------------------------------------------
+shared_ms=(helm template ms charts/swarm-model-server --namespace model-server --values charts/tests/cases/model-server-two-engines.yaml)
+
+# The two shapes are exclusive. Setting both renders the single-model shape and
+# silently drops the second engine, which is a listing nobody would debug.
+refuses "both value shapes at once" "never by both" \
+  "${shared_ms[@]}" --set model.id=also-this-one
+
+# The budget. Two engines whose fractions reach 1.0 is the second one failing to
+# start after loading its weights, with "free memory" in the message and a card
+# that looks half empty to anyone who checks with nvidia-smi.
+refuses "fractions of one card that add up to all of it" "share one 1.0" \
+  "${shared_ms[@]}" --set engines[0].model.gpuMemoryUtilization=0.7
+
+refuses "an engine with no share of the card named" "a share nobody chose" \
+  "${shared_ms[@]}" --set engines[1].model.gpuMemoryUtilization=null
+
+refuses "an engine with no context length named" "take the model's own maximum" \
+  "${shared_ms[@]}" --set engines[1].model.maxModelLen=null
+
+# The name is a URL path segment, a port name and a directory, so each of these
+# breaks something different and all of them render.
+refuses "an engine with no name" "identified by name" \
+  "${shared_ms[@]}" --set engines[1].name=
+
+refuses "an engine name that is not a port name" "container port name" \
+  "${shared_ms[@]}" --set engines[1].name=Gemma_2
+
+refuses "an engine named after one of the engine's own routes" "the engine's own routes" \
+  "${shared_ms[@]}" --set engines[1].name=metrics
+
+refuses "two engines with one name" "has to be unique" \
+  "${shared_ms[@]}" --set engines[1].name=llama
+
+refuses "two engines on one port" "would fail to bind" \
+  "${shared_ms[@]}" --set engines[1].port=8000
+
+refuses "two engines serving one model id" "unaddressable" \
+  "${shared_ms[@]}" --set engines[1].model.id=llama-3.2-3b-instruct
+
+# Tensor parallelism and a shared card are different answers to the same
+# question, and asking for both gives each engine every device.
+refuses "several engines across several cards" "one model from several" \
+  "${shared_ms[@]}" --set gpu.count=2
+
+# The volume holds every engine's weights, not the largest one's.
+refuses "a volume sized for one of two models" "the download would fail with the volume full" \
+  "${shared_ms[@]}" --set persistence.size=8Gi
+
 # The three things a published endpoint must not expose, asserted on the render
 # rather than trusted to the values file.
 note "swarm-model-server publishes only what authenticates"
-for case in model-server-llama model-server-gemma model-server-qwen-fp8; do
+for case in model-server-llama model-server-gemma model-server-qwen-fp8 model-server-two-engines; do
   rendered=$(helm template ms charts/swarm-model-server --namespace model-server \
     --values "charts/tests/cases/$case.yaml" 2>&1) || { fail "$case (render)"; continue; }
   problems=""
-  # Every ingress path is under /v1: vLLM authenticates /v1 and leaves
-  # /metrics, /docs and /tokenize open.
+  # Every ingress path ends at /v1: vLLM authenticates /v1 and leaves /metrics,
+  # /docs and /tokenize open — under an engine's prefix as much as without one.
+  # One leading segment is allowed because that is an engine's own --root-path;
+  # that the prefix belongs to the engine behind the path, and reaches its port,
+  # is engine_routing.py below.
   paths=$(printf '%s\n' "$rendered" | awk '/^kind: Ingress$/,0' | grep -oE '^\s+- path: .*' | sed 's/.*path: //; s/"//g')
   for path in $paths; do
-    case "$path" in /v1*) ;; *) problems="$problems published-path:$path" ;; esac
+    case "$path" in /v1*) ;; /*/v1*) ;; *) problems="$problems published-path:$path" ;; esac
   done
   [ -n "$paths" ] || problems="$problems no-ingress-paths"
   # The key is referenced, never written into an argument or a literal env value.
@@ -1151,6 +1223,9 @@ for case in model-server-llama model-server-gemma model-server-qwen-fp8; do
   # A list item, not a mention: the chart's own comment explains why the flag is
   # not used, and a bare substring match would flag that comment.
   printf '%s\n' "$rendered" | grep -qE '^\s+- "?--api-key' && problems="$problems key-on-the-command-line"
+  # The same flag in the JSON command lines of engines.json, which are arguments
+  # in a ConfigMap rather than in `args` but are published just as plainly.
+  printf '%s\n' "$rendered" | grep -qE '"--api-key' && problems="$problems key-in-engines-json"
   # Every container that is not the engine asks for zero GPUs explicitly: a GPU
   # space's LimitRange defaults a missing nvidia.com/gpu to the reserved count.
   printf '%s\n' "$rendered" | grep -q 'nvidia.com/gpu: "0"' || problems="$problems fetcher-wants-a-gpu"
@@ -1165,7 +1240,7 @@ done
 # it is held constant here and only the things a deployment really chooses — the
 # namespace, the hostname and the generated key — are varied.
 note "two deployments of a model listing differ only in the hostname"
-for case in model-server-llama model-server-gemma model-server-qwen-fp8; do
+for case in model-server-llama model-server-gemma model-server-qwen-fp8 model-server-two-engines; do
   render_ms() {
     helm template ms-fixed charts/swarm-model-server --namespace "$2" \
       --values "charts/tests/cases/$case.yaml" \
@@ -1279,6 +1354,51 @@ else
   sed 's/^/        /' "$tls_render"
 fi
 rm -f "$tls_render"
+
+# Every object in the pod, parsed the way a cluster parses it. The `engines` shape
+# renders its ConfigMap from the other branch of the same template, which is
+# where a lost `---` glues two objects into one document and leaves a golden diff
+# with nothing to say.
+note "the model server renders every object of each of its three shapes"
+inventory_shape swarm-model-server model-server-llama swarm-model-server
+inventory_shape swarm-model-server model-server-gemma swarm-model-server:template
+inventory_shape swarm-model-server model-server-two-engines swarm-model-server:shared
+
+# Three agreements between the Ingress, the Service and the engines' own command
+# lines, each of which renders perfectly from one side and serves nothing from
+# the other (SUP-332).
+note "every engine in the pod is published, authenticated and alone on its port"
+for case in model-server-llama model-server-gemma model-server-qwen-fp8 model-server-two-engines; do
+  if output=$(python3 charts/tests/engine_routing.py "$case" 2>&1); then
+    printf '%s\n' "$output"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/engine_routing.py $case"
+  fi
+done
+
+# What Kubernetes would do for a second container — notice it died, stop it on a
+# delete, keep its logs apart — the supervisor has to do for a second engine,
+# because the two of them are one container. None of it is visible to a render.
+note "the supervisor and the readiness probe answer for every engine"
+if output=$(python3 charts/tests/supervisor_guard.py 2>&1); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/supervisor_guard.py"
+fi
+
+# The assumption the whole shared-card routing rests on: an engine behind
+# `--root-path /coder` *authenticates* /coder/v1 rather than merely routing it.
+# An engine that routed it without guarding it would publish an unauthenticated
+# inference endpoint on a public hostname, and the render would look the same.
+note "a prefixed path is authenticated, not merely routed"
+if output=$(python3 charts/tests/root_path_guard.py 2>&1); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/root_path_guard.py"
+fi
 
 # The fetcher is what stands between the manifest and the GPU, so its refusals
 # are tested rather than read. It is loaded from the chart's files/ directory —

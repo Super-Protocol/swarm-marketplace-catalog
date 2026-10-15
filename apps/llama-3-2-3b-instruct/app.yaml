@@ -5,7 +5,7 @@ metadata:
   name: llama-3-2-3b-instruct
   title: Llama 3.2 3B Instruct
   description: Meta's Llama 3.2 3B Instruct on an authenticated, OpenAI-compatible endpoint whose deployment publishes signed evidence of the weights it is serving. Tool calling works.
-  version: "0.2.0"
+  version: "0.2.1"
   category: ai-inference
   sourceRepo: https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct
   license: LicenseRef-Llama-3.2-Community
@@ -101,10 +101,11 @@ parameters:
     title: Share of the GPU
     description: >-
       The fraction of the card the engine claims for weights and KV cache. A fraction of the
-      *whole* card, so the default is chosen for the smallest accelerator this listing accepts
-      (24Gi); on a larger one it simply buys a larger KV cache, which is more requests at
-      once. The engine checks this against free memory at startup and refuses to start if
-      something else holds the card.
+      card's total memory, so the default is chosen for the smallest accelerator this listing
+      accepts (24Gi); on a larger one it simply buys a larger KV cache, which is more requests
+      at once. The engine checks the fraction against the memory actually free when it starts and
+      refuses to start rather than serve a short cache — this deployment serves one model, which
+      has the card to itself.
     default: 0.85
     validation:
       min: 0.2

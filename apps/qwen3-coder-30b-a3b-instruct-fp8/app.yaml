@@ -5,7 +5,7 @@ metadata:
   name: qwen3-coder-30b-a3b-instruct-fp8
   title: Qwen3-Coder 30B A3B Instruct (FP8)
   description: Qwen3-Coder 30B-A3B Instruct in Qwen's own FP8 quantisation — a coding model that fits one H200 NVL with room for a long context — on an authenticated, OpenAI-compatible endpoint whose deployment publishes signed evidence of the weights. Tool calling works.
-  version: "0.2.0"
+  version: "0.2.1"
   category: ai-inference
   sourceRepo: https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
   license: Apache-2.0
@@ -103,10 +103,11 @@ parameters:
     title: Share of the GPU
     description: >-
       The fraction of the card the engine claims for weights and KV cache. A fraction of the
-      *whole* card, so the default is chosen for the smallest accelerator this listing accepts
-      (80Gi); on a larger one it simply buys a larger KV cache, which is more requests at
-      once. The engine checks this against free memory at startup and refuses to start if
-      something else holds the card.
+      card's total memory, so the default is chosen for the smallest accelerator this listing
+      accepts (80Gi); on a larger one it simply buys a larger KV cache, which is more requests
+      at once. The engine checks the fraction against the memory actually free when it starts and
+      refuses to start rather than serve a short cache — this deployment serves one model, which
+      has the card to itself.
     default: 0.85
     validation:
       min: 0.2

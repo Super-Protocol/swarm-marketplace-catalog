@@ -5,7 +5,7 @@ metadata:
   name: gemma-2-2b-it
   title: Gemma 2 2B IT
   description: Google's Gemma 2 2B instruction-tuned on an authenticated, OpenAI-compatible endpoint whose deployment publishes signed evidence of the weights it is serving. This model cannot do tool calling — see the README before you plan on it.
-  version: "0.2.0"
+  version: "0.2.1"
   category: ai-inference
   sourceRepo: https://huggingface.co/google/gemma-2-2b-it
   license: LicenseRef-Gemma-Terms-of-Use
@@ -99,10 +99,11 @@ parameters:
     title: Share of the GPU
     description: >-
       The fraction of the card the engine claims for weights and KV cache. A fraction of the
-      *whole* card, so the default is chosen for the smallest accelerator this listing accepts
-      (16Gi); on a larger one it simply buys a larger KV cache, which is more requests at
-      once. The engine checks this against free memory at startup and refuses to start if
-      something else holds the card.
+      card's total memory, so the default is chosen for the smallest accelerator this listing
+      accepts (16Gi); on a larger one it simply buys a larger KV cache, which is more requests
+      at once. The engine checks the fraction against the memory actually free when it starts and
+      refuses to start rather than serve a short cache — this deployment serves one model, which
+      has the card to itself.
     default: 0.85
     validation:
       min: 0.2
