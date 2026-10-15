@@ -1,18 +1,31 @@
+{{- $e := dict -}}
+{{- include "swarm-model-server.engines" (dict "ctx" . "out" $e) -}}
 {{ .Chart.Name }} {{ .Chart.Version }} — vLLM {{ .Chart.AppVersion }}
-
-  Model      {{ .Values.model.id }}
-  Weights    {{ .Values.model.weights.repo }}@{{ substr 0 12 .Values.model.weights.revision }}
-             {{ len .Values.model.weights.files }} files, {{ include "swarm-model-server.humanBytes" (dict "n" .Values.model.weights.totalBytes) }}, each verified by sha256 before the engine starts
-  Inside     http://{{ include "swarm-model-server.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/v1
+{{ range $engine := $e.engines }}
+  Model      {{ $engine.model.id }}
+  Weights    {{ $engine.model.weights.repo }}@{{ substr 0 12 $engine.model.weights.revision }}
+             {{ len $engine.model.weights.files }} files, {{ include "swarm-model-server.humanBytes" (dict "n" $engine.model.weights.totalBytes) }}, each verified by sha256 before the engine starts
+  Context    {{ $engine.model.maxModelLen | default "the model's own maximum" }} tokens{{ if $engine.model.gpuMemoryUtilization }}, on {{ $engine.model.gpuMemoryUtilization }} of the card{{ end }}
+  Inside     http://{{ include "swarm-model-server.fullname" $ }}.{{ $.Release.Namespace }}.svc.cluster.local:{{ $engine.servicePort }}{{ $engine.prefix }}/v1
+{{- if $.Values.ingress.enabled }}
+  Published  https://{{ $.Values.hostname }}{{ $engine.prefix }}/v1
+{{- end }}
+  Tools      {{ if ($engine.model.toolCalling | default dict).enabled }}tool_choice auto, parser {{ $engine.model.toolCalling.parser }}{{ else }}no auto tool choice — this model has no parser configured{{ end }}
+{{ end }}
 {{- if .Values.ingress.enabled }}
-  Published  https://{{ .Values.hostname }}/v1
   Evidence   https://{{ .Values.hostname }}/.well-known/swarm-evidence
 {{- end }}
-  Tools      {{ if .Values.model.toolCalling.enabled }}tool_choice auto, parser {{ .Values.model.toolCalling.parser }}{{ else }}no auto tool choice — this model has no parser configured{{ end }}
 
 Every `/v1` request needs `Authorization: Bearer <the key>`. `/health` does not,
 which is why it is the probe; it is also why the ingress publishes `/v1` alone
 and leaves `/metrics` and `/docs` inside the cluster space.
+{{- if $e.shared }}
+
+The {{ len $e.engines }} engines above share one card, in one container, with the share of its
+memory each one claims written into the deployment's evidence. Each has its own
+base URL — the prefix is what tells them apart — and all of them answer to the
+same key.
+{{- end }}
 
 The first start downloads the weights and hashes them. That is minutes, and the
-pod is not ready until the engine has loaded them and compiled its graphs.
+pod is not ready until {{ if $e.shared }}every engine has{{ else }}the engine has{{ end }} loaded them and compiled its graphs.

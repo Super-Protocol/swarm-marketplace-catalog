@@ -34,7 +34,9 @@ pair        = name "=" value                            ; application/x-www-form
 ```
 
 - `base-url` is exactly what an OpenAI client is given as its `base_url` — scheme `https` only, no
-  userinfo, no query, no trailing slash, path ending in `/v1`.
+  userinfo, no query, no trailing slash, path ending in `/v1`. The path is *not* always exactly
+  `/v1`: a deployment serving several models from one GPU gives each model its own prefix
+  (`https://m.example.com/coder/v1`), so a consumer matches on the ending and keeps the rest.
 - `fragment` is `application/x-www-form-urlencoded`: pairs joined by `&`, percent-encoding for
   anything outside the unreserved set, `+` decoding to a space.
 - Parameter names are lowercase and case-sensitive.

@@ -41,6 +41,7 @@ The release name and namespace are fixed per listing (`cr` / `confidential-route
 | `s3-external-postgres` | `postgresql.enabled: false` with a DSN of the deployment's own |
 | `s3-explicit-credentials` | a real master key and a real Garage credential instead of seeds; the chart checks both shapes rather than trusting them |
 | `s3-large-volumes` | the large end of the form, and the engine's layout capacity, which is derived from the data volume rather than set beside it |
+| `model-server-two-engines` | two models on one card (SUP-332): the `engines` shape — one container, two command lines in the attested `engines.json`, a weights manifest and a prefix each, and the only case with no listing behind it, because nothing published serves two models yet |
 
 The model server was otwld's `ollama` chart up to listing 0.12.x. It is
 `confidential-router-ollama` from 0.13.0, because a router serving only external
@@ -67,6 +68,33 @@ cannot answer the question:
   and finds nothing wrong. The cluster applies one and silently drops the other. That happened
   here, to the confidential-s3 gateway's Service, and it presented as an S3 endpoint answering
   503 through an Ingress pointing at nothing.
+
+- **Every engine in the pod is published, authenticated and alone on its port**
+  (`engine_routing.py`). Three agreements between the Ingress, the Service and the engines' own
+  command lines, each of which renders perfectly from one side while serving nothing from the
+  other: the published path is the engine's own `--root-path` (publish `/coder/v1` to an engine
+  that was not told that prefix and every request is a 404), the Ingress backend is that engine's
+  port (crossing two differs by one digit and serves each model under the other's name, with the
+  pod Ready), and nothing published escapes `/v1`. It also holds the two things that are true of
+  one engine or ten: the key is on no command line — including the ones that moved into a
+  ConfigMap — and exactly one container asks for the card while every other one asks for zero in
+  writing.
+
+- **A prefixed path is authenticated, not merely routed** (`root_path_guard.py`). The assumption
+  the whole shared-card routing rests on, and the only one whose failure is a security hole rather
+  than an outage: vLLM compares a request's path against `("/v1", "/v2", "/inference")` to decide
+  whether to demand the key, so an engine that routed `/coder/v1/...` without stripping its root
+  path first would serve an unauthenticated inference endpoint on a public hostname. It holds
+  because the middleware strips `scope["root_path"]` and Starlette strips it again; the check drives
+  vLLM's middleware, copied verbatim, over a FastAPI app as an ASGI app. The versions that serve are
+  the pinned image's — this is the canary for the semantics moving under a later engine bump.
+
+- **The supervisor does what Kubernetes would have done for a second container**
+  (`supervisor_guard.py`). Engines that share a GPU share a container, because a device is
+  allocated to a container; so noticing that one died, stopping it on a delete and keeping its logs
+  apart are all this repository's job now. Exercised with fake engines — an engine is whatever
+  `engines.json` says it is — over every promise `files/run-engines.py` makes, plus the readiness
+  probe beside it, which is the only thing that makes "Ready" mean both models.
 
 - **Every image pinned by a real digest** (`digests.py`). The cases set their image digests
   explicitly, so the goldens stay stable across an image bump — and say nothing about what the
