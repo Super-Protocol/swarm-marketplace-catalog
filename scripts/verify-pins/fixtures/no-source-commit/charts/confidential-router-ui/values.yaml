@@ -1,0 +1,7 @@
+# A fixture, not a chart. scripts/verify-pins/run.sh renders no templates from this —
+# only the image pins are read. See ../README.md.
+image:
+  registry: ghcr.io
+  repository: super-protocol/confidential-router/router-ui
+  digest: sha256:af8ea605f79472d9d74806fac154a390fe1fae8c4b3277d83ec412d6b9d93fbf
+  tag: ""

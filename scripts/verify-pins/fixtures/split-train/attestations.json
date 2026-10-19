@@ -1,0 +1,34 @@
+{
+  "ghcr.io/super-protocol/confidential-router/router-ui@sha256:af8ea605f79472d9d74806fac154a390fe1fae8c4b3277d83ec412d6b9d93fbf": {
+    "attestations": [
+      {
+        "verificationResult": {
+          "signature": {
+            "certificate": {
+              "sourceRepositoryURI": "https://github.com/Super-Protocol/confidential-router",
+              "sourceRepositoryRef": "refs/heads/main",
+              "sourceRepositoryDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "buildConfigURI": "https://github.com/Super-Protocol/confidential-router/.github/workflows/release-router.yml@refs/heads/main"
+            }
+          },
+          "statement": {
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "subject": [
+              {
+                "name": "ghcr.io/super-protocol/confidential-router/router-ui",
+                "digest": { "sha256": "af8ea605f79472d9d74806fac154a390fe1fae8c4b3277d83ec412d6b9d93fbf" }
+              }
+            ],
+            "predicate": {
+              "buildDefinition": {
+                "resolvedDependencies": [
+                  { "digest": { "gitCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } }
+                ]
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

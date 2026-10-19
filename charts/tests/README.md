@@ -73,6 +73,11 @@ cannot answer the question:
   chart itself would pull. A listing overrides the defaults too, which leaves an empty or
   placeholder default invisible until somebody runs `helm install` with no `--set`, or until a
   chart is published to an append-only repository carrying a digest nobody can pull.
+
+  Whether that digest names an image anyone built from a revision we reviewed is a different
+  question, and `digests.py` cannot ask it: a well-formed digest of nothing in particular
+  passes here. `scripts/verify-pins/` asks it, of every chart and every listing, by verifying
+  the attestation over each first-party digest and reading the source commit out of it.
 - **No consumer value in an attested manifest** (`consumer_fields.py`). The two-consumer render
   below cannot see this one: it renders the chart with fixed values, while `consumer.*` is
   resolved by the marketplace when it turns a definition into values — so the gap is the seam
