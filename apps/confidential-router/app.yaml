@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.18.3"
+  version: "0.19.0"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -88,6 +88,9 @@ ui:
         - parameterId: mailFrom
           widget: text
           visible: "params.mailProvider != 'none' || params.billingMode == 'stripe'"
+        - parameterId: mailReplyTo
+          widget: text
+          visible: "params.mailProvider != 'none'"
         - parameterId: smtpHost
           widget: text
           visible: "params.mailProvider == 'smtp'"
@@ -467,6 +470,16 @@ parameters:
       default is a `.local` address no server delivers from, and the deployment refuses it.
     default: "no-reply@confidential-router.local"
 
+  - id: mailReplyTo
+    type: string
+    title: Reply-To address
+    description: >-
+      Where a reply goes. The sender above is a no-reply address, and the domain it sits on does not
+      have to receive mail at all — so unless you name a mailbox here, a reply to a sign-in code, and
+      a bounce someone forwards back by hand, reaches nothing. Leave it empty to send no `Reply-To`
+      header at all.
+    default: ""
+
   - id: smtpHost
     type: string
     title: SMTP server
@@ -803,10 +816,20 @@ components:
       # reuses an upstream connection the far end has already closed — the 502
       # on the first request after an idle gap (SUP-289). The two must move
       # together, and they do here.
-      version: "0.12.1"
+      #
+      # 0.13.0 (SUP-409) adds `mail.replyTo`, which the `mailReplyTo` parameter
+      # below fills. The API moves to `main-5de9e7d` because it has to: the
+      # router's config schema is strict, and `main-82769ff` refuses to boot on
+      # a configuration carrying that key. Arriving from the same head, because
+      # an image is a head and not a cherry-pick — the lifted 5s upstream
+      # deadline and 1 MiB `/v1` body cap (SUP-339), and a documentation fix in
+      # the console's VS Code steps. The egress sidecar does not move this
+      # time: nothing in this change touches it, and the console image below
+      # stays where it is for the same reason.
+      version: "0.13.0"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
-        digest: sha256:367aab943e948fb5443e6839212bdb5965a9d3791966626eadede79c44ec7ab0
+        digest: sha256:274300916d72b51c9bf60d7b7b1873016bf913d11559822b6a34d678d146f9e8
       # The attested egress, a second container in the API pod (ADR-008 §2): the
       # gatekeeper's own core, verifying an external model endpoint's evidence and
       # pinning its TLS leaf before this deployment proxies a prompt to it. The
@@ -1031,6 +1054,14 @@ components:
             path: mail.from
             value: "{{ params.mailFrom }}"
             when: "params.mailProvider != 'none'"
+
+          # Reply-To (SUP-409), and only when the deployer named a mailbox: the
+          # router's schema is strict, so an empty value here would be a key it
+          # rejects rather than a header it omits.
+          - op: add
+            path: mail.replyTo
+            value: "{{ params.mailReplyTo }}"
+            when: "params.mailProvider != 'none' && params.mailReplyTo != ''"
 
           - op: add
             path: mail.smtp.host

@@ -16,7 +16,7 @@
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-router/router-api
-  digest: sha256:367aab943e948fb5443e6839212bdb5965a9d3791966626eadede79c44ec7ab0
+  digest: sha256:274300916d72b51c9bf60d7b7b1873016bf913d11559822b6a34d678d146f9e8
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -318,6 +318,14 @@ mail:
   from: ""
   # Display name in front of `from`; the router's default is "Confidential Router".
   fromName: ""
+  # Where a reply goes (SUP-409). `from` is a no-reply address, and the domain it
+  # sits on need not receive mail at all, so without this a reply — or a bounce a
+  # human returns by hand — reaches nothing. Unset sends no `Reply-To` header,
+  # which is what every deployment before chart 0.13.0 did.
+  #
+  # Needs a router image carrying `mail.replyTo` (confidential-router#130 on).
+  # The config schema is strict: an older image refuses to boot on this key.
+  replyTo: ""
   resendApiKey: ""
   smtp:
     host: ""
@@ -329,8 +337,8 @@ mail:
     password: ""
   # Read every key above from a Secret of your own instead — the same key names
   # this chart writes (`mail-provider`, `mail-from`, `mail-from-name`,
-  # `mail-resend-api-key`, `smtp-host`, `smtp-port`, `smtp-security`,
-  # `smtp-user`, `smtp-password`).
+  # `mail-reply-to`, `mail-resend-api-key`, `smtp-host`, `smtp-port`,
+  # `smtp-security`, `smtp-user`, `smtp-password`).
   existingSecret: ""
 
 # Which models this deployment serves: a plain list of Ollama model names. This
