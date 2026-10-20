@@ -123,7 +123,27 @@ type: application
 # the same head, because an image is a head and not a cherry-pick: the lifted
 # 5s upstream deadline and 1 MiB `/v1` body cap (SUP-339) and a documentation
 # fix in the console's VS Code steps. The gatekeeper sidecar does not move.
-version: 0.13.0
+#
+# 0.13.1 (SUP-434) re-pins the router API and its egress sidecar to
+# `main-37ed4ba`, the head of the deploy train this version exists to carry. No
+# template change and no values change besides the two digests, so this is a
+# patch: the rendered documents are 0.13.0's, and only what runs inside them
+# moves.
+#
+# The sidecar is the reason the train leaves at all, and it is the first time
+# this chart has moved it since 0.12.1. A re-attestation that failed latched the
+# gatekeeper into deny until the next five-minute tick, so a six-second upstream
+# blip cost ten minutes of refusals; it now re-attests on demand when a request
+# meets a denial (SUP-422). The server-side half of that fix is this container
+# and nothing else, which is why a reconfigure could never have delivered it.
+#
+# Arriving from the same head, because an image is a head and not a cherry-pick:
+# an invite-only deployment no longer mails a sign-in code to an address it would
+# refuse to register (SUP-410), and evidence coverage no longer reads 0% for a
+# generation served through an external model endpoint, with no ratio shown
+# where no request was coverable (SUP-421, SUP-429, SUP-430). `mail.replyTo`
+# arrived in 0.13.0 and is unchanged here.
+version: 0.13.1
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous

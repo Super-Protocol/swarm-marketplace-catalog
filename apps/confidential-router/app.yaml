@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.19.0"
+  version: "0.19.1"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -826,10 +826,24 @@ components:
       # the console's VS Code steps. The egress sidecar does not move this
       # time: nothing in this change touches it, and the console image below
       # stays where it is for the same reason.
-      version: "0.13.0"
+      #
+      # 0.19.1 (SUP-434) carries the deploy train at `main-37ed4ba` on chart
+      # 0.13.1. The sidecar moves for the first time since 0.18.3, and it is the
+      # reason this version exists: a failed re-attestation latched the
+      # gatekeeper into deny until the next five-minute tick, so a six-second
+      # upstream blip cost ten minutes of refusals, and it now re-attests on
+      # demand when a request meets a denial (SUP-422). That fix is server-side
+      # — this container and nothing else — so no reconfigure of a deployment
+      # created from an earlier version can deliver it, and a deploy of this
+      # version is the only path to it. The API and the console move from the
+      # same head: an invite-only deployment mails no sign-up it would refuse
+      # (SUP-410), and evidence coverage counts a generation served through a
+      # verified external endpoint, showing no ratio where nothing was coverable
+      # (SUP-421, SUP-429, SUP-430).
+      version: "0.13.1"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
-        digest: sha256:274300916d72b51c9bf60d7b7b1873016bf913d11559822b6a34d678d146f9e8
+        digest: sha256:28283b7cc7f1daee55679cfa05df66b72ff039f1013cdf291e4d1a6457e1b897
       # The attested egress, a second container in the API pod (ADR-008 §2): the
       # gatekeeper's own core, verifying an external model endpoint's evidence and
       # pinning its TLS leaf before this deployment proxies a prompt to it. The
@@ -852,8 +866,11 @@ components:
       # `main-f23d2d6`, whose registry lookup is proven against the real
       # `sp-vm/signatures` layout, Azure folders included (SUP-255);
       # `charts/tests/sidecar_boot.sh` boots the declared digest on that document.
+      # 0.18.3 moved it to `main-82769ff` with the rest of the test-group train,
+      # and 0.19.1 moves it to `main-37ed4ba` — published as gatekeeper release
+      # `0.3.2` — for the on-demand re-attestation above (SUP-422).
       - name: ghcr.io/super-protocol/confidential-router/gatekeeper
-        digest: sha256:e57e4f2f1952d6b369086a72e28ea42f7d8ac93f4dc39b76217bfb8bf9c1958b
+        digest: sha256:4569f7c8a00bc14ef3eb65fb61c584aed93a2897e907b733416901ea6831066a
       # Spilo: PostgreSQL 17.5 and Patroni 4.0.4 in one image, which is what makes the
       # database three instances that elect a leader instead of one that comes back empty.
       # It replaces `bitnamilegacy/postgresql` — a mirror that receives no rebuilds, no
@@ -1135,7 +1152,14 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-router-ui
-      version: "0.2.10"
+      #
+      # 0.19.1 (SUP-434) moves both halves to `main-37ed4ba` on chart 0.2.11:
+      # the coverage numerator counts a generation served through a verified
+      # external model endpoint, the denominator excludes what was never
+      # coverable, and a page with nothing coverable on it says so instead of
+      # reading 0% (SUP-421, SUP-429, SUP-430). The API ships the query the
+      # console reads, which is why the two move together as always.
+      version: "0.2.11"
     images:
       # Moves with the API's digest above, from the same source revision: the
       # admin section that registers an external endpoint and edits the trust
@@ -1171,7 +1195,7 @@ components:
       # and key forms refuse per field (SUP-295), and every TEE label the
       # console shows is read from published evidence (SUP-260).
       - name: ghcr.io/super-protocol/confidential-router/router-ui
-        digest: sha256:af8ea605f79472d9d74806fac154a390fe1fae8c4b3277d83ec412d6b9d93fbf
+        digest: sha256:6e68ac6c173591d03ccf6687f0d348f04e9f7c2adfe85c0b6a6f9ce4d1d37ec4
     deployment:
       values:
         base:
