@@ -43,5 +43,11 @@ type: application
 # (SUP-300). It also carries the field-level sign-up refusals and the key-form
 # copy (SUP-295) and the evidence-derived TEE label everywhere it is shown
 # (SUP-260). No template change.
-version: 0.2.10
+#
+# 0.2.11 (SUP-434) pins `main-37ed4ba`: the console half of evidence coverage —
+# a generation served through a verified external model endpoint counts as
+# covered, and a page with nothing coverable on it says so instead of showing
+# 0% (SUP-421, SUP-429, SUP-430). The profile heatmap stops reading 0 signed
+# days for an account served entirely by external endpoints. No template change.
+version: 0.2.11
 appVersion: "0.4.1"
