@@ -143,7 +143,21 @@ type: application
 # generation served through an external model endpoint, with no ratio shown
 # where no request was coverable (SUP-421, SUP-429, SUP-430). `mail.replyTo`
 # arrived in 0.13.0 and is unchanged here.
-version: 0.13.1
+#
+# 0.13.2 (SUP-424) re-pins the router API to `main-7b7aaba`. The metering a
+# user is billed against is now honest: every streamed first token is timed
+# even when the stream opens with a tool call rather than text, a rate nothing
+# could measure reads as absent instead of as a fabricated number — a
+# two-token completion no longer claims 2000 tok/s — and a ledger usage row is
+# priced to four decimals, so a sub-cent charge is a number and not `-$0.00`.
+#
+# A patch, and the second one in this train: 0.13.1 was published and the chart
+# repository is append-only, so SUP-424 arriving after that merge is a new
+# version rather than an edit. No template change and no values change besides
+# the one digest. The egress sidecar does not move — `7b7aaba` changes no Go
+# code at all, so release `0.3.2` is the same gatekeeper source this head would
+# produce.
+version: 0.13.2
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous

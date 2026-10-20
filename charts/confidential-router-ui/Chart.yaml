@@ -49,5 +49,12 @@ type: application
 # covered, and a page with nothing coverable on it says so instead of showing
 # 0% (SUP-421, SUP-429, SUP-430). The profile heatmap stops reading 0 signed
 # days for an account served entirely by external endpoints. No template change.
-version: 0.2.11
+#
+# 0.2.12 (SUP-424) pins `main-7b7aaba`: the console reads the metering the API
+# now records honestly. A streamed turn that opens with a tool call shows a
+# TTFT instead of an em dash, a Speed cell nothing could measure shows an em
+# dash instead of a fabricated rate, and a ledger amount is rendered to four
+# decimals so a sub-cent charge is not displayed as `-$0.00`. The Activity
+# tile's hint names its sample sizes. No template change.
+version: 0.2.12
 appVersion: "0.4.1"
