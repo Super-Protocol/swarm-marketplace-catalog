@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.13.1
+    helm.sh/chart: confidential-router-api-0.13.2
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -34,7 +34,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api-public
   labels:
-    helm.sh/chart: confidential-router-api-0.13.1
+    helm.sh/chart: confidential-router-api-0.13.2
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -74,7 +74,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.13.1
+    helm.sh/chart: confidential-router-api-0.13.2
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -181,7 +181,7 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.13.1
+    helm.sh/chart: confidential-router-api-0.13.2
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -204,7 +204,7 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.13.1
+    helm.sh/chart: confidential-router-api-0.13.2
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -235,12 +235,12 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: 97490d28d2d597c01a54467c8fc2b0098cbaa7a7c49611ba97d4cbd9373a65e3
+        checksum/config: 366b6eb0679432098b4c5ba69a18a5760f9bd78e56cfa56424c5fd75ab803302
         # And a hostname reconfigure is a config change the pod cannot see at all:
         # `envFrom` is read once, when the container starts, so without this the
         # ConfigMap is updated and the running router keeps advertising the old
         # origin.
-        checksum/public-config: 6431531ec43d20fa16fe04929d0814adadd49679d7d5b65291a1053dff5fd92e
+        checksum/public-config: 8d7f5a966e297f19be9b45e6eb15e72ee6fd03fa794073ae709012474f4385f0
         # The mail settings reach the container as env read from the Secret, once,
         # at start — so a reconfigured SMTP server or a rotated password would
         # otherwise sit in the Secret while the router keeps the old one (SUP-269).
@@ -264,7 +264,7 @@ spec:
         # PostgreSQL accepts connections, which is exactly the wait this pod needs
         # and is why there is no separate wait-for-database container.
         - name: migrate
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:28283b7cc7f1daee55679cfa05df66b72ff039f1013cdf291e4d1a6457e1b897
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:2d450289cf9afd227a48b99bed1384bd3e76105099172f825d6fb2876d9dcd09
           imagePullPolicy: IfNotPresent
           args: ["migrate"]
           securityContext:
@@ -377,7 +377,7 @@ spec:
               nvidia.com/gpu: "0"
       containers:
         - name: router-api
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:28283b7cc7f1daee55679cfa05df66b72ff039f1013cdf291e4d1a6457e1b897
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:2d450289cf9afd227a48b99bed1384bd3e76105099172f825d6fb2876d9dcd09
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -528,7 +528,7 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.13.1
+    helm.sh/chart: confidential-router-api-0.13.2
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
