@@ -106,7 +106,24 @@ type: application
 # next (SUP-300). No template change on top of 0.12.0 and no values change
 # besides the two digests; anyone pinning a deployment's evidence digest
 # re-pins once for 0.12.0's dropped line and the new images together.
-version: 0.12.1
+#
+# 0.13.0 (SUP-409) adds `mail.replyTo`, written to the Secret as
+# `mail-reply-to` and read as `CR_API_MAIL__REPLY_TO`. The sender on a
+# deployment is a no-reply address on a domain that need not receive mail at
+# all — `router.superprotocol.com` has no MX, and a probe against Google's MX
+# returned 5.1.3 for every address on it — so without this a reply, or a bounce
+# a human returns by hand, reaches nothing. Unset writes no key and sends no
+# header, so a deployment that says nothing sends what it sent before.
+#
+# The value is not optional for the chart's own default, which is why this is a
+# minor and not a patch: `image.digest` moves to `main-5de9e7d`, the first
+# router build whose config schema knows the key. The schema is strict, so the
+# two must move together — 0.12.1's image refuses to boot on a Secret carrying
+# `mail-reply-to`, the same trap 0.12.0's ⚠ above described. Riding along from
+# the same head, because an image is a head and not a cherry-pick: the lifted
+# 5s upstream deadline and 1 MiB `/v1` body cap (SUP-339) and a documentation
+# fix in the console's VS Code steps. The gatekeeper sidecar does not move.
+version: 0.13.0
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous

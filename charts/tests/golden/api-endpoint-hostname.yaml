@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.12.1
+    helm.sh/chart: confidential-router-api-0.13.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -25,7 +25,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api-public
   labels:
-    helm.sh/chart: confidential-router-api-0.12.1
+    helm.sh/chart: confidential-router-api-0.13.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -57,7 +57,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.12.1
+    helm.sh/chart: confidential-router-api-0.13.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -171,7 +171,7 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.12.1
+    helm.sh/chart: confidential-router-api-0.13.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -194,7 +194,7 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.12.1
+    helm.sh/chart: confidential-router-api-0.13.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -225,12 +225,12 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: 39bfd411a944f82fe61ffb5b461adbe1a6d03cd05c5df9b6ed0488db1d8838a2
+        checksum/config: 346c3e25a9bbb8930730d8099786dc36b21d28db5c4c1cbca3d66e0539c1192f
         # And a hostname reconfigure is a config change the pod cannot see at all:
         # `envFrom` is read once, when the container starts, so without this the
         # ConfigMap is updated and the running router keeps advertising the old
         # origin.
-        checksum/public-config: 48e362ef4b330bf8b534888386035a5a9547857c762d92e87bca1e1b7e07629d
+        checksum/public-config: dd60140e41d500a846b51fa935dd0e0313199147f7d1ea71a1951cd5ac8cb9ed
         # The mail settings reach the container as env read from the Secret, once,
         # at start — so a reconfigured SMTP server or a rotated password would
         # otherwise sit in the Secret while the router keeps the old one (SUP-269).
@@ -238,7 +238,7 @@ spec:
         # Keyed with `auth.secret`: everything else in the pre-image is either
         # known or guessable, so a bare hash of it would be an offline oracle for
         # the SMTP password to anyone who can read the Deployment.
-        checksum/mail: 7e54497ae94e1e16acb7be6ebd5a310b4382b026ddee618456dffaa65bc30bfe
+        checksum/mail: 9aebf344e17962f36efa71495eb6e8b388642285fe09618961aa7c2346190efa
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr
@@ -254,7 +254,7 @@ spec:
         # PostgreSQL accepts connections, which is exactly the wait this pod needs
         # and is why there is no separate wait-for-database container.
         - name: migrate
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:367aab943e948fb5443e6839212bdb5965a9d3791966626eadede79c44ec7ab0
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:274300916d72b51c9bf60d7b7b1873016bf913d11559822b6a34d678d146f9e8
           imagePullPolicy: IfNotPresent
           args: ["migrate"]
           securityContext:
@@ -305,6 +305,12 @@ spec:
                 secretKeyRef:
                   name: confidential-router-api
                   key: mail-provider
+                  optional: true
+            - name: CR_API_MAIL__REPLY_TO
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-reply-to
                   optional: true
             - name: CR_API_MAIL__RESEND_API_KEY
               valueFrom:
@@ -361,7 +367,7 @@ spec:
               nvidia.com/gpu: "0"
       containers:
         - name: router-api
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:367aab943e948fb5443e6839212bdb5965a9d3791966626eadede79c44ec7ab0
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:274300916d72b51c9bf60d7b7b1873016bf913d11559822b6a34d678d146f9e8
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -415,6 +421,12 @@ spec:
                 secretKeyRef:
                   name: confidential-router-api
                   key: mail-provider
+                  optional: true
+            - name: CR_API_MAIL__REPLY_TO
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-reply-to
                   optional: true
             - name: CR_API_MAIL__RESEND_API_KEY
               valueFrom:
@@ -506,7 +518,7 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.12.1
+    helm.sh/chart: confidential-router-api-0.13.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
