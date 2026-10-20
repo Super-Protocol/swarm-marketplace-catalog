@@ -124,8 +124,11 @@ type: application
 # 5s upstream deadline and 1 MiB `/v1` body cap (SUP-339) and a documentation
 # fix in the console's VS Code steps. The gatekeeper sidecar does not move.
 #
-# 0.13.1 (SUP-434) re-pins the router API and its egress sidecar to
-# `main-37ed4ba`, the head of the deploy train this version exists to carry. No
+# 0.13.1 (SUP-434) re-pins the router API to `main-7b7aaba` and its egress
+# sidecar to gatekeeper release `0.3.2`, the head of the deploy train this
+# version exists to carry. `7b7aaba` changes no Go code at all, so the sidecar
+# binary is the one built from `37ed4ba` and published as that release — the
+# same source tree either way, and a release is the better thing to pin. No
 # template change and no values change besides the two digests, so this is a
 # patch: the rendered documents are 0.13.0's, and only what runs inside them
 # moves.
@@ -139,10 +142,12 @@ type: application
 #
 # Arriving from the same head, because an image is a head and not a cherry-pick:
 # an invite-only deployment no longer mails a sign-in code to an address it would
-# refuse to register (SUP-410), and evidence coverage no longer reads 0% for a
+# refuse to register (SUP-410), evidence coverage no longer reads 0% for a
 # generation served through an external model endpoint, with no ratio shown
-# where no request was coverable (SUP-421, SUP-429, SUP-430). `mail.replyTo`
-# arrived in 0.13.0 and is unchanged here.
+# where no request was coverable (SUP-421, SUP-429, SUP-430), and every streamed
+# first token is timed, an unmeasurable rate is dropped rather than invented,
+# and a ledger usage row is priced to four decimals instead of reading -$0.00
+# (SUP-424). `mail.replyTo` arrived in 0.13.0 and is unchanged here.
 version: 0.13.1
 appVersion: "0.4.1"
 dependencies:
