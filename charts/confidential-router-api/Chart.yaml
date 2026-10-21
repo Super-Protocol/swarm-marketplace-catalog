@@ -157,7 +157,25 @@ type: application
 # the one digest. The egress sidecar does not move — `7b7aaba` changes no Go
 # code at all, so release `0.3.2` is the same gatekeeper source this head would
 # produce.
-version: 0.13.2
+#
+# 0.13.3 (SUP-459) re-pins the router API to `main-c668239`, the head of the
+# second production train. A streamed request now carries SSE comment
+# heartbeats while the upstream is still thinking, so the stream opens
+# immediately and nothing between the client and this deployment times the
+# connection out during a long prefill (SUP-449) — the fix a VS Code chat
+# session needs, because that client does not retry a turn it loses. From the
+# same head: an upstream 4xx about the request reaches the client as that 4xx
+# instead of a 502 (SUP-448), `/v1/completions` answers for every chat model
+# and `/v1/models` reports capabilities the deployment actually has (SUP-450),
+# the deployment bundle carries API keys so a rebuild no longer voids every
+# user's key (SUP-445), and an endpoint edit keeps the approved deployment it
+# was pinned to instead of silently clearing the digest (SUP-435).
+#
+# A patch: no template change and no values change besides the one digest. The
+# egress sidecar does not move — `c668239` changes no Go code under
+# `apps/gatekeeper`, so release `0.3.2` is the same gatekeeper source this head
+# would produce.
+version: 0.13.3
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous
