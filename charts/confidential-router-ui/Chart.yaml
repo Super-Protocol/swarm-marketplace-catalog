@@ -56,5 +56,10 @@ type: application
 # dash instead of a fabricated rate, and a ledger amount is rendered to four
 # decimals so a sub-cent charge is not displayed as `-$0.00`. The Activity
 # tile's hint names its sample sizes. No template change.
-version: 0.2.12
+#
+# 0.2.13 (SUP-459) pins `main-c668239` for the second production train. The
+# console half of it is the admin data-migration screen, which now reports the
+# API keys an export carries and an import restored (SUP-445); the rest of the
+# train is API behaviour the console reads unchanged. No template change.
+version: 0.2.13
 appVersion: "0.4.1"
