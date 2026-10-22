@@ -51,11 +51,20 @@ the one answer it must never give wrongly. `@Post([A, B])` was exactly that miss
 until SUP-482: the console ingest moved to `/v1/console-events` in SUP-463 and
 the scan kept reporting every route named.
 
-Routes are read from `*.controller.ts`, which is this repository's expectation
-and not Nest's requirement, so that name is checked rather than trusted: a
-`@Controller` anywhere else in the checkout is reported the same way. Tests are
-left out throughout — nothing a `*.spec.ts` declares is mounted by a
-deployment.
+Routes are read from `*.controller.ts` under `apps/router-api/src`, which is
+this repository's expectation and not Nest's requirement, so that name is
+checked rather than trusted: a `@Controller` under any other name in that tree
+is reported the same way. The directory is the scan's edge and not checked —
+a controller in `libs/` that `router-api` imported would mount and would not be
+read here. Nothing outside `apps/router-api/src` declares one in the build this
+chart pins. Tests are left out throughout, since nothing a `*.spec.ts` declares
+is mounted by a deployment.
+
+Reporting a `@Controller` the route read would have missed is deliberately
+blunt: prose that writes the decorator with its call — a JSDoc line in a file
+that is not a controller — fails the scan too. A failure naming a file is the
+cheap mistake to make here; the one this file exists to prevent is the silent
+pass.
 """
 
 import os
@@ -177,9 +186,12 @@ CONSTANT = re.compile(
 )
 STRING = re.compile(r"^(['\"])([^'\"]*)\1$")
 # A controller this scan would not read, because routes are read from
-# `*.controller.ts` and Nest does not require that name. The call is part of the
-# pattern: `@Controller` is a decorator factory, so a mention without one is
-# prose about the decorator rather than a controller.
+# `*.controller.ts` and Nest does not require that name. The call is in the
+# pattern because `@Controller` is a decorator factory and a real one always has
+# it — not as a filter on prose, which it is not: a JSDoc line writing
+# `@Controller()` fails this too. That is the accepted cost, and the cheaper
+# mistake: the report names the file, where the failure this guards against
+# names nothing at all.
 CONTROLLER = re.compile(r"@Controller\s*\(")
 
 # Routes are read from these; the rest of the checkout is read for the two
@@ -246,7 +258,9 @@ def strayed_controllers(source: pathlib.Path, root: pathlib.Path) -> list[str]:
     expectation rather than Nest's requirement: a controller under any other
     name is a route the scan does not see, and a route it does not see reads as
     `ok` — the one answer it must never give wrongly, and SUP-275's failure one
-    filename away. The glob is therefore checked rather than trusted.
+    filename away. The glob is therefore checked rather than trusted, within
+    `source`: a controller outside that directory is outside this scan, which
+    the module docstring says and nothing here detects.
     """
     strayed = []
     for file in router_sources(source):

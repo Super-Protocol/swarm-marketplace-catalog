@@ -120,6 +120,15 @@ CASES = [
         ["routes.ts:1", f"routes are read from {CONTROLLERS} only"],
     ),
     (
+        # Accepted rather than accidental: the report does not tell prose from
+        # a decorator, and a failure naming a file is the cheaper mistake than
+        # a route nobody reads.
+        "prose writing the decorator, which is reported as bluntly as the real thing",
+        {f"{SRC}/wiring.ts": "/** Built from @Controller() decorated classes. */\nexport const WIRING = 'app';\n"},
+        set(),
+        ["wiring.ts:1", f"routes are read from {CONTROLLERS} only"],
+    ),
+    (
         "a controller declared by a test, which no deployment mounts",
         {f"{SRC}/fixture.spec.ts": "@Controller('fixture')\nclass F {\n  @Get()\n  read() {}\n}\n"},
         set(),
