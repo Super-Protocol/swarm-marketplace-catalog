@@ -34,6 +34,37 @@ name fails the check instead of shipping unrouted —
 
     charts/tests/api_routes.py
     ROUTER_SRC=../confidential-router charts/tests/api_routes.py
+
+That scan reads the source as text, so what it can read is a limit worth
+writing down. It understands a route decorator whose argument is empty, one
+inline string, or an array of them, and a `const NAME = 'path'` a decorator
+names instead of spelling out:
+
+    @Controller()  @Get('export')  @Post([CONSOLE_EVENTS_PATH, 'v1/legacy'])
+
+It does not evaluate anything else — a template literal, a concatenation, a
+computed path, a name two files define differently, a function-local constant,
+an argument carrying a nested call. None of those is skipped: every
+`@Controller`/`@Get`/`@Post`/… it finds and cannot read is a failure naming the
+file and line, because a route this file does not see reads as `ok`, and that is
+the one answer it must never give wrongly. `@Post([A, B])` was exactly that miss
+until SUP-482: the console ingest moved to `/v1/console-events` in SUP-463 and
+the scan kept reporting every route named.
+
+Routes are read from `*.controller.ts` under `apps/router-api/src`, which is
+this repository's expectation and not Nest's requirement, so that name is
+checked rather than trusted: a `@Controller` under any other name in that tree
+is reported the same way. The directory is the scan's edge and not checked —
+a controller in `libs/` that `router-api` imported would mount and would not be
+read here. Nothing outside `apps/router-api/src` declares one in the build this
+chart pins. Tests are left out throughout, since nothing a `*.spec.ts` declares
+is mounted by a deployment.
+
+Reporting a `@Controller` the route read would have missed is deliberately
+blunt: prose that writes the decorator with its call — a JSDoc line in a file
+that is not a controller — fails the scan too. A failure naming a file is the
+cheap mistake to make here; the one this file exists to prevent is the silent
+pass.
 """
 
 import os
@@ -51,7 +82,8 @@ LISTING = "apps/confidential-router/app.yaml"
 
 PUBLISHED, INTERNAL = "published", "internal"
 
-# (method, route, audience, who calls it) — router-api at `main-44708f9`.
+# (method, route, audience, who calls it) — router-api at `main-e670363`, the
+# build listing 0.19.4 pins.
 # `:name` and `*name` are Nest's parameter and wildcard segments.
 ROUTES = [
     # Not controllers: mounted in `bootstrap.ts` and by the GraphQL module.
@@ -70,7 +102,11 @@ ROUTES = [
     ("GET", "/v1/evidence", PUBLISHED, "anyone verifying the deployment"),
     ("GET", "/v1/evidence/:endpoint", PUBLISHED, "anyone verifying the deployment"),
     ("GET", "/v1/invites/:code", PUBLISHED, "the landing page"),
-    ("POST", "/v1/analytics/events", PUBLISHED, "the console and the landing page"),
+    ("POST", "/v1/console-events", PUBLISHED, "the console and the landing page (SUP-463)"),
+    # The path the ingest answered before SUP-463, kept by the pinned build for
+    # one release so a console served from a cache still reaches it. It goes
+    # when the build that stops serving it is pinned.
+    ("POST", "/v1/analytics/events", PUBLISHED, "the console and the landing page — superseded by /v1/console-events"),
     ("POST", "/v1/webhooks/typeform", PUBLISHED, "Typeform"),
     ("POST", "/billing/stripe/webhook", PUBLISHED, "Stripe"),
     ("GET", "/billing/manual/complete", PUBLISHED, "the manual provider's checkout return link"),
@@ -134,23 +170,147 @@ def listing_overrides() -> list[str]:
     return found
 
 
-DECORATOR = re.compile(r"@(Controller|Get|Post|Put|Patch|Delete|All)\(\s*(?:'([^']*)')?\s*\)")
+# Every route decorator, with its argument captured whole rather than matched.
+# `[^)]*` stops at the first `)`, so an argument this scan does not expect — a
+# nested call, anything multi-line that closes elsewhere — arrives here
+# unparsed and is reported, instead of the decorator matching nothing and the
+# route disappearing.
+DECORATOR = re.compile(r"@(Controller|Get|Post|Put|Patch|Delete|All|Head|Options|Search)\(([^)]*)\)")
+# A path a decorator names by identifier: `export const CONSOLE_EVENTS_PATH = 'v1/console-events'`.
+# Anchored at the left margin, because a `const` a decorator can name is one at
+# the top of a module and nothing indented is: a function-local name that
+# collided with a real one would make the real one ambiguous.
+CONSTANT = re.compile(
+    r"^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(['\"])([^'\"\n]*)\2\s*(?:as\s+const\s*)?;?\s*$",
+    re.MULTILINE,
+)
+STRING = re.compile(r"^(['\"])([^'\"]*)\1$")
+# A controller this scan would not read, because routes are read from
+# `*.controller.ts` and Nest does not require that name. The call is in the
+# pattern because `@Controller` is a decorator factory and a real one always has
+# it — not as a filter on prose, which it is not: a JSDoc line writing
+# `@Controller()` fails this too. That is the accepted cost, and the cheaper
+# mistake: the report names the file, where the failure this guards against
+# names nothing at all.
+CONTROLLER = re.compile(r"@Controller\s*\(")
+
+# Routes are read from these; the rest of the checkout is read for the two
+# things that would otherwise pass unseen — a constant a decorator names, and a
+# controller under another name.
+CONTROLLERS, TESTS = "*.controller.ts", ".spec.ts"
 
 
-def source_routes(root: pathlib.Path) -> set[tuple[str, str]]:
-    """Every (method, route) a controller in a router checkout declares."""
+def router_sources(source: pathlib.Path) -> list[pathlib.Path]:
+    """Every file in a router checkout this scan reads.
+
+    Tests are left out throughout: a fixture is free to declare a controller of
+    its own and to reuse a name a route's path happens to have, and nothing a
+    test declares is mounted by the deployment.
+    """
+    return sorted(path for path in source.rglob("*.ts") if not path.name.endswith(TESTS))
+
+
+def string_constants(source: pathlib.Path) -> dict[str, str | None]:
+    """Module-level string constants in a router checkout, by name.
+
+    A name two files define differently maps to None: which one a decorator
+    meant is not a question a text scan may answer by picking.
+    """
+    values: dict[str, str | None] = {}
+    for file in router_sources(source):
+        for name, _, value in CONSTANT.findall(file.read_text(encoding="utf-8")):
+            if name in values and values[name] != value:
+                values[name] = None
+            else:
+                values.setdefault(name, value)
+    return values
+
+
+def declared_paths(argument: str, constants: dict[str, str | None]) -> list[str] | None:
+    """The paths one route decorator declares, or None if it cannot be read.
+
+    Nest takes a single path or an array of them, written inline or named by a
+    constant: `()`, `('v1/models')`, `([CONSOLE_EVENTS_PATH, 'v1/legacy'])`.
+    """
+    text = argument.strip().rstrip(",").strip()
+    if not text:
+        return [""]
+    if text.startswith("[") and text.endswith("]"):
+        items = [item.strip() for item in text[1:-1].split(",")]
+    else:
+        items = [text]
+    paths = []
+    for item in items:
+        if not item:
+            continue
+        literal = STRING.match(item)
+        value = literal.group(2) if literal else constants.get(item)
+        if value is None:
+            return None
+        paths.append(value)
+    return paths or None
+
+
+def strayed_controllers(source: pathlib.Path, root: pathlib.Path) -> list[str]:
+    """Every `@Controller` this scan would not have read, by file and line.
+
+    Routes are read from `*.controller.ts`, and that name is this repository's
+    expectation rather than Nest's requirement: a controller under any other
+    name is a route the scan does not see, and a route it does not see reads as
+    `ok` — the one answer it must never give wrongly, and SUP-275's failure one
+    filename away. The glob is therefore checked rather than trusted, within
+    `source`: a controller outside that directory is outside this scan, which
+    the module docstring says and nothing here detects.
+    """
+    strayed = []
+    for file in router_sources(source):
+        if file.match(CONTROLLERS):
+            continue
+        text = file.read_text(encoding="utf-8")
+        for match in CONTROLLER.finditer(text):
+            line = text.count("\n", 0, match.start()) + 1
+            strayed.append(
+                f"{file.relative_to(root)}:{line} declares @Controller, and routes are read"
+                f" from {CONTROLLERS} only — rename the file or widen the scan"
+            )
+    return strayed
+
+
+def source_routes(root: pathlib.Path) -> tuple[set[tuple[str, str]], list[str]]:
+    """Every (method, route) a controller in a router checkout declares, and
+    everything in it this scan could not read: a decorator argument it does not
+    understand, and a controller outside the files it reads."""
     routes = set()
     source = root / "apps" / "router-api" / "src"
     if not source.is_dir():
         sys.exit(f"  FAIL  ROUTER_SRC={root} has no apps/router-api/src")
-    for file in sorted(source.rglob("*.controller.ts")):
-        prefix = None
-        for kind, argument in DECORATOR.findall(file.read_text(encoding="utf-8")):
-            if kind == "Controller":
-                prefix = argument
-            elif prefix is not None:
-                routes.add((kind.upper(), "/" + "/".join(elements(f"{prefix}/{argument}"))))
-    return routes
+    constants = string_constants(source)
+    unreadable = strayed_controllers(source, root)
+    for file in sorted(source.rglob(CONTROLLERS)):
+        where, prefixes = file.relative_to(root), None
+        text = file.read_text(encoding="utf-8")
+        for match in DECORATOR.finditer(text):
+            kind, argument = match.group(1), match.group(2)
+            line = text.count("\n", 0, match.start()) + 1
+            paths = declared_paths(argument, constants)
+            if paths is None:
+                unreadable.append(
+                    f"{where}:{line} declares @{kind}({' '.join(argument.split())}),"
+                    " a route this scan cannot read"
+                )
+                if kind == "Controller":
+                    prefixes = None
+            elif kind == "Controller":
+                prefixes = paths
+            elif prefixes is None:
+                unreadable.append(f"{where}:{line} declares @{kind} under no prefix this scan could read")
+            else:
+                routes.update(
+                    (kind.upper(), "/" + "/".join(elements(f"{prefix}/{path}")))
+                    for prefix in prefixes
+                    for path in paths
+                )
+    return routes, unreadable
 
 
 def main() -> int:
@@ -173,7 +333,8 @@ def main() -> int:
 
     scanned = ""
     if os.environ.get("ROUTER_SRC"):
-        declared = source_routes(pathlib.Path(os.environ["ROUTER_SRC"]))
+        declared, unreadable = source_routes(pathlib.Path(os.environ["ROUTER_SRC"]))
+        failures.extend(unreadable)
         known = {(method, route) for method, route, _, _ in ROUTES}
         for method, route in sorted(declared - known):
             failures.append(f"{method} {route} is a controller route ROUTES does not name — published or internal?")
