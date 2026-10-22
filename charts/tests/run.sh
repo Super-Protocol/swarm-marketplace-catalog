@@ -744,6 +744,19 @@ else
   fail "charts/tests/local_stack.py"
 fi
 
+# The scan below reads the router's controllers as text, and its one unacceptable
+# failure is the silent one: a route it cannot read used to be a route it did not
+# report, which reads as every route named. `@Post([A, B])` was that miss for the
+# console ingest (SUP-482), so every decorator shape is exercised against fixture
+# controllers here — each one either read or reported.
+note "the route scan reads every decorator shape, or says which it cannot"
+if output=$(python3 charts/tests/route_decorators.py 2>&1); then
+  pass "$(printf '%s' "$output" | tail -1)"
+else
+  fail "charts/tests/route_decorators.py"
+  printf '%s\n' "$output" | sed 's/^/        /'
+fi
+
 # A controller answers in-process whatever its prefix is; on a deployment it
 # answers only if the Ingress routes that prefix. The export/import and codes CSV
 # routes shipped without theirs and were a 404 from nginx everywhere (SUP-275).
