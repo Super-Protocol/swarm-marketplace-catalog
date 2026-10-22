@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.19.3"
+  version: "0.19.4"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -859,10 +859,18 @@ components:
       # every key (SUP-445); and an endpoint edit keeps its pinned approved
       # deployment (SUP-435). The sidecar stays on gatekeeper release `0.3.2`:
       # no Go code moved.
-      version: "0.13.3"
+      #
+      # 0.19.4 (SUP-459) is what that train actually ships, on chart 0.13.4 and
+      # router `main-e670363`: 0.19.3 was cut, then held while the product was
+      # tested by hand, and three analytics fixes merged in the meantime. Added
+      # to 0.19.3's five: the feedback funnel reaches PostHog (SUP-465), the
+      # console event ingest moves off a path EasyPrivacy cancelled, to
+      # `POST /v1/console-events` (SUP-463), and `/health` says whether
+      # analytics is configured and what it has dropped (SUP-464).
+      version: "0.13.4"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
-        digest: sha256:5c6bd6a1d2f67d2573eb8ee63af9f1e9cc0eab9df1af6f3907a11e37565288fc
+        digest: sha256:58202c68f2ea401f2be3a858373e4d04049684837627ba2b852ec8dffc3b2016
       # The attested egress, a second container in the API pod (ADR-008 §2): the
       # gatekeeper's own core, verifying an external model endpoint's evidence and
       # pinning its TLS leaf before this deployment proxies a prompt to it. The
@@ -1186,7 +1194,10 @@ components:
       # 0.19.3 (SUP-459) moves both halves to `main-c668239` on chart 0.2.13;
       # the console's own change is the data-migration screen reporting the API
       # keys an export carries and an import restored (SUP-445).
-      version: "0.2.13"
+      #
+      # 0.19.4 (SUP-459) moves both halves to `main-e670363` on chart 0.2.14,
+      # for the console's half of the analytics fixes (SUP-465, SUP-463).
+      version: "0.2.14"
     images:
       # Moves with the API's digest above, from the same source revision: the
       # admin section that registers an external endpoint and edits the trust
@@ -1222,7 +1233,7 @@ components:
       # and key forms refuse per field (SUP-295), and every TEE label the
       # console shows is read from published evidence (SUP-260).
       - name: ghcr.io/super-protocol/confidential-router/router-ui
-        digest: sha256:460a23428006028ba6d95241723a5e8f9166c5e6eef699581516e7f3f5feb0e8
+        digest: sha256:d8689095ce02e77b01c84b8b60c5048ed7a50242893d235e782433002f704682
     deployment:
       values:
         base:
