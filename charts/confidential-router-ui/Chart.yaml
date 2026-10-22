@@ -61,5 +61,11 @@ type: application
 # console half of it is the admin data-migration screen, which now reports the
 # API keys an export carries and an import restored (SUP-445); the rest of the
 # train is API behaviour the console reads unchanged. No template change.
-version: 0.2.13
+#
+# 0.2.14 (SUP-459) pins `main-e670363`. The console's half of the three
+# analytics fixes that joined the train while it was held: the feedback card
+# and prompt emit the funnel events that had no call site (SUP-465), and the
+# browser posts its events to `/v1/console-events` instead of a path an
+# ad-blocker rule cancelled (SUP-463). No template change.
+version: 0.2.14
 appVersion: "0.4.1"

@@ -175,7 +175,25 @@ type: application
 # egress sidecar does not move — `c668239` changes no Go code under
 # `apps/gatekeeper`, so release `0.3.2` is the same gatekeeper source this head
 # would produce.
-version: 0.13.3
+#
+# 0.13.4 (SUP-459) re-pins the router API to `main-e670363`. The train 0.13.3
+# was cut for did not leave — it was held while the product was tested by hand,
+# and three analytics fixes merged while it waited, so the version that ships
+# carries eight commits rather than five. On top of 0.13.3: the feedback
+# funnel's `feedback_grant_applied` reaches PostHog, where the binding had no
+# call site at all (SUP-465); the console's event ingest moves from
+# `POST /v1/analytics/events` — which matched an EasyPrivacy path rule and was
+# therefore cancelled in the browser for much of a developer audience — to
+# `POST /v1/console-events`, with the old path still answering identically for
+# one release (SUP-463); and `/health` now reports whether analytics is
+# configured and how many events it has dropped, so a rebuild that forgets the
+# PostHog key is visible instead of silent (SUP-464).
+#
+# A patch again: no template change, no values change besides the one digest,
+# and `/v1` is already a prefix path on the Ingress, so the new ingest route
+# needs nothing here. The egress sidecar does not move — `e670363` changes no
+# Go code under `apps/gatekeeper`.
+version: 0.13.4
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous
