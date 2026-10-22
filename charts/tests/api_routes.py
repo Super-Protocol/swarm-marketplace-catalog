@@ -43,13 +43,19 @@ names instead of spelling out:
     @Controller()  @Get('export')  @Post([CONSOLE_EVENTS_PATH, 'v1/legacy'])
 
 It does not evaluate anything else — a template literal, a concatenation, a
-computed path, a name two files define differently, an argument carrying a
-nested call. None of those is skipped: every `@Controller`/`@Get`/`@Post`/… it
-finds and cannot read is a failure naming the file and line, because a route
-this file does not see reads as `ok`, and that is the one answer it must never
-give wrongly. `@Post([A, B])` was exactly that miss until SUP-482: the console
-ingest moved to `/v1/console-events` in SUP-463 and the scan kept reporting
-every route named.
+computed path, a name two files define differently, a function-local constant,
+an argument carrying a nested call. None of those is skipped: every
+`@Controller`/`@Get`/`@Post`/… it finds and cannot read is a failure naming the
+file and line, because a route this file does not see reads as `ok`, and that is
+the one answer it must never give wrongly. `@Post([A, B])` was exactly that miss
+until SUP-482: the console ingest moved to `/v1/console-events` in SUP-463 and
+the scan kept reporting every route named.
+
+Routes are read from `*.controller.ts`, which is this repository's expectation
+and not Nest's requirement, so that name is checked rather than trusted: a
+`@Controller` anywhere else in the checkout is reported the same way. Tests are
+left out throughout — nothing a `*.spec.ts` declares is mounted by a
+deployment.
 """
 
 import os
@@ -162,23 +168,44 @@ def listing_overrides() -> list[str]:
 # route disappearing.
 DECORATOR = re.compile(r"@(Controller|Get|Post|Put|Patch|Delete|All|Head|Options|Search)\(([^)]*)\)")
 # A path a decorator names by identifier: `export const CONSOLE_EVENTS_PATH = 'v1/console-events'`.
+# Anchored at the left margin, because a `const` a decorator can name is one at
+# the top of a module and nothing indented is: a function-local name that
+# collided with a real one would make the real one ambiguous.
 CONSTANT = re.compile(
-    r"^\s*(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(['\"])([^'\"\n]*)\2\s*(?:as\s+const\s*)?;?\s*$",
+    r"^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(['\"])([^'\"\n]*)\2\s*(?:as\s+const\s*)?;?\s*$",
     re.MULTILINE,
 )
 STRING = re.compile(r"^(['\"])([^'\"]*)\1$")
+# A controller this scan would not read, because routes are read from
+# `*.controller.ts` and Nest does not require that name. The call is part of the
+# pattern: `@Controller` is a decorator factory, so a mention without one is
+# prose about the decorator rather than a controller.
+CONTROLLER = re.compile(r"@Controller\s*\(")
+
+# Routes are read from these; the rest of the checkout is read for the two
+# things that would otherwise pass unseen — a constant a decorator names, and a
+# controller under another name.
+CONTROLLERS, TESTS = "*.controller.ts", ".spec.ts"
+
+
+def router_sources(source: pathlib.Path) -> list[pathlib.Path]:
+    """Every file in a router checkout this scan reads.
+
+    Tests are left out throughout: a fixture is free to declare a controller of
+    its own and to reuse a name a route's path happens to have, and nothing a
+    test declares is mounted by the deployment.
+    """
+    return sorted(path for path in source.rglob("*.ts") if not path.name.endswith(TESTS))
 
 
 def string_constants(source: pathlib.Path) -> dict[str, str | None]:
     """Module-level string constants in a router checkout, by name.
 
     A name two files define differently maps to None: which one a decorator
-    meant is not a question a text scan may answer by picking. Tests are left
-    out, because a fixture is free to reuse a name a controller's path happens
-    to have and nothing is routed by one.
+    meant is not a question a text scan may answer by picking.
     """
     values: dict[str, str | None] = {}
-    for file in sorted(path for path in source.rglob("*.ts") if not path.name.endswith(".spec.ts")):
+    for file in router_sources(source):
         for name, _, value in CONSTANT.findall(file.read_text(encoding="utf-8")):
             if name in values and values[name] != value:
                 values[name] = None
@@ -212,15 +239,40 @@ def declared_paths(argument: str, constants: dict[str, str | None]) -> list[str]
     return paths or None
 
 
+def strayed_controllers(source: pathlib.Path, root: pathlib.Path) -> list[str]:
+    """Every `@Controller` this scan would not have read, by file and line.
+
+    Routes are read from `*.controller.ts`, and that name is this repository's
+    expectation rather than Nest's requirement: a controller under any other
+    name is a route the scan does not see, and a route it does not see reads as
+    `ok` — the one answer it must never give wrongly, and SUP-275's failure one
+    filename away. The glob is therefore checked rather than trusted.
+    """
+    strayed = []
+    for file in router_sources(source):
+        if file.match(CONTROLLERS):
+            continue
+        text = file.read_text(encoding="utf-8")
+        for match in CONTROLLER.finditer(text):
+            line = text.count("\n", 0, match.start()) + 1
+            strayed.append(
+                f"{file.relative_to(root)}:{line} declares @Controller, and routes are read"
+                f" from {CONTROLLERS} only — rename the file or widen the scan"
+            )
+    return strayed
+
+
 def source_routes(root: pathlib.Path) -> tuple[set[tuple[str, str]], list[str]]:
     """Every (method, route) a controller in a router checkout declares, and
-    every route decorator in it this scan could not read."""
-    routes, unreadable = set(), []
+    everything in it this scan could not read: a decorator argument it does not
+    understand, and a controller outside the files it reads."""
+    routes = set()
     source = root / "apps" / "router-api" / "src"
     if not source.is_dir():
         sys.exit(f"  FAIL  ROUTER_SRC={root} has no apps/router-api/src")
     constants = string_constants(source)
-    for file in sorted(source.rglob("*.controller.ts")):
+    unreadable = strayed_controllers(source, root)
+    for file in sorted(source.rglob(CONTROLLERS)):
         where, prefixes = file.relative_to(root), None
         text = file.read_text(encoding="utf-8")
         for match in DECORATOR.finditer(text):

@@ -19,7 +19,7 @@ import pathlib
 import sys
 import tempfile
 
-from api_routes import declared_paths, source_routes, string_constants
+from api_routes import CONTROLLERS, declared_paths, source_routes, string_constants
 
 SRC = "apps/router-api/src"
 
@@ -110,6 +110,29 @@ CASES = [
         set(),
         ["prefixed.controller.ts:1", "prefixed.controller.ts:3"],
     ),
+    (
+        # `*.controller.ts` is this repository's expectation, not Nest's
+        # requirement, so a controller under another name is reported rather
+        # than passed over: that is SUP-275 one filename away.
+        "a controller in a file the scan does not read for routes",
+        {f"{SRC}/routes.ts": "@Controller('admin/data')\nclass D {\n  @Get('export')\n  out() {}\n}\n"},
+        set(),
+        ["routes.ts:1", f"routes are read from {CONTROLLERS} only"],
+    ),
+    (
+        "a controller declared by a test, which no deployment mounts",
+        {f"{SRC}/fixture.spec.ts": "@Controller('fixture')\nclass F {\n  @Get()\n  read() {}\n}\n"},
+        set(),
+        [],
+    ),
+    (
+        "a function-local constant, which is not a path a decorator can name",
+        {f"{SRC}/local.controller.ts":
+            "function build() {\n  const INNER_PATH = 'v1/inner';\n  return INNER_PATH;\n}\n"
+            "@Controller()\nclass L {\n  @Post(INNER_PATH)\n  take() {}\n}\n"},
+        set(),
+        ["local.controller.ts:7", "cannot read"],
+    ),
 ]
 
 # (decorator argument, the paths it declares or None) — the parser on its own,
@@ -159,13 +182,16 @@ def main() -> int:
             if not any(fragment in message for message in unreadable):
                 failures.append(f"{what}: no report mentions {fragment!r}; got {unreadable}")
 
-    # A constant the scan cannot pin to one value is None rather than a guess,
-    # and a fixture in a test is not what makes it ambiguous.
+    # A constant the scan cannot pin to one value is None rather than a guess.
+    # Neither a fixture in a test nor a name inside a function is what makes it
+    # ambiguous — "module-level" is the claim the docstring makes, so it is the
+    # claim under test.
     with tempfile.TemporaryDirectory() as tmp:
         root = checkout({f"{SRC}/a.ts": "export const P = 'one';\n",
                          f"{SRC}/b.ts": "const P = 'two';\n",
                          f"{SRC}/c.ts": "export const Q = 'three';\n",
-                         f"{SRC}/c.spec.ts": "const Q = 'a fixture';\n"}, pathlib.Path(tmp))
+                         f"{SRC}/c.spec.ts": "const Q = 'a fixture';\n",
+                         f"{SRC}/d.ts": "function f() {\n  const Q = 'a local';\n}\n"}, pathlib.Path(tmp))
         constants = string_constants(root / SRC)
     if constants.get("P") is not None or constants.get("Q") != "three":
         failures.append(f"string_constants read {constants}, expected P=None and Q='three'")
