@@ -67,5 +67,10 @@ type: application
 # and prompt emit the funnel events that had no call site (SUP-465), and the
 # browser posts its events to `/v1/console-events` instead of a path an
 # ad-blocker rule cancelled (SUP-463). No template change.
-version: 0.2.14
+#
+# 0.2.15 (SUP-522) pins `main-5bf6f33`. SUP-497 is API and server-common
+# logging, so the console's own code does not change — but both halves ship
+# from one revision, and a console built from a head the API is not pinned to
+# is a question nobody should have to ask at an incident. No template change.
+version: 0.2.15
 appVersion: "0.4.1"
