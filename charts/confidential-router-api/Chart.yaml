@@ -193,7 +193,29 @@ type: application
 # and `/v1` is already a prefix path on the Ingress, so the new ingest route
 # needs nothing here. The egress sidecar does not move — `e670363` changes no
 # Go code under `apps/gatekeeper`.
-version: 0.13.4
+#
+# 0.13.5 (SUP-522) re-pins the router API to `main-5bf6f33`, one commit over
+# 0.13.4's `e670363`: the log sanitiser `/privacy` credits, and the upstream
+# error body out of the log (SUP-497). Two halves, one commit.
+# `libs/server-common/src/lib/logging/redact.ts` grows a second list,
+# `DEFAULT_CONTENT_KEYS` (`messages`, `prompt`, `input`, `content`, `choices`,
+# `delta`, `text`, `completion`, `embedding`), matched on the whole key so
+# `contextLength` and `contentType` survive, wired into every structured record
+# through the `formatters.log` hook — the filter standing between a body and a
+# log line that §5 and §13 of `/privacy` describe, and which did not exist.
+# And `apps/router-api/src/app/api/v1/upstream-failure.ts` stops handing a
+# non-2xx body's text to `logger.warn`: `describeUpstreamError` carries the
+# status, the OpenAI-shaped `type` and `param` when the body parsed that way,
+# and the body's length — never its text. That interpolated line was the only
+# path that ever put request content into an operational log, and the sanitiser
+# above could not have caught it. The caller still receives the upstream's own
+# wording on the wire, which is what SUP-448 needed it for.
+#
+# A patch: no template change, no values change besides the one digest. The
+# egress sidecar does not move — `5bf6f33` changes no Go code under
+# `apps/gatekeeper`, so release `0.3.2` is the same gatekeeper source this head
+# would produce.
+version: 0.13.5
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous
