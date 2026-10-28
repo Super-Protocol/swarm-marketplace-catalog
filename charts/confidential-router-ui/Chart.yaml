@@ -72,5 +72,11 @@ type: application
 # logging, so the console's own code does not change — but both halves ship
 # from one revision, and a console built from a head the API is not pinned to
 # is a question nobody should have to ask at an incident. No template change.
-version: 0.2.15
+#
+# 0.2.16 (SUP-578) pins `main-91922ec`. The console's own code moves in
+# SUP-542's event taxonomy — the explainer video click is named and the
+# waitlist click it was already sending is written down — together with the
+# router-ui test that watches the path the feedback click really posts to
+# (SUP-486). No template change.
+version: 0.2.16
 appVersion: "0.4.1"
