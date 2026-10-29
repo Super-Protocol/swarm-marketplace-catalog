@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.13.5
+    helm.sh/chart: confidential-router-api-0.14.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -26,7 +26,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api-public
   labels:
-    helm.sh/chart: confidential-router-api-0.13.5
+    helm.sh/chart: confidential-router-api-0.14.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -66,7 +66,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.13.5
+    helm.sh/chart: confidential-router-api-0.14.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -201,7 +201,7 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.13.5
+    helm.sh/chart: confidential-router-api-0.14.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -224,7 +224,7 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.13.5
+    helm.sh/chart: confidential-router-api-0.14.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -255,12 +255,12 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: 5eeae98412c6dcb9ed137ddfbd8924b9dc435df48c09baef2f4dda7643ebc1cf
+        checksum/config: fff1ee3b9e738fcbf15283d0524303dd54e3f1873abf25e01cc80fca90e6b019
         # And a hostname reconfigure is a config change the pod cannot see at all:
         # `envFrom` is read once, when the container starts, so without this the
         # ConfigMap is updated and the running router keeps advertising the old
         # origin.
-        checksum/public-config: 7dfb860883616c37fe7177a31207e188c54f066a24cdfeff19c2ed508e57eaaa
+        checksum/public-config: 943a62b3440a5a0194bf114e5593eee4522f9c9ac2eea0dda5b219e116672f1a
         # The mail settings reach the container as env read from the Secret, once,
         # at start — so a reconfigured SMTP server or a rotated password would
         # otherwise sit in the Secret while the router keeps the old one (SUP-269).
@@ -590,11 +590,47 @@ spec:
           # else. A containerPort here would advertise a reachability that does
           # not exist.
           #
-          # No probe either. "Is it serving?" is not a question this container
-          # can answer about itself without a verdict, and a probe that reported
-          # healthy while every endpoint was fail-closed would be worse than
-          # none; the API polls the admin socket for exactly that and shows it in
-          # the console.
+          # No *readiness* probe, for the reason this block has always given:
+          # "is it serving?" is not a question this container can answer about
+          # itself without a verdict, and a probe that reported healthy while
+          # every endpoint was fail-closed would be worse than none; the API
+          # polls the admin socket for exactly that and shows it in the console.
+          #
+          # A liveness probe is a different question, and the absence of one
+          # cost 4.5 days (SUP-583): the admin API stopped answering, so nothing
+          # could re-check the verdict the router was serving a model on, and
+          # with no probe `restartCount` stayed 0, the pod stayed Ready and
+          # nothing restarted it. This is the in-pod version of "Ready is not
+          # serving".
+          #
+          # `exec`, not `httpGet`, and both halves of that matter:
+          #
+          #  - The admin listener is on loopback, which the kubelet cannot dial
+          #    — it probes the pod IP. An HTTP probe would mean a listener on an
+          #    interface ADR-008 deliberately does not grant this container.
+          #  - It does not exist at all until router-api has rendered an
+          #    endpoint. With none registered — the state every deployment
+          #    ships in — the render is a valid document with an empty
+          #    `endpoints` list, the supervisor waits on it, and an HTTP probe
+          #    would restart this container for ever over a deployment that has
+          #    done nothing wrong.
+          #
+          # `--healthcheck` has neither problem: it runs inside the container
+          # and answers from the rendered file and loopback. Healthy while there
+          # is no configuration to run, healthy when the admin API answers
+          # whatever it says — a fail-closed endpoint is a verdict, not a wedged
+          # process — and unhealthy only when a runnable configuration has an
+          # admin API that does not answer. Four periods, so a reload or a slow
+          # re-attestation is never why a container goes away, and two minutes
+          # to recover what nobody recovered in four days.
+          livenessProbe:
+            exec:
+              command:
+                - /usr/local/bin/gatekeeper-sidecar
+                - --healthcheck
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
           volumeMounts:
             - name: gatekeeper-config
               mountPath: "/var/run/gatekeeper"
@@ -634,7 +670,7 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.13.5
+    helm.sh/chart: confidential-router-api-0.14.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
