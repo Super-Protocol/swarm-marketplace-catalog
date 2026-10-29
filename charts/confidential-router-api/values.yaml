@@ -16,7 +16,7 @@
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-router/router-api
-  digest: sha256:6edbac2ef4b8a3ee22a72901517f98ee25e7699b8a7cbd2d7e01ac50213e4e06
+  digest: sha256:126146f3e398ac1255c671d878df8426546e717f2a51d44b2a0ee54bab970386
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -482,7 +482,7 @@ externalEndpoints:
   image:
     registry: ghcr.io
     repository: super-protocol/confidential-router/gatekeeper
-    digest: sha256:4569f7c8a00bc14ef3eb65fb61c584aed93a2897e907b733416901ea6831066a
+    digest: sha256:9fbba46762b140fb6cd5d97d384aaed6f3035d0b99b7efa989ca0da919f76891
     tag: ""
     pullPolicy: IfNotPresent
 

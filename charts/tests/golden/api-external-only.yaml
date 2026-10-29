@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.13.5
+    helm.sh/chart: confidential-router-api-0.13.6
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -26,7 +26,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api-public
   labels:
-    helm.sh/chart: confidential-router-api-0.13.5
+    helm.sh/chart: confidential-router-api-0.13.6
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -66,7 +66,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.13.5
+    helm.sh/chart: confidential-router-api-0.13.6
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -201,7 +201,7 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.13.5
+    helm.sh/chart: confidential-router-api-0.13.6
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -224,7 +224,7 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.13.5
+    helm.sh/chart: confidential-router-api-0.13.6
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -255,12 +255,12 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: 5eeae98412c6dcb9ed137ddfbd8924b9dc435df48c09baef2f4dda7643ebc1cf
+        checksum/config: 3e9aedf031861a008db233fc3b035c471dbbf12c99179b1334f80931a43a8c0f
         # And a hostname reconfigure is a config change the pod cannot see at all:
         # `envFrom` is read once, when the container starts, so without this the
         # ConfigMap is updated and the running router keeps advertising the old
         # origin.
-        checksum/public-config: 7dfb860883616c37fe7177a31207e188c54f066a24cdfeff19c2ed508e57eaaa
+        checksum/public-config: c5242c63e701be3d4162f18a837f9905d050d6f4e1ae9099f5dd31f94f728f56
         # The mail settings reach the container as env read from the Secret, once,
         # at start — so a reconfigured SMTP server or a rotated password would
         # otherwise sit in the Secret while the router keeps the old one (SUP-269).
@@ -284,7 +284,7 @@ spec:
         # PostgreSQL accepts connections, which is exactly the wait this pod needs
         # and is why there is no separate wait-for-database container.
         - name: migrate
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:6edbac2ef4b8a3ee22a72901517f98ee25e7699b8a7cbd2d7e01ac50213e4e06
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:126146f3e398ac1255c671d878df8426546e717f2a51d44b2a0ee54bab970386
           imagePullPolicy: IfNotPresent
           args: ["migrate"]
           securityContext:
@@ -404,7 +404,7 @@ spec:
               nvidia.com/gpu: "0"
       containers:
         - name: router-api
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:6edbac2ef4b8a3ee22a72901517f98ee25e7699b8a7cbd2d7e01ac50213e4e06
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:126146f3e398ac1255c671d878df8426546e717f2a51d44b2a0ee54bab970386
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -557,7 +557,7 @@ spec:
         # nothing writable: a static binary on a read-only root filesystem,
         # running as the image's own non-root uid rather than the API's.
         - name: gatekeeper
-          image: ghcr.io/super-protocol/confidential-router/gatekeeper@sha256:4569f7c8a00bc14ef3eb65fb61c584aed93a2897e907b733416901ea6831066a
+          image: ghcr.io/super-protocol/confidential-router/gatekeeper@sha256:9fbba46762b140fb6cd5d97d384aaed6f3035d0b99b7efa989ca0da919f76891
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -634,7 +634,7 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.13.5
+    helm.sh/chart: confidential-router-api-0.13.6
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"

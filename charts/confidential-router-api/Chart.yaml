@@ -215,7 +215,44 @@ type: application
 # egress sidecar does not move — `5bf6f33` changes no Go code under
 # `apps/gatekeeper`, so release `0.3.2` is the same gatekeeper source this head
 # would produce.
-version: 0.13.5
+#
+# 0.13.6 (SUP-578) re-pins the router API to `main-91922ec`, ten commits over
+# 0.13.5's `5bf6f33` — a SHA `main` no longer carries, since the branch was
+# rewritten on 2026-10-26; the tree it named is now `6ce7c4a`, and that is
+# where this delta starts. Two of the ten carry a migration, and one moves the
+# egress sidecar, which has not moved since 0.19.1.
+#
+# What the API image gains:
+#   * SUP-517, SUP-535 — an external upstream that stops serving is detected
+#     and a human is mailed. The failure run is projected beside the verdict —
+#     `lastSuccessAt`, `lastFailureAt`, `notServingSince`,
+#     `consecutiveFailures` (migration `1760300000000-ExternalEndpointLiveness`)
+#     — and both thresholds, `externalEndpoints.outage.afterFailures` and
+#     `.afterNoSuccess`, carry defaults. The alert leaves the process by the
+#     mail transport the sign-in codes already use: `alerts.emails` is empty by
+#     default and falls back to `auth.adminEmails`, so this chart emits no new
+#     key and the listing grows no parameter — deliberately, because a channel
+#     needing a new parameter would be unset on the deployment the outage
+#     happens on. `/health` gains an `alerts` block; its `unconfigured` state
+#     is the one that says outages are detected and nobody is told.
+#   * SUP-466 — which client sent each request, as a closed-set dimension
+#     (migration `GenerationClient1760200000000`).
+#   * SUP-542 — which model each `/v1` request asked for, recorded beside it.
+#   * SUP-479 — the health document served at `/admin/health`, for an operator
+#     who cannot reach `/health` from outside the cluster. `/admin` is already
+#     a prefix path on this chart's Ingress, so nothing here moves for it.
+#   * SUP-551, SUP-556 — mail the provider accepted and then discarded becomes
+#     visible to the operator, and a recipient whose address the provider drops
+#     has a way back.
+#
+# The sidecar moves to `main-91922ec` for SUP-537: a reconciling supervisor
+# that keeps every listener the configuration declares. There is no published
+# gatekeeper release at this head — `0.3.2` (2026-10-20) predates it — so until
+# one is cut the verifier in this pod is ahead of the binary a user downloads.
+#
+# A patch, as 0.13.5 was: no template change, and no values change besides the
+# two digests.
+version: 0.13.6
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous

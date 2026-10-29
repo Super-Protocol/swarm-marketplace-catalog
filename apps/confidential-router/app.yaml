@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.19.5"
+  version: "0.19.6"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -876,10 +876,27 @@ components:
       # while the caller still receives the upstream's own wording (SUP-497).
       # Until this version is deployed, `/privacy` §5 and §13 describe a
       # control the running deployment does not have.
-      version: "0.13.5"
+      #
+      # 0.19.6 (SUP-578) is the fourth production train, on chart 0.13.6 and
+      # router `main-91922ec`: ten commits over 0.19.5. Mind the SHA above —
+      # `main` was rewritten on 2026-10-26, so `5bf6f33` is an orphaned commit
+      # whose tree is now `6ce7c4a`, and that is where this delta starts.
+      #
+      # An external upstream that stops serving is now detected and mailed to a
+      # human (SUP-517, SUP-535) — the half missing when a lost gateway route
+      # left the router answering `503 attestation_failed` for 30 hours on
+      # 2026-10-23 — and it needs no new parameter here, because `alerts.emails`
+      # falls back to `auth.adminEmails`, which a production deployment already
+      # sets. Beside it: the client and the model behind each request (SUP-466,
+      # SUP-542), the health document where an operator can read it at
+      # `/admin/health` (SUP-479), mail the provider accepted and then silently
+      # discarded made visible with a way back for a dropped recipient
+      # (SUP-551, SUP-556), and the egress sidecar reconciling its listeners
+      # instead of losing one on an edit (SUP-537).
+      version: "0.13.6"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
-        digest: sha256:6edbac2ef4b8a3ee22a72901517f98ee25e7699b8a7cbd2d7e01ac50213e4e06
+        digest: sha256:126146f3e398ac1255c671d878df8426546e717f2a51d44b2a0ee54bab970386
       # The attested egress, a second container in the API pod (ADR-008 §2): the
       # gatekeeper's own core, verifying an external model endpoint's evidence and
       # pinning its TLS leaf before this deployment proxies a prompt to it. The
@@ -905,8 +922,15 @@ components:
       # 0.18.3 moved it to `main-82769ff` with the rest of the test-group train,
       # and 0.19.1 moves it to `main-37ed4ba` — published as gatekeeper release
       # `0.3.2` — for the on-demand re-attestation above (SUP-422).
+      # 0.13.6 moves it to `main-91922ec` for SUP-537: a reconciling supervisor
+      # that keeps every listener the rendered configuration declares, where an
+      # endpoint edit could previously leave one dead until the pod rolled. The
+      # first sidecar move since 0.19.1 — and the first with **no published
+      # gatekeeper release at the head**, since `0.3.2` (2026-10-20) predates
+      # it. Until one is cut, the verifier in this pod is ahead of the binary
+      # `releases/latest` hands a user.
       - name: ghcr.io/super-protocol/confidential-router/gatekeeper
-        digest: sha256:4569f7c8a00bc14ef3eb65fb61c584aed93a2897e907b733416901ea6831066a
+        digest: sha256:9fbba46762b140fb6cd5d97d384aaed6f3035d0b99b7efa989ca0da919f76891
       # Spilo: PostgreSQL 17.5 and Patroni 4.0.4 in one image, which is what makes the
       # database three instances that elect a leader instead of one that comes back empty.
       # It replaces `bitnamilegacy/postgresql` — a mirror that receives no rebuilds, no
@@ -1211,7 +1235,12 @@ components:
       # The console's own code does not change — SUP-497 is API and
       # server-common logging — but the two halves ship from one revision, so
       # the console is rebuilt from the same source the API is pinned to.
-      version: "0.2.15"
+      #
+      # 0.19.6 (SUP-578) moves both halves to `main-91922ec` on chart 0.2.16.
+      # The console's own code moves in SUP-542's event taxonomy — the explainer
+      # video click named, the waitlist click it was already sending written
+      # down — with the ingest-path test behind it (SUP-486).
+      version: "0.2.16"
     images:
       # Moves with the API's digest above, from the same source revision: the
       # admin section that registers an external endpoint and edits the trust
@@ -1247,7 +1276,7 @@ components:
       # and key forms refuse per field (SUP-295), and every TEE label the
       # console shows is read from published evidence (SUP-260).
       - name: ghcr.io/super-protocol/confidential-router/router-ui
-        digest: sha256:3df1593784f9c542a700cb1dabf2b403bb6a1b81c1e7e238da49d7ff498d529d
+        digest: sha256:43a40bc95524928cc18897ba0dbf54fa101e31663626cceb8b2157288dc1c21c
     deployment:
       values:
         base:
