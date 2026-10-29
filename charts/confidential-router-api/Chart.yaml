@@ -215,7 +215,46 @@ type: application
 # egress sidecar does not move — `5bf6f33` changes no Go code under
 # `apps/gatekeeper`, so release `0.3.2` is the same gatekeeper source this head
 # would produce.
-version: 0.13.5
+#
+# 0.14.0 (SUP-583) gives the egress sidecar a liveness probe. It had neither
+# probe, so when its admin API stopped answering on production the container
+# stayed `restartCount: 0`, `Ready` stayed true, the pod stayed Ready and
+# nothing restarted it for 4.5 days — while the router went on serving a model
+# whose verdict it could no longer re-check. This is the in-pod version of
+# "Ready is not serving", and it is the second time that family has cost us
+# production time.
+#
+# A minor and not a patch: the template changes, so the attested pod spec gains
+# a block and anyone pinning this deployment's evidence digest re-pins once. No
+# values change, and the `readinessProbe` this block has always argued against
+# is still absent — "is it serving?" needs a verdict, and a probe that reported
+# healthy while every endpoint was fail-closed would be worse than none.
+#
+# The probe is an `exec` of `gatekeeper-sidecar --healthcheck`, and both halves
+# of that are load-bearing. The admin listener is on loopback, which the kubelet
+# cannot dial — it probes the pod IP — so an `httpGet` would mean a listener on
+# an interface ADR-008 does not grant this container; and that listener does not
+# exist at all until router-api has rendered an endpoint, so an `httpGet` would
+# restart the state every deployment ships in, for ever. The check inside the
+# container is healthy while there is nothing to run, healthy when the admin API
+# answers whatever it says, and unhealthy only when a runnable configuration has
+# an admin API that does not answer.
+#
+# ⚠ Not publishable as it stands. `--healthcheck` is new in
+# confidential-router#176, so `externalEndpoints.image.digest` — still the
+# `main-37ed4ba` build published as gatekeeper release `0.3.2` — has no such
+# flag: the probe would exec a binary that prints usage and exits 2, and
+# Kubernetes would restart the sidecar every two minutes for ever. Re-pin that
+# digest to a gatekeeper built from #176 on in the change that publishes this
+# version, the same way 0.12.1 cleared 0.12.0's ⚠. A listing must move to this
+# chart version and to such an image together; its own `image.digest` override
+# does not make the chart safe.
+#
+# `image.digest` (the router API) should move in the same change, since #176
+# also carries the two router-api halves of SUP-583 — the status poll that
+# stopped discarding half the sidecar's answers, and the verdict that now
+# expires when nothing re-confirms it.
+version: 0.14.0
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous

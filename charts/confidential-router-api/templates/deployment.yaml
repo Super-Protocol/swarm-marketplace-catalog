@@ -160,11 +160,47 @@ spec:
           # else. A containerPort here would advertise a reachability that does
           # not exist.
           #
-          # No probe either. "Is it serving?" is not a question this container
-          # can answer about itself without a verdict, and a probe that reported
-          # healthy while every endpoint was fail-closed would be worse than
-          # none; the API polls the admin socket for exactly that and shows it in
-          # the console.
+          # No *readiness* probe, for the reason this block has always given:
+          # "is it serving?" is not a question this container can answer about
+          # itself without a verdict, and a probe that reported healthy while
+          # every endpoint was fail-closed would be worse than none; the API
+          # polls the admin socket for exactly that and shows it in the console.
+          #
+          # A liveness probe is a different question, and the absence of one
+          # cost 4.5 days (SUP-583): the admin API stopped answering, so nothing
+          # could re-check the verdict the router was serving a model on, and
+          # with no probe `restartCount` stayed 0, the pod stayed Ready and
+          # nothing restarted it. This is the in-pod version of "Ready is not
+          # serving".
+          #
+          # `exec`, not `httpGet`, and both halves of that matter:
+          #
+          #  - The admin listener is on loopback, which the kubelet cannot dial
+          #    — it probes the pod IP. An HTTP probe would mean a listener on an
+          #    interface ADR-008 deliberately does not grant this container.
+          #  - It does not exist at all until router-api has rendered an
+          #    endpoint. With none registered — the state every deployment
+          #    ships in — the render is a valid document with an empty
+          #    `endpoints` list, the supervisor waits on it, and an HTTP probe
+          #    would restart this container for ever over a deployment that has
+          #    done nothing wrong.
+          #
+          # `--healthcheck` has neither problem: it runs inside the container
+          # and answers from the rendered file and loopback. Healthy while there
+          # is no configuration to run, healthy when the admin API answers
+          # whatever it says — a fail-closed endpoint is a verdict, not a wedged
+          # process — and unhealthy only when a runnable configuration has an
+          # admin API that does not answer. Four periods, so a reload or a slow
+          # re-attestation is never why a container goes away, and two minutes
+          # to recover what nobody recovered in four days.
+          livenessProbe:
+            exec:
+              command:
+                - /usr/local/bin/gatekeeper-sidecar
+                - --healthcheck
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
           volumeMounts:
             - name: gatekeeper-config
               mountPath: {{ include "confidential-router-api.sidecarConfigDir" . | quote }}
