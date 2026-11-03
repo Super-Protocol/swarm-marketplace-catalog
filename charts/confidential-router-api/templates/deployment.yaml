@@ -21,6 +21,17 @@ metadata:
     swarm.io/exclude-evidence-fields: "/spec/template/metadata/annotations/checksum~1public-config,/spec/template/metadata/annotations/checksum~1mail"
 spec:
   replicas: {{ .Values.replicaCount }}
+  # One router-api process at a time, never two (SUP-601). A rolling update at
+  # `replicaCount: 1` is `maxSurge: 1, maxUnavailable: 0` — the new pod goes
+  # Ready *beside* the old one — and for that window two processes write one
+  # `external_endpoints` table, each reading the other sidecar's in-memory
+  # verdict back through the database, which ADR-008 §8 exists to forbid. The
+  # new pod's reset-to-pending also discards the old pod's live verdict while
+  # the old pod is still serving every request. SUP-600 is what that overlap
+  # produced once. The cost is that a publish is a short hard outage instead of
+  # a handover, which is the honest shape of restarting a single pod anyway.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "confidential-router-api.selectorLabels" . | nindent 6 }}

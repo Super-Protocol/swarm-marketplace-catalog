@@ -289,7 +289,44 @@ type: application
 #
 # A patch, as 0.13.6 was: no template change, and no values change besides the
 # two digests.
-version: 0.13.7
+#
+# 0.13.8 (SUP-601) sets `strategy: { type: Recreate }` on the Deployment. No
+# image moves and no value changes: this is about how a publish replaces the
+# pod, not about what runs in it.
+#
+# Without it Kubernetes rolls the Deployment with `maxSurge: 1,
+# maxUnavailable: 0`, so at this chart's `replicaCount: 1` the new pod boots
+# and goes Ready *beside* the old one. For that window two router-api
+# processes write one `external_endpoints` table — and those rows are a
+# projection of a verdict a particular sidecar holds in memory (ADR-008 §8),
+# so each pod ends up reading the other sidecar's verdict through the
+# database. §8 exists to forbid exactly that. The new pod also resets every
+# row to `pending` while the old pod is still taking every request, which
+# recovers on the next poll but is a self-inflicted gap in `/v1` meanwhile.
+#
+# SUP-600 is what the overlap produced once: the new pod built an empty
+# catalogue from the rows it had just reset, the old pod re-verified them from
+# its own sidecar, the new pod then saw no transition of its own and served
+# `/v1/models` empty and 503 `attestation_failed` for the life of the pod,
+# every train, until an operator cycled the endpoint by hand. confidential-
+# router#179 makes router-api robust to the overlap, so this is no longer the
+# fix that keeps production up — it removes the condition rather than survives
+# it, and both halves above disappear with one pod at a time.
+#
+# The trade-off, stated rather than hidden: `Recreate` tears the old pod down
+# before starting the new one, so a publish becomes a short hard outage
+# instead of a handover. At one replica that is the honest description of a
+# restart — a single pod's rollout was never seamless for in-flight requests —
+# and a deploy train already runs inside a maintenance window.
+#
+# `confidential-router-ui` deliberately keeps the default: it is stateless,
+# shares nothing between pods, and has nothing to gain from the outage.
+#
+# A patch, as 0.11.1's Ingress path was: one more field in the attested
+# Deployment, no values and no image. `/spec/strategy` is attested like the
+# rest of the object, so anyone pinning this deployment's evidence digest
+# re-pins once.
+version: 0.13.8
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous
