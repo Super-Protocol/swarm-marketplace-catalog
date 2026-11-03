@@ -78,5 +78,12 @@ type: application
 # waitlist click it was already sending is written down — together with the
 # router-ui test that watches the path the feedback click really posts to
 # (SUP-486). No template change.
-version: 0.2.16
+#
+# 0.2.17 (SUP-599) pins `main-d2ed74b`. The console's own code moves only where
+# SUP-583 widened the endpoint-status vocabulary the admin section renders —
+# `endpoint-status.ts`, the generated GraphQL types and the vocabulary test
+# behind them. SUP-598, the fix this train is cut for, is API-side. Both halves
+# ship from one revision, so the console is rebuilt from the head the API is
+# pinned to. No template change.
+version: 0.2.17
 appVersion: "0.4.1"

@@ -252,7 +252,44 @@ type: application
 #
 # A patch, as 0.13.5 was: no template change, and no values change besides the
 # two digests.
-version: 0.13.6
+#
+# 0.13.7 (SUP-599) re-pins the router API to `main-d2ed74b`, two commits over
+# 0.13.6's `91922ec`.
+#
+#   * SUP-598 — `models` resolved "which endpoint is live" through
+#     `latestForMany`, which loaded every `evidence_snapshots` row ever written
+#     and reduced it in process. The query's cost therefore grew with the
+#     history, and production's console Keys page reached 8-23 s. It now reads
+#     one snapshot per endpoint. No migration and no schema change: a question
+#     the database could always answer cheaply, finally asked that way.
+#   * SUP-583 — the egress sidecar's own verdicts stopped being discarded, and
+#     a stale verdict expires instead of standing in for a live answer. The
+#     sidecar serves health (`apps/gatekeeper/pkg/sidecar/health.go`) and the
+#     admin client reads it, so an endpoint the sidecar cannot verify is
+#     reported unverified rather than silently last-known-good.
+#
+# The sidecar moves with it, to `main-d2ed74b`, for that health endpoint. There
+# is still no published gatekeeper release at this head — `0.3.2` (2026-10-20)
+# predates both SUP-537 and SUP-583 — so the verifier in this pod remains ahead
+# of the binary a user downloads, as it has been since 0.13.6.
+#
+# `docker/router-api/entrypoint.sh` gains a heap-sizing step with its own test,
+# which changes the image and no rendered template.
+# It is the fix for a real production failure: router-api killed itself at a
+# heap of ~557 MB inside a 1Gi container, because Node sized the old space from
+# the host rather than the cgroup. The ceiling is derived at boot now.
+#
+# SUP-583's own chart half is deliberately **not** here. The sidecar binary at
+# this head answers `gatekeeper-sidecar --healthcheck`, but the pod probe that
+# would run it is PR #78 (chart 0.14.0), still open against `main` and
+# unreviewed. So this train carries the binary's half and not the probe: a
+# wedged sidecar is caught by `expireVerdict` in the API — which is the half
+# that protects the trust chain — but Kubernetes still will not restart it.
+# 0.14.0 is the follow-up, and it is a minor bump, not this patch.
+#
+# A patch, as 0.13.6 was: no template change, and no values change besides the
+# two digests.
+version: 0.13.7
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous
