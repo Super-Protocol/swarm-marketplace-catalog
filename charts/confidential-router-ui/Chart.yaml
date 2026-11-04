@@ -85,5 +85,12 @@ type: application
 # behind them. SUP-598, the fix this train is cut for, is API-side. Both halves
 # ship from one revision, so the console is rebuilt from the head the API is
 # pinned to. No template change.
-version: 0.2.17
+# 0.2.18 (SUP-603) pins `main-f507761`. SUP-600 is entirely API-side — the
+# external catalogue, the status pass and the health DTO — so the console's own
+# code does not move at all. It is rebuilt and re-pinned because both halves of
+# a train ship from one revision: a console built from a head the API is not
+# pinned to is a question nobody should have to answer at an incident. No
+# template change.
+
+version: 0.2.18
 appVersion: "0.4.1"

@@ -326,7 +326,52 @@ type: application
 # Deployment, no values and no image. `/spec/strategy` is attested like the
 # rest of the object, so anyone pinning this deployment's evidence digest
 # re-pins once.
-version: 0.13.8
+# 0.13.9 (SUP-603) re-pins the router API and its egress sidecar to
+# `main-f507761`, one commit over 0.13.7's `d2ed74b`. It inherits
+# `strategy: { type: Recreate }` from 0.13.8 unchanged — 0.13.8 set that field
+# and moved no image, so this is the version that carries both halves of the
+# SUP-600 story at once, and it is the one a listing has to pin to get either.
+#
+# The commit is confidential-router#179, SUP-600. The external catalogue is
+# re-derived from the `external_endpoints` rows on **every** status pass rather
+# than only on a pass that itself projected a flip; `refresh()` is serialised;
+# and `/health` publishes `externalEndpoints.routable` beside `serving`, with
+# `routable < serving` for two consecutive passes promoting `status` to
+# `outage`.
+#
+# What that fixes is the failure every deploy train had to be nursed through by
+# hand. A new pod reset the rows to `pending`, built its catalogue from them —
+# empty — and then saw no transition of its own on any later pass, because the
+# old pod had already re-verified the rows. So the empty catalogue stood for the
+# life of the pod: `/v1/models` empty, every completion a 503
+# `attestation_failed`, until an operator cycled the endpoint. Rebuilding from
+# the rows unconditionally means the catalogue cannot outlive the state it was
+# derived from, whoever wrote that state.
+#
+# 0.13.8 removes the condition (one pod at a time) and this removes the
+# fragility (a pod that cannot get stuck on a stale catalogue). They are
+# complementary, not alternatives, which is why the train ships them together.
+# No migration: the change touches `external-catalog.service.ts`,
+# `external-endpoint-status.service.ts`, `external-endpoint-health.ts`,
+# `external-endpoint-liveness.ts` and the health DTO, and no schema.
+#
+# A patch: no template change, and no values change besides the two digests.
+#
+# The sidecar digest moves even though `f507761` touches no Go. The image is
+# rebuilt per commit, so a new digest is what re-pins the attested evidence —
+# and there is a second reason it is worth reading rather than assuming here. A
+# scheduled `Release gatekeeper` workflow rebuilds and re-pushes `main-<sha>`
+# nightly, so this tag resolved to `sha256:e9d296c8…` after #179 merged and to
+# `sha256:28112070…` after the 2026-11-04T03:20Z run, at the same `headSha`.
+# The two images are the same sidecar: identical `rootfs`, identical layer
+# digests, identical runtime config, differing only in the label
+# `org.opencontainers.image.created`. The digest below is what the tag resolved
+# to when this version was cut. Still no published gatekeeper release at this
+# head — `0.3.2` (2026-10-20) predates SUP-537, SUP-583 and this — so the
+# verifier in this pod remains ahead of the binary `releases/latest` hands a
+# user, as it has been since 0.13.6.
+
+version: 0.13.9
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous

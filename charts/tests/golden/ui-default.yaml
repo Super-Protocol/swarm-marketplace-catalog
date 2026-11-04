@@ -5,7 +5,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-ui-public
   labels:
-    helm.sh/chart: confidential-router-ui-0.2.17
+    helm.sh/chart: confidential-router-ui-0.2.18
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -31,7 +31,7 @@ kind: Service
 metadata:
   name: confidential-router-ui
   labels:
-    helm.sh/chart: confidential-router-ui-0.2.17
+    helm.sh/chart: confidential-router-ui-0.2.18
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -54,7 +54,7 @@ kind: Deployment
 metadata:
   name: confidential-router-ui
   labels:
-    helm.sh/chart: confidential-router-ui-0.2.17
+    helm.sh/chart: confidential-router-ui-0.2.18
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -78,7 +78,7 @@ spec:
         # `envFrom` is read once, when the container starts, so without this a
         # hostname reconfigure updates the ConfigMap and the running console keeps
         # calling the old origin.
-        checksum/public-config: 8979208a5c37b0c340af8a0e71bcdaf494fb7efa24efd72ababe0ad4c763c1a4
+        checksum/public-config: ea77c05cdb96c59a025c861dd93fa74f6f3d7044d8209a42f392200df195af8c
       labels:
         app.kubernetes.io/name: confidential-router-ui
         app.kubernetes.io/instance: cr
@@ -89,7 +89,7 @@ spec:
         runAsUser: 1001
       containers:
         - name: router-ui
-          image: ghcr.io/super-protocol/confidential-router/router-ui@sha256:5d6b322db4568cb1b50ed0a94a5ba1ce6c2fa685e65aaababd4a7ba2245ed0bb
+          image: ghcr.io/super-protocol/confidential-router/router-ui@sha256:af868c9be01b1ecb96afae6881837d5cc1ec761a15534b82fff60e6aefbc1572
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -163,7 +163,7 @@ kind: Ingress
 metadata:
   name: confidential-router-ui
   labels:
-    helm.sh/chart: confidential-router-ui-0.2.17
+    helm.sh/chart: confidential-router-ui-0.2.18
     app.kubernetes.io/name: confidential-router-ui
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
