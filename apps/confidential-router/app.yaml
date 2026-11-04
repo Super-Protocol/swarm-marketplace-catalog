@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.19.7"
+  version: "0.19.8"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -903,10 +903,39 @@ components:
       # history did. One snapshot per endpoint is read now. Beside it, SUP-583
       # stops the egress sidecar's verdicts being discarded and expires a stale
       # one, which moves the sidecar digest below as well.
-      version: "0.13.7"
+      # 0.19.8 (SUP-603) is the sixth production train, on chart 0.13.9 and
+      # router `main-f507761`: one commit over 0.19.7's `d2ed74b`, plus the
+      # chart field 0.13.8 added and no listing ever shipped.
+      #
+      # It is cut for SUP-600 — the failure that made every one of the five
+      # trains above need an operator to cycle the external endpoint by hand
+      # after the publish. A new API pod reset the `external_endpoints` rows to
+      # `pending`, built its external catalogue from them (empty), and then saw
+      # no status transition of its own on any later pass because the old pod
+      # had already re-verified those rows. The empty catalogue therefore stood
+      # for the life of the pod: `/v1/models` empty and every completion a 503
+      # `attestation_failed`. confidential-router#179 re-derives the catalogue
+      # from the rows on every pass instead of only on a pass that projected a
+      # flip, serialises `refresh()`, and publishes
+      # `externalEndpoints.routable` beside `serving` on `/health` so the
+      # mismatch is legible instead of silent.
+      #
+      # Riding with it, from chart 0.13.8 (SUP-601): `strategy: Recreate` on
+      # the API Deployment, so one router-api process runs at a time and the
+      # two-pod overlap that produced SUP-600 cannot arise. 0.13.8 was
+      # published with 0.19.7's digests and no listing pinned it, so 0.13.9 is
+      # where both halves reach a deployment — the removed condition and the
+      # robustness against it. The trade-off `Recreate` brings is stated in the
+      # chart: a publish is a short hard outage rather than a handover, which
+      # at one replica is the honest shape of restarting a pod anyway.
+      #
+      # No migration. Both image digests below move because the images are
+      # rebuilt per commit; the gatekeeper's Go code is untouched by `f507761`.
+
+      version: "0.13.9"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
-        digest: sha256:6bc71cf0598cd760b4cecaab3fe72ac058df149be2413f7e52f710f20956afe4
+        digest: sha256:4d6d64c32a65e8447b4014cde1927d7b76b36082cbb1a4c0a01b7589b88ad569
       # The attested egress, a second container in the API pod (ADR-008 §2): the
       # gatekeeper's own core, verifying an external model endpoint's evidence and
       # pinning its TLS leaf before this deployment proxies a prompt to it. The
@@ -945,7 +974,7 @@ components:
       # published gatekeeper release at the head — `0.3.2` predates both SUP-537
       # and SUP-583 — so the caveat above carries forward unchanged.
       - name: ghcr.io/super-protocol/confidential-router/gatekeeper
-        digest: sha256:0ff710e58bcbda608f98d14c95ff462230bd67ac8f43f894854ee23675ac78ce
+        digest: sha256:28112070369b3803610d3d436d5efbf1b1731214c4e2e606db7da29ad5927f00
       # Spilo: PostgreSQL 17.5 and Patroni 4.0.4 in one image, which is what makes the
       # database three instances that elect a leader instead of one that comes back empty.
       # It replaces `bitnamilegacy/postgresql` — a mirror that receives no rebuilds, no
@@ -1260,7 +1289,11 @@ components:
       # The console moves only where SUP-583 widened the endpoint-status
       # vocabulary its admin section renders; SUP-598, the fix this train is cut
       # for, is API-side.
-      version: "0.2.17"
+      # 0.19.8 (SUP-603) moves both halves to `main-f507761` on chart 0.2.18.
+      # SUP-600 is API-side in full, so the console's own code does not move;
+      # it is re-pinned because both halves of a train ship from one revision.
+
+      version: "0.2.18"
     images:
       # Moves with the API's digest above, from the same source revision: the
       # admin section that registers an external endpoint and edits the trust
@@ -1296,7 +1329,7 @@ components:
       # and key forms refuse per field (SUP-295), and every TEE label the
       # console shows is read from published evidence (SUP-260).
       - name: ghcr.io/super-protocol/confidential-router/router-ui
-        digest: sha256:5d6b322db4568cb1b50ed0a94a5ba1ce6c2fa685e65aaababd4a7ba2245ed0bb
+        digest: sha256:af868c9be01b1ecb96afae6881837d5cc1ec761a15534b82fff60e6aefbc1572
     deployment:
       values:
         base:
