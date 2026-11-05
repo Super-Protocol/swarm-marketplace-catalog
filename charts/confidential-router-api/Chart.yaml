@@ -371,7 +371,25 @@ type: application
 # verifier in this pod remains ahead of the binary `releases/latest` hands a
 # user, as it has been since 0.13.6.
 
-version: 0.13.9
+# 0.13.10 (SUP-615) re-pins the router API and its egress sidecar to
+# `main-0c5f34f`, one commit over 0.13.9's `f507761`
+# (confidential-router#180). Template-wise nothing moves: `strategy:
+# { type: Recreate }` and every value stay as 0.13.9 left them.
+#
+# What the new image carries is the refresh of a relayed external-upstream
+# evidence copy. The old skip was keyed on the evidence digest, which says
+# *what* an upstream is running and does not move while its deployment stands,
+# so the bring-up fetch was the only copy ever filed and it aged past the
+# 24-hour window every verifier applies. A filed copy is now re-fetched once
+# the row's `fetchedAt` passes `externalEndpoints.evidenceRefreshAfter` (1h),
+# and past `evidenceStaleAfter` (6h) the status pass logs an `ERROR` and raises
+# an operator alert through the existing mail channel. Both keys default inside
+# the image and are not chart values, so no deployment parameter changes and a
+# deployment on 0.13.9's values gets the new behaviour by moving the digest.
+#
+# No migration: service logic and two config defaults, no entity or schema
+# change.
+version: 0.13.10
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous
