@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.19.8"
+  version: "0.19.9"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -932,10 +932,34 @@ components:
       # No migration. Both image digests below move because the images are
       # rebuilt per commit; the gatekeeper's Go code is untouched by `f507761`.
 
-      version: "0.13.9"
+      # 0.19.9 (SUP-615) is the seventh production train, on chart 0.13.10 and
+      # router `main-0c5f34f`: one commit over 0.19.8's `f507761`,
+      # confidential-router#180.
+      #
+      # It is cut for SUP-615 — the relayed copy of an external upstream's
+      # evidence stopped advancing. `ExternalEvidenceService.refreshAll` filed
+      # one publication per `(endpoint, digest)` and never asked again, and a
+      # digest states *what* is deployed, not *when* the upstream last asserted
+      # it: it does not move while a deployment stands. So a bring-up fetch was
+      # the only copy ever filed, every verifier correctly refused it past its
+      # 24-hour window, and no restart or reconfigure cleared it — each
+      # deployment started a 24-hour fuse on its upstream-evidence panel. The
+      # filed copy is now re-fetched once its `fetchedAt` is older than
+      # `externalEndpoints.evidenceRefreshAfter` (1h), read from the row so
+      # replicas share the schedule and a restarted pod inherits it; past
+      # `evidenceStaleAfter` (6h) the pass logs an `ERROR`, counts it on the
+      # poll report and raises an operator alert, which is the gap that let
+      # this run 37 hours with `/health` green.
+      #
+      # No migration, no new deploy parameter: both thresholds carry defaults
+      # and are not chart values. Both image digests below move because the
+      # images are rebuilt per commit; the gatekeeper's Go code is untouched by
+      # `0c5f34f`.
+
+      version: "0.13.10"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
-        digest: sha256:4d6d64c32a65e8447b4014cde1927d7b76b36082cbb1a4c0a01b7589b88ad569
+        digest: sha256:9e1fce1b4759e0678a7afbed952c4df2153e900e8cda28ef3bfafb3dcb2f5f0f
       # The attested egress, a second container in the API pod (ADR-008 §2): the
       # gatekeeper's own core, verifying an external model endpoint's evidence and
       # pinning its TLS leaf before this deployment proxies a prompt to it. The
@@ -974,7 +998,7 @@ components:
       # published gatekeeper release at the head — `0.3.2` predates both SUP-537
       # and SUP-583 — so the caveat above carries forward unchanged.
       - name: ghcr.io/super-protocol/confidential-router/gatekeeper
-        digest: sha256:28112070369b3803610d3d436d5efbf1b1731214c4e2e606db7da29ad5927f00
+        digest: sha256:c6bc7903b634c17e89e397c308d738decc5d109f40d572fe970f79be11db378e
       # Spilo: PostgreSQL 17.5 and Patroni 4.0.4 in one image, which is what makes the
       # database three instances that elect a leader instead of one that comes back empty.
       # It replaces `bitnamilegacy/postgresql` — a mirror that receives no rebuilds, no
@@ -1293,7 +1317,14 @@ components:
       # SUP-600 is API-side in full, so the console's own code does not move;
       # it is re-pinned because both halves of a train ship from one revision.
 
-      version: "0.2.18"
+      # 0.19.9 (SUP-615) moves both halves to `main-0c5f34f` on chart 0.2.19.
+      # The console's own change is the freshness sentence: a bundle read from
+      # the host now says the host stopped publishing, while the same bundle out
+      # of this router's relay says this router's copy is old. The old sentence
+      # said the former in both cases, which is what sent SUP-612's reader to
+      # the wrong deployment.
+
+      version: "0.2.19"
     images:
       # Moves with the API's digest above, from the same source revision: the
       # admin section that registers an external endpoint and edits the trust
@@ -1329,7 +1360,7 @@ components:
       # and key forms refuse per field (SUP-295), and every TEE label the
       # console shows is read from published evidence (SUP-260).
       - name: ghcr.io/super-protocol/confidential-router/router-ui
-        digest: sha256:af868c9be01b1ecb96afae6881837d5cc1ec761a15534b82fff60e6aefbc1572
+        digest: sha256:f964d070cbf6b20d6b3f09f295aa86b22dcfc8947b7c64184bfb0d1bd3d74206
     deployment:
       values:
         base:

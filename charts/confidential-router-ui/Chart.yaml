@@ -92,5 +92,11 @@ type: application
 # pinned to is a question nobody should have to answer at an incident. No
 # template change.
 
-version: 0.2.18
+# 0.2.19 (SUP-615) re-pins the console to `main-0c5f34f`. The console's own
+# change is one string: the chat's evidence panel now names the party that let
+# a bundle age — the host when the page read it from the host, this router when
+# the page read this router's relayed copy. The old sentence said the former in
+# both cases, which pointed a reader at the wrong deployment for 37 hours. No
+# template change.
+version: 0.2.19
 appVersion: "0.4.1"
