@@ -1,0 +1,173 @@
+---
+# Source: claims-fraud-feed/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cr-clients
+type: Opaque
+stringData:
+  payer.properties: |
+    security.protocol=SASL_PLAINTEXT
+    sasl.mechanism=PLAIN
+    sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="payer" password="test-payer";
+  hospital.properties: |
+    security.protocol=SASL_PLAINTEXT
+    sasl.mechanism=PLAIN
+    sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="hospital" password="test-hospital";
+---
+# Source: claims-fraud-feed/templates/scripts.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cr-scripts
+data:
+  payer.sh: |
+    #!/usr/bin/env bash
+    # A payer's claim feed. Bills for a knee arthroplasty; every 10th claim
+    # names a different provider than the site the patient is actually admitted to, which is the
+    # conflict the stream processor is looking for.
+    set -uo pipefail
+    B="claims-kafka:9092"
+    until kafka-broker-api-versions --bootstrap-server "$B" --command-config /clients/payer.properties >/dev/null 2>&1; do
+      echo "waiting for the bus"; sleep 5
+    done
+    echo "payer feed started"
+    while true; do
+      # Both feeds wake on the same multiple of the interval and only then decide which patient
+      # this round is about. Without that they drift apart within a minute — each round spends a
+      # few seconds starting a JVM to send one message — the two sides stop naming the same
+      # patient, and a join that never matches looks exactly like a rule that found nothing.
+      now=$(date +%s)
+      sleep $(( 5 - now % 5 ))
+      bucket=$(( $(date +%s) / 5 ))
+      patient="P-${bucket}"
+      claim="CLM-${bucket}"
+      if [ $(( bucket % 10 )) -eq 0 ]; then
+        provider="PROV-778"; amount="8450.00"
+      else
+        provider="HOSP-B"; amount="240.00"
+      fi
+      echo "${claim}:{\"patient_id\":\"${patient}\",\"provider_id\":\"${provider}\",\"procedure\":\"27447-KNEE-ARTHROPLASTY\",\"amount\":${amount}}" \
+        | kafka-console-producer --bootstrap-server "$B" --command-config /clients/payer.properties \
+          --topic claims --property parse.key=true --property key.separator=: 2>/dev/null
+    done
+  hospital.sh: |
+    #!/usr/bin/env bash
+    # A hospital's admission feed. It knows nothing about claims, and could not read them if it did.
+    set -uo pipefail
+    B="claims-kafka:9092"
+    until kafka-broker-api-versions --bootstrap-server "$B" --command-config /clients/hospital.properties >/dev/null 2>&1; do
+      echo "waiting for the bus"; sleep 5
+    done
+    echo "hospital feed started"
+    while true; do
+      now=$(date +%s)
+      sleep $(( 5 - now % 5 ))
+      bucket=$(( $(date +%s) / 5 ))
+      patient="P-${bucket}"
+      echo "EVT-${bucket}:{\"patient_id\":\"${patient}\",\"hospital_id\":\"HOSP-B\",\"status\":\"INPATIENT\"}" \
+        | kafka-console-producer --bootstrap-server "$B" --command-config /clients/hospital.properties \
+          --topic clinical.events --property parse.key=true --property key.separator=: 2>/dev/null
+    done
+---
+# Source: claims-fraud-feed/templates/feeds.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cr-payer
+  labels:
+    app.kubernetes.io/name: payer-feed
+    app.kubernetes.io/instance: cr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payer-feed
+      app.kubernetes.io/instance: cr
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: payer-feed
+        app.kubernetes.io/instance: cr
+    spec:
+      containers:
+        - name: feed
+          image: "confluentinc/cp-server:8.3.1"
+          command: ["bash", "/scripts/payer.sh"]
+          env:
+            # Each message is sent by a fresh console producer, and a JVM that sizes its heap from
+            # the machine rather than the container limit is killed long before the demo is over.
+            - name: KAFKA_HEAP_OPTS
+              value: "-Xmx128m"
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+            - name: clients
+              mountPath: /clients
+          resources:
+            limits:
+              cpu: 100m
+              memory: 768Mi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: 100m
+              memory: 768Mi
+              nvidia.com/gpu: "0"
+      volumes:
+        - name: scripts
+          configMap:
+            name: cr-scripts
+        - name: clients
+          secret:
+            secretName: cr-clients
+---
+# Source: claims-fraud-feed/templates/feeds.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cr-hospital
+  labels:
+    app.kubernetes.io/name: hospital-feed
+    app.kubernetes.io/instance: cr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hospital-feed
+      app.kubernetes.io/instance: cr
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hospital-feed
+        app.kubernetes.io/instance: cr
+    spec:
+      containers:
+        - name: feed
+          image: "confluentinc/cp-server:8.3.1"
+          command: ["bash", "/scripts/hospital.sh"]
+          env:
+            # Each message is sent by a fresh console producer, and a JVM that sizes its heap from
+            # the machine rather than the container limit is killed long before the demo is over.
+            - name: KAFKA_HEAP_OPTS
+              value: "-Xmx128m"
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+            - name: clients
+              mountPath: /clients
+          resources:
+            limits:
+              cpu: 100m
+              memory: 768Mi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: 100m
+              memory: 768Mi
+              nvidia.com/gpu: "0"
+      volumes:
+        - name: scripts
+          configMap:
+            name: cr-scripts
+        - name: clients
+          secret:
+            secretName: cr-clients

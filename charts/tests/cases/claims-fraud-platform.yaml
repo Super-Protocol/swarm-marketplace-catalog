@@ -1,0 +1,39 @@
+# confluent-platform as the confidential-claims-fraud listing renders it.
+consoleHostname: claims.example.test
+auth:
+  enabled: true
+  adminUser: admin
+  adminPassword: test-admin
+  viewerUser: viewer
+  viewerPassword: test-viewer
+  internalPassword: test-internal
+  cookieSecret: 0123456789abcdef0123456789abcdef
+kafka:
+  storage: 10Gi
+schemaRegistry:
+  enabled: true
+sasl:
+  adminPassword: test-admin
+  accounts:
+    - name: payer
+      password: test-payer
+      produce: ["claims"]
+    - name: hospital
+      password: test-hospital
+      produce: ["clinical.events"]
+    - name: analyst
+      password: test-analyst
+      consume: ["fraud.alerts"]
+      groups: ["fraud-analyst"]
+topics:
+  - name: claims
+    partitions: 1
+  - name: clinical.events
+    partitions: 1
+ksqldb:
+  enabled: true
+  serviceId: "claims_fraud_"
+  verify:
+    - FRAUD_ALERTS
+  statements: |
+    CREATE STREAM IF NOT EXISTS claims (claim_id VARCHAR KEY) WITH (kafka_topic='claims', value_format='JSON', partitions=1, replicas=1);

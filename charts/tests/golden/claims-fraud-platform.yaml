@@ -1,0 +1,995 @@
+---
+# Source: confluent-platform/templates/control-center.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cr-control-center-auth
+type: Opaque
+stringData:
+  password.properties: |
+    admin: test-internal,Administrators
+    viewer: test-internal,Restricted
+---
+# Source: confluent-platform/templates/control-center.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cr-control-center-htpasswd
+type: Opaque
+stringData:
+  htpasswd: |
+    admin:<bcrypt>
+    viewer:<bcrypt>
+  cookieSecret: "0123456789abcdef0123456789abcdef"
+  internalPassword: "test-internal"
+---
+# Source: confluent-platform/templates/sasl.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cr-sasl
+type: Opaque
+stringData:
+  kafka.jaas: |
+    KafkaServer {
+      org.apache.kafka.common.security.plain.PlainLoginModule required
+      username="admin"
+      password="test-admin"
+      user_admin="test-admin"
+      user_payer="test-payer"
+      user_hospital="test-hospital"
+      user_analyst="test-analyst"
+      ;
+    };
+  admin.sasl.jaas.config: |-
+    org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="test-admin";
+  admin.password: "test-admin"
+  payer.sasl.jaas.config: |-
+    org.apache.kafka.common.security.plain.PlainLoginModule required username="payer" password="test-payer";
+  hospital.sasl.jaas.config: |-
+    org.apache.kafka.common.security.plain.PlainLoginModule required username="hospital" password="test-hospital";
+  analyst.sasl.jaas.config: |-
+    org.apache.kafka.common.security.plain.PlainLoginModule required username="analyst" password="test-analyst";
+---
+# Source: confluent-platform/templates/console-signin.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cr-control-center-signin
+data:
+  sign_in.html: |
+    {{define "sign_in.html"}}
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Sign in — Control Center</title>
+        <style>
+          :root { color-scheme: light dark; }
+          body {
+            margin: 0; min-height: 100vh; display: grid; place-items: center;
+            font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f4f5f7; color: #16181d;
+          }
+          .card {
+            width: 22rem; padding: 2rem; border-radius: 12px; background: #fff;
+            box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.08);
+          }
+          h1 { margin: 0 0 .25rem; font-size: 1.15rem; }
+          p.sub { margin: 0 0 1.5rem; color: #5c6270; font-size: .875rem; }
+          label { display: block; margin-bottom: .35rem; font-size: .8125rem; color: #5c6270; }
+          input {
+            width: 100%; box-sizing: border-box; padding: .6rem .7rem; margin-bottom: 1rem;
+            border: 1px solid #d3d6dd; border-radius: 8px; font-size: .9375rem; background: #fff; color: inherit;
+          }
+          input:focus { outline: 2px solid #007d85; outline-offset: -1px; border-color: #007d85; }
+          button {
+            width: 100%; padding: .65rem; border: 0; border-radius: 8px; cursor: pointer;
+            background: #007d85; color: #fff; font-size: .9375rem; font-weight: 500;
+          }
+          button:hover { background: #00676e; }
+          .message { margin: 0 0 1rem; padding: .6rem .7rem; border-radius: 8px; background: #fdecea; color: #8f1d14; font-size: .875rem; }
+          @media (prefers-color-scheme: dark) {
+            body { background: #14161a; color: #e8eaed; }
+            .card { background: #1d2025; box-shadow: none; border: 1px solid #2c3037; }
+            p.sub, label { color: #9aa0aa; }
+            input { background: #14161a; border-color: #343943; }
+            .message { background: #3a1d1a; color: #f3b7b0; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h1>Control Center</h1>
+          <p class="sub">Confluent Platform, deployed from the marketplace.</p>
+    
+          {{ if .SignInMessage }}<p class="message">{{.SignInMessage}}</p>{{ end }}
+    
+          <form method="POST" action="{{.ProxyPrefix}}/sign_in">
+            <input type="hidden" name="rd" value="{{.Redirect}}">
+            <label for="username">User</label>
+            <input type="text" name="username" id="username" autocomplete="username" autofocus>
+            <label for="password">Password</label>
+            <input type="password" name="password" id="password" autocomplete="current-password">
+            <button type="submit">Sign in</button>
+          </form>
+        </div>
+      </body>
+    </html>
+    {{end}}
+---
+# Source: confluent-platform/templates/control-center.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cr-control-center-seed
+data:
+  alertmanager-generated.yml: |
+    global:
+      resolve_timeout: 1m
+      smtp_require_tls: false
+    receivers:
+    - name: default
+    route:
+      receiver: default
+      routes: []
+  prometheus-generated.yml: |-
+    # my global config
+    global:
+      scrape_interval: 60s # Set the scrape interval to every 60 seconds.
+      evaluation_interval: 60s # Evaluate rules every 60 seconds.
+  
+    # Alertmanager configuration
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets:
+                - localhost:9093
+  
+    # Load rules once and periodically evaluate them according to the global 'evaluation_interval'.
+    rule_files:
+      # recording rules file has rules for aggregating partition level metrics in advance so that queries at runtime are faster
+      - 'recording_rules-generated.yml'
+      # trigger rules file is used for defining triggers which are configured by the user using C3 UI
+      - 'trigger_rules-generated.yml'
+  
+    # A scrape configuration containing exactly one endpoint to scrape:
+    # Here it's Prometheus itself.
+    scrape_configs:
+  
+    # this rule helps flaten the resource attributes
+    otlp:
+      promote_resource_attributes: ["host.hostname", "java.version", "kafka.broker.id", "kafka.cluster.id", "kafka.version", "type"]
+  
+    # A 10min time window is enough because it can easily absorb retries and network delays.
+    storage:
+      tsdb:
+        out_of_order_time_window: 10m
+  recording_rules-generated.yml: |-
+    groups:
+      - name: partition_level_heavy_queries
+        rules:
+          - record: code:io_confluent_kafka_server_log_size_by_broker:total
+            expr: sum by (kafka_broker_id, kafka_cluster_id) (io_confluent_kafka_server_log_size{topic!="__cluster_metadata"})
+          - record: code:io_confluent_kafka_server_log_size_by_topic:total
+            expr: sum by (topic, kafka_cluster_id) (io_confluent_kafka_server_log_size{topic!="__cluster_metadata"})
+          - record: code:io_confluent_kafka_server_partition_under_min_isr_by_broker:total
+            expr: sum by (kafka_broker_id, kafka_cluster_id) (io_confluent_kafka_server_partition_under_min_isr)
+          - record: code:io_confluent_kafka_server_log_tier_size_by_broker:total
+            expr: sum by (kafka_cluster_id, kafka_broker_id) (io_confluent_kafka_server_log_tier_size{topic!="__cluster_metadata"})
+          - record: code:io_confluent_kafka_server_partition_replicas_count_by_topic:total
+            expr: "sum by (kafka_cluster_id, topic) (io_confluent_kafka_server_partition_replicas_count)"
+          - record: code:io_confluent_kafka_server_partition_in_sync_replicas_count_by_topic:total
+            expr: "sum by (kafka_cluster_id, topic) (io_confluent_kafka_server_partition_in_sync_replicas_count)"
+          - record: code:io_confluent_kafka_server_broker_topic_total_fetch_requests_rate_1_min_by_topic:total
+            expr: "sum by (kafka_cluster_id, topic) (io_confluent_kafka_server_broker_topic_total_fetch_requests_rate_1_min)"
+          - record: code:io_confluent_kafka_server_broker_topic_total_fetch_requests_rate_1_min_by_broker:total
+            expr: "sum by (kafka_cluster_id, kafka_broker_id) (io_confluent_kafka_server_broker_topic_total_fetch_requests_rate_1_min)"
+          - record: code:io_confluent_kafka_server_partition_under_replicated_by_broker:total
+            expr: "sum by (kafka_cluster_id, kafka_broker_id) (io_confluent_kafka_server_partition_under_replicated)"
+          - record: code:io_confluent_kafka_server_partition_observer_replicas_count_by_topic:total
+            expr: "sum by (kafka_cluster_id, topic) (io_confluent_kafka_server_partition_observer_replicas_count)"
+          - record: code:io_confluent_kafka_server_partition_under_replicated_by_topic:total
+            expr: "sum by (kafka_cluster_id, topic) (io_confluent_kafka_server_partition_under_replicated)"
+          - record: code:io_confluent_kafka_server_log_tier_size_by_cluster:total
+            expr: "sum by (kafka_cluster_id) (max by (partition, topic, kafka_cluster_id) (io_confluent_kafka_server_log_tier_size))"
+          - record: code:io_confluent_kafka_server_partition_count_by_topic:total
+            expr: "count by (kafka_cluster_id, topic) (io_confluent_kafka_server_partition_replicas_count > 0)"
+          - record: code:io_confluent_kafka_server_partition_caught_up_replicas_count_by_topic:total
+            expr: "sum by (kafka_cluster_id, topic) (io_confluent_kafka_server_partition_caught_up_replicas_count)"
+          - record: code:io_confluent_kafka_server_log_tier_size_by_topic:total
+            expr: "sum by (kafka_cluster_id, topic) (max by (topic, partition, kafka_cluster_id) (io_confluent_kafka_server_log_tier_size))"
+  trigger_rules-generated.yml: |-
+    groups:
+      - name: c3-triggers
+        rules:
+  web-config-am.yml: ""
+  web-config-prom.yml: ""
+---
+# Source: confluent-platform/templates/control-center.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cr-control-center-jaas
+data:
+  jaas.conf: |
+    c3 {
+      org.eclipse.jetty.security.jaas.spi.PropertyFileLoginModule required
+      file="/etc/c3-auth/password.properties";
+    };
+---
+# Source: confluent-platform/templates/ksqldb.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cr-ksqldb-statements
+data:
+  statements.sql: |
+    CREATE STREAM IF NOT EXISTS claims (claim_id VARCHAR KEY) WITH (kafka_topic='claims', value_format='JSON', partitions=1, replicas=1);
+---
+# Source: confluent-platform/templates/provision.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cr-provision
+data:
+  provision.sh: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    cat > /tmp/admin.properties <<EOF
+    security.protocol=SASL_PLAINTEXT
+    sasl.mechanism=PLAIN
+    sasl.jaas.config=${ADMIN_JAAS}
+    EOF
+
+    BOOTSTRAP="cr-kafka:9092"
+
+    echo "waiting for ${BOOTSTRAP}"
+    until kafka-broker-api-versions --bootstrap-server "${BOOTSTRAP}" \
+          --command-config /tmp/admin.properties >/dev/null 2>&1; do
+      sleep 5
+    done
+    echo "broker is up"
+    kafka-topics --bootstrap-server "${BOOTSTRAP}" --command-config /tmp/admin.properties \
+      --create --if-not-exists --topic "claims" \
+      --partitions 1 --replication-factor 1
+    kafka-topics --bootstrap-server "${BOOTSTRAP}" --command-config /tmp/admin.properties \
+      --create --if-not-exists --topic "clinical.events" \
+      --partitions 1 --replication-factor 1
+    kafka-acls --bootstrap-server "${BOOTSTRAP}" --command-config /tmp/admin.properties --add \
+      --allow-principal User:payer --operation Write --operation Describe --topic "claims"
+    kafka-acls --bootstrap-server "${BOOTSTRAP}" --command-config /tmp/admin.properties --add \
+      --allow-principal User:hospital --operation Write --operation Describe --topic "clinical.events"
+    kafka-acls --bootstrap-server "${BOOTSTRAP}" --command-config /tmp/admin.properties --add \
+      --allow-principal User:analyst --operation Read --operation Describe --topic "fraud.alerts"
+    kafka-acls --bootstrap-server "${BOOTSTRAP}" --command-config /tmp/admin.properties --add \
+      --allow-principal User:analyst --operation Read --group "fraud-analyst"
+
+    echo "topics and grants are in place"
+---
+# Source: confluent-platform/templates/control-center.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: cr-control-center
+  labels:
+    app.kubernetes.io/name: control-center
+    app.kubernetes.io/instance: cr
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 9021
+      targetPort: proxy
+    - name: otlp
+      port: 9090
+      targetPort: prometheus
+  selector:
+    app.kubernetes.io/name: control-center
+    app.kubernetes.io/instance: cr
+---
+# Source: confluent-platform/templates/kafka.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: cr-kafka
+  labels:
+    app.kubernetes.io/name: kafka
+    app.kubernetes.io/instance: cr
+spec:
+  type: ClusterIP
+  ports:
+    - name: kafka
+      port: 9092
+      targetPort: kafka
+  selector:
+    app.kubernetes.io/name: kafka
+    app.kubernetes.io/instance: cr
+---
+# Source: confluent-platform/templates/ksqldb.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: cr-ksqldb
+  labels:
+    app.kubernetes.io/name: ksqldb
+    app.kubernetes.io/instance: cr
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8088
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: ksqldb
+    app.kubernetes.io/instance: cr
+---
+# Source: confluent-platform/templates/schema-registry.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: cr-schema-registry
+  labels:
+    app.kubernetes.io/name: schema-registry
+    app.kubernetes.io/instance: cr
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: schema-registry
+    app.kubernetes.io/instance: cr
+---
+# Source: confluent-platform/templates/control-center.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cr-control-center
+  labels:
+    app.kubernetes.io/name: control-center
+    app.kubernetes.io/instance: cr
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: control-center
+      app.kubernetes.io/instance: cr
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: control-center
+        app.kubernetes.io/instance: cr
+    spec:
+      securityContext:
+        fsGroup: 1000
+      initContainers:
+        - name: seed-config
+          image: "confluentinc/cp-enterprise-prometheus:2.5.0"
+          command:
+            - sh
+            - -c
+            - cp /seed/*.yml /mnt/config/
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+              nvidia.com/gpu: "0"
+            limits:
+              cpu: 100m
+              memory: 128Mi
+              nvidia.com/gpu: "0"
+          volumeMounts:
+            - name: seed
+              mountPath: /seed
+            - name: config
+              mountPath: /mnt/config
+      containers:
+        - name: control-center
+          image: "confluentinc/cp-enterprise-control-center-next-gen:2.5.0"
+          ports:
+            - name: http
+              containerPort: 9021
+          env:
+            - name: PORT
+              value: "9021"
+            - name: CONTROL_CENTER_BOOTSTRAP_SERVERS
+              value: "cr-kafka:9092"
+            - name: CONTROL_CENTER_SCHEMA_REGISTRY_URL
+              value: "http://cr-schema-registry:8081"
+            - name: CONTROL_CENTER_REPLICATION_FACTOR
+              value: "1"
+            - name: CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS
+              value: "1"
+            - name: CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS
+              value: "1"
+            - name: CONFLUENT_METRICS_TOPIC_REPLICATION
+              value: "1"
+            - name: CONTROL_CENTER_PROMETHEUS_ENABLE
+              value: "true"
+            - name: CONTROL_CENTER_PROMETHEUS_URL
+              value: "http://localhost:9090"
+            - name: CONTROL_CENTER_PROMETHEUS_RULES_FILE
+              value: "/mnt/config/trigger_rules-generated.yml"
+            - name: CONTROL_CENTER_ALERTMANAGER_URL
+              value: "http://localhost:9093"
+            - name: CONTROL_CENTER_ALERTMANAGER_CONFIG_FILE
+              value: "/mnt/config/alertmanager-generated.yml"
+            - name: CONTROL_CENTER_REST_AUTHENTICATION_METHOD
+              value: "BASIC"
+            - name: CONTROL_CENTER_REST_AUTHENTICATION_REALM
+              value: "c3"
+            - name: CONTROL_CENTER_REST_AUTHENTICATION_ROLES
+              value: "Administrators,Restricted"
+            - name: CONTROL_CENTER_AUTH_RESTRICTED_ROLES
+              value: "Restricted"
+            - name: CONTROL_CENTER_OPTS
+              value: "-Djava.security.auth.login.config=/etc/c3-auth/jaas.conf"
+            - name: CONTROL_CENTER_STREAMS_SECURITY_PROTOCOL
+              value: "SASL_PLAINTEXT"
+            - name: CONTROL_CENTER_STREAMS_SASL_MECHANISM
+              value: "PLAIN"
+            - name: CONTROL_CENTER_STREAMS_SASL_JAAS_CONFIG
+              valueFrom:
+                secretKeyRef:
+                  name: cr-sasl
+                  key: admin.sasl.jaas.config
+            - name: CONTROL_CENTER_KSQL_KSQLDB_URL
+              value: "http://cr-ksqldb:8088"
+            - name: CONTROL_CENTER_KSQL_KSQLDB_ADVERTISED_URL
+              value: "http://cr-ksqldb:8088"
+            - name: CONTROL_CENTER_HEAP_OPTS
+              value: "-Xmx2g"
+          volumeMounts:
+            - name: config
+              mountPath: /mnt/config
+            - name: c3-data
+              mountPath: /var/lib/confluent-control-center-next-gen
+            - name: jaas
+              mountPath: /etc/c3-auth/jaas.conf
+              subPath: jaas.conf
+            - name: auth
+              mountPath: /etc/c3-auth/password.properties
+              subPath: password.properties
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 20
+          resources:
+            limits:
+              cpu: 500m
+              memory: 3Gi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: 500m
+              memory: 3Gi
+              nvidia.com/gpu: "0"
+        - name: console-proxy
+          image: "quay.io/oauth2-proxy/oauth2-proxy:v7.13.0"
+          args:
+            - --http-address=0.0.0.0:4180
+            - --upstream=http://127.0.0.1:9021
+            - --htpasswd-file=/etc/console-proxy/htpasswd
+            - --display-htpasswd-form=true
+            - --custom-templates-dir=/etc/console-proxy/templates
+            - --reverse-proxy=true
+            - --cookie-secure=true
+            - --email-domain=*
+            - --provider=google
+            - --client-id=unused
+            - --client-secret=unused
+            - --pass-basic-auth=true
+            - --pass-user-headers=true
+            - --skip-auth-route=GET=^/dist/manifest\.webmanifest$
+            - --skip-auth-route=GET=^/dist/yandex-browser-manifest\.json$
+            - --skip-auth-route=GET=^/dist/.+\.(png|ico|svg|webp)$
+            - --skip-auth-route=GET=^/favicon\.ico$
+          env:
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cr-control-center-htpasswd
+                  key: cookieSecret
+            - name: OAUTH2_PROXY_BASIC_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cr-control-center-htpasswd
+                  key: internalPassword
+          ports:
+            - name: proxy
+              containerPort: 4180
+          volumeMounts:
+            - name: proxy-auth
+              mountPath: /etc/console-proxy
+            - name: proxy-templates
+              mountPath: /etc/console-proxy/templates
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: proxy
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+              nvidia.com/gpu: "0"
+            limits:
+              cpu: 100m
+              memory: 128Mi
+              nvidia.com/gpu: "0"
+        - name: prometheus
+          image: "confluentinc/cp-enterprise-prometheus:2.5.0"
+          ports:
+            - name: prometheus
+              containerPort: 9090
+          env:
+            - name: CONFIG_PATH
+              value: "/mnt/config"
+            - name: SHOULD_LOG_TO_FILE
+              value: "false"
+            - name: LOG_FILE
+              value: "/dev/null"
+          volumeMounts:
+            - name: config
+              mountPath: /mnt/config
+            - name: prometheus-data
+              mountPath: /var/lib/confluent/control-center/prometheus/data
+          resources:
+            limits:
+              cpu: 200m
+              memory: 2Gi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: 200m
+              memory: 2Gi
+              nvidia.com/gpu: "0"
+        - name: alertmanager
+          image: "confluentinc/cp-enterprise-alertmanager:2.5.0"
+          ports:
+            - name: alertmanager
+              containerPort: 9093
+          env:
+            - name: CONFIG_PATH
+              value: "/mnt/config"
+            - name: SHOULD_LOG_TO_FILE
+              value: "false"
+            - name: LOG_FILE
+              value: "/dev/null"
+          volumeMounts:
+            - name: config
+              mountPath: /mnt/config
+            - name: alertmanager-data
+              mountPath: /var/lib/confluent/control-center/alertmanager
+          resources:
+            limits:
+              cpu: 100m
+              memory: 256Mi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: 100m
+              memory: 256Mi
+              nvidia.com/gpu: "0"
+      volumes:
+        - name: proxy-auth
+          secret:
+            secretName: cr-control-center-htpasswd
+        - name: proxy-templates
+          configMap:
+            name: cr-control-center-signin
+        - name: seed
+          configMap:
+            name: cr-control-center-seed
+        - name: config
+          emptyDir: {}
+        - name: c3-data
+          emptyDir: {}
+        - name: prometheus-data
+          emptyDir:
+            sizeLimit: "8Gi"
+        - name: alertmanager-data
+          emptyDir: {}
+        - name: jaas
+          configMap:
+            name: cr-control-center-jaas
+        - name: auth
+          secret:
+            secretName: cr-control-center-auth
+---
+# Source: confluent-platform/templates/ksqldb.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cr-ksqldb
+  labels:
+    app.kubernetes.io/name: ksqldb
+    app.kubernetes.io/instance: cr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ksqldb
+      app.kubernetes.io/instance: cr
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ksqldb
+        app.kubernetes.io/instance: cr
+    spec:
+      containers:
+        - name: ksqldb
+          image: "confluentinc/cp-ksqldb-server:8.3.1"
+          ports:
+            - name: http
+              containerPort: 8088
+          env:
+            - name: KSQL_BOOTSTRAP_SERVERS
+              value: "cr-kafka:9092"
+            - name: KSQL_LISTENERS
+              value: "http://0.0.0.0:8088"
+            - name: KSQL_HOST_NAME
+              value: "cr-ksqldb"
+            - name: KSQL_KSQL_SERVICE_ID
+              value: "claims_fraud_"
+            - name: KSQL_KSQL_INTERNAL_TOPIC_REPLICAS
+              value: "1"
+            - name: KSQL_KSQL_STREAMS_REPLICATION_FACTOR
+              value: "1"
+            - name: KSQL_KSQL_LOGGING_PROCESSING_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KSQL_KSQL_SCHEMA_REGISTRY_URL
+              value: "http://cr-schema-registry:8081"
+            - name: KSQL_SECURITY_PROTOCOL
+              value: "SASL_PLAINTEXT"
+            - name: KSQL_SASL_MECHANISM
+              value: "PLAIN"
+            - name: KSQL_SASL_JAAS_CONFIG
+              valueFrom:
+                secretKeyRef:
+                  name: cr-sasl
+                  key: admin.sasl.jaas.config
+          readinessProbe:
+            httpGet:
+              path: /info
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 30
+          resources:
+            limits:
+              cpu: 250m
+              memory: 2Gi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: 250m
+              memory: 2Gi
+              nvidia.com/gpu: "0"
+---
+# Source: confluent-platform/templates/schema-registry.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cr-schema-registry
+  labels:
+    app.kubernetes.io/name: schema-registry
+    app.kubernetes.io/instance: cr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: schema-registry
+      app.kubernetes.io/instance: cr
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: schema-registry
+        app.kubernetes.io/instance: cr
+    spec:
+      containers:
+        - name: schema-registry
+          image: "confluentinc/cp-schema-registry:8.3.1"
+          ports:
+            - name: http
+              containerPort: 8081
+          env:
+            - name: SCHEMA_REGISTRY_HOST_NAME
+              value: "cr-schema-registry"
+            - name: SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS
+              value: "cr-kafka:9092"
+            - name: SCHEMA_REGISTRY_LISTENERS
+              value: "http://0.0.0.0:8081"
+            - name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL
+              value: "SASL_PLAINTEXT"
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SASL_MECHANISM
+              value: "PLAIN"
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SASL_JAAS_CONFIG
+              valueFrom:
+                secretKeyRef:
+                  name: cr-sasl
+                  key: admin.sasl.jaas.config
+          readinessProbe:
+            httpGet:
+              path: /subjects
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            limits:
+              cpu: 100m
+              memory: 1Gi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: 100m
+              memory: 1Gi
+              nvidia.com/gpu: "0"
+---
+# Source: confluent-platform/templates/kafka.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: cr-kafka
+  labels:
+    app.kubernetes.io/name: kafka
+    app.kubernetes.io/instance: cr
+spec:
+  serviceName: cr-kafka
+  # One broker, deliberately: see the licensing note in values.yaml.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kafka
+      app.kubernetes.io/instance: cr
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kafka
+        app.kubernetes.io/instance: cr
+    spec:
+      securityContext:
+        # The Confluent images run as uid 1000; the volume has to be owned by that group or the
+        # broker cannot write its log directory.
+        fsGroup: 1000
+      containers:
+        - name: kafka
+          image: "confluentinc/cp-server:8.3.1"
+          ports:
+            - name: kafka
+              containerPort: 9092
+          env:
+            - name: CLUSTER_ID
+              value: "c3VwZXItY29uZmx1ZW50LTAx"
+            - name: KAFKA_NODE_ID
+              value: "1"
+            - name: KAFKA_PROCESS_ROLES
+              value: "broker,controller"
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: "1@127.0.0.1:29093"
+            - name: KAFKA_LISTENERS
+              value: "CLIENT://0.0.0.0:9092,CONTROLLER://127.0.0.1:29093"
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "CLIENT://cr-kafka:9092"
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "CONTROLLER:PLAINTEXT,CLIENT:SASL_PLAINTEXT"
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: "CLIENT"
+            - name: KAFKA_SASL_ENABLED_MECHANISMS
+              value: "PLAIN"
+            - name: KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL
+              value: "PLAIN"
+            - name: KAFKA_AUTHORIZER_CLASS_NAME
+              value: "org.apache.kafka.metadata.authorizer.StandardAuthorizer"
+            - name: KAFKA_SUPER_USERS
+              value: "User:admin;User:ANONYMOUS"
+            - name: KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND
+              value: "false"
+            - name: KAFKA_OPTS
+              value: "-Djava.security.auth.login.config=/etc/kafka/jaas/kafka.jaas"
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: "CONTROLLER"
+            - name: KAFKA_LOG_DIRS
+              value: "/var/lib/kafka/data"
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"
+            - name: KAFKA_CONFLUENT_LICENSE_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_CONFLUENT_BALANCER_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS
+              value: "0"
+            - name: KAFKA_CONFLUENT_SCHEMA_REGISTRY_URL
+              value: "http://cr-schema-registry:8081"
+            - name: KAFKA_METRIC_REPORTERS
+              value: "io.confluent.telemetry.reporter.TelemetryReporter"
+            - name: KAFKA_CONFLUENT_TELEMETRY_EXPORTER_C3PLUSPLUS_TYPE
+              value: "http"
+            - name: KAFKA_CONFLUENT_TELEMETRY_EXPORTER_C3PLUSPLUS_ENABLED
+              value: "true"
+            - name: KAFKA_CONFLUENT_TELEMETRY_EXPORTER_C3PLUSPLUS_CLIENT_BASE_URL
+              value: "http://cr-control-center:9090/api/v1/otlp"
+            - name: KAFKA_CONFLUENT_TELEMETRY_EXPORTER_C3PLUSPLUS_CLIENT_COMPRESSION
+              value: "gzip"
+            - name: KAFKA_CONFLUENT_TELEMETRY_EXPORTER_C3PLUSPLUS_API_KEY
+              value: "dummy"
+            - name: KAFKA_CONFLUENT_TELEMETRY_EXPORTER_C3PLUSPLUS_API_SECRET
+              value: "dummy"
+            - name: KAFKA_CONFLUENT_TELEMETRY_EXPORTER_C3PLUSPLUS_BUFFER_PENDING_BATCHES_MAX
+              value: "80"
+            - name: KAFKA_CONFLUENT_TELEMETRY_EXPORTER_C3PLUSPLUS_BUFFER_BATCH_ITEMS_MAX
+              value: "4000"
+            - name: KAFKA_CONFLUENT_TELEMETRY_EXPORTER_C3PLUSPLUS_BUFFER_INFLIGHT_SUBMISSIONS_MAX
+              value: "10"
+            - name: KAFKA_CONFLUENT_TELEMETRY_METRICS_COLLECTOR_INTERVAL_MS
+              value: "60000"
+            - name: KAFKA_CONFLUENT_TELEMETRY_REMOTECONFIG_CONFLUENT_ENABLED
+              value: "false"
+            - name: KAFKA_CONFLUENT_CONSUMER_LAG_EMITTER_ENABLED
+              value: "true"
+            - name: KAFKA_CONFLUENT_TELEMETRY_EXPORTER_C3PLUSPLUS_METRICS_INCLUDE
+              value: "io.confluent.kafka.server.request.(?!.*delta).*|io.confluent.kafka.server.server.broker.state|io.confluent.kafka.server.replica.manager.leader.count|io.confluent.kafka.server.request.queue.size|io.confluent.kafka.server.broker.topic.failed.produce.requests.rate.1.min|io.confluent.kafka.server.tier.archiver.total.lag|io.confluent.kafka.server.request.total.time.ms.p99|io.confluent.kafka.server.broker.topic.failed.fetch.requests.rate.1.min|io.confluent.kafka.server.broker.topic.total.fetch.requests.rate.1.min|io.confluent.kafka.server.partition.caught.up.replicas.count|io.confluent.kafka.server.partition.observer.replicas.count|io.confluent.kafka.server.tier.tasks.num.partitions.in.error|io.confluent.kafka.server.broker.topic.bytes.out.rate.1.min|io.confluent.kafka.server.request.total.time.ms.p95|io.confluent.kafka.server.controller.active.controller.count|io.confluent.kafka.server.request.total.time.ms.p999|io.confluent.kafka.server.controller.active.broker.count|io.confluent.kafka.server.request.handler.pool.request.handler.avg.idle.percent.rate.1.min|io.confluent.kafka.server.controller.unclean.leader.elections.rate.1.min|io.confluent.kafka.server.replica.manager.partition.count|io.confluent.kafka.server.controller.unclean.leader.elections.total|io.confluent.kafka.server.partition.replicas.count|io.confluent.kafka.server.broker.topic.total.produce.requests.rate.1.min|io.confluent.kafka.server.controller.offline.partitions.count|io.confluent.kafka.server.socket.server.network.processor.avg.idle.percent|io.confluent.kafka.server.partition.under.replicated|io.confluent.kafka.server.log.log.start.offset|io.confluent.kafka.server.log.tier.size|io.confluent.kafka.server.log.size|io.confluent.kafka.server.tier.fetcher.bytes.fetched.total|io.confluent.kafka.server.request.total.time.ms.p50|io.confluent.kafka.server.tenant.consumer.lag.offsets|io.confluent.kafka.server.log.log.end.offset|io.confluent.kafka.server.broker.topic.bytes.in.rate.1.min|io.confluent.kafka.server.partition.under.min.isr|io.confluent.kafka.server.partition.in.sync.replicas.count|io.confluent.telemetry.http.exporter.batches.dropped|io.confluent.telemetry.http.exporter.items.total|io.confluent.telemetry.http.exporter.items.succeeded|io.confluent.telemetry.http.exporter.send.time.total.millis|io.confluent.kafka.server.controller.leader.election.rate.(?!.*delta).*|io.confluent.telemetry.http.exporter.batches.failed"
+            - name: KAFKA_HEAP_OPTS
+              value: "-Xms512m -Xmx1g"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/kafka/data
+            - name: jaas
+              mountPath: /etc/kafka/jaas
+          readinessProbe:
+            tcpSocket:
+              port: kafka
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: kafka
+            initialDelaySeconds: 120
+            periodSeconds: 30
+          resources:
+            limits:
+              cpu: 500m
+              memory: 3Gi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: 500m
+              memory: 3Gi
+              nvidia.com/gpu: "0"
+      volumes:
+        - name: jaas
+          secret:
+            secretName: cr-sasl
+            items:
+              - key: kafka.jaas
+                path: kafka.jaas
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: "10Gi"
+---
+# Source: confluent-platform/templates/ksqldb.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cr-ksqldb-statements
+spec:
+  backoffLimit: 20
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: submit
+          image: "confluentinc/cp-ksqldb-server:8.3.1"
+          command:
+            - /bin/bash
+            - -c
+            - |
+              until (echo > /dev/tcp/cr-ksqldb/8088) 2>/dev/null; do
+                echo "waiting for ksqlDB"; sleep 5
+              done
+              ksql --file /statements/statements.sql http://cr-ksqldb:8088
+
+              echo "checking what the engine actually has"
+              streams=$(ksql --execute "SHOW STREAMS;" http://cr-ksqldb:8088 2>/dev/null)
+              missing=0
+              if ! echo "$streams" | grep -q "FRAUD_ALERTS"; then
+                echo "MISSING: FRAUD_ALERTS was not created"
+                missing=1
+              fi
+              if [ "$missing" -ne 0 ]; then
+                echo "$streams"
+                exit 1
+              fi
+              echo "the pipeline is in place"
+          volumeMounts:
+            - name: statements
+              mountPath: /statements
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+              nvidia.com/gpu: "0"
+            limits:
+              cpu: 100m
+              memory: 512Mi
+              nvidia.com/gpu: "0"
+      volumes:
+        - name: statements
+          configMap:
+            name: cr-ksqldb-statements
+---
+# Source: confluent-platform/templates/provision.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cr-provision
+spec:
+  backoffLimit: 20
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: provision
+          image: "confluentinc/cp-server:8.3.1"
+          command: ["bash", "/scripts/provision.sh"]
+          env:
+            - name: ADMIN_JAAS
+              valueFrom:
+                secretKeyRef:
+                  name: cr-sasl
+                  key: admin.sasl.jaas.config
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+              nvidia.com/gpu: "0"
+            limits:
+              cpu: 100m
+              memory: 512Mi
+              nvidia.com/gpu: "0"
+      volumes:
+        - name: scripts
+          configMap:
+            name: cr-provision
+---
+# Source: confluent-platform/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cr-control-center
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    swarm.io/exclude-evidence-fields: "/spec/rules/0/host"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: "claims.example.test"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: cr-control-center
+                port:
+                  number: 9021
