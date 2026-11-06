@@ -569,7 +569,7 @@ spec:
         # nothing writable: a static binary on a read-only root filesystem,
         # running as the image's own non-root uid rather than the API's.
         - name: gatekeeper
-          image: ghcr.io/super-protocol/confidential-router/gatekeeper@sha256:25aad04f9d740aa4c49596a1f03a07c8c651df2d2404e163e04afcb12b218016
+          image: ghcr.io/super-protocol/confidential-router/gatekeeper@sha256:c6bc7903b634c17e89e397c308d738decc5d109f40d572fe970f79be11db378e
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
