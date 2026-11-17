@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: swarm-model-server
   labels:
-    helm.sh/chart: swarm-model-server-0.2.0
+    helm.sh/chart: swarm-model-server-0.3.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"
@@ -21,7 +21,7 @@ kind: ConfigMap
 metadata:
   name: swarm-model-server-weights
   labels:
-    helm.sh/chart: swarm-model-server-0.2.0
+    helm.sh/chart: swarm-model-server-0.3.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"
@@ -197,7 +197,7 @@ kind: ConfigMap
 metadata:
   name: swarm-model-server-chat-template
   labels:
-    helm.sh/chart: swarm-model-server-0.2.0
+    helm.sh/chart: swarm-model-server-0.3.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"
@@ -232,7 +232,7 @@ kind: PersistentVolumeClaim
 metadata:
   name: swarm-model-server-weights
   labels:
-    helm.sh/chart: swarm-model-server-0.2.0
+    helm.sh/chart: swarm-model-server-0.3.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"
@@ -251,7 +251,7 @@ kind: Service
 metadata:
   name: swarm-model-server
   labels:
-    helm.sh/chart: swarm-model-server-0.2.0
+    helm.sh/chart: swarm-model-server-0.3.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"
@@ -274,7 +274,7 @@ kind: Deployment
 metadata:
   name: swarm-model-server
   labels:
-    helm.sh/chart: swarm-model-server-0.2.0
+    helm.sh/chart: swarm-model-server-0.3.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"
@@ -295,7 +295,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/weights: 1fa2582873f82ad6fdec0e0d9c8e42662e98155b30923ec97d6f831b72388ea2
+        checksum/weights: d6b73ae9e1cca1e36cbe063217ade849153cf7d91fddec25a74c027adf87dd13
       labels:
         app.kubernetes.io/name: swarm-model-server
         app.kubernetes.io/instance: ms
@@ -310,6 +310,11 @@ spec:
         # It runs the engine image rather than a Python base, because the script
         # is stdlib-only and a second image would be a second digest to keep
         # true and a second registry to trust.
+        #
+        # One per engine, in the order the values name them: init containers run
+        # sequentially, so two models are fetched one after the other rather
+        # than two streams competing for the same link, and each one prunes
+        # inside its own directory.
         # ---------------------------------------------------------------------
         - name: fetch-weights
           image: docker.io/vllm/vllm-openai@sha256:0fec7ec5f3e6bc168e54899935fb0557da908a4832a1dbc88e2debcf2f889416
@@ -319,7 +324,7 @@ spec:
             - /opt/weights/fetch-weights.py
           env:
             - name: WEIGHTS_MANIFEST
-              value: /etc/model/manifest.json
+              value: "/etc/model/manifest.json"
             - name: WEIGHTS_DIR
               value: "/models/current"
             - name: WEIGHTS_REPO
@@ -354,6 +359,14 @@ spec:
               memory: "2Gi"
               nvidia.com/gpu: "0"
       containers:
+        # ---------------------------------------------------------------------
+        # The container that holds the card. One for however many engines are
+        # served from it: Kubernetes allocates a GPU to a container rather than
+        # to a pod, so a second container asking for the same `nvidia.com/gpu: 1`
+        # stays Pending for ever and engines that share a device share a process
+        # tree instead (SUP-332). `files/run-engines.py` is that process tree —
+        # it starts what the attested engines.json names and nothing else.
+        # ---------------------------------------------------------------------
         - name: vllm
           image: docker.io/vllm/vllm-openai@sha256:0fec7ec5f3e6bc168e54899935fb0557da908a4832a1dbc88e2debcf2f889416
           imagePullPolicy: IfNotPresent
@@ -498,7 +511,7 @@ kind: Ingress
 metadata:
   name: swarm-model-server
   labels:
-    helm.sh/chart: swarm-model-server-0.2.0
+    helm.sh/chart: swarm-model-server-0.3.0
     app.kubernetes.io/name: swarm-model-server
     app.kubernetes.io/instance: ms
     app.kubernetes.io/version: "0.22.0"

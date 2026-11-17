@@ -1,4 +1,9 @@
 {{- include "swarm-model-server.validate" . -}}
+{{- $e := dict -}}
+{{- include "swarm-model-server.engines" (dict "ctx" . "out" $e) -}}
+{{- $engines := $e.engines -}}
+{{- $name := include "swarm-model-server.fullname" . -}}
+{{- if not $e.multi -}}
 {{- /*
 Two documents the deployment's evidence is supposed to contain.
 
@@ -11,7 +16,7 @@ which is the whole reason the weights are not simply pulled by model name.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "swarm-model-server.fullname" . }}-weights
+  name: {{ $name }}-weights
   labels:
     {{- include "swarm-model-server.labels" . | nindent 4 }}
 data:
@@ -30,10 +35,49 @@ files/chat-templates/README.md for why a listing cannot carry one.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "swarm-model-server.fullname" . }}-chat-template
+  name: {{ $name }}-chat-template
   labels:
     {{- include "swarm-model-server.labels" . | nindent 4 }}
 data:
   chat-template.jinja: |
     {{- .Files.Get (printf "files/chat-templates/%s" .Values.model.chatTemplateFile) | nindent 4 }}
+{{- end }}
+{{- else -}}
+{{- /*
+Everything the engines of a shared card are run from, in the one ConfigMap the
+cloud digests and signs: each engine's weights manifest, each engine's chat
+template, the full command line of every engine, and the three stdlib scripts
+that act on them.
+
+That is the point of putting the command lines here rather than leaving them in
+the Deployment's `args`: the evidence of a deployment serving two models covers
+*both* engines — their weights by sha256, their context lengths and the share of
+the card each one claims — in one document, signed together. A supervisor that
+chose any of it would be a deployment whose behaviour is not in its evidence.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-engines
+  labels:
+    {{- include "swarm-model-server.labels" . | nindent 4 }}
+data:
+  engines.json: |
+    {{- include "swarm-model-server.enginesJson" (dict "ctx" . "engines" $engines) | nindent 4 }}
+  run-engines.py: |
+    {{- .Files.Get "files/run-engines.py" | nindent 4 }}
+  engine-health.py: |
+    {{- .Files.Get "files/engine-health.py" | nindent 4 }}
+  fetch-weights.py: |
+    {{- .Files.Get "files/fetch-weights.py" | nindent 4 }}
+  {{- range $engine := $engines }}
+  manifest-{{ $engine.name }}.json: |
+    {{- toPrettyJson (dict "repo" $engine.model.weights.repo "revision" $engine.model.weights.revision "totalBytes" (int64 $engine.model.weights.totalBytes) "files" $engine.model.weights.files) | nindent 4 }}
+  {{- end }}
+  {{- range $engine := $engines }}
+  {{- if $engine.model.chatTemplateFile }}
+  chat-template-{{ $engine.name }}.jinja: |
+    {{- $.Files.Get (printf "files/chat-templates/%s" $engine.model.chatTemplateFile) | nindent 4 }}
+  {{- end }}
+  {{- end }}
 {{- end }}

@@ -159,6 +159,15 @@ with a `system` message answers (Gemma 2's own template raises on one, which is 
 streaming terminates with `[DONE]`; tool choice behaves as the card claims; and
 `/.well-known/swarm-evidence` serves a JWS, because a router cannot attest what it cannot fetch.
 
+**A shared card is checked one engine at a time, and only on a card.** A deployment using the
+`engines` shape publishes a base URL per model — `https://m.example.com/coder/v1`,
+`https://m.example.com/chat/v1` — and each one is a connection link of its own, so run the script
+once per model. What nothing short of real hardware can tell you is the part that matters most
+there: that both engines loaded inside their budgeted fractions, and that the second one did not
+start *after* the first had taken more of the card than it declared. `nvidia-smi` on the host and
+both scripts against both links is the check; the render tests cover everything up to the point
+where memory is actually claimed.
+
 **The engine version must be re-checked here before any bump.** Several vLLM releases start, pass a
 readiness probe, serve at full speed and return fluent nonsense on this hardware — a golden render
 cannot see that, and neither can `/health`. `charts/swarm-model-server/values.yaml` has the matrix.

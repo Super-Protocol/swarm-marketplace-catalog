@@ -1,8 +1,16 @@
 {{- if .Values.ingress.enabled }}
+{{- $e := dict -}}
+{{- include "swarm-model-server.engines" (dict "ctx" . "out" $e) -}}
 {{- /*
 `/v1` and nothing else — `ingress.paths` says why. vLLM authenticates `/v1`,
 `/v2`, `/inference` and `/cohere`; everything else it serves, including
 `/metrics` and `/docs`, is open to whoever reaches it.
+
+With more than one engine on the hostname, each one's published path is its own
+prefix followed by that same list: `/coder/v1`, never a bare `/coder`. The
+engine is started with `--root-path /coder`, so it both routes and authenticates
+the prefixed path — the prefix reaches it intact, there is no rewrite in front of
+it, and `/coder/metrics` is as unpublished as `/metrics` is.
 
 Without `ingressClassName` the object is created, the cloud registers the
 hostname and writes its DNS, and nothing serves it: the controller only picks up
@@ -41,13 +49,15 @@ spec:
     - host: {{ .Values.hostname | quote }}
       http:
         paths:
-          {{- range .Values.ingress.paths }}
-          - path: {{ . | quote }}
+          {{- range $engine := $e.engines }}
+          {{- range $path := $.Values.ingress.paths }}
+          - path: {{ printf "%s%s" $engine.prefix ($path | toString) | quote }}
             pathType: {{ $.Values.ingress.pathType }}
             backend:
               service:
                 name: {{ include "swarm-model-server.fullname" $ }}
                 port:
-                  number: {{ $.Values.service.port }}
+                  number: {{ $engine.servicePort }}
+          {{- end }}
           {{- end }}
 {{- end }}
