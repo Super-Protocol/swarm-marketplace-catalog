@@ -1,6 +1,6 @@
 dependencies:
 - name: patroni-postgresql
   repository: file://../patroni-postgresql
-  version: 0.2.1
-digest: sha256:15b49163ce687d2e0efb39b561de927b51373ff10d015ffdec1b407686ebe3b8
-generated: "2026-10-06T13:36:55.609373+03:00"
+  version: 0.2.2
+digest: sha256:f9bcd5779b7bc7d596f97dfd693d4d44b7d2f7127d4d8bebb058d1a507cbfa47
+generated: "2026-10-06T17:36:00.174998926Z"

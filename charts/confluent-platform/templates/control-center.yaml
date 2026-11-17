@@ -139,12 +139,12 @@ spec:
             - cp /seed/*.yml /mnt/config/
           resources:
             requests:
-              cpu: 20m
-              memory: 64Mi
+              cpu: 100m
+              memory: 128Mi
               nvidia.com/gpu: "0"
             limits:
-              cpu: 20m
-              memory: 64Mi
+              cpu: 100m
+              memory: 128Mi
               nvidia.com/gpu: "0"
           volumeMounts:
             - name: seed
@@ -299,11 +299,11 @@ spec:
             periodSeconds: 10
           resources:
             requests:
-              cpu: 20m
+              cpu: 100m
               memory: 128Mi
               nvidia.com/gpu: "0"
             limits:
-              cpu: 20m
+              cpu: 100m
               memory: 128Mi
               nvidia.com/gpu: "0"
         {{- end }}

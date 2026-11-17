@@ -7,6 +7,12 @@ field by field rather than line by line: render the same chart as two consumers,
 two hostnames in two namespaces, and require every differing JSON Pointer to be covered
 by the `swarm.io/exclude-evidence-fields` annotation on the object that holds it.
 
+"Two consumers" means everything a consumer brings, not only the hostname they typed.
+The caller decides what else varies between the two shapes; for `confidential-router`
+that includes the deployer's own address, which the marketplace fills from the account
+clicking deploy. Varying only the hostname is what let the address be published for
+four versions with this check green (SUP-241).
+
 The line-based version of this check (confidential-s3's, in `run.sh`) passes as long as
 no *unexpected string* appears in the diff. It cannot tell a field that is excluded from
 a field that merely happens to contain an excluded hostname, and it cannot see a field
@@ -47,6 +53,15 @@ ANNOTATION = "swarm.io/exclude-evidence-fields"
 # has to declare: the namespace a consumer deploys into, and the deployment id it
 # stamps on every object.
 PLATFORM_STRIPPED = ("/metadata/namespace", "/metadata/labels/swarm.cloud~1app-deployment-id")
+
+# And a Secret's values never reach the snapshot at all: the canonical rules drop
+# `/data`, `/stringData` and `/immutable` from every Secret, so only its name and
+# key-less shell are attested. That is what makes a Secret the carrier for a value
+# which is neither a credential nor publishable — the deployer's own address, which
+# this chart handed the API as a plain env value until SUP-241. Modelled here
+# because without it the comparison below cannot be asked about anything a consumer
+# brings: the Secret differs, and the difference is one no listing may declare.
+SECRET_STRIPPED = ("/data", "/stringData", "/immutable")
 
 SHAPES = [("a", "space-a"), ("b", "space-b")]
 
@@ -149,8 +164,9 @@ def main(chart: str, values: str, app: str, overrides: list[str]) -> int:
                 print(f"  FAIL  {kind}/{name} excludes {pointer}, which apps/{app}/app.yaml does not declare")
                 failures += 1
 
+        stripped = PLATFORM_STRIPPED + (SECRET_STRIPPED if kind == "Secret" else ())
         for pointer in differing_pointers(here, there):
-            if pointer in PLATFORM_STRIPPED:
+            if any(covers(prefix, pointer) for prefix in stripped):
                 continue
             if any(covers(excluded, pointer) for excluded in exclusions):
                 excluded_total += 1

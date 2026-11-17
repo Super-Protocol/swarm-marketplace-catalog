@@ -73,9 +73,22 @@ only from SUP-95 onwards — hence the condition around it.
     secretKeyRef:
       name: {{ .Values.auth.bootstrapTokenExistingSecret | default (include "confidential-router-api.secretName" .) }}
       key: {{ if .Values.auth.bootstrapTokenExistingSecret }}{{ .Values.auth.bootstrapTokenExistingSecretKey }}{{ else }}bootstrap-token{{ end }}
-{{- if .Values.auth.bootstrapEmail }}
+{{- if or .Values.auth.bootstrapEmail .Values.auth.bootstrapEmailExistingSecret }}
+{{- /*
+Out of the Secret and not a plain `value:`, for the same reason
+`CR_API_AUTH__ADMIN_EMAILS` below is: this is the address of whoever deployed
+this, and a literal here is published. The container's env list is part of the
+attested snapshot, so the address would be readable by anyone who fetches
+`/.well-known/swarm-evidence` — and the digest would be a property of who
+deployed it rather than of the version, which is the one thing it must not be
+(SUP-241). It is the same value as the admin list, and one copy of it being
+protected while the other was published was an oversight, not a decision.
+*/}}
 - name: CR_API_AUTH__BOOTSTRAP_EMAIL
-  value: {{ .Values.auth.bootstrapEmail | quote }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.auth.bootstrapEmailExistingSecret | default (include "confidential-router-api.secretName" .) }}
+      key: {{ if .Values.auth.bootstrapEmailExistingSecret }}{{ .Values.auth.bootstrapEmailExistingSecretKey }}{{ else }}bootstrap-email{{ end }}
 {{- end }}
 {{- end }}
 {{- if or .Values.auth.adminEmails .Values.auth.adminEmailsExistingSecret }}
@@ -92,6 +105,23 @@ refers to.
     secretKeyRef:
       name: {{ .Values.auth.adminEmailsExistingSecret | default (include "confidential-router-api.secretName" .) }}
       key: {{ if .Values.auth.adminEmailsExistingSecret }}{{ .Values.auth.adminEmailsExistingSecretKey }}{{ else }}admin-emails{{ end }}
+{{- end }}
+{{- if .Values.externalEndpoints.enabled }}
+{{- /*
+`CR_API_SECRETS_KEY` — the AES-256 data key an external endpoint's upstream API
+key is sealed under. Outside the `CR_API_*` configuration tree in the router's
+own code as well: it is read straight from the environment and never becomes a
+config key, because the rendered `router.yaml` is attested and readable inside
+the published evidence bundle (ADR-008 §6, SUP-124).
+
+The migration container gets it too, for no reason of its own — this list is one
+list — and reads nothing with it.
+*/}}
+- name: CR_API_SECRETS_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.externalEndpoints.existingSecret | default (include "confidential-router-api.secretName" .) }}
+      key: {{ if .Values.externalEndpoints.existingSecret }}{{ .Values.externalEndpoints.existingSecretKey }}{{ else }}secrets-key{{ end }}
 {{- end }}
 {{- if or .Values.analytics.posthog.projectKey .Values.analytics.posthog.existingSecret }}
 {{- /*
@@ -111,6 +141,30 @@ two are simply not read.
 - name: POSTHOG_HOST
   value: {{ .Values.analytics.posthog.host | quote }}
 {{- end }}
+{{- end }}
+{{- /*
+Mail (SUP-269): the router's `mail` section, as `CR_API_MAIL__*` variables read
+out of the Secret. Rendered unconditionally and every one `optional`, which is
+the point: the list is identical whether this deployment mails through SMTP,
+Resend or nothing, so the attested env list — and the evidence digest — says
+nothing about the operator's mail setup. A key the Secret does not carry leaves
+its variable unset, and a deployment with no mail sets none of them, which is
+also what keeps an image older than the `mail` section booting.
+
+`CR_API_MAIL__REPLY_TO` (SUP-409) joins that list on the same terms, with one
+caveat the others no longer have: the router's config schema is strict, so an
+image that predates `mail.replyTo` refuses to boot on a Secret that carries
+`mail-reply-to`. Leaving `mail.replyTo` unset is what keeps such an image
+working, exactly as an unset `mail.provider` does — and `Chart.yaml` pins an
+image that has the key.
+*/}}
+{{- range $variable, $key := dict "CR_API_MAIL__PROVIDER" "mail-provider" "CR_API_MAIL__FROM" "mail-from" "CR_API_MAIL__FROM_NAME" "mail-from-name" "CR_API_MAIL__REPLY_TO" "mail-reply-to" "CR_API_MAIL__RESEND_API_KEY" "mail-resend-api-key" "CR_API_MAIL__SMTP__HOST" "smtp-host" "CR_API_MAIL__SMTP__PORT" "smtp-port" "CR_API_MAIL__SMTP__SECURITY" "smtp-security" "CR_API_MAIL__SMTP__USER" "smtp-user" "CR_API_MAIL__SMTP__PASSWORD" "smtp-password" }}
+- name: {{ $variable }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "confidential-router-api.mailSecretName" $ }}
+      key: {{ $key }}
+      optional: true
 {{- end }}
 {{- if .Values.auth.github.clientId }}
 - name: ROUTER_GITHUB_CLIENT_SECRET
@@ -154,4 +208,14 @@ ever started.
   mountPath: /tmp
 - name: data
   mountPath: /app/data
+{{- if .Values.externalEndpoints.enabled }}
+{{- /*
+The one path this container shares with the sidecar, and the only one it writes
+that another process reads. The migration container mounts it for the same
+reason it loads the same config file — this list is one list — and writes
+nothing to it.
+*/}}
+- name: gatekeeper-config
+  mountPath: {{ include "confidential-router-api.sidecarConfigDir" . | quote }}
+{{- end }}
 {{- end -}}

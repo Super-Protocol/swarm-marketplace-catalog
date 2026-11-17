@@ -22,32 +22,44 @@ The release name and namespace are fixed per listing (`cr` / `confidential-route
 | --- | --- |
 | `api-one-model` / `api-three-models` | the `models` list: `models[]` and `endpoints[]` in the rendered `router.yaml` are built from it |
 | `api-billing-disabled` / `api-billing-stripe` | the billing mode: no purchases at all, versus real card payments. The third provider, `manual`, mints credit from a signed link and the chart refuses it (SUP-167) |
-| `api-no-models` | an empty selection: an empty catalogue renders, rather than a chart that cannot be installed |
+| `api-no-models` | an empty selection: an empty catalogue renders, rather than a chart that cannot be installed — and the deployment's own endpoint still does, because the chat verifies this router's channel and locks without it (SUP-255) |
 | `api-external-postgres` | `postgresql.enabled: false` with a DSN of the deployment's own |
 | `litellm-one-model` / `litellm-three-models` | the same list on the other side, so the two charts' model names can be diffed against each other |
+| `litellm-no-models` | an empty selection: no proxy at all — one inert ConfigMap, because a marketplace component has to render something for the cloud to accept it (SUP-245) |
 | `api-bootstrap-token` | the SUP-95 auth seam: the one `CR_API_*` env var, rendered only when a token is set |
-| `api-password-no-mailer` | what the listing deploys (SUP-112): passwords on with `mailer: none`, which has to render a config the router boots on |
-| `api-password-off` | passwords off: the `auth.password` block is absent rather than `enabled: false`, so the chart stays bootable on an image that predates the key |
+| `api-mail-smtp` | SMTP mail configured (SUP-269), with `magicLink.enabled: false` as the listing sets it — the emailed code is the only mail sign-in: every mail value — provider, sender, reply-to, host, port, security, user, password — in the Secret, and the attested env list the same `optional` references every other case renders |
 | `api-invite-only` | the SUP-173 auth seam: `requireInviteForSignUp` rendered only while it is on, so the chart stays bootable on an image that predates the key |
+| `api-signup-grant` | the SUP-249 billing seam: `signupGrantMicros` rendered from whole USD only while it is above zero, so the chart stays bootable on an image that predates the key |
 | `api-endpoint-hostname` | an endpoint that names a hostname of its own: a parameter, so it is rendered as a literal rather than as `${ROUTER_PUBLIC_HOSTNAME}`, and the public ConfigMap does not carry that key at all (SUP-211) |
+| `api-external-only` | what the listing renders by default from 0.13.0 (SUP-245): no built-in model and the egress on — a router that serves only the external endpoints an administrator registers, and still publishes its own endpoint under `${ROUTER_PUBLIC_HOSTNAME}` (SUP-255). With the listing's auth block, so `local_stack.py` also pins the API Ingress and the first-sign-in token on this shape (SUP-248, SUP-269) |
+| `api-external-endpoints` | the attested egress on (ADR-008): the gatekeeper as a second container, the shared `emptyDir` they talk through, and `CR_API_SECRETS_KEY` in the Secret rather than in the attested `router.yaml`. Every other `api-*` case has it off, which is the other half — a chart that still boots an image predating the key |
 | `ui-default` | the console's env and ingress; run.sh renders it against a second hostname as well, because one pinned image has to serve any API origin |
-| `ollama-gpu-off` / `ollama-gpu-on` | the GPU switch |
+| `ollama-one-model` / `ollama-gpu` | the model server and its GPU switch: an explicit zero device request without one; the device count, the `nvidia` runtime class and the GPU toleration together with one |
+| `ollama-no-models` | an empty selection: no Deployment, no Service, no volume — one inert ConfigMap — with the GPU switch on, which therefore reaches nothing (SUP-245) |
 | `s3-default` | what the confidential-s3 listing deploys: two hostnames, credentials derived from seeds, the bundled engine and the bundled PostgreSQL |
 | `s3-virtual-host` | `server.s3_domains` in the gateway's config — the one line between an SDK that works out of the box and one that has to be told to use path style |
 | `s3-external-postgres` | `postgresql.enabled: false` with a DSN of the deployment's own |
 | `s3-explicit-credentials` | a real master key and a real Garage credential instead of seeds; the chart checks both shapes rather than trusting them |
 | `s3-large-volumes` | the large end of the form, and the engine's layout capacity, which is derived from the data volume rather than set beside it |
 
-The GPU cases render **otwld's `ollama` chart**, not one of ours: the listing
-deploys that chart by `repoUrl` and the GPU switch lives in it. They are here
-because a deployment of this listing with `gpuEnabled` on and no device on the
-node schedules nothing at all, and the values that avoid it are worth pinning
-somewhere. They need network the first time, to pull the chart.
+The model server was otwld's `ollama` chart up to listing 0.12.x. It is
+`confidential-router-ollama` from 0.13.0, because a router serving only external
+endpoints has to be able to deploy no model server at all, and a component cannot
+be skipped by the listing — so the chart decides from the `models` list itself
+(SUP-245).
 
 ## Beyond lint and goldens
 
-Eight checks in `run.sh` are not a golden diff, and each exists because a golden diff
+The checks below in `run.sh` are not a golden diff, and each exists because a golden diff
 cannot answer the question:
+
+- **Every container is admissible on a cluster space** (`limitrange.py`). A cluster space
+  carries a LimitRange the cloud writes itself: a 100m / 128Mi floor, and a request/limit
+  ratio of 1. A container under the floor, or one declaring no resources at all and handed a
+  2:1 pair by that same LimitRange, is refused at admission — so the pod never exists, and
+  nothing an operator looks at says "quota". It reads as "the app is broken". Four sub-floor
+  containers shipped that way before this check existed (SUP-238), and a golden diff held
+  every one of their numbers without a word.
 
 - **Every object, parsed as a cluster parses it** (`inventory.py`). A template that loses a
   `---` glues two objects into one document; the golden is regenerated from the same broken
@@ -68,6 +80,14 @@ cannot answer the question:
   `consumer.organization.name` straight into the control plane's environment; it rendered,
   deployed and worked, and made the evidence digest a property of who deployed it. A real
   deployment is what found it.
+
+  Run against every listing that passes one, and once per set of case values. Both halves of
+  that sentence are SUP-241: the check existed and was wired to confidential-s3 alone, while
+  `confidential-router` passed the deployer's address into two chart values — one sealed, one a
+  literal in two containers' env lists — and a chart renders an env var only on the path that
+  uses it, so a single set of values clears the paths it happens to exercise and is silent about
+  the rest. A path whose marker reaches nothing is reported rather than passed; lists are walked,
+  because an address passed as a one-entry list was invisible to the first version of this.
 - **Two consumers, one version.** The confidential-s3 chart is rendered twice, under two
   hostnames in two namespaces, and every field that differs has to be a declared exclusion.
   This is `cli/evidence-preview.js` done on the chart, and it is the only check that catches
@@ -91,6 +111,28 @@ cannot answer the question:
   happening. The second direction is invisible to the drift comparison: if the field stopped
   being rendered, nothing differs and nothing fails, while the listing goes on advertising that
   it was left out.
+
+  What varies between the two shapes is the caller's to choose, and "two consumers" means
+  everything a consumer brings rather than the hostname they typed: the router is also rendered
+  with two different deployer addresses, which is the difference that no listing may ever declare
+  because declaring it admits one deployer. Secret values are not compared — the platform's
+  canonical rules drop `/data`, `/stringData` and `/immutable` from every Secret — which is both
+  what makes a Secret the right carrier for such a value and what makes the comparison possible
+  to ask about one at all.
+- **Every route the router API serves is published or kept inside, on purpose**
+  (`api_routes.py`). A controller answers in-process whatever its prefix is; on a deployment it
+  answers only if `ingress.paths` routes that prefix, and the Ingress renders exactly what it is
+  given. The data export/import and the invitation codes CSV shipped under `/admin`, which was
+  not on the list, and were a 404 from nginx on every deployment (SUP-275). The check holds a
+  list of every route the pinned API mounts, each marked published or internal, against the
+  rendered Ingress. The router's source is not here, so when bumping the API image run it with
+  `ROUTER_SRC=<checkout>`: a controller route the list does not name fails.
+- **Mail configuration moves nothing attested** (`mail_invariance.py`). The router case is
+  rendered with no mail, with SMTP under two different hosts, senders and credentials, and with
+  Resend, and every attested field has to be identical across all four — not merely excluded:
+  an exclusion is still something a pinned digest has to be told about, and no part of a mail
+  setup has a reason to reach an attested object. The SMTP password and the Resend key have to
+  be in the Secret and in no other rendered object (SUP-269).
 - **Every placeholder has something that fills it** (`config_placeholders.py`). `router.yaml` is
   attested, so neither a secret nor a hostname is written into it — both are `${VAR}` the router's
   config loader substitutes from the environment. A placeholder with no value does not degrade:
@@ -98,9 +140,30 @@ cannot answer the question:
   error and no golden diff would have mentioned it. Checked in both directions, because a variable
   nothing refers to is dead configuration and, in the public ConfigMap's case, a field excluded
   from the snapshot for no reason.
+- **The listing declares every image its charts render** (`declared_images.py`). A component's
+  `images:` block is an allow-list and the render path is fail-closed on it, so an image the
+  listing does not declare refuses the whole deployment — and a digest bumped in one file and not
+  the other makes the listing advertise a pin the cluster never pulls. `helm template` reads
+  neither the listing nor the digest it declares, so no golden diff can see either. A second
+  container added to a chart is exactly the shape of change that walks into it.
+
+- **The two containers of the egress agree about the two things between them.** The sidecar
+  watches a file router-api renders and answers on a loopback port router-api polls, and nothing
+  in a cluster checks that the two were told the same path, the same mount, the same port or a
+  group that can actually open a 0640 file. Each disagreement is an egress that serves nothing
+  with both containers Ready.
+
 - **Misconfigurations are refused at render time.** Each one is a mistake that would deploy
   cleanly and then not work: an unpinned image, an Ingress with no class, a Garage key in a
-  shape Garage refuses, a master key that is not 32 bytes.
+  shape Garage refuses, a master key that is not 32 bytes, an AES key that is not 32 bytes.
+
+- **The egress sidecar the listing declares boots on an empty endpoint list**
+  (`sidecar_boot.sh`, its own CI job because it needs docker). Every fresh deployment's
+  sidecar first reads `endpoints: []`, and an endpoint can only be registered through the
+  API in the same pod. Listing 0.13.0 declared a build that exited 4 on that document, so
+  the pod never became Ready and the API hostname answered 503 on every path — the admin
+  page included (SUP-248). A digest is a property of the binary behind it; nothing
+  rendered could see it.
 
 ## Smoke
 

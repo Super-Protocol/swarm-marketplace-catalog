@@ -1,0 +1,15 @@
+---
+# Source: confidential-router-ollama/templates/disabled.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: confidential-router-ollama
+  labels:
+    helm.sh/chart: confidential-router-ollama-0.1.0
+    app.kubernetes.io/name: confidential-router-ollama
+    app.kubernetes.io/instance: cr
+    app.kubernetes.io/version: "0.35.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: confidential-router
+data:
+  models: "[]"

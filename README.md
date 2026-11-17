@@ -65,9 +65,10 @@ The script copies the catalog, drops listings that need extra env, and runs `doc
 | `confidential-claims-fraud` | Application | A payer and a hospital publishing into one bus neither operates, with a ksqlDB query finding the claims that contradict the clinical record. Composes the Confluent chart with per-party SASL accounts. |
 | `confluent-platform` | Application | Kafka with Confluent's Control Center. A chart of our own, because Confluent's Kubernetes path needs an operator; shows a multi-container pod and generated console credentials. |
 | `rag-agent` | Application | Data slots, including a schema-constrained one. |
-| `llama-3-2-3b-instruct` | Application | Llama 3.2 3B Instruct on an authenticated OpenAI-compatible endpoint, with tool calling as an acceptance criterion. One of three listings over one chart. |
+| `llama-3-2-3b-instruct` | Application | Llama 3.2 3B Instruct on an authenticated OpenAI-compatible endpoint, with tool calling as an acceptance criterion. One of four listings over one chart. |
 | `gemma-2-2b-it` | Application | Gemma 2 2B IT on the same chart, and the card that says a model *cannot* do tool calling instead of pretending — plus the chat-template fix without which a `system` message is a 400. |
 | `qwen3-coder-30b-a3b-instruct-fp8` | Application | Qwen3-Coder 30B-A3B in Qwen's FP8, the one that needs the GPU cloud. 29 GiB of weights pinned file by file inside the deployment's own evidence. |
+| `qwen3-coder-next-fp8` | Application | Qwen3-Coder-Next in Qwen's FP8 on the same chart: 80B of hybrid-attention mixture of experts, 74.9 GiB of weights pinned file by file, a 262 144-token default context — and the card that takes one H200 NVL to itself rather than pretending to share it. |
 | `roczen-metabolic-programme` | Dataset | De-identified longitudinal metabolic-programme records, 10 tables. |
 | `autonomyx-inflammation-monitoring` | Dataset | De-identified wearable biometrics and AI inflammation scores, 9 tables. |
 | `acme-internal-knowledge-base` | Dataset | Restricted internal corpus. |

@@ -21,7 +21,7 @@ namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; patr
 
 RELEASE=cr
 NAMESPACE=confidential-router
-CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ui confidential-s3 patroni-postgresql swarm-model-server)
+CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ollama confidential-router-ui confidential-s3 patroni-postgresql swarm-model-server)
 
 update="${UPDATE:-}"
 failures=0
@@ -64,6 +64,7 @@ for chart in "${CHARTS[@]}"; do
   case "$chart" in
     confidential-router-api) values="charts/tests/cases/api-one-model.yaml" ;;
     confidential-router-litellm) values="charts/tests/cases/litellm-one-model.yaml" ;;
+    confidential-router-ollama) values="charts/tests/cases/ollama-one-model.yaml" ;;
     confidential-router-ui) values="charts/tests/cases/ui-default.yaml" ;;
     confidential-s3) values="charts/tests/cases/s3-default.yaml" ;;
     patroni-postgresql) values="charts/tests/cases/patroni-default.yaml" ;;
@@ -93,7 +94,9 @@ while IFS=$'\t' read -r name chart repo version; do
     rendered=$(helm template "$release" "charts/$chart" \
       --namespace "$namespace" --values "$values" 2>&1) || { fail "$name (render)"; printf '%s\n' "$rendered" | sed 's/^/        /'; continue; }
   fi
-  filtered=$(printf '%s\n' "$rendered" | own_documents "$chart")
+  # bcrypt salts are random on every render (htpasswd in a Secret), so mask the hash.
+  filtered=$(printf '%s\n' "$rendered" | own_documents "$chart" \
+    | sed -E 's/\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}/<bcrypt>/g')
 
   if [ -n "$update" ]; then
     printf '%s' "$filtered" > "$golden"
@@ -108,6 +111,19 @@ while IFS=$'\t' read -r name chart repo version; do
   fi
   rm -f /tmp/chart-golden-diff.$$
 done < charts/tests/cases.tsv
+
+# A cluster space carries a LimitRange with a 100m / 128Mi floor and a
+# request/limit ratio of 1, so a container asking for less — or asking for
+# nothing, and being handed a 2:1 pair by the same LimitRange — is refused at
+# admission and the pod never exists. Nothing in a golden diff says that; the
+# render looks perfect and the deployment reads as "the app is broken" (SUP-238).
+note "every rendered container clears a cluster space's LimitRange"
+if output=$(python3 charts/tests/limitrange.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/limitrange.py"
+fi
 
 # The two charts are installed separately and have to be given the same list.
 # Nothing enforces that at deploy time, so it is enforced here: the router's
@@ -154,6 +170,27 @@ refuses "the console mailer, whose links land in the pod log" "written to the lo
 # The launch blocker this pair of refusals exists for (SUP-167). `mode: manual`
 # mints credit from a signed link; the chart used to deploy it by default and hand
 # the container NODE_ENV=development so the API would bind it.
+refuses "an SMTP provider with no host" "set mail.smtp.host" \
+  "${base_api[@]}" --set mail.provider=smtp
+
+refuses "a Resend provider with no key" "set mail.resendApiKey" \
+  "${base_api[@]}" --set mail.provider=resend
+
+refuses "a mail provider the router does not have" "mail.provider must be" \
+  "${base_api[@]}" --set mail.provider=sendmail
+
+refuses "an SMTP security mode the router does not have" "mail.smtp.security must be" \
+  "${base_api[@]}" --set mail.provider=smtp --set mail.smtp.host=smtp.example.com --set mail.from=no-reply@example.com --set mail.smtp.security=ssl
+
+refuses "a provider still sending from the .local default" "no server delivers mail from a .local address" \
+  "${base_api[@]}" --set mail.provider=smtp --set mail.smtp.host=smtp.example.com --set mail.from=no-reply@confidential-router.local
+
+refuses "a provider with no sender at all" "no server delivers mail from a .local address" \
+  "${base_api[@]}" --set mail.provider=smtp --set mail.smtp.host=smtp.example.com
+
+refuses "a sender that is not an address" "mail.from is" \
+  "${base_api[@]}" --set mail.provider=smtp --set mail.smtp.host=smtp.example.com --set mail.from=no-reply
+
 refuses "manual billing, which mints credit from a signed link" "mints credit" \
   "${base_api[@]}" --set billing.mode=manual
 
@@ -176,6 +213,12 @@ refuses "the same model twice, on the proxy" "twice" \
   helm template "$RELEASE" charts/confidential-router-litellm --namespace "$NAMESPACE" \
     --set 'models[0]=llama3.2:3b' --set 'models[1]=llama3.2:3b'
 
+# The deployment's own endpoint is rendered whatever `models` says (SUP-255), so
+# a name `endpoints` does not define is not a model-less render with nothing to
+# publish — it is a nil the endpoint loop dereferences.
+refuses "an own endpoint the endpoints map does not define" "which endpoints does not define" \
+  "${base_api[@]}" --set ownEndpoint=elsewhere
+
 refuses "an unpinned image" "pinned by digest" \
   "${base_api[@]}" --set image.digest= --set image.tag=
 
@@ -191,17 +234,17 @@ refuses "a bundled database that requires TLS the API never negotiates" "TypeORM
 refuses "an auth secret too short to sign with" "at least 32 characters" \
   "${base_api[@]}" --set auth.secret=short
 
-refuses "the unimplemented smtp mailer" "not implemented" \
+refuses "SMTP under the legacy mailer key, which points at mail.provider" "mail.provider: smtp" \
   "${base_api[@]}" --set auth.magicLink.mailer=smtp
 
-refuses "a password floor the router's schema would reject" "between 8 and 128" \
-  "${base_api[@]}" --set auth.password.minLength=6
+# Sign-in is a mailed code, OAuth or the first-sign-in token (SUP-269). With none
+# of the three there is no account anybody could ever create or open — a
+# deployment that renders, deploys and answers 404 to everyone.
+refuses "a deployment with no mail, no OAuth app and no first-sign-in token" "no sign-in path is configured" \
+  "${base_api[@]}" --set auth.magicLink.mailer=none --set auth.bootstrapToken=
 
-# The bootstrap token creates exactly one account and then stops existing, so a
-# deployment with nothing else configured strands even the administrator who
-# claimed it — behind a console whose sign-in screen offers nothing.
-refuses "every sign-in path switched off at once" "no sign-in path is configured" \
-  "${base_api[@]}" --set auth.magicLink.mailer=none --set auth.password.enabled=false
+refuses "a session length outside a year" "auth.sessionDays must be between 1 and 365" \
+  "${base_api[@]}" --set auth.sessionDays=400
 
 # A URL where a hostname belongs renders `https://https://…` into the CORS list,
 # which no browser origin matches: the landing page loads and quietly does
@@ -215,6 +258,32 @@ refuses "an operator name where an address belongs" "not an email address" \
 
 refuses "two operator addresses in one list entry" "one address per list entry" \
   "${base_api[@]}" --set 'auth.adminEmails[0]=a@example.com\,b@example.com'
+
+# The one address the first account is created under. A name here is a
+# `POST /auth/bootstrap` that creates an account nobody can sign in to — and the
+# token is spent on it, so there is no second attempt.
+refuses "a bootstrap name where an address belongs" "not an email address" \
+  "${base_api[@]}" --set auth.bootstrapToken=golden-test-bootstrap-token --set auth.bootstrapEmail=operator
+
+# The attested egress (ADR-008). Each of these renders a pod that comes up and an
+# egress that never works: an administrator who can register an upstream but
+# never store its API key, a key that is not an AES-256 key at all, a verifier
+# pulled by a tag that can move under a digest somebody pinned, and two
+# processes in one network namespace told to bind the same port.
+base_egress=("${base_api[@]}" --set externalEndpoints.enabled=true
+  --set externalEndpoints.secretsKey=goldentestsecretskeynotarealoneAAAAAAAAAAAAA)
+
+refuses "the egress switched on with no data key" "every registration is refused" \
+  "${base_api[@]}" --set externalEndpoints.enabled=true
+
+refuses "a data key that is not 32 bytes" "decode to exactly 32 bytes" \
+  "${base_api[@]}" --set externalEndpoints.enabled=true --set externalEndpoints.secretsKey=tooshort
+
+refuses "an unpinned egress verifier" "pinned by digest" \
+  "${base_egress[@]}" --set externalEndpoints.image.digest= --set externalEndpoints.image.tag=
+
+refuses "the egress admin API on the port the API itself listens on" "would fail to bind" \
+  "${base_egress[@]}" --set externalEndpoints.adminPort=3000
 
 # The console used to have its API origin compiled into its browser bundle, so
 # this chart refused to render one pointed anywhere else and the listing was
@@ -627,6 +696,209 @@ else
   fail "charts/tests/inventory.py confidential-router-api"
 fi
 
+# The component image list is the render path's one fail-closed gate: an image in
+# the manifests that the listing does not declare refuses the whole deployment,
+# and a digest bumped in one file and not the other is a listing advertising a
+# pin the cluster never pulls. Neither is visible to a golden diff — `helm
+# template` does not read app.yaml — and the second container ADR-008 adds is
+# exactly the shape of change that walks into it.
+note "the listing declares every image its charts render, with the same digest"
+declared_images() {
+  if output=$(python3 charts/tests/declared_images.py confidential-router "$1" "$2" "charts/tests/cases/$3.yaml"); then
+    printf '%s\n' "$output" | sed "s/\$/ ($1)/"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/declared_images.py $1"
+  fi
+}
+declared_images router-api confidential-router-api api-external-endpoints
+declared_images router-ui confidential-router-ui ui-default
+declared_images litellm confidential-router-litellm litellm-one-model
+declared_images ollama confidential-router-ollama ollama-gpu
+
+# The local inference stack is optional from listing 0.13.0 (SUP-245): an empty
+# `models` selection deploys no model server and no proxy, and the router serves
+# only the external endpoints an administrator registers. The listing cannot skip
+# a component — the specification has no `when:` on one and forbids an array in a
+# condition — so the two charts decide it themselves, and each has two shapes.
+note "the local inference stack renders all of itself or none of itself"
+inventory_shape() {
+  if output=$(python3 charts/tests/inventory.py "$1" "charts/tests/cases/$2.yaml" "$3"); then
+    printf '%s\n' "$output" | sed "s/\$/ ($2)/"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/inventory.py $1 $2"
+  fi
+}
+inventory_shape confidential-router-ollama ollama-one-model confidential-router-ollama
+inventory_shape confidential-router-ollama ollama-gpu confidential-router-ollama
+inventory_shape confidential-router-ollama ollama-no-models confidential-router-ollama:none
+inventory_shape confidential-router-litellm litellm-three-models confidential-router-litellm
+inventory_shape confidential-router-litellm litellm-no-models confidential-router-litellm:none
+
+# And the four components together, as the listing renders them with the form
+# left as it arrives: api, console, database and egress, and nothing else running.
+note "a router with no built-in model runs the API, the console, the database and the egress — nothing else"
+if output=$(python3 charts/tests/local_stack.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/local_stack.py"
+fi
+
+# A controller answers in-process whatever its prefix is; on a deployment it
+# answers only if the Ingress routes that prefix. The export/import and codes CSV
+# routes shipped without theirs and were a 404 from nginx everywhere (SUP-275).
+note "every route the router API serves is published or kept inside, on purpose"
+if output=$(python3 charts/tests/api_routes.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/api_routes.py"
+fi
+
+refuses "a model name a shell would read as more than one word" "is not an Ollama model name" \
+  helm template "$RELEASE" charts/confidential-router-ollama --namespace "$NAMESPACE" \
+    --set 'models[0]=llama3.2:3b; rm -rf /'
+
+refuses "the same model twice, on the model server" "twice" \
+  helm template "$RELEASE" charts/confidential-router-ollama --namespace "$NAMESPACE" \
+    --set 'models[0]=llama3.2:3b' --set 'models[1]=llama3.2:3b'
+
+# The egress is two containers that have to agree about one file and one port,
+# and nothing in a cluster would say so: a sidecar watching a path router-api
+# never writes waits for a configuration for ever, serving nothing, with both
+# containers Ready. Checked on the rendered objects rather than on the values,
+# because the mount point is derived and the agreement is what matters.
+note "the egress sidecar and the API agree on the file and the socket between them"
+if output=$(python3 - charts/tests/golden/api-external-endpoints.yaml <<'PYTHON'
+import sys, yaml
+
+golden = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+deployment = next(d for d in golden if d["kind"] == "Deployment")
+pod = deployment["spec"]["template"]["spec"]
+api = next(c for c in pod["containers"] if c["name"] == "router-api")
+sidecar = next(c for c in pod["containers"] if c["name"] == "gatekeeper")
+config = yaml.safe_load(
+    next(d for d in golden if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "confidential-router-api")["data"][
+        "router.yaml"
+    ].replace("${", "placeholder-").replace("}", "")
+)
+
+failures = []
+rendered = config["externalEndpoints"]["configFile"]
+watched = next(e["value"] for e in sidecar["env"] if e["name"] == "GATEKEEPER_CONFIG")
+if rendered != watched:
+    failures.append(f"router-api renders {rendered} and the sidecar watches {watched}")
+else:
+    print(f"  ok    both name {rendered}")
+
+shared = {
+    container["name"]: next(
+        (m["mountPath"] for m in container.get("volumeMounts", []) if m["name"] == "gatekeeper-config"), None
+    )
+    for container in pod["containers"]
+}
+directory = rendered.rsplit("/", 1)[0]
+for name, path in shared.items():
+    if path != directory:
+        failures.append(f"{name} mounts the shared volume at {path}, not {directory}")
+if not failures:
+    print(f"  ok    both mount the shared emptyDir at {directory}")
+
+volume = next((v for v in pod["volumes"] if v["name"] == "gatekeeper-config"), None)
+if volume is None or "emptyDir" not in volume:
+    failures.append("the shared volume is not an emptyDir")
+else:
+    print("  ok    the shared volume is an emptyDir, so nothing of it outlives the pod")
+
+# The listeners are loopback-only, which is what makes them need no Service and
+# no NetworkPolicy. A containerPort would advertise a reachability that is not
+# there, and the admin API answers verdicts to whoever reaches it.
+if sidecar.get("ports"):
+    failures.append(f"the sidecar declares ports {sidecar['ports']}, and every listener it opens is on loopback")
+else:
+    print("  ok    the sidecar publishes no port")
+
+admin = config["externalEndpoints"]["adminListen"]
+if not admin.startswith("127.0.0.1:"):
+    failures.append(f"the admin API is told to listen on {admin}, which is not loopback")
+else:
+    print(f"  ok    the admin API is loopback-only ({admin})")
+
+if sidecar["securityContext"].get("runAsUser") != 65532 or not sidecar["securityContext"]["readOnlyRootFilesystem"]:
+    failures.append("the sidecar is not the image's non-root uid on a read-only root filesystem")
+else:
+    print("  ok    the sidecar runs as 65532 on a read-only root filesystem")
+
+# router-api writes the rendered configuration 0640, owned by its own uid and
+# gid. A sidecar with a group of its own can see that file and cannot open it,
+# which is an egress that serves nothing with both containers Ready — so the
+# group has to be the pod's, which is the API's.
+pod_group = pod["securityContext"]["runAsGroup"]
+if sidecar["securityContext"].get("runAsGroup", pod_group) != pod_group:
+    failures.append(
+        f"the sidecar runs as group {sidecar['securityContext']['runAsGroup']} and the file it reads is "
+        f"group {pod_group}, mode 0640: it could not open it"
+    )
+else:
+    print(f"  ok    the sidecar shares the writer's group ({pod_group}), which 0640 requires")
+
+# The API container has to be able to write what the sidecar reads.
+api_mount = next(m for m in api["volumeMounts"] if m["name"] == "gatekeeper-config")
+if api_mount.get("readOnly"):
+    failures.append("router-api mounts the shared volume read-only, and it is the process that renders the file")
+else:
+    print("  ok    router-api mounts it writable and the sidecar read-only")
+
+for failure in failures:
+    print(f"  FAIL  {failure}")
+sys.exit(1 if failures else 0)
+PYTHON
+); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "the egress sidecar and the API do not agree"
+fi
+
+# The one reversible credential this deployment holds. `router.yaml` is attested
+# and published inside the evidence bundle, so a data key written there would be
+# handed out with it — along with every upstream credential it opens (SUP-124,
+# ADR-008 §6).
+note "the upstream-key envelope reaches the pod from the Secret, never from the attested config"
+egress_golden=charts/tests/golden/api-external-endpoints.yaml
+egress_key=goldentestsecretskeynotarealoneAAAAAAAAAAAAA
+egress_config=$(sed -n '/^  router.yaml: |/,/^---$/p' "$egress_golden")
+
+if printf '%s\n' "$egress_config" | grep -q -- "$egress_key"; then
+  fail "the attested router.yaml carries the upstream-key envelope, which the evidence bundle publishes"
+else
+  pass "no data key in the attested router.yaml"
+fi
+if grep -q "secrets-key: \"$egress_key\"" "$egress_golden"; then
+  pass "the data key reaches the Secret"
+else
+  fail "the Secret does not carry secrets-key"
+fi
+if [ "$(grep -c -- '- name: CR_API_SECRETS_KEY$' "$egress_golden")" = "2" ]; then
+  pass "CR_API_SECRETS_KEY is read from the Secret by both the server and the migration container"
+else
+  fail "CR_API_SECRETS_KEY is read $(grep -c -- '- name: CR_API_SECRETS_KEY$' "$egress_golden") time(s), expected 2"
+fi
+
+# And none of it for a deployment that did not ask: the router's config schema is
+# strict, so `externalEndpoints` on an image that predates ADR-008 is a boot
+# refusal rather than a key it ignores.
+note "a deployment with the egress off renders none of it"
+for absent in 'externalEndpoints:' CR_API_SECRETS_KEY secrets-key gatekeeper-config; do
+  if grep -q -- "$absent" charts/tests/golden/api-one-model.yaml; then
+    fail "api-one-model renders $absent"
+  else
+    pass "no $absent"
+  fi
+done
+
 note "patroni-postgresql pins every image it ships by a real digest"
 if output=$(python3 charts/tests/digests.py patroni-postgresql); then
   printf '%s\n' "$output"
@@ -713,12 +985,38 @@ refuses "replacing the one-per-node rule by accident" "the one that applies" \
 # config loader that throws before the first listener — the whole deployment is a
 # crash loop and no golden diff would have mentioned it.
 note "every placeholder in the attested config has something that fills it"
-for case in api-one-model api-campaign api-billing-stripe api-no-models api-endpoint-hostname; do
+for case in api-one-model api-campaign api-billing-stripe api-no-models api-external-only api-endpoint-hostname api-external-endpoints; do
   if output=$(python3 charts/tests/config_placeholders.py confidential-router-api "charts/tests/cases/$case.yaml"); then
     printf '%s\n' "$output" | sed "s/\$/ ($case)/"
   else
     printf '%s\n' "$output"
     fail "charts/tests/config_placeholders.py $case"
+  fi
+done
+
+# The listing/chart seam again — the one confidential-s3's check above asks — on
+# the listing that needed it most and never had it asked. `consumer_fields.py`
+# existed from confidential-s3 0.1.1 and was only ever run
+# against that listing, while `confidential-router` passed the deployer's address
+# into two chart values — one sealed, one a literal in the container's env list.
+# Four published versions later a measurement found it: two deployments identical
+# but for who clicked deploy, two digests, and a personal address inside both
+# signed snapshots (SUP-241).
+#
+# Once per case rather than once, and that is the shape of the hole: a chart
+# renders an env var only on the path that uses it, so a single set of values
+# clears the paths it happens to exercise and says nothing about the rest. The
+# deployer's address is rendered only alongside a first-sign-in token — on
+# `api-one-model` it is neither published nor probed, and `consumer_fields.py`
+# says so rather than passing.
+note "no attested object of the router carries a consumer value as a literal"
+for case in api-bootstrap-token api-campaign api-one-model; do
+  if output=$(python3 charts/tests/consumer_fields.py confidential-router \
+      "confidential-router-api=charts/tests/cases/$case.yaml"); then
+    printf '%s\n' "$output" | sed "s/\$/ ($case)/"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/consumer_fields.py confidential-router $case"
   fi
 done
 
@@ -739,7 +1037,38 @@ drift_case() {
 }
 drift_case confidential-router-api api-one-model
 drift_case confidential-router-api api-campaign 'invites.landingHostname=landing.{t}.example'
+# The second container is in the snapshot too, and nothing about it may follow
+# the hostname: the endpoints it verifies are registered at run time, so the
+# egress a deployment attests is the same for everybody (ADR-008 §2).
+drift_case confidential-router-api api-external-endpoints
 drift_case confidential-router-ui ui-default
+
+# Where a deployment's mail goes is a property of its Secret and of nothing it
+# attests (SUP-269): no mail, SMTP under two different hosts and senders, and
+# Resend all have to render byte-identical attested objects, or two deployments
+# of one version that differ only in their mail setup publish two digests. And
+# the SMTP password and the Resend key are in the Secret and nowhere else.
+note "mail configuration moves nothing a deployment attests"
+for case in api-external-only api-one-model api-bootstrap-token; do
+  if output=$(python3 charts/tests/mail_invariance.py "charts/tests/cases/$case.yaml"); then
+    printf '%s\n' "$output" | sed "s/\$/ ($case)/"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/mail_invariance.py $case"
+  fi
+done
+
+# And the same question with the *consumer* varying, not just the hostname they
+# typed. The marketplace fills both of these from the account clicking deploy, so
+# two people deploying one version render two different values for them — which is
+# a difference no listing may declare, because declaring it admits one deployer.
+# On the bootstrap case rather than api-one-model: that is the path where the
+# address reaches a container's environment at all, and before SUP-241 it reached
+# it as a literal, on the server and on the migration container both.
+note "two people deploying the same version of the router attest the same snapshot"
+drift_case confidential-router-api api-bootstrap-token \
+  'auth.bootstrapEmail=deployer-{t}@example.test' 'auth.adminEmails[0]=deployer-{t}@example.test'
+
 # ---------------------------------------------------------------------------
 # swarm-model-server. Every one of these is a deployment that renders cleanly
 # and then serves something it should not, or nothing at all.
@@ -808,7 +1137,7 @@ refuses "a chat template file the chart does not carry" "does not exist" \
 # The three things a published endpoint must not expose, asserted on the render
 # rather than trusted to the values file.
 note "swarm-model-server publishes only what authenticates"
-for case in model-server-llama model-server-gemma model-server-qwen-fp8; do
+for case in model-server-llama model-server-gemma model-server-qwen-fp8 model-server-qwen-next-fp8; do
   rendered=$(helm template ms charts/swarm-model-server --namespace model-server \
     --values "charts/tests/cases/$case.yaml" 2>&1) || { fail "$case (render)"; continue; }
   problems=""
@@ -838,7 +1167,7 @@ done
 # it is held constant here and only the things a deployment really chooses — the
 # namespace, the hostname and the generated key — are varied.
 note "two deployments of a model listing differ only in the hostname"
-for case in model-server-llama model-server-gemma model-server-qwen-fp8; do
+for case in model-server-llama model-server-gemma model-server-qwen-fp8 model-server-qwen-next-fp8; do
   render_ms() {
     helm template ms-fixed charts/swarm-model-server --namespace "$2" \
       --values "charts/tests/cases/$case.yaml" \
@@ -863,13 +1192,14 @@ done
 # cloud acts on, and `evidence.exclude` in the listing is what the marketplace
 # reads to show it beside the digest.
 note "each model listing declares the exclusion its chart annotates"
-# Each listing against its own golden. Feeding one golden to all three would
+# Each listing against its own golden. Feeding one golden to all of them would
 # still check every listing's declaration, but would only ever resolve the
 # llama render's pointer — and a pointer is an index, so the whole point of
 # resolving it is that it is checked against the object it indexes.
 for pair in "llama-3-2-3b-instruct:model-server-llama" \
             "gemma-2-2b-it:model-server-gemma" \
-            "qwen3-coder-30b-a3b-instruct-fp8:model-server-qwen-fp8"; do
+            "qwen3-coder-30b-a3b-instruct-fp8:model-server-qwen-fp8" \
+            "qwen3-coder-next-fp8:model-server-qwen-next-fp8"; do
   app="${pair%%:*}"
   case_name="${pair##*:}"
   if output=$(python3 - "apps/$app/app.yaml" "charts/tests/golden/$case_name.yaml" <<'PYTHON'
@@ -1008,7 +1338,7 @@ else
   printf '%s\n' "$output" | sed 's/^/        /'
 fi
 
-for app in llama-3-2-3b-instruct gemma-2-2b-it qwen3-coder-30b-a3b-instruct-fp8; do
+for app in llama-3-2-3b-instruct gemma-2-2b-it qwen3-coder-30b-a3b-instruct-fp8 qwen3-coder-next-fp8; do
   if output=$(python3 - "apps/$app/app.yaml" <<'PYTHON'
 import pathlib, sys, yaml
 sys.path.insert(0, "charts/tests/smoke")

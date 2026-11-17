@@ -1,0 +1,6 @@
+# The model server as the listing deploys it with the default-era selection and
+# no GPU: CPU scheduling, no runtime class, an explicit zero GPU request.
+models:
+  - "llama3.2:3b"
+persistence:
+  size: 30Gi

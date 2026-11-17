@@ -5,7 +5,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-litellm
   labels:
-    helm.sh/chart: confidential-router-litellm-0.1.2
+    helm.sh/chart: confidential-router-litellm-0.2.0
     app.kubernetes.io/name: confidential-router-litellm
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "1.80.5"
@@ -17,7 +17,7 @@ data:
       - model_name: "llama3.2:3b"
         litellm_params:
           model: "ollama_chat/llama3.2:3b"
-          api_base: "http://ollama:11434"
+          api_base: "http://confidential-router-ollama:11434"
           keep_alive: "24h"
 
     litellm_settings:
@@ -30,7 +30,7 @@ kind: Service
 metadata:
   name: confidential-router-litellm
   labels:
-    helm.sh/chart: confidential-router-litellm-0.1.2
+    helm.sh/chart: confidential-router-litellm-0.2.0
     app.kubernetes.io/name: confidential-router-litellm
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "1.80.5"
@@ -53,7 +53,7 @@ kind: Deployment
 metadata:
   name: confidential-router-litellm
   labels:
-    helm.sh/chart: confidential-router-litellm-0.1.2
+    helm.sh/chart: confidential-router-litellm-0.2.0
     app.kubernetes.io/name: confidential-router-litellm
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "1.80.5"
@@ -68,7 +68,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: 5778f35128f808da3f89ad06062cacca70bfc83394c609683791793817edc8cb
+        checksum/config: 57a48acc1d750147506243bc75cb3d841ef49fffb5057571236e1b708e648242
       labels:
         app.kubernetes.io/name: confidential-router-litellm
         app.kubernetes.io/instance: cr

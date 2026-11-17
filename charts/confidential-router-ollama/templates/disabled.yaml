@@ -1,0 +1,20 @@
+{{- /*
+No built-in models selected: the deployment serves external endpoints only, and
+nothing of the model server is rendered — no Deployment, no Service, no volume.
+
+This ConfigMap is the one object left, and it exists because of the platform,
+not the chart: the cloud refuses a component with no manifests, and the
+specification has no way to leave a component out of a deployment. It is inert
+— nothing mounts it — and it is attested, which makes "this deployment runs no
+local model server" a statement in the evidence rather than an absence in it.
+*/ -}}
+{{- if not (include "confidential-router-ollama.models" . | fromJsonArray) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "confidential-router-ollama.fullname" . }}
+  labels:
+    {{- include "confidential-router-ollama.labels" . | nindent 4 }}
+data:
+  models: "[]"
+{{- end }}

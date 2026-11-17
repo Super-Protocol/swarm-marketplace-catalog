@@ -1,0 +1,31 @@
+# What the listing renders for the API when the form is left as it arrives
+# (0.13.0, SUP-245): no built-in model, the attested egress on. The router comes
+# up with an empty local catalogue and serves whatever an administrator registers
+# as an external endpoint. Its own endpoint is rendered regardless, so the chat
+# can verify this router's channel (SUP-255). `litellmUrl` still names the
+# proxy's service, which this deployment does not run — nothing is routed to it,
+# because no catalogue entry points there, and the API's health check never
+# calls it.
+apiHostname: api.confidential-router.example
+consoleHostname: console.confidential-router.example
+# The auth block as the listing's base sets it: the first-sign-in token, no
+# mailer, and the emailed code as the only mail sign-in once one is configured
+# (SUP-269) — so the golden pins what a deployment left as the form arrives is.
+auth:
+  secret: golden-test-auth-secret-not-a-real-one
+  # The way in that needs nothing outside the cluster: with no token, no mail
+  # and no OAuth app the chart refuses to render a deployment nobody could claim.
+  bootstrapToken: golden-test-bootstrap-token
+  magicLink:
+    enabled: false
+    mailer: none
+database:
+  password: golden-test-password
+models: []
+externalEndpoints:
+  enabled: true
+  secretsKey: goldentestsecretskeynotarealoneAAAAAAAAAAAAA
+# The listing's sign-up credit default (SUP-249), so this case keeps rendering
+# what the form deploys as it arrives.
+billing:
+  signupGrantUsd: 20

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate the three swarm-model-server test cases from the listings.
+"""Regenerate the swarm-model-server test cases from the listings.
 
     charts/tests/cases/model-server-cases.py
     UPDATE=1 charts/tests/run.sh          # then refresh the goldens
@@ -30,6 +30,8 @@ CASES = {
     "model-server-gemma": ("gemma-2-2b-it", "gemma.models.example", 8192, 0.85),
     "model-server-qwen-fp8": (
         "qwen3-coder-30b-a3b-instruct-fp8", "qwen-coder.models.example", 65536, 0.85),
+    "model-server-qwen-next-fp8": (
+        "qwen3-coder-next-fp8", "qwen-coder-next.models.example", 262144, 0.9),
 }
 
 # A fixed stand-in for the generated key: 32 alphanumerics, the shape the

@@ -49,6 +49,35 @@ uncomputable (marketplace spec §2.7).
 {{- end -}}
 
 {{/*
+The egress sidecar's image reference. Same rule as the router's own: a digest
+wins over a tag, and one of the two has to be there, because this container is
+inside the snapshot a user pins (ADR-008 §2).
+*/}}
+{{- define "confidential-router-api.sidecarImage" -}}
+{{- $image := .Values.externalEndpoints.image -}}
+{{- $repo := printf "%s/%s" $image.registry $image.repository -}}
+{{- if $image.digest -}}
+{{- printf "%s@%s" $repo $image.digest -}}
+{{- else if $image.tag -}}
+{{- printf "%s:%s" $repo $image.tag -}}
+{{- else -}}
+{{- fail "externalEndpoints.image.digest is empty and externalEndpoints.image.tag is not set: every image in this chart is pinned by digest" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The directory the shared `emptyDir` is mounted at, in both containers.
+
+Derived from the one path rather than configured beside it: router-api writes
+that file and the sidecar watches it, and a chart that let the two be set
+separately would have a setting whose only effect is an egress that never
+reloads.
+*/}}
+{{- define "confidential-router-api.sidecarConfigDir" -}}
+{{- dir (required "externalEndpoints.configPath must be set" .Values.externalEndpoints.configPath) -}}
+{{- end -}}
+
+{{/*
 NODE_ENV — `production`, and nothing this chart is given changes that.
 
 It used to be derived: `development` unless billing ran on Stripe, because the
@@ -158,16 +187,43 @@ values mistake that would otherwise render a catalogue nobody asked for.
 {{- end -}}
 
 {{/*
+The endpoint names `router.yaml` carries: this deployment's own, and the ones the
+selected models refer to. Deduplicated, sorted.
+
+The own endpoint is in the list whatever `models` says. The router resolves "which
+endpoint am I" by matching its public hostname against `endpoints[]`, and the chat
+verifies that endpoint's channel before a prompt leaves the browser (ADR-008 §1) — so
+a deployment that published no endpoint, which is what an empty selection rendered
+until chart 0.10.0, had a locked chat composer and a message telling the user to name
+the endpoint in the router configuration themselves (SUP-255). An external-only
+deployment is what the listing's form arrives at since 0.13.0; it cannot be the one
+shape that does not work. `ownEndpoint: ""` opts out and is the only way to render
+`endpoints: []`.
+*/}}
+{{- define "confidential-router-api.renderedEndpoints" -}}
+{{- $seen := dict -}}
+{{- if .Values.ownEndpoint -}}
+{{- $_ := set $seen .Values.ownEndpoint true -}}
+{{- end -}}
+{{- range $name := (include "confidential-router-api.referencedEndpoints" . | fromJsonArray) -}}
+{{- $_ := set $seen $name true -}}
+{{- end -}}
+{{- keys $seen | sortAlpha | toJson -}}
+{{- end -}}
+
+{{/*
 Does any attested endpoint fall back to this deployment's own API hostname?
 
-Non-empty when at least one referenced endpoint named no hostname of its own, which is
-what makes `${ROUTER_PUBLIC_HOSTNAME}` appear in the rendered config. The public
-ConfigMap renders that key only then: a key nothing refers to would be a field excluded
-from the evidence snapshot for no reason, and `charts/tests/config_placeholders.py`
-fails on it. A deployment with every model switched off has no endpoints at all.
+Non-empty when at least one rendered endpoint — the deployment's own included — named
+no hostname of its own, which is what makes `${ROUTER_PUBLIC_HOSTNAME}` appear in the
+rendered config. The public ConfigMap renders that key only then: a key nothing refers
+to would be a field excluded from the evidence snapshot for no reason, and
+`charts/tests/config_placeholders.py` fails on it. Since the own endpoint is rendered
+whatever `models` says, this is empty only when every endpoint named a hostname, or
+when `ownEndpoint` opted out and no model is selected.
 */}}
 {{- define "confidential-router-api.endpointsUsePublicHostname" -}}
-{{- range $name := (include "confidential-router-api.referencedEndpoints" . | fromJsonArray) -}}
+{{- range $name := (include "confidential-router-api.renderedEndpoints" . | fromJsonArray) -}}
 {{- if not (get $.Values.endpoints $name).hostname -}}
 {{- "yes" -}}
 {{- end -}}
@@ -224,25 +280,26 @@ config does not set — so this refuses rather than papering over it.
 {{- end -}}
 {{- end -}}
 {{- if eq .Values.auth.magicLink.mailer "smtp" -}}
-{{- fail "auth.magicLink.mailer \"smtp\" is in the config schema but not implemented: use \"resend\", or \"console\" outside production" -}}
+{{- fail "auth.magicLink.mailer \"smtp\" was never implemented under that key: configure SMTP with mail.provider: smtp and mail.smtp.* instead (SUP-269)" -}}
 {{- end -}}
 {{- if not (has .Values.auth.magicLink.mailer (list "none" "console" "resend")) -}}
 {{- fail (printf "auth.magicLink.mailer must be none, console or resend, not %q" .Values.auth.magicLink.mailer) -}}
 {{- end -}}
-{{- if .Values.auth.password.enabled -}}
-{{- $minLength := .Values.auth.password.minLength | int -}}
-{{- if or (lt $minLength 8) (gt $minLength 128) -}}
-{{- fail (printf "auth.password.minLength must be between 8 and 128, not %d" $minLength) -}}
-{{- end -}}
-{{- end -}}
 {{/*
-Every sign-in path off at once deploys cleanly and answers nothing but 404: the
-bootstrap token lets exactly one account in and then stops existing, so a
-deployment that has no mailer, no OAuth app and no password has no second way in
-even for the administrator who claimed it.
+No way in at all deploys cleanly and answers nothing but 404. Sign-in is a code
+mailed to the address, OAuth, or the bootstrap token (SUP-269) — there are no
+passwords — so a deployment with no mail, no OAuth app and no token is one
+nobody can ever claim. A token alone is enough to render: that is the
+bootstrap-token-only deployment, where the administrator is the only account.
 */}}
-{{- if not (or .Values.auth.password.enabled .Values.auth.github.clientId .Values.auth.google.clientId (ne .Values.auth.magicLink.mailer "none")) -}}
-{{- fail "no sign-in path is configured: auth.magicLink.mailer is none, auth.password.enabled is false and neither auth.github nor auth.google is set. The bootstrap token creates one account and then stops existing, so nobody could sign in afterwards" -}}
+{{- if not (or .Values.auth.bootstrapToken .Values.auth.bootstrapTokenExistingSecret .Values.auth.github.clientId .Values.auth.google.clientId (ne .Values.auth.magicLink.mailer "none") (include "confidential-router-api.mailSends" .) .Values.mail.existingSecret) -}}
+{{- fail "no sign-in path is configured: there is no mail provider (mail.provider, or auth.magicLink.mailer), neither auth.github nor auth.google is set, and there is no auth.bootstrapToken. Nobody could ever sign in" -}}
+{{- end -}}
+{{- if .Values.auth.sessionDays -}}
+{{- $days := .Values.auth.sessionDays | int -}}
+{{- if or (lt $days 1) (gt $days 365) -}}
+{{- fail (printf "auth.sessionDays must be between 1 and 365, not %v" .Values.auth.sessionDays) -}}
+{{- end -}}
 {{- end -}}
 {{/*
 The manual provider mints credit from a signed link. It exists for a laptop, and
@@ -261,6 +318,16 @@ nothing is `mode: disabled`, which refuses checkout instead of minting.
 {{- if and (eq .Values.billing.mode "stripe") (ne (include "confidential-router-api.nodeEnv" .) "production") -}}
 {{- fail "billing.mode is stripe but nodeEnv is not production: real card payments must not run in a mode that relaxes the checks around them" -}}
 {{- end -}}
+{{/*
+The deployment's own endpoint has to be one the chart knows how to render: a name
+`endpoints` does not define would be a nil the templates dereference, which fails
+somewhere inside the endpoint loop with a message that names no value at all.
+*/}}
+{{- if .Values.ownEndpoint -}}
+{{- if not (hasKey .Values.endpoints .Values.ownEndpoint) -}}
+{{- fail (printf "ownEndpoint is %q, which endpoints does not define. Known: %s" .Values.ownEndpoint (join ", " (keys .Values.endpoints | sortAlpha))) -}}
+{{- end -}}
+{{- end -}}
 {{- if eq .Values.auth.magicLink.mailer "resend" -}}
 {{- if not (or .Values.auth.magicLink.resendApiKey .Values.auth.magicLink.resendApiKeyExistingSecret) -}}
 {{- fail "auth.magicLink.mailer is resend: set auth.magicLink.resendApiKey or auth.magicLink.resendApiKeyExistingSecret" -}}
@@ -277,6 +344,29 @@ matches — and the symptom is a page that loads and quietly does nothing.
 {{- end -}}
 {{- end -}}
 {{/*
+The attested egress. Both of these render cleanly and then do not work: a
+deployment whose administrator can register an upstream but never store its API
+key, and a second container pulled by a tag that moved.
+*/}}
+{{- if .Values.externalEndpoints.enabled -}}
+{{- if not (or .Values.externalEndpoints.secretsKey .Values.externalEndpoints.existingSecret) -}}
+{{- fail "externalEndpoints.enabled is true: set externalEndpoints.secretsKey, or externalEndpoints.existingSecret. It is CR_API_SECRETS_KEY, the AES-256 key an upstream API key is sealed under, and without it every registration is refused" -}}
+{{- end -}}
+{{- if .Values.externalEndpoints.secretsKey -}}
+{{- $length := len .Values.externalEndpoints.secretsKey -}}
+{{- if not (has $length (list 43 44 64)) -}}
+{{- fail (printf "externalEndpoints.secretsKey is %d characters: it has to decode to exactly 32 bytes, which is 43 characters of unpadded base64url, 44 of base64, or 64 of hex" $length) -}}
+{{- end -}}
+{{- end -}}
+{{- $port := .Values.externalEndpoints.adminPort | int -}}
+{{- if or (lt $port 1024) (gt $port 65535) -}}
+{{- fail (printf "externalEndpoints.adminPort must be between 1024 and 65535, not %d" $port) -}}
+{{- end -}}
+{{- if eq $port (.Values.service.targetPort | int) -}}
+{{- fail (printf "externalEndpoints.adminPort is %d, which is the port the API itself listens on: the two containers share one network namespace, so one of them would fail to bind" $port) -}}
+{{- end -}}
+{{- end -}}
+{{/*
 The addresses travel to the pod as one comma-separated variable, so a comma
 inside one of them would split it into two addresses that match nobody. An entry
 without an `@` is a name where an address was meant, which the guard compares
@@ -289,5 +379,73 @@ against a signed-in email and always refuses.
 {{- if contains "," $email -}}
 {{- fail (printf "auth.adminEmails contains %q: one address per list entry, commas separate them" $email) -}}
 {{- end -}}
+{{- end -}}
+{{/*
+The same question about the one address the first account is created under. A
+name where an address was meant is a `POST /auth/bootstrap` that creates an
+account nobody can sign in to, and the token is spent on it.
+*/}}
+{{- if .Values.auth.bootstrapEmail -}}
+{{- if not (contains "@" .Values.auth.bootstrapEmail) -}}
+{{- fail (printf "auth.bootstrapEmail is %q, which is not an email address" .Values.auth.bootstrapEmail) -}}
+{{- end -}}
+{{- end -}}
+{{/*
+Mail (SUP-269). Each of these renders, deploys, and then sends nothing: the
+router refuses to boot on the first two, and a sender that is not an address is
+a mail every server rejects. An `existingSecret` is trusted to hold what the
+provider needs, because what it holds is not visible from here.
+*/}}
+{{- $mail := .Values.mail -}}
+{{- if not (has $mail.provider (list "" "none" "smtp" "resend")) -}}
+{{- fail (printf "mail.provider must be none, smtp or resend, not %q" $mail.provider) -}}
+{{- end -}}
+{{- if and (eq $mail.provider "smtp") (not $mail.existingSecret) (not $mail.smtp.host) -}}
+{{- fail "mail.provider is smtp: set mail.smtp.host" -}}
+{{- end -}}
+{{- if and (eq $mail.provider "resend") (not $mail.existingSecret) (not $mail.resendApiKey) -}}
+{{- fail "mail.provider is resend: set mail.resendApiKey" -}}
+{{- end -}}
+{{- if and (include "confidential-router-api.mailSends" .) $mail.from (not (contains "@" $mail.from)) -}}
+{{- fail (printf "mail.from is %q, which is not an email address" $mail.from) -}}
+{{- end -}}
+{{- if and (include "confidential-router-api.mailSends" .) (or (not $mail.from) (hasSuffix ".local" (lower $mail.from))) -}}
+{{- fail (printf "mail.from is %q: a provider is configured, so set a sender on a domain you control — no server delivers mail from a .local address, and the router's default is one" ($mail.from | default "unset")) -}}
+{{- end -}}
+{{- if and (eq $mail.provider "smtp") (not (has $mail.smtp.security (list "starttls" "tls" "none"))) -}}
+{{- fail (printf "mail.smtp.security must be starttls, tls or none, not %q" $mail.smtp.security) -}}
+{{- end -}}
+{{- if and (eq $mail.provider "smtp") $mail.smtp.port -}}
+{{- $port := $mail.smtp.port | int -}}
+{{- if or (lt $port 1) (gt $port 65535) -}}
+{{- fail (printf "mail.smtp.port must be between 1 and 65535, not %v" $mail.smtp.port) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+"true" when `mail` configures a provider that actually sends, empty otherwise —
+the shape `if` reads as a boolean.
+*/}}
+{{- define "confidential-router-api.mailSends" -}}
+{{- if has .Values.mail.provider (list "smtp" "resend") -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+The Secret a mail value is read from: the operator's own, or this chart's.
+*/}}
+{{- define "confidential-router-api.mailSecretName" -}}
+{{- .Values.mail.existingSecret | default (include "confidential-router-api.secretName" .) -}}
+{{- end -}}
+
+{{/*
+The session lifetime the router is given: `auth.sessionDays` as hours when it is
+set, `auth.sessionMaxAge` as written otherwise.
+*/}}
+{{- define "confidential-router-api.sessionMaxAge" -}}
+{{- if .Values.auth.sessionDays -}}
+{{- printf "%dh" (mul (int .Values.auth.sessionDays) 24) -}}
+{{- else -}}
+{{- .Values.auth.sessionMaxAge -}}
 {{- end -}}
 {{- end -}}

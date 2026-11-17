@@ -14,6 +14,12 @@ So this parses the render as YAML documents, the way a cluster does, and names
 every object it expects to find.
 
     charts/tests/inventory.py confidential-s3 charts/tests/cases/s3-default.yaml
+
+A chart whose object list depends on its values is keyed once per shape, and the
+key is given as a third argument:
+
+    charts/tests/inventory.py confidential-router-ollama \\
+        charts/tests/cases/ollama-no-models.yaml confidential-router-ollama:none
 """
 
 import subprocess
@@ -67,6 +73,27 @@ EXPECTED = {
         ("StatefulSet", "confidential-router-postgresql"),
         ("StatefulSet", "confidential-router-postgresql-etcd"),
     },
+    # The local inference stack, with a selection and without one. Without one it
+    # is a single inert ConfigMap per chart: no workload, no Service, no volume,
+    # no Secret — the platform needs a component to render something, and that
+    # is all it gets (SUP-245).
+    "confidential-router-ollama": {
+        ("Deployment", "confidential-router-ollama"),
+        ("PersistentVolumeClaim", "confidential-router-ollama"),
+        ("Service", "confidential-router-ollama"),
+    },
+    "confidential-router-ollama:none": {
+        ("ConfigMap", "confidential-router-ollama"),
+    },
+    "confidential-router-litellm": {
+        ("ConfigMap", "confidential-router-litellm"),
+        ("Deployment", "confidential-router-litellm"),
+        ("Secret", "confidential-router-litellm"),
+        ("Service", "confidential-router-litellm"),
+    },
+    "confidential-router-litellm:none": {
+        ("ConfigMap", "confidential-router-litellm"),
+    },
     "confidential-s3": {
         ("ConfigMap", "confidential-s3-bootstrap"),
         ("ConfigMap", "confidential-s3-garage"),
@@ -92,7 +119,7 @@ EXPECTED = {
 }
 
 
-def main(chart: str, values: str) -> int:
+def main(chart: str, values: str, key: str | None = None) -> int:
     rendered = subprocess.run(
         ["helm", "template", "release", f"charts/{chart}", "--namespace", chart, "--values", values],
         capture_output=True,
@@ -105,7 +132,7 @@ def main(chart: str, values: str) -> int:
         for doc in yaml.safe_load_all(rendered)
         if doc
     }
-    expected = EXPECTED[chart]
+    expected = EXPECTED[key or chart]
 
     missing = sorted(expected - found)
     extra = sorted(found - expected)
@@ -121,4 +148,4 @@ def main(chart: str, values: str) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1], sys.argv[2]))
+    sys.exit(main(*sys.argv[1:4]))

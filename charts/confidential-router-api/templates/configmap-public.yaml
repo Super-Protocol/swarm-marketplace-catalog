@@ -41,9 +41,11 @@ data:
   {{- if include "confidential-router-api.endpointsUsePublicHostname" . }}
   # `endpoints[].hostname` for an endpoint that did not name one — this
   # deployment's own API hostname, which is where its evidence bundle is fetched
-  # from. A hostname, not a URL, which is what that field is. Absent when every
-  # endpoint named its own, and when there are no endpoints because every model
-  # is switched off.
+  # from, and the value the router matches against `server.publicBaseUrl` to
+  # know which endpoint is its own (SUP-255). A hostname, not a URL, which is
+  # what that field is. Present on every render the listing produces, because
+  # the deployment's own endpoint is rendered whatever `models` says; absent
+  # only when every rendered endpoint named a hostname of its own.
   ROUTER_PUBLIC_HOSTNAME: {{ required "apiHostname must be set" .Values.apiHostname | quote }}
   {{- end }}
   # `server.validClientOrigins`, comma-separated: the router's schema splits a

@@ -1,0 +1,692 @@
+---
+# Source: swarm-model-server/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: swarm-model-server
+  labels:
+    helm.sh/chart: swarm-model-server-0.2.0
+    app.kubernetes.io/name: swarm-model-server
+    app.kubernetes.io/instance: ms
+    app.kubernetes.io/version: "0.22.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: model-server
+type: Opaque
+stringData:
+  api-key: "TESTKEYtestkey0123456789abcdefAB"
+---
+# Source: swarm-model-server/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: swarm-model-server-weights
+  labels:
+    helm.sh/chart: swarm-model-server-0.2.0
+    app.kubernetes.io/name: swarm-model-server
+    app.kubernetes.io/instance: ms
+    app.kubernetes.io/version: "0.22.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: model-server
+data:
+  manifest.json: |
+    {
+      "files": [
+        {
+          "path": "chat_template.jinja",
+          "sha256": "c79a833039a43602150cce0902403d6e376c50930c1b2a139b2964e1f0c322a0",
+          "size": 6068
+        },
+        {
+          "path": "config.json",
+          "sha256": "8756acedd5ae0df36b2d6d774c87e30b422c3f4988015aa0b7e6c32f21769cdf",
+          "size": 9836
+        },
+        {
+          "path": "generation_config.json",
+          "sha256": "37a3c1ef63516ca489c575f0db1c0405ddc0c3dbaca9ed987344c966c37aeef5",
+          "size": 214
+        },
+        {
+          "path": "merges.txt",
+          "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
+          "size": 1671839
+        },
+        {
+          "path": "model-00001-of-00040.safetensors",
+          "sha256": "81fc8306344bb5d37b3a1d6c267fb7b0f2cf05ecb05cd065016aab87e6a55a33",
+          "size": 2313917472
+        },
+        {
+          "path": "model-00002-of-00040.safetensors",
+          "sha256": "7c1eb3b175b9122bf28e64dca9dac63696c229bd6e0ced2351a4e2c414aa33af",
+          "size": 2001731528
+        },
+        {
+          "path": "model-00003-of-00040.safetensors",
+          "sha256": "62c034d5f7b21b25cc2497a9cebfbebbda500d0d3a9b08381d476c481dc2df5b",
+          "size": 2001406544
+        },
+        {
+          "path": "model-00004-of-00040.safetensors",
+          "sha256": "879eaa1ce8ba3b7c3e48c24deb039a9972bcb724f790945a916003efd4312616",
+          "size": 2001732024
+        },
+        {
+          "path": "model-00005-of-00040.safetensors",
+          "sha256": "785259af0e3e7959d48360927f9556f1b636a5d800dcbc8d2a11c295b9caab4f",
+          "size": 2001732960
+        },
+        {
+          "path": "model-00006-of-00040.safetensors",
+          "sha256": "79c183f8388e35516509d9488c2e6a6f0aaafc1ff5a3c8b1c872d5d23622c385",
+          "size": 2002790192
+        },
+        {
+          "path": "model-00007-of-00040.safetensors",
+          "sha256": "5b33fd40d09ef4ddd75ac342c6661a3658e26d1b3ca7e38d0774a0b9d235c73a",
+          "size": 2001731792
+        },
+        {
+          "path": "model-00008-of-00040.safetensors",
+          "sha256": "3993df6622752249b565409a8c339f933e2bc326d432c75385ade37f74c18257",
+          "size": 2001731960
+        },
+        {
+          "path": "model-00009-of-00040.safetensors",
+          "sha256": "074c68c97085550d3746cc6fb0e0ec74ee634c09c9bd59a9d1abb099e251ae89",
+          "size": 2001737552
+        },
+        {
+          "path": "model-00010-of-00040.safetensors",
+          "sha256": "9ff4156992002e43012eabf9f0c7dcc7c9e7060d124af9ac188461aa4f93ef0d",
+          "size": 2001411064
+        },
+        {
+          "path": "model-00011-of-00040.safetensors",
+          "sha256": "7a94ef41eabb382b138e781ac0f6054e649ee6e9583298e0b84a0dd75f4d4f97",
+          "size": 2003119416
+        },
+        {
+          "path": "model-00012-of-00040.safetensors",
+          "sha256": "185b7d1bfc64adfa9076918c56b77391d589e99d254c84b281fd79c8a2b8b98d",
+          "size": 2001735720
+        },
+        {
+          "path": "model-00013-of-00040.safetensors",
+          "sha256": "f2a2457629e7b1c5264aa0a3b9304aab17e5fc9781d7267677ec7aa19273dc9d",
+          "size": 2001410320
+        },
+        {
+          "path": "model-00014-of-00040.safetensors",
+          "sha256": "88fd3310606c521c8553ee83ad84c0b82eec892818029e1db6d99ba45a300478",
+          "size": 2001736280
+        },
+        {
+          "path": "model-00015-of-00040.safetensors",
+          "sha256": "c98a491d0e3295f39a0bca7bdf9833255c544e9302b4d3d15d1146d90c024aad",
+          "size": 2003119368
+        },
+        {
+          "path": "model-00016-of-00040.safetensors",
+          "sha256": "ddfb0d48974186fd19a54c4ae5cc354151d8346528adb5184b8fa2b26bade09b",
+          "size": 2001409888
+        },
+        {
+          "path": "model-00017-of-00040.safetensors",
+          "sha256": "87963822288f82be220324a4bf3a0f93b60ae5b0ffec858bf443589fae11118e",
+          "size": 2001735720
+        },
+        {
+          "path": "model-00018-of-00040.safetensors",
+          "sha256": "f81bca32c73a477483552e472fb05ebff3f47a32c23f6ffbb46f8b5a9d40074d",
+          "size": 2001735784
+        },
+        {
+          "path": "model-00019-of-00040.safetensors",
+          "sha256": "0f9a7b626201b4a3f3a6273d1355b6af0b01039c185302421f3be2ceac3011a7",
+          "size": 2001736712
+        },
+        {
+          "path": "model-00020-of-00040.safetensors",
+          "sha256": "20b837e2920bd389b1f4da9a147691bd87daea509e6b19514000b43fe9543bfc",
+          "size": 2002792760
+        },
+        {
+          "path": "model-00021-of-00040.safetensors",
+          "sha256": "e5ae0ae4f8a7d4df1b091d0042bfe3eb30cf6fbdbdf214597e830d8791031b4e",
+          "size": 2001735552
+        },
+        {
+          "path": "model-00022-of-00040.safetensors",
+          "sha256": "b141f2a16a1216c332cb2efdf842a9512fd190b4dccf7223c93bc1a2c44bcb87",
+          "size": 2001735720
+        },
+        {
+          "path": "model-00023-of-00040.safetensors",
+          "sha256": "a27074531ffc6f64232a473a523f65d8de1a6172b4de09c0578a9ad08717171c",
+          "size": 2001410368
+        },
+        {
+          "path": "model-00024-of-00040.safetensors",
+          "sha256": "24a04b08e9c736a14b13a2929d49ec48d13b1946ea997101cde853764a94eb21",
+          "size": 2001737192
+        },
+        {
+          "path": "model-00025-of-00040.safetensors",
+          "sha256": "50ed4184a0f85b89ce4b4f7ec0f5062c1ef281c0eda3f00f1f48e4707d567b98",
+          "size": 2003119408
+        },
+        {
+          "path": "model-00026-of-00040.safetensors",
+          "sha256": "95f5114fe6e7e3bc997c13d913c67b45adec715fc6ae6e4fe6fcabca743686f5",
+          "size": 2001410328
+        },
+        {
+          "path": "model-00027-of-00040.safetensors",
+          "sha256": "1d403f9008dfec3c99d45e3bc5a75630b68c50a5b701d3e7016cd678b7f16e11",
+          "size": 2001735720
+        },
+        {
+          "path": "model-00028-of-00040.safetensors",
+          "sha256": "35a968fef6f36d50cab8a43ee4d824023466a992a025a4d6ab1d48ce17dd22de",
+          "size": 2001736272
+        },
+        {
+          "path": "model-00029-of-00040.safetensors",
+          "sha256": "82f9a8ae7e2936360a0b114bdfb01469fd466287749c8ea404aede06384f459f",
+          "size": 2002793952
+        },
+        {
+          "path": "model-00030-of-00040.safetensors",
+          "sha256": "ce9c6ca2e0c57f86b4ec98a2725f6f38d5886af94d4951fce282ce0b3b3c1dec",
+          "size": 2001735296
+        },
+        {
+          "path": "model-00031-of-00040.safetensors",
+          "sha256": "69e0054fffd16d7f7ef743d6db5a50efcdb3981092229c81ad0f44bd16183704",
+          "size": 2001735720
+        },
+        {
+          "path": "model-00032-of-00040.safetensors",
+          "sha256": "b59cc011d44011b7814ad764470ea7dc54846ec4404751ed3421f3155503154c",
+          "size": 2001735784
+        },
+        {
+          "path": "model-00033-of-00040.safetensors",
+          "sha256": "dfdac2e0770457ed5b49b7e9cf498c91a784c61ba13646f92e7dade7a6a3c636",
+          "size": 2001410816
+        },
+        {
+          "path": "model-00034-of-00040.safetensors",
+          "sha256": "3dc60cb85567bf1d1f1e7e6f5e5a34e42d5e4e5e4983ac12d1aee1b899b84e69",
+          "size": 2003119328
+        },
+        {
+          "path": "model-00035-of-00040.safetensors",
+          "sha256": "6a302b467f63f704626f7ca5cb528e395002fc64718d8d77c65a1d197f9b2275",
+          "size": 2001735544
+        },
+        {
+          "path": "model-00036-of-00040.safetensors",
+          "sha256": "093fb4c1cc509039c693d60f0c73ef32756f15769dad7d5f9b0a94796b64263b",
+          "size": 2001410328
+        },
+        {
+          "path": "model-00037-of-00040.safetensors",
+          "sha256": "859ba58bd90503512f9d4c9bbc7765b6de69774d8337daf70edf43ebba69dbc5",
+          "size": 2001735824
+        },
+        {
+          "path": "model-00038-of-00040.safetensors",
+          "sha256": "8ab001453b89e4312ea0ee5191e0da4012f9e770946fb7884788cec5b98428a9",
+          "size": 2001737184
+        },
+        {
+          "path": "model-00039-of-00040.safetensors",
+          "sha256": "4beb85e677e9e2982b7e5b1371151a31ef679ecc715257897c88982441692cad",
+          "size": 2002794000
+        },
+        {
+          "path": "model-00040-of-00040.safetensors",
+          "sha256": "9db4ee4a0f2aa63f3fdb981bdccd7f933ae5ce4305257e4755fd4a097a12afb8",
+          "size": 1994375208
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "sha256": "0ac9834aa1e30eb60d921d25e1755f97e92dfd47cf74ac2613e474243adcc4cf",
+          "size": 14819483
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "19564a48c4f71a2a1b937cce34c737a1e662b171c5f5d7edf641a15cd896f07d",
+          "size": 7032399
+        },
+        {
+          "path": "tokenizer_config.json",
+          "sha256": "fc76878832c668e3f0f8be66e6239a475b9093d2fe5cef97c242369779e6c6e6",
+          "size": 11681
+        },
+        {
+          "path": "vocab.json",
+          "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+          "size": 2776833
+        }
+      ],
+      "repo": "Qwen/Qwen3-Coder-Next-FP8",
+      "revision": "da6e2ed27304dd39abadd9c82ef50e8de67bdd4c",
+      "totalBytes": 80407722953
+    }
+  fetch-weights.py: |
+    #!/usr/bin/env python3
+    """Fetch model weights and refuse to hand over anything the manifest did not name.
+    
+    Reads a manifest (repo, revision, files[].path/.size/.sha256), downloads each file from
+    the Hugging Face resolve endpoint at that exact revision, and verifies the sha256 while
+    writing. Idempotent: a file already on disk with the right digest is left alone, so a
+    restarted pod does not re-download 29 GiB. Fails closed: any mismatch, any short read,
+    any file the manifest does not name is an error and the destination is not marked ready.
+    
+    stdlib only, so the image that runs this can stay a plain python base.
+    """
+    import hashlib, json, os, sys, time, urllib.error, urllib.request
+    
+    CHUNK = 8 << 20
+    RETRIES = 5
+    UA = "swarm-marketplace-weights-fetcher/1"
+    
+    
+    def log(msg: str) -> None:
+        print(f"[weights] {msg}", flush=True)
+    
+    
+    def digest(path: str) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            while chunk := fh.read(CHUNK):
+                h.update(chunk)
+        return h.hexdigest()
+    
+    
+    def fetch(url: str, dest: str, expect_sha: str, expect_size: int) -> None:
+        tmp = dest + ".part"
+        h = hashlib.sha256()
+        written = 0
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=120) as resp, open(tmp, "wb") as out:
+            while chunk := resp.read(CHUNK):
+                out.write(chunk)
+                h.update(chunk)
+                written += len(chunk)
+        if written != expect_size:
+            os.unlink(tmp)
+            raise ValueError(f"size {written} != manifest {expect_size}")
+        got = h.hexdigest()
+        if got != expect_sha:
+            os.unlink(tmp)
+            raise ValueError(f"sha256 {got} != manifest {expect_sha}")
+        os.replace(tmp, dest)
+    
+    
+    def main() -> int:
+        manifest_path = os.environ.get("WEIGHTS_MANIFEST", "/etc/model/manifest.json")
+        target = os.environ.get("WEIGHTS_DIR", "/models/current")
+        endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
+    
+        with open(manifest_path) as fh:
+            manifest = json.load(fh)
+        repo, revision = manifest["repo"], manifest["revision"]
+        source = os.environ.get("WEIGHTS_REPO", repo)
+    
+        os.makedirs(target, exist_ok=True)
+        ready = os.path.join(target, ".weights-ready")
+        stamp = f"{source}@{revision}"
+        if os.path.exists(ready) and open(ready).read().strip() == stamp:
+            log(f"already verified {stamp}")
+            return 0
+    
+        total = manifest["totalBytes"]
+        log(f"{stamp}: {len(manifest['files'])} files, {total / 2**30:.2f} GiB -> {target}")
+        done = 0
+        for entry in manifest["files"]:
+            rel, sha, size = entry["path"], entry["sha256"], entry["size"]
+            # Every component, not only the ones in a path with a separator in it:
+            # a bare ".." has no "/" and would otherwise reach os.path.join.
+            if rel.startswith("/") or any(part in ("", ".", "..") for part in rel.split("/")):
+                log(f"refusing suspicious manifest path {rel!r}")
+                return 1
+            dest = os.path.join(target, rel)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            if os.path.exists(dest) and os.path.getsize(dest) == size and digest(dest) == sha:
+                log(f"ok (cached)  {rel}")
+                done += size
+                continue
+            url = f"{endpoint}/{source}/resolve/{revision}/{rel}"
+            for attempt in range(1, RETRIES + 1):
+                try:
+                    started = time.monotonic()
+                    fetch(url, dest, sha, size)
+                    took = max(time.monotonic() - started, 1e-6)
+                    done += size
+                    log(f"ok  {rel}  {size / 2**20:.0f} MiB in {took:.0f}s "
+                        f"({size / 2**20 / took:.0f} MiB/s)  [{done / total:.0%}]")
+                    break
+                except (urllib.error.URLError, OSError, ValueError, TimeoutError) as err:
+                    log(f"attempt {attempt}/{RETRIES} failed for {rel}: {err}")
+                    if attempt == RETRIES:
+                        log("giving up — weights are NOT usable, failing closed")
+                        return 1
+                    time.sleep(min(2 ** attempt, 30))
+    
+        # Nothing outside the manifest may reach the serving container.
+        named = {e["path"] for e in manifest["files"]}
+        for root, _dirs, names in os.walk(target):
+            for name in names:
+                rel = os.path.relpath(os.path.join(root, name), target)
+                if rel in named or rel == ".weights-ready":
+                    continue
+                log(f"removing unmanifested file {rel}")
+                os.unlink(os.path.join(root, name))
+    
+        with open(ready, "w") as fh:
+            fh.write(stamp + "\n")
+        log(f"verified {stamp}")
+        return 0
+    
+    
+    if __name__ == "__main__":
+        sys.exit(main())
+---
+# Source: swarm-model-server/templates/pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: swarm-model-server-weights
+  labels:
+    helm.sh/chart: swarm-model-server-0.2.0
+    app.kubernetes.io/name: swarm-model-server
+    app.kubernetes.io/instance: ms
+    app.kubernetes.io/version: "0.22.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: model-server
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: "100Gi"
+---
+# Source: swarm-model-server/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: swarm-model-server
+  labels:
+    helm.sh/chart: swarm-model-server-0.2.0
+    app.kubernetes.io/name: swarm-model-server
+    app.kubernetes.io/instance: ms
+    app.kubernetes.io/version: "0.22.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: model-server
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: swarm-model-server
+    app.kubernetes.io/instance: ms
+---
+# Source: swarm-model-server/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: swarm-model-server
+  labels:
+    helm.sh/chart: swarm-model-server-0.2.0
+    app.kubernetes.io/name: swarm-model-server
+    app.kubernetes.io/instance: ms
+    app.kubernetes.io/version: "0.22.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: model-server
+spec:
+  # One. A second replica would want a second card, and the weights volume is
+  # ReadWriteOnce.
+  replicas: 1
+  strategy:
+    # The card is held by the running pod until it exits, so a rolling update
+    # would leave the new pod Pending on a GPU quota of one for ever.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: swarm-model-server
+      app.kubernetes.io/instance: ms
+  template:
+    metadata:
+      annotations:
+        checksum/weights: e8eaddca11acaf55cf6710059f96df1463a4971b298843e19685a2170e83d9aa
+      labels:
+        app.kubernetes.io/name: swarm-model-server
+        app.kubernetes.io/instance: ms
+    spec:
+      runtimeClassName: nvidia
+      initContainers:
+        # ---------------------------------------------------------------------
+        # Downloads the weights and refuses to hand over anything the manifest
+        # did not name, by sha256. Idempotent: a restarted pod with a populated
+        # volume re-hashes and starts in a minute instead of downloading again.
+        #
+        # It runs the engine image rather than a Python base, because the script
+        # is stdlib-only and a second image would be a second digest to keep
+        # true and a second registry to trust.
+        # ---------------------------------------------------------------------
+        - name: fetch-weights
+          image: docker.io/vllm/vllm-openai@sha256:0fec7ec5f3e6bc168e54899935fb0557da908a4832a1dbc88e2debcf2f889416
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - /opt/weights/fetch-weights.py
+          env:
+            - name: WEIGHTS_MANIFEST
+              value: /etc/model/manifest.json
+            - name: WEIGHTS_DIR
+              value: "/models/current"
+            - name: WEIGHTS_REPO
+              value: "Qwen/Qwen3-Coder-Next-FP8"
+            - name: HF_ENDPOINT
+              value: "https://huggingface.co"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+          volumeMounts:
+            - name: weights
+              mountPath: /models/current
+            - name: weights-config
+              mountPath: /etc/model
+              readOnly: true
+            - name: fetcher
+              mountPath: /opt/weights
+              readOnly: true
+          resources:
+            requests:
+              cpu: "2"
+              memory: "2Gi"
+              # Explicit zero, not an omitted field. A GPU cluster space's
+              # LimitRange defaults a missing `nvidia.com/gpu` to the reserved
+              # count, so this container would ask for the card the engine needs
+              # and the pod would never schedule.
+              nvidia.com/gpu: "0"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+              nvidia.com/gpu: "0"
+      containers:
+        - name: vllm
+          image: docker.io/vllm/vllm-openai@sha256:0fec7ec5f3e6bc168e54899935fb0557da908a4832a1dbc88e2debcf2f889416
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--model"
+            - "/models/current"
+            - "--served-model-name"
+            - "qwen3-coder-next"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8000"
+            - "--max-model-len"
+            - "262144"
+            - "--gpu-memory-utilization"
+            - "0.9"
+            - "--dtype"
+            - "auto"
+            - "--quantization"
+            - "fp8"
+            - "--enable-auto-tool-choice"
+            - "--tool-call-parser"
+            - "qwen3_coder"
+          env:
+            # The key the engine demands on every `/v1` request, by reference.
+            # The engine's equivalent command-line flag is deliberately unused:
+            # arguments are rendered into the manifests and published in the
+            # evidence snapshot in clear (marketplace trap 4).
+            - name: VLLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: swarm-model-server
+                  key: api-key
+            # The init container decided what this deployment may serve. Offline
+            # mode is what stops the engine quietly fetching a file the manifest
+            # never named when something is missing or renamed.
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
+            # Caches, on the throwaway volume. The weights volume is the one
+            # whose contents are verified and pruned, so nothing else lives
+            # there; and the image's default cache paths are under a root home
+            # this pod should not be writing to.
+            - name: HOME
+              value: /cache
+            - name: HF_HOME
+              value: /cache/huggingface
+            - name: XDG_CACHE_HOME
+              value: /cache/xdg
+            - name: VLLM_CACHE_ROOT
+              value: /cache/vllm
+            - name: TRITON_CACHE_DIR
+              value: /cache/triton
+            - name: TORCHINDUCTOR_CACHE_DIR
+              value: /cache/inductor
+            # Telemetry off: this endpoint serves prompts inside an enclave and
+            # should not be reporting anything about itself to a third party.
+            - name: VLLM_NO_USAGE_STATS
+              value: "1"
+            - name: DO_NOT_TRACK
+              value: "1"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          # `/health` is outside the engine's authentication middleware, which is
+          # what makes it usable as a probe at all. It answers only once the
+          # model is loaded, and loading 29 GiB of weights and compiling the
+          # graphs takes minutes — hence a startup probe with room rather than a
+          # liveness probe that would restart the pod halfway through.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 180
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            - name: weights
+              mountPath: /models/current
+              readOnly: true
+            - name: cache
+              mountPath: /cache
+            - name: shm
+              mountPath: /dev/shm
+          resources:
+            requests:
+              cpu: "8"
+              memory: "48Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: "48Gi"
+              nvidia.com/gpu: "1"
+      volumes:
+        - name: weights
+          persistentVolumeClaim:
+            claimName: swarm-model-server-weights
+        - name: weights-config
+          configMap:
+            name: swarm-model-server-weights
+        - name: fetcher
+          configMap:
+            name: swarm-model-server-weights
+            items:
+              - key: fetch-weights.py
+                path: fetch-weights.py
+        - name: cache
+          emptyDir:
+            sizeLimit: 16Gi
+        # vLLM's workers talk over /dev/shm and the 64Mi default is not enough.
+        # Memory-backed, so this counts against the container's memory limit —
+        # `resources.memory` includes it.
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+---
+# Source: swarm-model-server/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: swarm-model-server
+  labels:
+    helm.sh/chart: swarm-model-server-0.2.0
+    app.kubernetes.io/name: swarm-model-server
+    app.kubernetes.io/instance: ms
+    app.kubernetes.io/version: "0.22.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: model-server
+  annotations:
+    swarm.io/exclude-evidence-fields: "/spec/rules/0/host"
+    nginx.ingress.kubernetes.io/proxy-body-size: 32m
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: "qwen-coder-next.models.example"
+      http:
+        paths:
+          - path: "/v1"
+            pathType: Prefix
+            backend:
+              service:
+                name: swarm-model-server
+                port:
+                  number: 8000

@@ -1,0 +1,7 @@
+# No built-in model selected (SUP-245): no Deployment, no Service, no volume —
+# even with the GPU switch left on, which is inert here because there is no pod
+# for it to reach.
+models: []
+gpu:
+  enabled: true
+  count: 1

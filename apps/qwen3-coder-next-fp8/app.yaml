@@ -1,0 +1,435 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: AppDefinition
+
+metadata:
+  name: qwen3-coder-next-fp8
+  title: Qwen3-Coder-Next (FP8)
+  description: Qwen3-Coder-Next in Qwen's own FP8 quantisation — an 80B hybrid-attention mixture of experts with 3B active parameters and a 262 144-token context, served on an authenticated, OpenAI-compatible endpoint whose deployment publishes signed evidence of the weights. Needs one H200 NVL to itself. Tool calling works.
+  version: "0.1.0"
+  category: ai-inference
+  sourceRepo: https://huggingface.co/Qwen/Qwen3-Coder-Next-FP8
+  license: Apache-2.0
+  tags:
+    - ai
+    - llm
+    - inference
+    - openai-compatible
+    - tool-calling
+    - code
+    - qwen
+    - fp8
+    - moe
+    - long-context
+    - attestation
+
+ui:
+  sections:
+    # Same shape as the 30B-A3B listing: one field above Advanced, and it arrives
+    # filled in. The difference is that this model's defaults are not a
+    # compromise — it takes the whole card, so the context length default is the
+    # model's own maximum rather than a fraction of it.
+    - id: access
+      title: Access
+      description: >-
+        Where the OpenAI-compatible API is served. This is the name that ends up in somebody
+        else's configuration: a client's `base_url`, or the Confidential Router's
+        "Add external model" field.
+      fields:
+        - parameterId: apiHostname
+          widget: hostname
+
+    - id: advanced
+      title: Advanced
+      description: >-
+        Every field below is answered. The key is generated and shown with the deployment's
+        outputs, the context length is the model's own maximum, and the GPU share is sized for
+        the one card this listing accepts. Open this to bring your own key, to trade context
+        length for concurrency, or to leave the engine less of the card — but note that the
+        weights alone are 74.9 GiB, so there is much less room to give away here than on a
+        smaller model.
+      fields:
+        - parameterId: apiKey
+          widget: password
+        - parameterId: maxModelLen
+          widget: select
+        - parameterId: gpuMemoryUtilization
+          widget: number
+
+parameters:
+  - id: apiHostname
+    type: string
+    title: API hostname
+    description: >-
+      Where `/v1` is served. Take the one offered and the DNS is written for you; bring your own
+      and point it at this cloud's gateway before publishing the deployment.
+    required: true
+    validation:
+      pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+
+  - id: apiKey
+    type: string
+    title: API key
+    description: >-
+      Demanded on every `/v1` request as `Authorization: Bearer …`. Generated if left blank and
+      shown below once this is deployed, together with a connection link that carries it. Letters
+      and digits only — the key travels inside a URL fragment, and punctuation there would split
+      the link on its own separators.
+    sensitive: true
+    generated: true
+    validation:
+      minLength: 32
+      pattern: "^[A-Za-z0-9]+$"
+
+  - id: maxModelLen
+    type: integer
+    title: Context length
+    description: >-
+      The longest prompt-plus-answer the endpoint accepts, and this model's own maximum is the
+      default. Its hybrid attention makes a long context unusually cheap: only 12 of the 48
+      layers keep a per-token KV cache, so a token costs 24 KiB rather than the 96 KiB a
+      full-attention model of this shape would — 6.0 GiB for one full-length 262 144-token
+      sequence, 1.5 GiB at 65 536. The other 36 layers hold a fixed-size recurrent state per
+      sequence that does not grow with length at all. A shorter context therefore buys less
+      concurrency here than elsewhere; the reason to lower it is a tighter GPU share, not speed.
+    default: 262144
+    options:
+      source:
+        type: static
+        values:
+          - value: 32768
+            label: "32 768 tokens"
+          - value: 65536
+            label: "65 536 tokens"
+          - value: 131072
+            label: "131 072 tokens"
+          - value: 262144
+            label: "262 144 tokens"
+
+  - id: gpuMemoryUtilization
+    type: number
+    title: Share of the GPU
+    description: >-
+      The fraction of the card the engine claims for weights and KV cache. A fraction of the
+      *whole* card: on the 140 GiB H200 NVL this listing requires, the default 0.90 is ~126 GiB,
+      of which 74.9 GiB is weights — so roughly 51 GiB is left for KV cache, about eight
+      full-length sequences at once. The floor is 0.6 rather than 0.2 because the weights alone
+      are 53% of the card and the engine refuses to start below them. Nothing else may hold the
+      card: the engine checks free memory at startup and declines rather than sharing.
+    default: 0.90
+    validation:
+      min: 0.6
+      max: 0.95
+
+resources:
+  # The cluster space quota, not a hint: it becomes the namespace's quota, and
+  # under-declared it evicts the heaviest pod and reads as "the app is broken".
+  #
+  # Derived from the 30B-A3B listing's measured figures rather than measured on
+  # this model — the deployment that measures it is a separate issue (SUP-330),
+  # and these numbers are the budget it will check, not a report of it. There,
+  # the container's cgroup peaked at 20.3 GiB serving 29.05 GiB of weights; the
+  # part of that which scales is the page cache pulled in by reading the
+  # weights, and this checkpoint is 2.6x larger. 48Gi plus the 2 GiB of
+  # memory-backed /dev/shm the engine's workers talk over is the budget, with
+  # the engine's own footprint unchanged — the resident set lives on the card,
+  # not in RAM.
+  #
+  # `storage` is the weights volume, which has to hold 74.89 GiB plus the
+  # `.part` file of whichever shard is being written; the chart's own floor is
+  # 82.4 GiB and refuses to render below it.
+  min:
+    cpu: "8"
+    memory: "48Gi"
+    storage: "100Gi"
+  recommended:
+    cpu: "16"
+    memory: "64Gi"
+    storage: "120Gi"
+  gpu:
+    # Not optional and not a switch. The engine's published image is a CUDA build
+    # and does not serve on a CPU; a deployment without a card starts, finds no
+    # device and restarts for ever.
+    required: true
+    minCount: 1
+    # 74.9 GiB of weights is 53% of an H200 NVL and more than the whole of an
+    # 80 GiB card, so unlike the 30B-A3B listing this one has no second option:
+    # a 94 GiB H100 NVL would hold the weights and ~10 GiB of KV cache, which is
+    # one and a half full-length requests. The floor is set to exclude it rather
+    # than to let it fail at startup.
+    minVram: "120Gi"
+    # nvidia-smi product names, which hw-measurement writes to
+    # device.swarm.io/gpu-product. Placement requires this exact string, so a
+    # different card of the same family needs its own entry.
+    types:
+      - NVIDIA H200 NVL
+
+components:
+  - name: engine
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: swarm-model-server
+      version: "0.2.0"
+    # The engine image, and the only image this deployment runs — it serves the
+    # model and, as an init container, fetches and hash-checks the weights. An
+    # unpinned reference would make the evidence digest uncomputable
+    # (specification 2.7).
+    #
+    # vLLM 0.22.0, the same digest the other listings in this family pin, and
+    # deliberately not newer: it already registers `Qwen3NextForCausalLM`
+    # (`vllm/model_executor/models/registry.py` at v0.22.0) and the
+    # `qwen3_coder` tool-call parser, while every build from 0.24.0 up either
+    # fails to import against this stand's CUDA 12.9 driver or — worse — starts,
+    # passes a readiness probe and returns fluent wrong answers. The measurements
+    # are in `charts/swarm-model-server/values.yaml`.
+    images:
+      - name: docker.io/vllm/vllm-openai
+        digest: sha256:0fec7ec5f3e6bc168e54899935fb0557da908a4832a1dbc88e2debcf2f889416
+    deployment:
+      values:
+        base:
+          hostname: "{{ params.apiHostname }}"
+          apiKey: "{{ params.apiKey }}"
+          persistence:
+            size: 100Gi
+          resources:
+            cpu: "8"
+            memory: 48Gi
+          model:
+            # The user-visible id, which is what a client asks for and what the
+            # Confidential Router registers. Shorter than the repository name on
+            # purpose: it is typed into configuration by people.
+            id: qwen3-coder-next
+            maxModelLen: "{{ params.maxModelLen }}"
+            gpuMemoryUtilization: "{{ params.gpuMemoryUtilization }}"
+            toolCalling:
+              enabled: true
+              parser: qwen3_coder
+            # The checkpoint's chat template emits Qwen3-Coder's XML tool format
+            # (`<tool_call><function=…><parameter=…>`), which is what this parser
+            # reads — the same format and the same parser as the 30B-A3B listing,
+            # verified against `chat_template.jinja` at the pinned revision.
+
+            # The checkpoint carries its own `quantization_config` (fp8 e4m3,
+            # dynamic activations, 128x128 weight blocks, with the embeddings,
+            # the router gates and the linear-attention convolutions left in
+            # bf16), so this names what is already there rather than asking for
+            # a conversion.
+            quantization: fp8
+
+            # ---------------------------------------------------------------
+            # The weights, pinned file by file.
+            #
+            # This block is rendered into a ConfigMap, so it is part of what the
+            # cloud digests and signs: the bytes this deployment serves are
+            # named, by sha256, inside its published evidence. An init container
+            # downloads each file, hashes it while writing, and refuses to let
+            # the engine start on any mismatch.
+            #
+            # Regenerate with:
+            #   scripts/model-weights-manifest.py Qwen/Qwen3-Coder-Next-FP8
+            # ---------------------------------------------------------------
+            weights:
+              repo: Qwen/Qwen3-Coder-Next-FP8
+              revision: da6e2ed27304dd39abadd9c82ef50e8de67bdd4c
+              totalBytes: 80407722953
+              files:
+                - path: chat_template.jinja
+                  size: 6068
+                  sha256: c79a833039a43602150cce0902403d6e376c50930c1b2a139b2964e1f0c322a0
+                - path: config.json
+                  size: 9836
+                  sha256: 8756acedd5ae0df36b2d6d774c87e30b422c3f4988015aa0b7e6c32f21769cdf
+                - path: generation_config.json
+                  size: 214
+                  sha256: 37a3c1ef63516ca489c575f0db1c0405ddc0c3dbaca9ed987344c966c37aeef5
+                - path: merges.txt
+                  size: 1671839
+                  sha256: 599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3
+                - path: model-00001-of-00040.safetensors
+                  size: 2313917472
+                  sha256: 81fc8306344bb5d37b3a1d6c267fb7b0f2cf05ecb05cd065016aab87e6a55a33
+                - path: model-00002-of-00040.safetensors
+                  size: 2001731528
+                  sha256: 7c1eb3b175b9122bf28e64dca9dac63696c229bd6e0ced2351a4e2c414aa33af
+                - path: model-00003-of-00040.safetensors
+                  size: 2001406544
+                  sha256: 62c034d5f7b21b25cc2497a9cebfbebbda500d0d3a9b08381d476c481dc2df5b
+                - path: model-00004-of-00040.safetensors
+                  size: 2001732024
+                  sha256: 879eaa1ce8ba3b7c3e48c24deb039a9972bcb724f790945a916003efd4312616
+                - path: model-00005-of-00040.safetensors
+                  size: 2001732960
+                  sha256: 785259af0e3e7959d48360927f9556f1b636a5d800dcbc8d2a11c295b9caab4f
+                - path: model-00006-of-00040.safetensors
+                  size: 2002790192
+                  sha256: 79c183f8388e35516509d9488c2e6a6f0aaafc1ff5a3c8b1c872d5d23622c385
+                - path: model-00007-of-00040.safetensors
+                  size: 2001731792
+                  sha256: 5b33fd40d09ef4ddd75ac342c6661a3658e26d1b3ca7e38d0774a0b9d235c73a
+                - path: model-00008-of-00040.safetensors
+                  size: 2001731960
+                  sha256: 3993df6622752249b565409a8c339f933e2bc326d432c75385ade37f74c18257
+                - path: model-00009-of-00040.safetensors
+                  size: 2001737552
+                  sha256: 074c68c97085550d3746cc6fb0e0ec74ee634c09c9bd59a9d1abb099e251ae89
+                - path: model-00010-of-00040.safetensors
+                  size: 2001411064
+                  sha256: 9ff4156992002e43012eabf9f0c7dcc7c9e7060d124af9ac188461aa4f93ef0d
+                - path: model-00011-of-00040.safetensors
+                  size: 2003119416
+                  sha256: 7a94ef41eabb382b138e781ac0f6054e649ee6e9583298e0b84a0dd75f4d4f97
+                - path: model-00012-of-00040.safetensors
+                  size: 2001735720
+                  sha256: 185b7d1bfc64adfa9076918c56b77391d589e99d254c84b281fd79c8a2b8b98d
+                - path: model-00013-of-00040.safetensors
+                  size: 2001410320
+                  sha256: f2a2457629e7b1c5264aa0a3b9304aab17e5fc9781d7267677ec7aa19273dc9d
+                - path: model-00014-of-00040.safetensors
+                  size: 2001736280
+                  sha256: 88fd3310606c521c8553ee83ad84c0b82eec892818029e1db6d99ba45a300478
+                - path: model-00015-of-00040.safetensors
+                  size: 2003119368
+                  sha256: c98a491d0e3295f39a0bca7bdf9833255c544e9302b4d3d15d1146d90c024aad
+                - path: model-00016-of-00040.safetensors
+                  size: 2001409888
+                  sha256: ddfb0d48974186fd19a54c4ae5cc354151d8346528adb5184b8fa2b26bade09b
+                - path: model-00017-of-00040.safetensors
+                  size: 2001735720
+                  sha256: 87963822288f82be220324a4bf3a0f93b60ae5b0ffec858bf443589fae11118e
+                - path: model-00018-of-00040.safetensors
+                  size: 2001735784
+                  sha256: f81bca32c73a477483552e472fb05ebff3f47a32c23f6ffbb46f8b5a9d40074d
+                - path: model-00019-of-00040.safetensors
+                  size: 2001736712
+                  sha256: 0f9a7b626201b4a3f3a6273d1355b6af0b01039c185302421f3be2ceac3011a7
+                - path: model-00020-of-00040.safetensors
+                  size: 2002792760
+                  sha256: 20b837e2920bd389b1f4da9a147691bd87daea509e6b19514000b43fe9543bfc
+                - path: model-00021-of-00040.safetensors
+                  size: 2001735552
+                  sha256: e5ae0ae4f8a7d4df1b091d0042bfe3eb30cf6fbdbdf214597e830d8791031b4e
+                - path: model-00022-of-00040.safetensors
+                  size: 2001735720
+                  sha256: b141f2a16a1216c332cb2efdf842a9512fd190b4dccf7223c93bc1a2c44bcb87
+                - path: model-00023-of-00040.safetensors
+                  size: 2001410368
+                  sha256: a27074531ffc6f64232a473a523f65d8de1a6172b4de09c0578a9ad08717171c
+                - path: model-00024-of-00040.safetensors
+                  size: 2001737192
+                  sha256: 24a04b08e9c736a14b13a2929d49ec48d13b1946ea997101cde853764a94eb21
+                - path: model-00025-of-00040.safetensors
+                  size: 2003119408
+                  sha256: 50ed4184a0f85b89ce4b4f7ec0f5062c1ef281c0eda3f00f1f48e4707d567b98
+                - path: model-00026-of-00040.safetensors
+                  size: 2001410328
+                  sha256: 95f5114fe6e7e3bc997c13d913c67b45adec715fc6ae6e4fe6fcabca743686f5
+                - path: model-00027-of-00040.safetensors
+                  size: 2001735720
+                  sha256: 1d403f9008dfec3c99d45e3bc5a75630b68c50a5b701d3e7016cd678b7f16e11
+                - path: model-00028-of-00040.safetensors
+                  size: 2001736272
+                  sha256: 35a968fef6f36d50cab8a43ee4d824023466a992a025a4d6ab1d48ce17dd22de
+                - path: model-00029-of-00040.safetensors
+                  size: 2002793952
+                  sha256: 82f9a8ae7e2936360a0b114bdfb01469fd466287749c8ea404aede06384f459f
+                - path: model-00030-of-00040.safetensors
+                  size: 2001735296
+                  sha256: ce9c6ca2e0c57f86b4ec98a2725f6f38d5886af94d4951fce282ce0b3b3c1dec
+                - path: model-00031-of-00040.safetensors
+                  size: 2001735720
+                  sha256: 69e0054fffd16d7f7ef743d6db5a50efcdb3981092229c81ad0f44bd16183704
+                - path: model-00032-of-00040.safetensors
+                  size: 2001735784
+                  sha256: b59cc011d44011b7814ad764470ea7dc54846ec4404751ed3421f3155503154c
+                - path: model-00033-of-00040.safetensors
+                  size: 2001410816
+                  sha256: dfdac2e0770457ed5b49b7e9cf498c91a784c61ba13646f92e7dade7a6a3c636
+                - path: model-00034-of-00040.safetensors
+                  size: 2003119328
+                  sha256: 3dc60cb85567bf1d1f1e7e6f5e5a34e42d5e4e5e4983ac12d1aee1b899b84e69
+                - path: model-00035-of-00040.safetensors
+                  size: 2001735544
+                  sha256: 6a302b467f63f704626f7ca5cb528e395002fc64718d8d77c65a1d197f9b2275
+                - path: model-00036-of-00040.safetensors
+                  size: 2001410328
+                  sha256: 093fb4c1cc509039c693d60f0c73ef32756f15769dad7d5f9b0a94796b64263b
+                - path: model-00037-of-00040.safetensors
+                  size: 2001735824
+                  sha256: 859ba58bd90503512f9d4c9bbc7765b6de69774d8337daf70edf43ebba69dbc5
+                - path: model-00038-of-00040.safetensors
+                  size: 2001737184
+                  sha256: 8ab001453b89e4312ea0ee5191e0da4012f9e770946fb7884788cec5b98428a9
+                - path: model-00039-of-00040.safetensors
+                  size: 2002794000
+                  sha256: 4beb85e677e9e2982b7e5b1371151a31ef679ecc715257897c88982441692cad
+                - path: model-00040-of-00040.safetensors
+                  size: 1994375208
+                  sha256: 9db4ee4a0f2aa63f3fdb981bdccd7f933ae5ce4305257e4755fd4a097a12afb8
+                - path: model.safetensors.index.json
+                  size: 14819483
+                  sha256: 0ac9834aa1e30eb60d921d25e1755f97e92dfd47cf74ac2613e474243adcc4cf
+                - path: tokenizer.json
+                  size: 7032399
+                  sha256: 19564a48c4f71a2a1b937cce34c737a1e662b171c5f5d7edf641a15cd896f07d
+                - path: tokenizer_config.json
+                  size: 11681
+                  sha256: fc76878832c668e3f0f8be66e6239a475b9093d2fe5cef97c242369779e6c6e6
+                - path: vocab.json
+                  size: 2776833
+                  sha256: ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910
+
+outputs:
+  - id: baseUrl
+    title: OpenAI base URL
+    type: url
+    value: "https://{{ params.apiHostname }}/v1"
+
+  - id: modelId
+    title: Model
+    type: string
+    value: "qwen3-coder-next"
+
+  - id: connectionLink
+    title: Connection link
+    # `secret`, because this is a credential with a URL wrapped around it. The
+    # key is in the fragment and not the query on purpose: a fragment is never
+    # sent to a server, so it is not in an access log, a proxy log or a Referer
+    # header. Format: docs/model-connection-link.md.
+    type: secret
+    value: "https://{{ params.apiHostname }}/v1#key={{ params.apiKey }}&model=qwen3-coder-next"
+
+  - id: apiKey
+    title: API key
+    type: secret
+    value: "{{ params.apiKey }}"
+
+  - id: toolCalling
+    title: Tool calling
+    type: string
+    value: >-
+      Tool calling works. Send `tools` with `tool_choice: "auto"` and you get back a `tool_calls` entry; the engine parses Qwen3-Coder's XML tool format (`--tool-call-parser qwen3_coder`). A named `tool_choice` works too.
+
+  - id: evidenceBundle
+    title: Published evidence
+    type: url
+    value: "https://{{ params.apiHostname }}/.well-known/swarm-evidence"
+
+  - id: registerWithRouter
+    title: Register this with a Confidential Router
+    type: string
+    value: "Copy the connection link above into the router's admin section, \"Add external model\". The router fetches this deployment's evidence, checks its measurement against its own trust list, pins the TLS certificate the evidence names, and only then proxies a request — so what it serves is attested, not asserted."
+
+evidence:
+  # The hostname is the one field that differs between two deployments of this
+  # listing, and excluding it is what makes the digest a property of the version
+  # rather than of the deployment. Declared here as well as in the chart's own
+  # annotation, because the listing page shows only what the definition declares
+  # — a digest displayed beside "no exclusions" answers the only question that
+  # matters about it wrongly.
+  exclude:
+    - match:
+        kind: Ingress
+        name: swarm-model-server
+      fields:
+        - /spec/rules/0/host

@@ -29,10 +29,10 @@ image: confluentinc/cp-server:8.3.1
 
 resources:
   requests:
-    cpu: 50m
+    cpu: 100m
     memory: 768Mi
     nvidia.com/gpu: "0"
   limits:
-    cpu: 50m
+    cpu: 100m
     memory: 768Mi
     nvidia.com/gpu: "0"

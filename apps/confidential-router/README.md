@@ -24,18 +24,24 @@ surface, no "verified" badge, no registry of who attested it and no record that 
 question belongs to whoever is about to send a prompt, and it is answered on their machine:
 
 ```bash
-gatekeeper endpoint add router --listen 127.0.0.1:8443 --upstream https://<API hostname>
+gatekeeper init                              # writes the config, and prints where
+gatekeeper endpoint add router --upstream https://<API hostname> --listen 127.0.0.1:8787
 gatekeeper endpoint discover router          # read what the endpoint publishes
 gatekeeper endpoint trust add router --from-upstream   # pin it, after review
 gatekeeper run
 ```
+
+`init` is not optional and was missing from this block: without it every other
+command exits 4 with "no configuration at …". Each step now prints the next one,
+and the path it writes — the configuration directory is the OS's own, so no
+instruction here can name it in advance (SUP-300).
 
 The [Gatekeeper](https://github.com/Super-Protocol/confidential-router) is a forward proxy that
 runs on the client's own machine. It fetches the published bundle, checks the signature chain
 against the clouds its operator trusts, matches it against the digests they pinned, and only then
 lets traffic through — re-checking in the background and failing closed when a snapshot goes stale.
 The router never learns whether, when, or by whom this happened. The client's base URL becomes
-`http://127.0.0.1:8443/v1` and nothing else about the integration changes.
+`http://127.0.0.1:8787/v1` and nothing else about the integration changes.
 
 Pinning is always explicit. `--from-upstream` prints the full report and asks before it writes;
 there is no trust-on-first-use anywhere in this product.
@@ -49,11 +55,20 @@ origins allowed to call it, the checkout return URL, the campaign landing origin
 origin the console fetches from. They live in ConfigMaps of their own, named in the listing's
 `evidence.exclude` block and annotated on the objects that carry them.
 
+Left out for a different reason, and worth saying plainly: **your own email address is not in the
+snapshot.** The marketplace hands this deployment the address of the account deploying it — it is
+who the first administrator account is created for and who may read the campaign numbers — and both
+copies of it travel to the pod sealed, out of a Secret whose values the platform strips before it
+signs anything. Until chart 0.8.0 one of the two was a plain value in the container's environment,
+which published it to anyone who fetched the bundle and made the digest a property of who deployed
+this listing rather than of its version (SUP-241).
+
 That is a deliberate trade and it runs one way only: *where* this deployment answers is not
 attested, *what* it is configured to do is. The reason is that a digest containing the hostname
 would be a digest of one deployment — nobody else could ever reproduce it, and a pinned value would
-admit exactly one endpoint. With them out, two deployments of the same listing version attest the
-same snapshot, which is what makes a published digest worth comparing against at all.
+admit exactly one endpoint. With them out — and with the deployer out — two deployments of the same
+listing version attest the same snapshot, which is what makes a published digest worth comparing
+against at all.
 
 ## What runs
 
@@ -63,7 +78,7 @@ Four components, in this order:
 | ----------- | --------------------------------------------------------------------------- | --------- |
 | `ollama`    | the model server, holding the weights you selected                          | no        |
 | `litellm`   | an OpenAI-compatible face on Ollama, keyed so only the router may call it   | no        |
-| `router-api`| `/v1` for clients, `/graphql` and `/auth` for the console, plus PostgreSQL  | API hostname |
+| `router-api`| `/v1` for clients, `/graphql` and `/auth` for the console, plus PostgreSQL and the attesting egress | API hostname |
 | `router-ui` | the console                                                                 | console hostname |
 
 Only the last two are reachable from outside the cluster space. An Ollama endpoint has no
@@ -93,6 +108,44 @@ left to re-sync from — which is why an image update of a swarm cloud has to ro
 And it does not make a deployment whose nodes are all on one physical machine survive that machine:
 replication across three cVMs on one host is not three hosts.
 
+### Models in other deployments, attested before anything is sent to them
+
+An administrator can register a model endpoint that lives somewhere else — another deployment of
+this listing, another swarm cloud — and it appears in `/v1/models` and in the console beside the
+local ones, at a price they set. Nothing is proxied to it until it has been verified.
+
+The verification is the Gatekeeper's own core, running as a second container in the API pod. It is
+the same binary a client runs on their own machine, which is the point: the check this deployment
+performs on an upstream and the check a user performs on this deployment cannot drift apart,
+because there is only one implementation of it. For each registered endpoint it fetches the
+upstream's evidence, verifies the signature chain and the hardware report, requires the
+measurement to be on a trust list the administrator maintains, binds the observed TLS leaf to the
+evidence, and from then on connects to that pinned certificate only — never to the global CA
+bundle. It re-verifies every ten minutes, immediately on a certificate that does not match the
+pin, and immediately after an edit to the trust list.
+
+**Fail-closed, in both halves.** A failed check drops the model out of `/v1/models` and refuses
+routing to it; a request that was in flight when a verdict was withdrawn ends with
+`attestation_revoked`. The API refuses before it opens a connection and the egress refuses again
+one hop later — two independent refusals for one rule, in two processes.
+
+A measurement admits a *cloud*, not a deployment: it says what kind of confidential VM answered,
+not which one. That is weaker than the digest pin a user puts on this router, and it is the trade
+the trust list makes deliberately — the alternative is approving every upstream deployment by hand.
+The endpoint's own published evidence is fetched and shown beside the verdict, informational and
+never gating.
+
+**The upstream's API key** is whatever credential that endpoint expects, entered once at
+registration and sealed with AES-256 under a key the marketplace generates and keeps in a Secret —
+so the plaintext is absent from SQL, from a database dump and from the log. It is never rendered
+back; rotating it is a new write. Rotating the sealing key makes every stored upstream key
+unreadable, and they are entered again rather than recovered.
+
+None of this is a chart value. Endpoints and trusted measurements are registered at run time in
+the console's admin section, which is what keeps the deployment's attested snapshot the same for
+everybody: two deployments of this listing version still publish the same digest, however
+differently they are configured afterwards.
+
 ## Prerequisites
 
 - **Two hostnames**, one for the console and one for the API. Take the ones offered and the DNS is
@@ -107,7 +160,7 @@ replication across three cVMs on one host is not three hosts.
   `postgresql.replicaCount` lowered, and then it is a database that does not survive its node.
 - **Nothing to authenticate against a registry.** `ghcr.io/super-protocol/confidential-router/*` is
   a public package; a cluster that can reach ghcr.io can pull it.
-- **Quota** as declared: 5 CPU / 14 GB / 60 GB at minimum, 9 CPU / 26 GB / 120 GB recommended. The
+- **Quota** as declared, unchanged by this version: 5 CPU / 14 GB / 60 GB at minimum, 9 CPU / 26 GB / 120 GB recommended. The
   model server has no memory limit of its own and grows with the number of models kept resident.
   The declared storage covers the default volumes — 30 GB of models and **three** 8 GB database
   volumes, because the database is three instances holding a copy each; choosing larger ones is a
@@ -147,7 +200,8 @@ The form is five sections, and only the first three are on the way to Deploy:
 | Campaign | Only invited people can create an account | Off. An invitation then decides whether $100 comes with an account, not whether the account can exist. |
 | Advanced | Model storage, Database storage | 30 GB and 8 GB, sized for all five models and an evaluation's worth of metering. The database size is per instance, and there are three. |
 | Advanced | First sign-in token | Generated, and shown once with the deployment's outputs. Set one to bring your own. |
-| Advanced | Allow sign-up with a password | On. It is what lets a second person in, since this deployment cannot send an invitation. |
+| Mail | Mail provider | `None`. People sign in with a code mailed to their address, so until a provider is set only the administrator can sign in, with the first-sign-in token. |
+| Advanced | Stay signed in for, days | 90. How long a browser stays signed in without visiting. |
 | Advanced | Billing, Stripe keys, Resend key, Sender address | No purchases. The rest appear only if you switch to Stripe. |
 
 Nothing above Advanced has to be typed: a deployment reaches Deploy on the offered hostnames and
@@ -181,7 +235,7 @@ published inside the evidence bundle and readable by anyone.
 **Only invited people can create an account** is the switch that turns a campaign into a closed
 launch. Off, this deployment's sign-up is open and a code only decides whether the $100 comes with
 the account — a wrong or spent code costs the credit and never the registration. On, the code
-decides whether the account exists: every sign-up path — password, magic link, an OAuth callback —
+decides whether the account exists: every sign-up path — emailed code, an OAuth callback —
 is refused, before anything is created, unless the request carries a code that is valid and has not
 been redeemed. The visitor is told which of three it was: no code at all, already claimed, or
 expired-or-unknown, that last one deliberately merging "withdrawn" and "never issued" so the
@@ -201,29 +255,65 @@ readable by more than one person, they read them through that account.
 
 ## Signing in
 
-This deployment has no mailbox and no OAuth application, so nobody here is ever *invited*. Two
-paths replace that, and both work with nothing but the cluster:
+There are no passwords. A person signs in with a **one-time code mailed to their address**, and the
+same step creates the account the first time — so who can sign in at all depends on whether this
+deployment can send mail.
 
-**The first account is claimed.** The marketplace generates a first-sign-in token, shows it once
-with the deployment's outputs, and the console trades it plus your own address for the
-administrator account — the outputs name the exact address it was created for. From that moment
-the endpoint that accepts it returns 404. Claim the deployment before you publish its hostname:
-the token is spent by the *first* account, whoever creates it.
+**The first account is claimed with a token.** The marketplace generates a first-sign-in token, shows
+it with the deployment's outputs, and the console trades it for the administrator account. That
+account is created for *Administrator email* when it is set, and otherwise for the address of the
+marketplace account that deployed this. The administrator signs in with a code mailed to that
+address from then on, so set *Administrator email* whenever the deploying account's address is not
+a mailbox somebody reads. Claim the deployment before you publish its hostname.
 
-**Everyone after that signs up.** `https://<console hostname>/signup` takes an email address and a
-password, and answers with a session — there is nothing to deliver and nothing to verify. Each
-account arrives with its own empty workspace and no credit; it can read nobody else's keys,
-generations or balance. What it does mean is that **anyone who can reach the console can create an
-account** — unless *Only invited people can create an account* is on, which is what a closed launch
-wants; otherwise switch *Allow sign-up with a password* off in Advanced where open registration is
-not what you want. Switching it off leaves the administrator's own way back in as a magic link written to the
-API log, which is where sign-in links went before this existed — or as real mail, on a Stripe
-deployment, since that one configures Resend.
+**The token stays the administrator's key.** After the claim it signs back into that one account and
+no other. That is what gets the administrator in whenever a code cannot be mailed — before a mail
+provider is set, or while the mail server is down — so keep it like a password. It creates nothing
+and opens nobody else's account.
 
-**There is no password reset**, either way round. Sending one is the mail delivery this deployment
-exists without; an administrator can create a fresh account, and a lost one is a lost workspace.
-Magic-link and OAuth sign-in are still there for a deployment that configures a Resend key or a
-GitHub/Google application — but neither is needed to use this one.
+**Everyone else needs a mail provider.** With *Mail provider* left at `None`, nobody can be mailed a
+code: the deployment is first-sign-in-token-only, which is enough to evaluate it alone and nothing
+more. Set a provider (next section) and `https://<console hostname>/signup` takes an email address
+and the six-digit code mailed to it. The code works once and expires in ten minutes. Each account
+arrives with its own empty workspace and the sign-up credit; it can read nobody else's keys,
+generations or balance. **Anyone who can reach the console can then create an account** — unless
+*Only invited people can create an account* is on, which is what a closed launch wants: a new
+address then needs a valid, unredeemed invitation *and* the mailed code, and an existing account
+needs only the code.
+
+**People stay signed in for 90 days** without visiting (*Stay signed in for, days*); every visit
+starts the count again.
+
+Upgrading from a version that had passwords: the stored password hashes are deleted, accounts are
+untouched, and each address signs in with a mailed code from then on. Make sure the administrator's
+address is a mailbox somebody reads.
+
+## Mail
+
+Off by default, and the difference between a deployment one person can use and one anybody can.
+*Mail provider* is `None`, `SMTP` or `Resend`. With one set:
+
+- anyone signs in, and signs up, with a one-time code mailed to their address — requests answer the
+  same whether or not the address has an account, and are rate-limited;
+- every new account gets a welcome email (Super Protocol logo, the console address, the credit it
+  started with).
+
+**Deliverability is yours.** Mail reaches inboxes only if the sender address's domain publishes SPF
+and DKIM records covering the server that sends it (for Resend, a domain verified there). That is
+DNS this deployment cannot write. The sender has to be changed from its `.local` default, which no
+server delivers from — the deployment refuses it.
+
+**Test it once it is deployed.** Ask for a sign-in code for an address you can read: a code that
+arrives is the proof that mail leaves this cloud. The API does check the SMTP server at start-up and
+records every failed send — `unreachable` (a cluster space admits outbound connections to public
+addresses only, and some clouds block port 25) or `auth_failed` — but only in its own health report
+and log, and a published deployment exposes neither. While mail is failing nobody receives a code,
+and the administrator signs in with the first-sign-in token.
+
+**Nothing about it is attested.** Every mail setting — the provider included — reaches the API out
+of the deployment's Secret, so two deployments of one version that differ only in their mail setup
+publish the same evidence digest, and the SMTP password is in no log, configuration or snapshot.
+Reconfiguring them restarts the API: the pod template carries a hash of the mail settings, excluded from the snapshot like the hostname hash.
 
 ## Billing
 
@@ -237,8 +327,8 @@ reach: this listing's previous default shipped a working, unbounded, free-credit
 account holder of a public deployment (SUP-167). The chart refuses to render it and there is no form
 field for it.
 
-**Stripe** takes real payments. A Resend API key and a sender address are part of the same choice,
-not extras, and the render refuses without them: the container runs in production mode, where a
+**Stripe** takes real payments. With no mail provider chosen, a Resend API key and a sender address
+are part of the same choice, not extras, and the render refuses without them: the container runs in production mode, where a
 sign-in link written to the container log would be a sign-in link for anyone who can read logs. Point
 a Stripe webhook at `https://<API hostname>/billing`, or a completed payment never becomes credit.
 
@@ -253,3 +343,8 @@ image never has to change for it.
 Every image is pinned by digest, so what the definition says and what the cluster pulls are the
 same thing, and the evidence a deployment publishes is computable from the listing before anything
 is deployed.
+
+**Moving to 0.12.0 is a re-pin rollout.** The attesting egress is a new container in the API pod,
+so this version's snapshot is not the previous version's. Anyone who pinned a digest of 0.11.0
+pins both digests, deploys, and then removes the old one — the pattern ADR-003 §3 pre-approves for
+exactly this. Nothing a client sends changes; the base URL, the keys and the models are the same.

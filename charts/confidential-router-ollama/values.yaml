@@ -1,0 +1,44 @@
+# Pinned by digest for the reason every image in this repository is: the
+# deployment's evidence names what is running, and only a digest survives a moved
+# tag (marketplace spec §2.7). `tag` is used only when `digest` is emptied for a
+# local build, and records which tag the digest was resolved from.
+image:
+  repository: ollama/ollama
+  digest: sha256:2a6e883b917fc543389599dae79918f5cac9e1438890506982f44aa4f5625d01
+  tag: "0.35.0"
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+# The models to pull on first start and keep on the volume: the same plain list of
+# Ollama model names the confidential-router-api and confidential-router-litellm
+# charts take, in the listing's multiselect order.
+#
+# Empty is a configuration, not a mistake: the deployment serves external
+# endpoints only, and this chart renders no Deployment, no Service and no volume —
+# one ConfigMap saying so, because a marketplace component has to render at least
+# one object for the cloud to accept the bundle.
+models: []
+
+gpu:
+  # A device request without the runtime class leaves the pod Pending for ever
+  # rather than falling back to CPU, so this one switch sets both.
+  enabled: false
+  count: 1
+
+# ClusterIP and nothing else. An Ollama endpoint has no authentication of its own;
+# everything that reaches it goes through the proxy and then the router.
+service:
+  port: 11434
+
+persistence:
+  size: 30Gi
+
+# Equal requests and limits, on or above the cluster space's LimitRange floor
+# (SUP-238). `nvidia.com/gpu` is set by the template — zero without a GPU, the
+# count with one — because a GPU cluster space's LimitRange defaults a missing
+# one to the reserved count.
+resources:
+  cpu: "2"
+  memory: 4Gi

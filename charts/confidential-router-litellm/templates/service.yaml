@@ -1,3 +1,4 @@
+{{- if include "confidential-router-litellm.selectedModels" . | fromJsonArray }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -13,3 +14,4 @@ spec:
       protocol: TCP
   selector:
     {{- include "confidential-router-litellm.selectorLabels" . | nindent 4 }}
+{{- end }}

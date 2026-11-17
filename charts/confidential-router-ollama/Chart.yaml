@@ -1,0 +1,17 @@
+apiVersion: v2
+name: confidential-router-ollama
+description: The Ollama model server behind the Confidential Router's built-in models — rendered only when at least one is selected.
+type: application
+# Ours rather than otwld's `ollama` chart, which the listing deployed up to 0.12.x,
+# for one reason: a router serving only external endpoints (ADR-008) has to be able
+# to deploy no model server at all, and a marketplace component cannot be skipped —
+# the specification has no `when:` on a component and forbids an array parameter
+# in any condition (§7.4). So the decision moves into the chart, which reads the
+# selection itself: an empty `models` list renders no workload (SUP-245).
+#
+# What it renders with a selection is the vendor chart's render at 1.85.0, as the
+# listing configured it, minus the parts nothing used: the ServiceAccount (the pod
+# never talks to the Kubernetes API, so it no longer gets a token for it) and the
+# `helm test` Pod the marketplace never runs.
+version: 0.1.0
+appVersion: "0.35.0"
