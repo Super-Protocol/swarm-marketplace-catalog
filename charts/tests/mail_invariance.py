@@ -14,8 +14,12 @@ exclusions. This one is stricter on purpose: there is no reason for any part of 
 setup to reach an attested object at all, so the only acceptable answer is "no
 difference".
 
-It also checks the other half of the promise: the SMTP password and the Resend key reach
-the Secret, and appear in no other rendered object.
+It also checks the other half of the promise: the SMTP password, the Resend key and the
+provider's webhook signing secret reach the Secret, and appear in no other rendered
+object. The webhook secret is set in every sending shape, SMTP included, because that
+is where it is easiest to get wrong: production sends through Resend's SMTP relay and
+the delivery notifications are the mail account's, so a secret rendered only under
+`provider: resend` would be missing on exactly the deployment that needs it (SUP-553).
 
     charts/tests/mail_invariance.py charts/tests/cases/api-external-only.yaml
 """
@@ -33,6 +37,7 @@ MAIL_CHECKSUM = "/spec/template/metadata/annotations/checksum~1mail"
 
 SMTP_PASSWORD = "golden-smtp-password-not-a-real-one"
 RESEND_KEY = "re_golden_mail_not_a_real_key"
+WEBHOOK_SECRET = "whsec_golden_mail_not_a_real_webhook_secret"
 
 SHAPES = {
     "no mail": [],
@@ -45,6 +50,7 @@ SHAPES = {
         "mail.smtp.security=starttls",
         "mail.smtp.user=mailer@mail-a.example",
         f"mail.smtp.password={SMTP_PASSWORD}",
+        f"mail.webhookSecret={WEBHOOK_SECRET}",
     ],
     "smtp elsewhere": [
         "mail.provider=smtp",
@@ -54,11 +60,13 @@ SHAPES = {
         "mail.smtp.security=tls",
         "mail.smtp.user=other@mail-b.example",
         "mail.smtp.password=a-different-password",
+        f"mail.webhookSecret={WEBHOOK_SECRET}",
     ],
     "resend": [
         "mail.provider=resend",
         "mail.from=no-reply@mail-c.example",
         f"mail.resendApiKey={RESEND_KEY}",
+        f"mail.webhookSecret={WEBHOOK_SECRET}",
     ],
 }
 
@@ -101,7 +109,7 @@ def main(values: str) -> int:
                     failures += 1
 
         # Every credential in the Secret, and in nothing else.
-        for credential in (SMTP_PASSWORD, RESEND_KEY):
+        for credential in (SMTP_PASSWORD, RESEND_KEY, WEBHOOK_SECRET):
             if credential not in " ".join(overrides):
                 continue
             holders = [

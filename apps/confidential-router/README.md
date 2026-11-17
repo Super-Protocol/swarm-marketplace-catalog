@@ -310,6 +310,16 @@ addresses only, and some clouds block port 25) or `auth_failed` — but only in 
 and log, and a published deployment exposes neither. While mail is failing nobody receives a code,
 and the administrator signs in with the first-sign-in token.
 
+**Hear what the provider did with a message.** A relay accepts a message and can still discard it —
+most often because the address is on the provider's suppression list from an earlier bounce. Register
+a webhook endpoint at `https://<API hostname>/v1/webhooks/resend` in the provider's dashboard,
+subscribe it to the bounce, complaint, suppression and failure events, and paste the `whsec_…`
+signing secret it shows into *Mail webhook signing secret*. The deployment then counts the addresses
+it cannot reach on `/admin/health`, logs each one, and tells the person waiting for a code that it was
+rejected instead of asking them to check their spam folder. Needed with Resend's SMTP relay as much
+as with its API — the notifications belong to the mail account, not to the transport. Left empty, the
+endpoint answers 404 and a discarded message is indistinguishable from one still in flight.
+
 **Nothing about it is attested.** Every mail setting — the provider included — reaches the API out
 of the deployment's Secret, so two deployments of one version that differ only in their mail setup
 publish the same evidence digest, and the SMTP password is in no log, configuration or snapshot.

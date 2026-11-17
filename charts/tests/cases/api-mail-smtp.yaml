@@ -1,6 +1,11 @@
 # The listing with SMTP configured (SUP-269): sign-in by emailed code, no built-in model,
 # and every mail value set. What the golden pins is where each one lands — all of
 # them in the Secret, and the env list identical to a deployment with no mail.
+#
+# `mail.webhookSecret` is set here, on an SMTP provider, deliberately (SUP-553):
+# production sends through Resend's SMTP relay and the delivery notifications are
+# the mail account's, so this golden is where "the webhook secret is written for a
+# provider that is not `resend`" is pinned.
 apiHostname: api.confidential-router.example
 consoleHostname: console.confidential-router.example
 auth:
@@ -19,6 +24,7 @@ mail:
   from: no-reply@confidential-router.example
   fromName: Confidential Router
   replyTo: support@confidential-router.example
+  webhookSecret: whsec_golden_test_not_a_real_webhook_secret
   smtp:
     host: smtp.confidential-router.example
     port: 587

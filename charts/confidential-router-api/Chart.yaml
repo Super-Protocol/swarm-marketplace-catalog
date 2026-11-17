@@ -430,7 +430,42 @@ type: application
 # SUP-537 train named: it shipped the binary's half of SUP-583 and left the
 # probe to 0.14.0, so a wedged sidecar has been caught by `expireVerdict` in
 # the API and by nothing that could restart the container.
-version: 0.14.0
+# 0.15.0 (SUP-553) adds `mail.webhookSecret`, written to the Secret as
+# `mail-webhook-secret` and read as `CR_API_MAIL__WEBHOOK_SECRET`. It is the
+# Svix signing secret the mail provider shows when a webhook endpoint is created
+# (`whsec_…`), and it is the key that turns SUP-551 from code into a working
+# feature.
+#
+# Without it `POST /v1/webhooks/resend` answers 404, so nothing the provider
+# says about a message after the relay accepted it ever arrives: a suppressed
+# address reads as a message still in flight, `mail.undeliverable.addresses` on
+# `/admin/health` stays `0`, and the console goes on telling a user whose code
+# was discarded to check their spam folder. The code for all of that shipped in
+# the image this chart has pinned since 0.13.6 and has been inert on every
+# deployment since, because no chart version carried the key — and a reconfigure
+# cannot deliver one, since it re-renders the version the deployment was created
+# from.
+#
+# The key is set **outside** the `if eq $mail.provider "resend"` branch of
+# `templates/secret.yaml`, which is the one detail worth being deliberate about.
+# Production sends through Resend's *SMTP relay* (`mail.provider: smtp`) and the
+# delivery notifications belong to the mail account rather than to the
+# transport, so a key rendered only for `provider: resend` would be dropped on
+# exactly the deployment this exists for — silently, with the route answering
+# 404 as if nothing were configured. `charts/tests/mail_invariance.py` now sets
+# the secret in every sending shape and requires it to reach a Secret, which is
+# that mistake as a failing test rather than as a comment.
+#
+# A minor and not a patch: the attested env list grows one `optional` entry, so
+# `checksum/config` is untouched but the container's env list moves and anyone
+# pinning this deployment's evidence digest re-pins once. The entry is rendered
+# unconditionally and `optional` like the nine mail variables beside it, so the
+# list still says nothing about how a deployment mails
+# (`charts/tests/mail_invariance.py`), and a deployment that sets no webhook
+# secret has an unset variable rather than an empty one. No image moves: the
+# router build pinned here (`main-0c5f34f`) has carried `mail.webhookSecret` in
+# its config schema since confidential-router#173.
+version: 0.15.0
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous
