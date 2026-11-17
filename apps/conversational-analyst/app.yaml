@@ -1130,6 +1130,15 @@ outputs:
 # anything derived from it, and the hostname the operator chose — the gate binds evidence to
 # the host it fetched it from, so the hostname is established by the channel rather than by the
 # digest.
+#
+# One thing in that list not to over-read. The model endpoint in the configuration is the one
+# this deployment was CREATED with, and it is what the grounding component writes into the
+# installation's model registry — which is where the api actually reads a model from, so the
+# two agree at deploy time by construction. They are not bound together afterwards: an
+# installation administrator may add a second registry row pointing somewhere else, and no
+# manifest changes, so the digest does not move. The two egress allowlists are different in
+# kind — they ARE configuration, so what this deployment may reach cannot be widened without
+# the digest saying so.
 evidence:
   # NOT DECLARED YET, and deliberately left absent rather than carried over.
   #

@@ -101,6 +101,17 @@ one.
 - **It does not say anything about install administrators.** Who may administer this
   installation is a row in the platform's own database, not a manifest, so the signed evidence
   cannot attest to it. Do not read the evidence as a statement about that.
+- **And it does not pin the set of models the deployment will ever use.** What the attested
+  configuration records is the endpoint and model id this deployment was *created* with; what
+  the agent actually runs a dialog on is a row in the installation's model registry, which the
+  grounding Job writes from the same parameters — so the two agree at deploy time by
+  construction. They are not locked together afterwards: an installation administrator can add
+  a second registry row, pointing anywhere, and nothing in the manifests changes, so the
+  evidence digest does not move. Read the model disclosure as "this is where the deployment
+  was pointed when it was created", not as "this is the only place it can ever send a prompt".
+  The thing the evidence *does* pin about egress is the allowlists — which tool servers may be
+  called and where a signal webhook may be sent — and those are configuration, so they cannot
+  change without the digest changing.
 
 ## What a verifier can read out of the signed evidence
 
@@ -110,7 +121,8 @@ listing rather than how to run one. The snapshot a deployment publishes at
 
 - every image, by digest, and the sha256 of every embedding-weight file the deployment was
   permitted to load, together with the code that enforced it;
-- the **model endpoint and model id**, and the **embedding endpoint, model and vector width**;
+- the **model endpoint and model id** the deployment was created with, and the **embedding
+  endpoint, model and vector width** (see the caveat about later registry rows above);
 - both egress allowlists — which tool servers the agent may call and where a signal webhook may
   be sent — and whether a private address is allowed at all;
 - the absence of a speech-to-text provider;
