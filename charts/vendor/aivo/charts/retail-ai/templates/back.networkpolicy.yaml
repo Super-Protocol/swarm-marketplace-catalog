@@ -1,0 +1,57 @@
+{{- if .Values.back.networkPolicy.enabled }}
+{{/*
+Ingress fence around the api (AIV-1295).
+
+The api takes the caller's identity — and their groups, which the corporate
+tenancy mode turns into roles — from headers oauth2-proxy stamps on. The proxy
+overwrites those headers, so nothing from outside the cluster can set them; this
+policy is about what is already inside it. A pod that can reach the api's port
+directly can present any `x-auth-claims` it likes and, without this, be listened
+to. The api still refuses one it cannot verify, so this is the outer of two
+fences, not the only one.
+
+Off by default, and deliberately so: it only bites on a CNI that enforces
+NetworkPolicy (Canal on RKE2 does), and an incomplete `from` list takes the
+platform down rather than degrading it. Turn it on once the peers below are
+known to be complete for the installation — kubelet probes in particular are
+node-sourced and may need an `ipBlock` in `extraIngress`.
+
+Enabled with no peers at all is refused outright rather than rendered. An
+ingress rule whose `from` is empty does not close the port, it opens it: per the
+NetworkPolicy API, "if this field is empty or missing, this rule matches all
+sources". That would leave the fence standing wide open while looking installed,
+which is worse than not having it.
+*/}}
+{{- if and (not .Values.back.networkPolicy.fromAuthProxy) (not .Values.back.networkPolicy.extraFrom) }}
+{{- fail "retail-ai.back.networkPolicy is enabled with no peers: fromAuthProxy is off and extraFrom is empty, which renders `from:` empty — and an empty `from` matches EVERY source rather than none." }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "app.fullname" . }}-back
+  labels:
+    {{- include "app.labelsBack" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "app.selectorLabelsBack" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- if .Values.back.networkPolicy.fromAuthProxy }}
+        # The auth proxy: the only route a user request may take in.
+        - podSelector:
+            matchLabels:
+              {{- toYaml .Values.back.networkPolicy.authProxyPodLabels | nindent 14 }}
+        {{- end }}
+        {{- with .Values.back.networkPolicy.extraFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: http
+    {{- with .Values.back.networkPolicy.extraIngress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

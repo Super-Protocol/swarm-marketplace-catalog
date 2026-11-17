@@ -1,0 +1,82 @@
+---
+# Source: conversational-analyst-platform/templates/regcred.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: regcred
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: eyJhdXRocyI6eyJyZWdpc3RyeS5hZ2dyZWdpb24uY29tIjp7InVzZXJuYW1lIjoibWFya2V0cGxhY2UtcmVhZGVyIiwicGFzc3dvcmQiOiJSRUdUT0tFTiIsImF1dGgiOiJiV0Z5YTJWMGNHeGhZMlV0Y21WaFpHVnlPbEpGUjFSUFMwVk8ifX19
+---
+# Source: conversational-analyst-platform/templates/database-check.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Follows the expectation it checks, because a Job's pod template cannot be updated in place.
+  name: analyst-database-check-995f212c
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: check
+          image: "pgvector/pgvector:0.8.7-pg17-bookworm"
+          command:
+            - bash
+            - -c
+            - |
+              set -Eeuo pipefail
+              for _ in $(seq 1 120); do
+                pg_isready -h "$PGHOST" -U postgres >/dev/null 2>&1 && break
+                sleep 5
+              done
+              missing=""
+              one() { psql -tAqX -h "$PGHOST" -U postgres -d "$1" -c "$2"; }
+              [ "$(one postgres "SELECT 1 FROM pg_database WHERE datname = 'retail_ai'")" = 1 ] \
+                || missing="$missing database:retail_ai"
+              [ "$(one postgres "SELECT 1 FROM pg_database WHERE datname = 'retail_ai_identity'")" = 1 ] \
+                || missing="$missing database:retail_ai_identity"
+              [ "$(one postgres "SELECT 1 FROM pg_database WHERE datname = 'retail_ai_checkpointer'")" = 1 ] \
+                || missing="$missing database:retail_ai_checkpointer"
+              [ "$(one postgres "SELECT 1 FROM pg_database WHERE datname = 'keycloak'")" = 1 ] \
+                || missing="$missing database:keycloak"
+              [ "$(one postgres "SELECT 1 FROM pg_roles WHERE rolname = 'retail_ai_user'")" = 1 ] \
+                || missing="$missing role:retail_ai_user"
+              [ "$(one postgres "SELECT 1 FROM pg_roles WHERE rolname = 'identity_user'")" = 1 ] \
+                || missing="$missing role:identity_user"
+              [ "$(one postgres "SELECT 1 FROM pg_roles WHERE rolname = 'checkpointer_user'")" = 1 ] \
+                || missing="$missing role:checkpointer_user"
+              [ "$(one postgres "SELECT 1 FROM pg_roles WHERE rolname = 'keycloak_user'")" = 1 ] \
+                || missing="$missing role:keycloak_user"
+              [ "$(one retail_ai "SELECT 1 FROM pg_extension WHERE extname = 'vector'")" = 1 ] \
+                || missing="$missing extension:retail_ai.vector"
+              [ "$(one retail_ai "SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'")" = 1 ] \
+                || missing="$missing extension:retail_ai.pg_trgm"
+              if [ -n "$missing" ]; then
+                echo "PostgreSQL initialisation is incomplete:$missing" >&2
+                echo "The init script runs only on an empty data directory — this volume was" >&2
+                echo "initialised without it, or a statement in it aborted the rest." >&2
+                exit 1
+              fi
+              echo "databases, roles and extensions are in place"
+          env:
+            - name: PGHOST
+              value: "analyst-postgresql"
+            # The superuser password, from the Secret the PostgreSQL chart renders — never
+            # a literal in this pod spec, which travels in the deployment bundle and lands
+            # in the evidence snapshot.
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: "analyst-postgresql"
+                  key: postgres-password
+          resources:
+            limits:
+              cpu: 100m
+              memory: 128Mi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: 100m
+              memory: 128Mi
+              nvidia.com/gpu: "0"

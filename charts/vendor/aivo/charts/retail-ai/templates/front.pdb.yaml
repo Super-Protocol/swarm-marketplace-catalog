@@ -1,0 +1,24 @@
+{{/*
+The same budget for the web UI pods (AIV-2669).
+
+The front holds no state — every request it serves is a page render or a proxied
+call to the api — so this is purely about a node drain not taking every UI pod
+at once: without a budget, two replicas that ended up on one node leave the
+whole UI unreachable until a replacement starts somewhere else.
+*/}}
+{{- $pdb := .Values.front.podDisruptionBudget }}
+{{- if $pdb }}
+{{- if include "app.pdbEnabled" (dict "pdb" $pdb "replicas" .Values.front.replicaCount) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "app.fullname" . }}-front
+  labels:
+    {{- include "app.labelsFront" . | nindent 4 }}
+spec:
+  {{- include "app.pdbSpec" (dict "pdb" $pdb "key" "retail-ai.front.podDisruptionBudget") | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "app.selectorLabelsFront" . | nindent 6 }}
+{{- end }}
+{{- end }}

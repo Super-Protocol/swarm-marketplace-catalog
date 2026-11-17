@@ -6,16 +6,33 @@ metadata:
     {{- include "app.labelsBack" . | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
-  replicas: {{ .Values.front.replicaCount }}
+  replicas: {{ .Values.back.replicaCount }}
+  {{- end }}
+  {{- with .Values.back.updateStrategy }}
+  {{- if .type }}
+  strategy:
+    type: {{ .type }}
+    {{- if and (eq .type "RollingUpdate") .rollingUpdate }}
+    rollingUpdate:
+      {{- toYaml .rollingUpdate | nindent 6 }}
+    {{- end }}
+  {{- end }}
   {{- end }}
   selector:
     matchLabels:
       {{- include "app.selectorLabelsBack" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
+      {{- if or .Values.global.caCert.enabled .Values.podAnnotations }}
       annotations:
+        {{- if .Values.global.caCert.enabled }}
+        # The CA bundle is a ConfigMap too, and NODE_EXTRA_CA_CERTS is read once
+        # when node starts — a rotated chain has to roll the pods to take effect.
+        checksum/ca-cert: {{ .Values.global.caCert.content | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
       labels:
         {{- include "app.labelsBack" . | nindent 8 }}
@@ -23,6 +40,18 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
+      # An answer being generated lives in the pod that accepted the mutation,
+      # so a pod leaving the Service has to be given time to finish it instead
+      # of dropping the user's reply mid-stream (AIV-2366). Kubernetes gives 30
+      # seconds by default, which is a request-serving budget — an agent turn is
+      # not a request. Stays above the api's own drain ceiling, so the process
+      # and not the kubelet is what ends the drain — see values.yaml.
+      terminationGracePeriodSeconds: {{ .Values.back.terminationGracePeriodSeconds }}
+      {{- with (include "app.backServiceAccountName" .) }}
+      # Carries the token the api uses to read the kube-system namespace UID it
+      # binds its license to (AIV-892); see back-licensing-rbac.yaml.
+      serviceAccountName: {{ . }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -45,25 +74,43 @@ spec:
           value: "--max-old-space-size={{ .Values.back.config.maxOldSpaceSize }}"
         - name: PORT
           value: {{ .Values.back.config.port | quote }}
+        {{- if .Values.worker.enabled }}
+        # A dedicated worker Deployment drains the queues (AIV-1265), so these
+        # pods must not: `web` registers no Bull consumer, while still enqueuing
+        # work exactly as before.
+        - name: RAI_PROCESS_ROLE
+          value: web
+        {{- end }}
         - name: RAI_SERVICE_DISCOVERY_URL
           value: http://{{ .Release.Name }}-service-discovery
         {{- if .Values.global.caCert.enabled }}
         - name: NODE_EXTRA_CA_CERTS
           value: /etc/ssl/certs/x5-ca-chain.pem
         {{- end }}
+        {{- with .Values.back.extraEnv }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         ports:
         - name: http
           containerPort: {{ .Values.back.config.port }}
           protocol: TCP
-        {{- with .Values.livenessProbe }}
+        {{- with (int .Values.back.preStopSleepSeconds) }}
+        # Keeps the pod serving while it leaves the EndpointSlice and kube-proxy /
+        # the ingress catch up; SIGTERM only follows the hook (AIV-2402).
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sleep", "{{ . }}"]
+        {{- end }}
+        {{- with (.Values.back.livenessProbe | default .Values.livenessProbe) }}
         livenessProbe:
           {{- toYaml . | nindent 12 }}
         {{- end }}
-        {{- with .Values.readinessProbe }}
+        {{- with (.Values.back.readinessProbe | default .Values.readinessProbe) }}
         readinessProbe:
           {{- toYaml . | nindent 12 }}
         {{- end }}
-        {{- with .Values.resources }}
+        {{- with (.Values.back.resources | default .Values.resources) }}
         resources:
           {{- toYaml . | nindent 12 }}
         {{- end }}
@@ -110,9 +157,9 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- with (include "app.roleAffinity" (dict "explicit" .Values.affinity "podAntiAffinity" .Values.back.podAntiAffinity "selector" (include "app.selectorLabelsBack" .))) }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+        {{- . | nindent 8 }}
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:

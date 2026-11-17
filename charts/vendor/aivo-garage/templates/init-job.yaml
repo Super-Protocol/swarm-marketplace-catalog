@@ -1,0 +1,166 @@
+{{/* Бакеты и права ключа на них.
+
+     Хук `post-install,post-upgrade`, а не обычный Job. Разница не
+     косметическая: `helm upgrade --install --wait` — то, чем ставит
+     инсталлятор, — ждёт готовности РЕСУРСОВ, но НЕ ждёт завершения обычного
+     Job'а (проверено на helm 3.20.1: релиз получал статус deployed, пока Job
+     ещё крутился). Установка тогда считалась бы законченной до того, как
+     появились бакеты, и первым это увидел бы Langfuse. Хуков helm ждёт всегда,
+     и провалившийся хук делает релиз failed — то есть говорит правду.
+
+     Порядок при этом получается правильный сам собой: `--wait` доводит под
+     сервера до Ready ДО хуков, а Ready у него означает «узел обслуживает
+     чтение и запись» (раскладку кластера он заводит сам, `--single-node`).
+     Прежний чарт MinIO делал то же самое post-install-хуком с `mc`.
+
+     В кластерном режиме раскладку применяет контейнер `peer` (почему не
+     этот Job — в _helpers.tpl), а Job перед бакетами ещё дожидается, что в
+     раскладке стоят все узлы, и заводит ключ доступа: флаг
+     `--default-access-key`, которым его заводит одиночный узел, кластерный
+     сервер не принимает.
+
+     `before-hook-creation` снимает прошлый Job перед созданием нового: у
+     Job'а неизменяемая спецификация, и обновление, меняющее список бакетов,
+     ключ или образ, иначе встало бы на «field is immutable». Завершённый Job
+     остаётся в namespace до следующего обновления — по его журналу видно, что
+     именно он завёл. */}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "garage.fullname" . }}-init
+  labels:
+    {{- include "garage.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        {{- include "garage.labels" . | nindent 8 }}
+        # Не `server`: под этой меткой отбирают ПОД СЕРВЕРА, и Job, попавший
+        # под селектор headless-сервиса, получал бы в DNS собственный адрес.
+        app.kubernetes.io/component: init
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: init
+          image: "{{ .Values.initImage.repository }}:{{ .Values.initImage.tag }}"
+          imagePullPolicy: {{ .Values.initImage.pullPolicy }}
+          {{- with .Values.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.initResources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: ADMIN_URL
+              value: {{ include "garage.adminUrl" . | quote }}
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "garage.fullname" . }}
+                  key: admin-token
+            - name: ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "garage.fullname" . }}
+                  key: access-key-id
+            - name: BUCKETS
+              value: {{ join " " .Values.buckets | quote }}
+            {{- if .Values.cluster.enabled }}
+            - name: SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "garage.fullname" . }}
+                  key: secret-access-key
+            - name: REPLICAS
+              value: {{ int .Values.cluster.replicas | quote }}
+            {{- end }}
+          command: ["/bin/sh", "-eu", "-c"]
+          args:
+            - |
+              # Ответы админ-API печатаются с отступами, по одному полю в
+              # строке, — первого значения поля хватает, разбирать JSON целиком
+              # незачем.
+              field() { sed -n 's/^ *"'"$1"'": *"\([^"]*\)".*/\1/p' | head -1; }
+              api() {
+                if [ "$1" = GET ]; then
+                  wget -q -O - -T 15 --header="Authorization: Bearer $ADMIN_TOKEN" "$ADMIN_URL$2"
+                else
+                  wget -q -O - -T 15 --header="Authorization: Bearer $ADMIN_TOKEN" \
+                       --post-data="$3" "$ADMIN_URL$2"
+                fi
+              }
+
+              # /health отвечает 200 только когда узел готов обслуживать
+              # чтение и запись. Job может стартовать раньше пода с сервером,
+              # поэтому ждёт, а не падает: пять минут — это запас на выкачку
+              # образа и первый запуск с пустым томом.
+              echo "ждём garage на $ADMIN_URL"
+              n=0
+              until wget -q -O /dev/null -T 5 "$ADMIN_URL/health"; do
+                n=$((n + 1))
+                [ "$n" -lt 60 ] || { echo "garage не ответил за 5 минут" >&2; exit 1; }
+                sleep 5
+              done
+              {{- if .Values.cluster.enabled }}
+
+              # Кластер: /health зеленеет, как только набран кворум, а
+              # раскладка применяется только целиком, — но ждём явно, чтобы
+              # журнал Job'а говорил, на чём он стоит.
+              n=0
+              until [ "$(api GET /v2/GetClusterLayout 2>/dev/null | grep -c '"capacity": [0-9]')" -ge "$REPLICAS" ]; do
+                n=$((n + 1))
+                [ "$n" -lt 60 ] || { echo "в раскладке нет всех $REPLICAS узлов за 5 минут — журналы контейнеров peer" >&2; exit 1; }
+                sleep 5
+              done
+              echo "раскладка: $REPLICAS узлов"
+
+              # Ключ доступа. Тот же отказ, что у одиночного узла на
+              # `--default-access-key`: заведённый ключ с ДРУГИМ секретом
+              # Garage сменить не даёт, и молча продолжить — значит оставить
+              # обоих потребителей на 403.
+              esc="$(printf '%s' "$SECRET_ACCESS_KEY" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+              if key="$(api GET "/v2/GetKeyInfo?id=$ACCESS_KEY_ID&showSecretKey=true" 2>/dev/null)"; then
+                printf '%s\n' "$key" | grep -qF "\"secretAccessKey\": \"$esc\"" || {
+                  echo "ключ $ACCESS_KEY_ID уже заведён с другим секретом — сменить секрет у существующего ключа Garage не даёт" >&2
+                  exit 1
+                }
+                echo "ключ $ACCESS_KEY_ID уже есть"
+              else
+                api POST /v2/ImportKey \
+                  "{\"accessKeyId\":\"$ACCESS_KEY_ID\",\"secretAccessKey\":\"$esc\",\"name\":\"$ACCESS_KEY_ID\"}" >/dev/null
+                echo "ключ $ACCESS_KEY_ID заведён"
+              fi
+              {{- end }}
+
+              for bucket in $BUCKETS; do
+                # Проверка существования — GET, который на отсутствующем бакете
+                # отвечает 404; вывод wget'а о нём глушится, чтобы «бакета ещё
+                # нет» не выглядело в журнале Job'а ошибкой установки.
+                if info="$(api GET "/v2/GetBucketInfo?globalAlias=$bucket" 2>/dev/null)"; then
+                  echo "бакет $bucket уже есть"
+                else
+                  info="$(api POST /v2/CreateBucket "{\"globalAlias\":\"$bucket\"}")"
+                  echo "бакет $bucket создан"
+                fi
+                id="$(printf '%s' "$info" | field id)"
+                [ -n "$id" ] || { echo "не разобрали идентификатор бакета $bucket" >&2; exit 1; }
+                # Выдача прав идемпотентна: повторный вызов возвращает те же
+                # права, а не ошибку.
+                api POST /v2/AllowBucketKey \
+                  "{\"bucketId\":\"$id\",\"accessKeyId\":\"$ACCESS_KEY_ID\",\"permissions\":{\"read\":true,\"write\":true,\"owner\":true}}" \
+                  >/dev/null
+                echo "ключ $ACCESS_KEY_ID допущен к $bucket"
+              done
+              echo "готово"

@@ -1,0 +1,142 @@
+# Embeddings are MANDATORY in this product — the knowledge index and schema search are
+# built from them — so "where do they go" is not a preference. Sent to a hosted provider,
+# every table name, every column description and the contents of every document in the
+# knowledge base go with them, which is precisely what a confidential deployment exists to
+# prevent. This chart is the alternative: the model runs in the deployment's own namespace,
+# on CPU, reachable only from inside it.
+#
+# Off is for the one case where it is the right answer: an operator who already runs an
+# OpenAI-compatible embedding endpoint inside their own perimeter and would rather the
+# agent used that one. The listing switches this with a parameter and points the agent at
+# whichever endpoint is live.
+enabled: true
+
+# Referenced by digest, not by tag. `cpu-1.8` is a release tag the publisher could rebuild,
+# and a rebuilt tag replaces the software while leaving the manifests — and so the digest the
+# deployment attests to — unchanged. The tag stays beside it so a human can see which release
+# this is.
+image:
+  registry: ghcr.io
+  repository: huggingface/text-embeddings-inference
+  digest: sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c
+  tag: cpu-1.8
+  pullPolicy: IfNotPresent
+
+# The fetcher is stdlib Python and the serving image carries no interpreter, so the init
+# container runs a plain Python base. Two images, both pinned by digest in the listing.
+fetcher:
+  image:
+    registry: docker.io
+    repository: library/python
+    digest: sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
+    tag: 3.12.16-slim-bookworm
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "1"
+      memory: 512Mi
+      nvidia.com/gpu: "0"
+    limits:
+      cpu: "1"
+      memory: 512Mi
+      nvidia.com/gpu: "0"
+
+model:
+  # The name the agent sends in `model` and the width of the vectors it stores. The width
+  # has to be the one the model really returns: the knowledge index's column is created
+  # `vector(N)` from it and cannot be re-sized once the index holds anything.
+  #
+  # The server ignores the name — it serves whatever is in `dir` — so this is the agent's
+  # label for it, and it is what a reader of the evidence sees.
+  id: bge-large-en-v1.5
+  dimensions: 1024
+  dir: /models/current
+  # Pooling is read from the model's own 1_Pooling/config.json; named here because the
+  # value is a property of the checkpoint and a reader should not have to open it.
+  pooling: cls
+  maxBatchTokens: 16384
+  maxClientBatchSize: 32
+  # Every file this deployment may load, by sha256. Build it with
+  # `scripts/model-weights-manifest.py BAAI/bge-large-en-v1.5`.
+  weights:
+    endpoint: https://huggingface.co
+    repo: BAAI/bge-large-en-v1.5
+    revision: d4aa6901d3a41ba39fb536a557fa166f842b0e09
+    totalBytes: 1341561506
+    files:
+      - path: 1_Pooling/config.json
+        size: 191
+        sha256: e54c164a07274f2eb45bb724f54a79d1efcc90c41573887cd9a29aeee0597352
+      - path: config.json
+        size: 779
+        sha256: 446712fac367857b4b1302762fe1cd7bfa8b3c4b77b4dc5d77c4025407660896
+      - path: config_sentence_transformers.json
+        size: 124
+        sha256: 940d5f50db195fa6e5e6a4f122c095f77880de259d74b14a65779ed48bdd7c56
+      - path: model.safetensors
+        size: 1340616616
+        sha256: 45e1954914e29bd74080e6c1510165274ff5279421c89f76c418878732f64ae7
+      - path: modules.json
+        size: 349
+        sha256: 84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf
+      - path: sentence_bert_config.json
+        size: 52
+        sha256: 84e39fda68ccbff05bfa723ae9c0e70e23e2ec373b76e0f8c6e71af72a693cbf
+      - path: special_tokens_map.json
+        size: 125
+        sha256: b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3
+      - path: tokenizer.json
+        size: 711396
+        sha256: d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66
+      - path: tokenizer_config.json
+        size: 366
+        sha256: 9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3
+      - path: vocab.txt
+        size: 231508
+        sha256: 07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3
+
+# The endpoint authenticates. It is reachable only from inside the namespace and is on no
+# Ingress, but an unauthenticated inference endpoint is an unauthenticated inference
+# endpoint, and the agent has to carry a key for its OpenAI client anyway. Required: the
+# chart refuses to render without one.
+apiKey: ""
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+# Holds the verified weights. Survives a restart, so a bounced pod re-hashes 1.25 GiB in
+# under a minute instead of downloading it again.
+persistence:
+  enabled: true
+  size: 4Gi
+  storageClass: ""
+  accessMode: ReadWriteOnce
+
+replicaCount: 1
+
+# The model is 1.25 GiB of fp32 weights and the backend runs it on CPU. Two cores keep a
+# knowledge-base reload moving without competing with the agent's own pods; nothing here
+# asks for a GPU, and the explicit zero is what stops a GPU cluster space's LimitRange
+# from defaulting one in.
+resources:
+  requests:
+    cpu: "2"
+    memory: 4Gi
+    nvidia.com/gpu: "0"
+  limits:
+    cpu: "2"
+    memory: 4Gi
+    nvidia.com/gpu: "0"
+
+podSecurityContext: {}
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  capabilities:
+    drop: [ALL]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -16,12 +16,18 @@ cd "$root"
 # One release name and namespace per listing. Neither reaches an object name in
 # these charts — they are chosen so the rendered labels say which listing a
 # golden belongs to, and nothing more.
-release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; patroni-postgresql) printf 'pg' ;; swarm-model-server) printf 'ms' ;; *) printf 'cr' ;; esac; }
-namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; patroni-postgresql) printf 'patroni' ;; swarm-model-server) printf 'model-server' ;; *) printf 'confidential-router' ;; esac; }
+#
+# `analyst` is the release name for every conversational-analyst chart on purpose, and not
+# only for the label: those charts address one another by `<release>-<subchart>` and the
+# listing resolves the same names through `{{ components.agent.release }}`, so a golden taken
+# under a different release name would not be the deployment anybody gets.
+release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; patroni-postgresql) printf 'pg' ;; swarm-model-server) printf 'ms' ;; conversational-analyst-*) printf 'analyst' ;; *) printf 'cr' ;; esac; }
+namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; patroni-postgresql) printf 'patroni' ;; swarm-model-server) printf 'model-server' ;; conversational-analyst-*) printf 'conversational-analyst' ;; *) printf 'confidential-router' ;; esac; }
 
 RELEASE=cr
 NAMESPACE=confidential-router
-CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ollama confidential-router-ui confidential-s3 patroni-postgresql swarm-model-server)
+CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ollama confidential-router-ui confidential-s3 patroni-postgresql swarm-model-server
+        conversational-analyst-platform conversational-analyst-embeddings conversational-analyst-identity conversational-analyst-agent conversational-analyst-gateway conversational-analyst-grounding)
 
 update="${UPDATE:-}"
 failures=0
@@ -69,6 +75,12 @@ for chart in "${CHARTS[@]}"; do
     confidential-s3) values="charts/tests/cases/s3-default.yaml" ;;
     patroni-postgresql) values="charts/tests/cases/patroni-default.yaml" ;;
     swarm-model-server) values="charts/tests/cases/model-server-llama.yaml" ;;
+    conversational-analyst-platform) values="charts/tests/cases/analyst-platform.yaml" ;;
+    conversational-analyst-embeddings) values="charts/tests/cases/analyst-embeddings.yaml" ;;
+    conversational-analyst-identity) values="charts/tests/cases/analyst-identity.yaml" ;;
+    conversational-analyst-agent) values="charts/tests/cases/analyst-agent.yaml" ;;
+    conversational-analyst-gateway) values="charts/tests/cases/analyst-gateway.yaml" ;;
+    conversational-analyst-grounding) values="charts/tests/cases/analyst-grounding.yaml" ;;
   esac
   if output=$(helm lint "charts/$chart" --values "$values" 2>&1); then
     pass "$chart"
@@ -109,6 +121,16 @@ while IFS=$'\t' read -r name chart repo version; do
   filtered=$(printf '%s\n' "$rendered" | own_documents "$chart" \
     | sed -E 's/\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}/<bcrypt>/g')
 
+  # A chart that renders only its subcharts' documents has nothing of its own to golden —
+  # `conversational-analyst-agent` is entirely values over the vendored `aivo` chart. Saying
+  # so is better than an empty golden file nobody can read a meaning into; what matters about
+  # that chart's output is checked by `analyst_config.py` below.
+  if [ -z "$(printf '%s' "$filtered" | tr -d '[:space:]')" ]; then
+    rm -f "$golden"
+    pass "$name (no documents of its own; see analyst_config.py)"
+    continue
+  fi
+
   if [ -n "$update" ]; then
     printf '%s' "$filtered" > "$golden"
     pass "$name (written)"
@@ -128,6 +150,48 @@ done < charts/tests/cases.tsv
 # nothing, and being handed a 2:1 pair by the same LimitRange — is refused at
 # admission and the pod never exists. Nothing in a golden diff says that; the
 # render looks perfect and the deployment reads as "the app is broken" (SUP-238).
+# An image in the manifests that the listing does not declare refuses the whole deployment,
+# and a digest bumped in one file and not the other advertises a pin the cluster never pulls.
+# Six components, each probed with its own case values, because an image a chart renders only
+# on one path is invisible on the others.
+note "every image the analyst renders is declared by its listing"
+analyst_images() {
+  if output=$(python3 charts/tests/declared_images.py conversational-analyst "$1" "$2" "charts/tests/cases/$3.yaml"); then
+    printf '%s\n' "$output"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/declared_images.py $1"
+  fi
+}
+analyst_images platform   conversational-analyst-platform   analyst-platform
+analyst_images embeddings conversational-analyst-embeddings analyst-embeddings
+analyst_images identity   conversational-analyst-identity   analyst-identity
+analyst_images agent      conversational-analyst-agent      analyst-agent
+analyst_images gateway    conversational-analyst-gateway    analyst-gateway
+analyst_images grounding  conversational-analyst-grounding  analyst-grounding
+
+# The agent's configuration is a ConfigMap the cloud digests and publishes. What must be in
+# it, what must not, and why a golden cannot answer either question: see the file.
+note "the agent's configuration is attested, and carries no credential and no hostname"
+if output=$(python3 charts/tests/analyst_config.py charts/tests/cases/analyst-agent.yaml); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  failures=$((failures + 1))
+fi
+
+# `consumer.*` reaches the analyst through the realm bootstrap — the deploying person's own
+# name and address, which until 4.0.0 were rendered into a ConfigMap and published with it.
+# The probe is the identity chart, because that is the only component any of it reaches.
+note "no attested manifest of the analyst carries a literal naming the consumer"
+if output=$(python3 charts/tests/consumer_fields.py conversational-analyst \
+      conversational-analyst-identity=charts/tests/cases/analyst-identity.yaml); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  failures=$((failures + 1))
+fi
+
 note "every rendered container clears a cluster space's LimitRange"
 if output=$(python3 charts/tests/limitrange.py); then
   printf '%s\n' "$output"

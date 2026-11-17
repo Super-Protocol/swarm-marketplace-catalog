@@ -1,0 +1,128 @@
+# First-party MCP connector "Telegram bot - send a message" (AIV-2337).
+#
+# Off by default. Turning it on deploys one pod and a ClusterIP Service
+# `<release>-mcp-telegram:8931`; the api starts using it only once the same
+# address is listed in `config.services.api.mcp.globalServers` — see
+# aivo/README.md, "Поставляемые MCP-коннекторы".
+enabled: false
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/aivoagent/agent/mcp-telegram
+  pullPolicy: IfNotPresent
+  # Image tag. Defaults to the chart appVersion.
+  tag: develop
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Optional. Name of a Kubernetes Secret mounted whole as environment
+# (`envFrom.secretRef`); empty renders no `envFrom` at all. Created out of git,
+# never committed. The only key the connector reads from it:
+#
+#   MCP_AUTH_TOKEN      when set, /mcp requires `Authorization: Bearer <token>`;
+#                       the api then sends it via `globalServers[].authHeaders`
+#
+#   kubectl -n <namespace> create secret generic aivo-mcp-telegram \
+#     --from-literal=MCP_AUTH_TOKEN='<random>'
+#
+# There is no bot token here: since v2.1 (AIV-2337 §6) each tenant enters its
+# own bot token and chat aliases in the tenant admin ("MCP servers" ->
+# "Built-in connectors" -> "Configure"); the api passes them per request.
+#
+# The pod does not restart on its own when the Secret changes: after rotating a
+# key, `kubectl -n <namespace> rollout restart deployment/<release>-mcp-telegram`.
+existingSecret: ""
+
+# Operator-level, non-secret configuration, passed to the container as
+# environment one key per entry. An empty value is not rendered at all, so the
+# connector's own default applies. Contract: AIV-2337 §6.9. Tenant data (bot
+# token, chats) never goes here. Any other non-secret variable (a proxy, say)
+# can be added the same way.
+config:
+  # Bot API base URL; tenants cannot change it. Connector default:
+  # https://api.telegram.org
+  TELEGRAM_API_BASE_URL: ""
+  # Default for the tenant's "disable link preview" setting. Connector
+  # default: "true".
+  TELEGRAM_DISABLE_LINK_PREVIEW: ""
+  # Messages per minute per tenant; past it a call returns `rate_limited`.
+  # Connector default: 30.
+  RATE_LIMIT_PER_MINUTE: ""
+
+# Container port, also the PORT the connector listens on.
+port: 8931
+
+service:
+  type: ClusterIP
+  port: 8931
+
+podAnnotations: {}
+podLabels: {}
+
+# Same uid/gid as the platform images (1001) — the connector image runs as
+# non-root uid 1001 (AIV-2337 §3). Values make it VERIFIABLE from the manifest,
+# as for retail-ai (AIV-1590).
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  seccompProfile:
+    type: RuntimeDefault
+
+# readOnlyRootFilesystem is on: the connector writes nothing to disk. /tmp is
+# an emptyDir in case a library wants scratch space.
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+resources: {}
+  # limits:
+  #   memory: 256Mi
+  # requests:
+  #   cpu: 20m
+  #   memory: 96Mi
+
+# `/healthz` answers 200 once the configuration is valid and the process is
+# alive; an invalid configuration exits the process instead (CrashLoopBackOff).
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+
+# Ingress fence: only the api pods (web and worker — autopilot runs call tools
+# from the worker) may reach the connector port. It is the primary barrier in
+# front of a tool that sends messages to the outside world; MCP_AUTH_TOKEN is
+# the second one.
+#
+# Off by default, as for retail-ai's `back.networkPolicy`: it only bites on a
+# CNI that enforces NetworkPolicy (Canal on RKE2 does), and kubelet probes are
+# node-sourced and may need an `ipBlock` in `extraIngress`. `helm test` pods are
+# not among the peers, so the chart test fails while the fence is on.
+networkPolicy:
+  enabled: false
+  # Allow the api pods of the same release: `app.kubernetes.io/instance:
+  # <release>` and `app.kubernetes.io/name` in `apiPodNames` (the retail-ai
+  # subchart's back and worker selector labels).
+  fromApi: true
+  apiPodNames:
+    - retail-ai-back
+    - retail-ai-worker
+  # Extra peers for the same rule.
+  extraFrom: []
+  # Whole additional ingress rules, appended verbatim.
+  extraIngress: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

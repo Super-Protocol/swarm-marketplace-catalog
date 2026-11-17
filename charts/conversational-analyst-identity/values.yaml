@@ -4,13 +4,31 @@ internalSecret: ""
 # the /auth path, or the proxy in front of the agent rejects every token it mints.
 appHostname: ""
 
-# The tenant users belong to. The agent resolves a tenant from the user's Keycloak organization;
-# a user with none gets "Can't get tenant context" instead of a chat. Both this and the first
-# administrator below are supplied per deployment from who is doing the deploying.
-tenant:
-  name: ""
-  alias: ""
+# The organisations users belong to. The agent resolves a tenant from the user's Keycloak
+# organization; a user with none gets "Can't get tenant context" instead of a chat.
+#
+# A LIST, because the boundary this product enforces is the tenant and nothing else: it has
+# two roles, `org-admin` and `org-member`, and a data-source connection is stored as an
+# (organisation, source) pair whose connection cache is split on that pair — another
+# organisation's credentials are not even loaded while a request is processed. A deployment
+# that has to show one party unable to reach another's data needs a second and a third
+# organisation to show it with, and they are tenants rather than roles.
+#
+# The first entry is where the deploying administrator lands. The rest are created empty: there
+# is no invitation anywhere in this product by design, and membership is the sign-in system's
+# to maintain — which is the right answer, because it makes "who gets in" the organisation's own
+# decision rather than this deployment's.
+#
+#   name   what people see. Any text, except `|`, which separates the fields on the wire.
+#   alias  the slug the agent keys the tenant by, and the label of the organisation's
+#          Keycloak domain. Lowercase, digits and hyphens.
+organizations: []
+# - name: Example Clinic
+#   alias: clinic
 
+# The first administrator: an `org-admin` of the first organisation above, an administrator of
+# the Keycloak realm, and the installation administrator. Supplied per deployment from whoever
+# is doing the deploying — which is why none of it is rendered into a ConfigMap.
 demoUser:
   username: ""
   email: ""
@@ -73,3 +91,5 @@ keycloak:
     database: keycloak
   ingress:
     enabled: false
+  # The hostname-derived setting, out of the pod spec — see templates/keycloak-env.yaml.
+  extraEnvVarsSecret: analyst-keycloak-env

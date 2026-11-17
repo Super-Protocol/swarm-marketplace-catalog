@@ -1,0 +1,28 @@
+MCP connector "Email - send a message" is deployed as
+  http://{{ include "mcp-email.fullname" . }}:{{ .Values.service.port }}/mcp
+
+The api uses it only once it is listed as a global connector in the api
+configuration (umbrella values):
+
+  config:
+    config:
+      services:
+        api:
+          mcp:
+            globalServers:
+              - slug: email
+                name: Email
+                url: http://{{ include "mcp-email.fullname" . }}:{{ .Values.service.port }}/mcp
+
+Tenants then switch it on in "MCP servers" -> "Built-in connectors" (opt-in,
+off by default) and, under "Configure", pick the platform SMTP or enter their
+own, plus the recipient allowlist — tenant credentials never live in this chart.
+{{- if not .Values.config.SMTP_HOST }}
+
+No platform SMTP is configured (config.SMTP_HOST is empty): tenants choosing
+"platform SMTP" get `platform_smtp_not_configured` and must set their own.
+{{- end }}
+
+Health:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "mcp-email.fullname" . }} {{ .Values.service.port }}
+  curl -s http://127.0.0.1:{{ .Values.service.port }}/healthz

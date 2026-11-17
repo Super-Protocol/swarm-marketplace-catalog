@@ -41,17 +41,24 @@ SPEC_REPO="${SPEC_REPO:-Super-Protocol/swarm-marketplace-spec}"
 # and a definition that starts passing has to be taken off this list — which is
 # how the debt gets paid rather than forgotten.
 #
-#   conversational-analyst            a top-level `evidence` block, which the
-#                                     platform implements but the published
-#                                     schemas do not carry yet.
+# The list is EMPTY, and the check above fails a definition that is on it and
+# validates, so it stays empty by itself.
 #
 # confluent-platform and ollama-webui were here for `widget: hostname`, which the
 # specification did not define. It defines it as of the revision pinned above
-# (SUP-104), and both now validate — so they come off the list rather than stay
+# (SUP-104), and both now validate — so they came off the list rather than stay
 # on it as debt nobody owes.
-KNOWN_INVALID=(
-  apps/conversational-analyst/app.yaml
-)
+#
+# conversational-analyst was here for its top-level `evidence` block. Two things
+# were wrong with that entry by the time 4.0.0 re-authored the listing (SUP-709):
+# the pinned specification does describe `evidence`, and what the definition
+# actually failed on was a patch path with a hyphen in it
+# (`oauth2-proxy.config.clientSecret` — the path pattern is
+# `^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+)*$`). The chart aliases that subchart
+# without the hyphen, so the definition validates whole and the entry is gone.
+# Worth knowing the next time something "needs" to go on this list: check what
+# ajv actually says rather than what the comment says it said.
+KNOWN_INVALID=()
 
 failures=0
 note() { printf '\n\033[1m%s\033[0m\n' "$*"; }

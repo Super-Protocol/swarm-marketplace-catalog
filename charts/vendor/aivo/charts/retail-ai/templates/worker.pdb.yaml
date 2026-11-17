@@ -1,0 +1,28 @@
+{{/*
+The same budget for the pods that drain the queues (AIV-2368).
+
+Losing every worker at once does not take the platform down — jobs queue in
+Redis and a stalled job is handed to the next consumer — but it does restart
+whatever was running from the beginning, and a reference-book sync is expensive
+to redo. That restart is what the worker's long grace period exists to avoid
+(AIV-1288), and a budget is what stops a drain taking every worker at once,
+before any of them gets to use it.
+*/}}
+{{- if .Values.worker.enabled }}
+{{- $pdb := .Values.worker.podDisruptionBudget }}
+{{- if $pdb }}
+{{- if include "app.pdbEnabled" (dict "pdb" $pdb "replicas" .Values.worker.replicaCount) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "app.fullname" . }}-worker
+  labels:
+    {{- include "app.labelsWorker" . | nindent 4 }}
+spec:
+  {{- include "app.pdbSpec" (dict "pdb" $pdb "key" "retail-ai.worker.podDisruptionBudget") | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "app.selectorLabelsWorker" . | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}

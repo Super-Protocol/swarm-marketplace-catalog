@@ -26,16 +26,29 @@ podAnnotations: {}
 # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
 podLabels: {}
 
-podSecurityContext: {}
-  # fsGroup: 2000
+# Образы платформы уже non-root: backend объявляет `USER nestjs`, frontend —
+# `USER nextjs`, оба под номером 1001, и файлы приложения принадлежат группе
+# 1001 (`--chown=nestjs:nodejs`). Значения здесь ничего не меняют в поведении —
+# они делают это ПРОВЕРЯЕМЫМ: проверка ИБ читает securityContext манифеста, а
+# не метаданные образа, и «мы собираем образы правильно» она не видит
+# (AIV-1590).
+#
+# readOnlyRootFilesystem не включается: Next.js держит кэш рендера в /app/.next
+# внутри образа (frontend.dockerfile заводит этот каталог отдельным chown), и
+# запись туда идёт на каждом запросе.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  seccompProfile:
+    type: RuntimeDefault
 
-securityContext: {}
-  # capabilities:
-  #   drop:
-  #   - ALL
-  # readOnlyRootFilesystem: true
-  # runAsNonRoot: true
-  # runAsUser: 1000
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  capabilities:
+    drop:
+      - ALL
 
 # This is for setting up a service more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/
 service:
@@ -96,6 +109,26 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+# Placement of the replicas across nodes (AIV-2669). The service is stateless —
+# every replica answers every request — so a second replica only buys anything
+# if it sits on another node: a soft `kubernetes.io/hostname` anti-affinity
+# against its own pods, merged with `affinity` above (an `affinity` that carries
+# its own `podAntiAffinity` replaces it). `required: true` makes the term hard —
+# for a cluster with at least `replicaCount` + 1 worker nodes; with fewer, the
+# extra pod stays Pending. Costs nothing at one replica.
+podAntiAffinity:
+  enabled: true
+  required: false
+
+# `auto` renders a PodDisruptionBudget once `replicaCount` (or, under the HPA,
+# `autoscaling.minReplicas`) is above one, so a node drain cannot take every
+# replica at once; `true` / `false` decide it outright. `maxUnavailable` wins
+# over `minAvailable` when set; exactly one of them has to carry a value.
+podDisruptionBudget:
+  enabled: auto
+  minAvailable: 1
+  maxUnavailable: ""
 
 clusterDomain: cluster.local
 

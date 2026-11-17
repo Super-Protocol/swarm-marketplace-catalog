@@ -7,9 +7,25 @@ metadata:
   annotations:
     "helm.sh/hook": test
 spec:
+  # Под hook'а `helm test`: во время установки он не запускается — но лежит в
+  # чарте, и скан манифестов видит его наравне с остальными (AIV-1590). uid
+  # произвольный: wget читает только сеть.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
   containers:
     - name: wget
       image: busybox
+      securityContext:
+        allowPrivilegeEscalation: false
+        privileged: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
       command: ['wget']
       args: ['{{ include "app.fullname" . }}:{{ .Values.back.service.port }}']
   restartPolicy: Never

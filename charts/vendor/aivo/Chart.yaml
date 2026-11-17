@@ -21,7 +21,7 @@ version: 0.1.0
 # incremented each time you make changes to the application. Versions are not expected to
 # follow Semantic Versioning. They should reflect the version the application is using.
 # It is recommended to use it with quotes.
-appVersion: "1.16.0"
+appVersion: "1.17.0"
 
 dependencies:
   - name: config
@@ -36,9 +36,12 @@ dependencies:
   - name: instance
     condition: instance.enabled
     version: 0.1.0
-  - name: kafka-llm-proxy
-    condition: kafka-llm-proxy.enabled
-    version: 0.1.0
   - name: retail-ai
     condition: retail-ai.enabled
+    version: 0.1.0
+  - name: mcp-telegram
+    condition: mcp-telegram.enabled
+    version: 0.1.0
+  - name: mcp-email
+    condition: mcp-email.enabled
     version: 0.1.0

@@ -1,0 +1,43 @@
+---
+# Source: conversational-analyst-gateway/templates/public-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: analyst-oauth2-proxy-public
+  annotations:
+    swarm.io/exclude-evidence-fields: "/data"
+data:
+  OAUTH2_PROXY_REDIRECT_URL: "https://alpha.conf-apps.superprotocol.dev/oauth2/callback"
+  OAUTH2_PROXY_WHITELIST_DOMAINS: "alpha.conf-apps.superprotocol.dev"
+---
+# Source: conversational-analyst-gateway/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: conversational-analyst
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 30m
+    nginx.ingress.kubernetes.io/proxy-buffer-size: 256k
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: "alpha.conf-apps.superprotocol.dev"
+      http:
+        paths:
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: analyst-keycloak
+                port:
+                  number: 80
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: analyst-oauth2-proxy
+                port:
+                  number: 4180

@@ -4,21 +4,44 @@
 # longer exist. Anything outside this chart that needs to reach them resolves the release name
 # through `{{ components.agent.release }}` instead of guessing.
 #
-# Credentials, hostnames and model settings are deliberately absent: the marketplace supplies
-# them per deployment, so nothing here has to be a placeholder that could be shipped by mistake.
+# Hostnames and the model's address are deliberately absent: the marketplace supplies them per
+# deployment, so nothing here has to be a placeholder that could be shipped by mistake.
+#
+# CREDENTIALS ARE ABSENT FOR A SECOND REASON, and so is the hostname. Every value the platform
+# configuration needs that is either a credential or different in every deployment is written
+# here as a `${NAME}` reference and carried by `aivo.config.configOverlay`, which the chart
+# renders into a Secret rather than into the attested ConfigMap. The listing fills both halves
+# from the same parameters. See charts/vendor/aivo/VENDORED.md; a `${NAME}` with no value behind
+# it stops the pod at boot and names itself, rather than reaching a database as a literal
+# string.
+#
+# Everything that is NOT one of those two things stays in the ConfigMap on purpose: the model
+# endpoint, the embedding endpoint, every threshold and both egress allowlists are what a
+# verifier reading this deployment's signed evidence needs to see.
 #
 # The images are pulled through a proxy of the vendor's registry; the account behind `regcred`
 # is read-only and issued for the marketplace.
 #
-# Every tag is an immutable build number, not `latest` or `develop`. A moving tag would leave the
+# Every tag is an immutable release, not `latest` or `develop`. A moving tag would leave the
 # manifests — and so the digest a deployment attests to — unchanged while the software behind them
 # was replaced, which is the one thing this listing exists to make impossible. Raising a version
 # here is therefore a deliberate act with a new measurement behind it.
 
 aivo:
-  kafka-llm-proxy:
+  # First-party MCP connectors, each its own subchart. Off: both reach a third party
+  # (Telegram's API, an SMTP server), which is an outbound channel this deployment does not
+  # have and does not want. The listing's own MCP servers are declared as
+  # `api.mcp.globalServers` and are the operator's to name.
+  mcp-telegram:
+    enabled: false
+  mcp-email:
     enabled: false
 
+  # ---------------------------------------------------------------------------
+  # The configuration service. It holds the one document every other service
+  # reads its own configuration out of, which is why the credential split lives
+  # here rather than in each service.
+  # ---------------------------------------------------------------------------
   config:
     resources:
       requests:
@@ -31,80 +54,246 @@ aivo:
         nvidia.com/gpu: "0"
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
-      pullPolicy: Always
-      tag: develop-452
+      pullPolicy: IfNotPresent
+      tag: "1.17.0"
     imagePullSecrets:
       - name: regcred
+
+    # The values the `${NAME}` references below stand for. Rendered into a Secret, which the
+    # platform lifts out of the deployment bundle and seals for the target, so none of this
+    # reaches the evidence snapshot. The listing supplies every one.
+    configOverlay:
+      ANALYST_IDENTITY_CLIENT_SECRET: ""
+      ANALYST_DB_PASSWORD: ""
+      ANALYST_IDENTITY_DB_PASSWORD: ""
+      ANALYST_REDIS_PASSWORD: ""
+      ANALYST_S3_ACCESS_KEY_ID: ""
+      ANALYST_S3_SECRET_KEY: ""
+      ANALYST_CHECKPOINTER_URI: ""
+      ANALYST_MODEL_API_KEY: ""
+      ANALYST_EMBEDDINGS_API_KEY: ""
+      # Not a credential — the public hostname. In the overlay because it is different in
+      # every deployment, and a hostname inside `services.yaml` would make this document's
+      # digest the consumer's rather than this version's. The gate binds a deployment's
+      # evidence to the host it fetched it from, so the hostname is established by the
+      # channel and does not need to be in the digest.
+      ANALYST_GRAPHQL_HTTP_URL: ""
+      ANALYST_GRAPHQL_WS_URL: ""
+      ANALYST_LOGOUT_URL: ""
+
     config:
       services:
+        # Credentials the backend services use against Keycloak. Not the identity service's
+        # own database — that is `identity.db` below, and they are different things.
         identityService:
           clientId: identity
+          clientSecret: ${ANALYST_IDENTITY_CLIENT_SECRET}
           endpoint: http://analyst-keycloak/auth
           realm: master
+
+        identity:
+          # Tenants and org-scoped roles come from this deployment's own Keycloak, read over
+          # its Admin API with the credentials above. The alternative — `local` — is for a
+          # customer's Keycloak that grants no Admin API, and it also requires
+          # `api.authClaims.trust: jwks`; the chart refuses the half-configured pair.
+          provider: keycloak
+          # New in this listing, and not optional: the identity service has had a database of
+          # its own since AIV-1294 and agent 1.17 does not start without the block that names
+          # it. It holds the tenants, the group-mapping rules and the local copies of the
+          # people who have signed in.
+          db:
+            type: postgresql
+            config:
+              host: analyst-postgresql
+              port: 5432
+              username: identity_user
+              password: "${ANALYST_IDENTITY_DB_PASSWORD}"
+              database: retail_ai_identity
+          # Which personal fields are copied into the deployment's own database when somebody
+          # signs in. Spelled out rather than defaulted because this is the list a customer's
+          # security office signs off on, and it should be readable in the attested
+          # configuration rather than implied by a version.
+          directory:
+            profileFields: [username, email, firstName, lastName, displayName]
+            sync:
+              # Background enumeration of the realm's users. Off: membership is the sign-in
+              # system's business, and the directory then holds only the people who have
+              # actually signed in.
+              enabled: false
+
         api:
           db:
             type: postgresql
             config:
               host: analyst-postgresql
+              port: 5432
               username: retail_ai_user
+              password: "${ANALYST_DB_PASSWORD}"
               database: retail_ai
               synchronize: true
               logging: false
           redis:
             host: analyst-redis-master
             port: 6379
+            password: "${ANALYST_REDIS_PASSWORD}"
             db: 1
+          # Dialog attachments and query exports. `region` has to be the one the server
+          # signs with: Garage checks the region in the SigV4 scope, and a mismatch lets a
+          # plain upload through while answering 400 on every presigned URL — a deployment
+          # that looks healthy until somebody downloads an export. `forcePathStyle` is
+          # implied by `endpoint` being set, which is what a virtual-host bucket name
+          # resolving to nothing inside a cluster requires.
           fileStorage:
             type: s3
             config:
               region: us-east-1
               bucket: agent
-              accessKeyId: root
-              endpoint: http://analyst-minio:9000
+              accessKeyId: "${ANALYST_S3_ACCESS_KEY_ID}"
+              secretAccessKey: "${ANALYST_S3_SECRET_KEY}"
+              endpoint: http://analyst-garage:3900
+          nats:
+            url: nats://analyst-nats:4222
+          # The agent's working state. `postgres`, so a dialog survives a restart, in a
+          # database of its own: retention runs over these tables and must not be able to
+          # reach anything else. The whole URI is one secret because it carries the password.
+          checkpointer:
+            type: postgres
+            uri: "${ANALYST_CHECKPOINTER_URI}"
           memory:
             enabled: true
             maxMessages: 5
             summarizeThreshold: 10
+            # Exact token counting with tiktoken. The tables ship inside the image and
+            # nothing is downloaded at runtime, so a deployment with no egress does not need
+            # the approximation.
+            approximateTokenCounting: false
+
+          # Vectors for the knowledge index and for schema search. This is the setting that
+          # decides whether a confidential deployment is one: embeddings are MANDATORY in
+          # this product, and sending them to a hosted provider sends every table name, every
+          # column description and the contents of every document in the knowledge base with
+          # them.
+          #
+          # `provider: openai` is the dialect, not the company — with `baseUrl` set, the
+          # client talks to whatever OpenAI-compatible endpoint it names. The listing points
+          # it at the in-namespace embedding server by default.
+          #
+          # `dimensions` must be the width the model really returns: the knowledge index's
+          # column is created `vector(N)` from it and cannot be re-sized once the index holds
+          # anything.
           embeddings:
             provider: openai
-            model: text-embedding-3-small
-            dimensions: 1536
+            model: bge-large-en-v1.5
+            dimensions: 1024
+            baseUrl: http://analyst-embeddings/v1
+            apiKey: "${ANALYST_EMBEDDINGS_API_KEY}"
+
+          # `llmSmart` is what the vendor's own 1.x delivery profile still writes, and it is
+          # where a reader of the evidence looks for "which model does this deployment talk
+          # to". What actually serves a dialog in 1.17 is a row in the installation's model
+          # registry — the api's schema does not carry a model any more — and the grounding
+          # component creates that row from the SAME parameters, so the two cannot disagree.
+          # Kept here because the alternative is a signed configuration that says nothing
+          # about the model.
+          llmSmart:
+            provider: openai
+            model: ""
+            baseURL: ""
+            apiKey: ${ANALYST_MODEL_API_KEY}
+            temperature: 0.7
+
+          # Speech to text is OFF, by being absent: the chart renders the block only when it
+          # is set. It is optional in the product and it would be a second outbound channel
+          # — the only provider it supports is OpenAI's — for a feature nothing in this
+          # deployment needs.
+
+          # Arbitrary Python the agent may run while answering. `docker` is the upstream
+          # default and there is no Docker daemon in a cluster space, so it would fail at the
+          # first call; `local` runs it in the api's own container.
           pythonExecutor:
-            type: docker
+            type: local
             timeout: 30000
             config:
-              image: aivo-python:latest
-              memoryLimit: 512m
-              cpuLimit: "1.0"
-              network: none
-              autoRemove: true
-          llmSmart:
-            provider: google
-            temperature: 1
-          llmFast:
-            provider: google
-            temperature: 1
+              pythonPath: python3
+              tempDir: /tmp/analyst-python
           recursionLimit: 100
           fileUpload:
             maxFileSize: 10485760
-          langfuse:
-            tracing: false
+            indexTextFiles: true
+
+          # Tool servers the agent may call. On, because the recall scenario is an autopilot
+          # calling one — and the egress rules are the point of declaring it here: the
+          # allowlist is in the attested ConfigMap, so what this deployment may reach is
+          # readable out of its signed evidence rather than taken on trust.
+          #
+          # `denyPrivateRanges` stays true and `allowHosts` empty: an operator naming a
+          # server names a public https host, and the install administrator's allowlist is
+          # the deliberate exception. `globalServers` is empty until the listing fills it.
+          mcp:
+            enabled: true
+            egress:
+              allowHosts: []
+              denyPrivateRanges: true
+
+          # Business signals — the mechanism the surveillance-recall scenario is built from:
+          # one autopilot publishes a signal, a second subscribes to it and acts. Signals
+          # with the same code and area are merged, so a recurring finding updates one card
+          # instead of multiplying.
+          signals:
+            enabled: true
+            cooldownDays: 3
+            maxSignalsPerRun: 10
+            maxChainDepth: 3
+            eventRetentionDays: 90
+            feed:
+              pageSize: 50
+            # Relative links in a signal's body. A hostname here would be a per-deployment
+            # value in the attested ConfigMap, and a relative link resolves correctly for
+            # whoever is reading the feed anyway.
+            publicBaseUrl: ""
+            webhook:
+              timeoutMs: 10000
+              maxAttempts: 3
+              backoffMs: 10000
+              maxPerTenant: 10
+              egress:
+                allowHosts: []
+                denyPrivateRanges: true
+
+          # No tracing. Both services are somebody else's host: LangSmith is a cloud service
+          # and Langfuse would be an address outside the perimeter. A deployment that claims
+          # its prompts stay inside it does not ship a tracer pointed outward.
           langsmith:
             tracing: false
-          checkpointer:
-            type: postgres
-          nats:
-            url: nats://analyst-nats:4222
-          stt:
-            provider: openai
-            model: whisper-1
+
+          # The deployment holds no license, and `enforce` — the default — starts the api in
+          # restricted mode with the agent features off, which reads as "the application is
+          # broken". `report-only` keeps them on and still reports the state truthfully.
+          #
+          # `clusterUid.source: static`, because the alternative reads the UID of the
+          # kube-system namespace through a ClusterRole, and a cluster space is one namespace:
+          # a bundle carrying cluster-scoped objects is not something a tenant may apply. The
+          # value is a fixed string, so it is the same in every deployment of this version and
+          # does not move the digest — and with `report-only` it is a label, not a claim.
+          licensing:
+            enforcement: report-only
+            installationName: Conversational Analyst
+            clusterUid:
+              source: static
+              value: conversational-analyst
+
+        # The three addresses the BROWSER uses, as overlay references for the reason above.
+        ui:
+          logoutUrl: ${ANALYST_LOGOUT_URL}
         instance:
+          endpoints:
+            graphqlHttp: ${ANALYST_GRAPHQL_HTTP_URL}
+            graphqlWs: ${ANALYST_GRAPHQL_WS_URL}
           instanceId: analyst
           # The UI ships with a Russian and an English translation and offers both unless told
           # otherwise. A marketplace listing is read by whoever finds it, so it is served in one
           # language rather than in whichever one a stale cookie last selected; the first entry
-          # is also the default. Requires an agent build that understands the key — before
-          # `d8c05e7` the instance service rejects it at startup.
+          # is also the default.
           locales:
             - en
 
@@ -120,25 +309,27 @@ aivo:
         nvidia.com/gpu: "0"
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
-      pullPolicy: Always
-      tag: develop-452
+      pullPolicy: IfNotPresent
+      tag: "1.17.0"
     imagePullSecrets:
       - name: regcred
 
   identity:
+    # Up from 100m / 256Mi: the service now owns a database and applies its migrations on
+    # boot, and it is on the path of every sign-in.
     resources:
       requests:
-        cpu: 100m
-        memory: 256Mi
+        cpu: 250m
+        memory: 512Mi
         nvidia.com/gpu: "0"
       limits:
-        cpu: 100m
-        memory: 256Mi
+        cpu: 250m
+        memory: 512Mi
         nvidia.com/gpu: "0"
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
-      pullPolicy: Always
-      tag: develop-452
+      pullPolicy: IfNotPresent
+      tag: "1.17.0"
     imagePullSecrets:
       - name: regcred
 
@@ -154,38 +345,142 @@ aivo:
         nvidia.com/gpu: "0"
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
-      pullPolicy: Always
-      tag: develop-452
+      pullPolicy: IfNotPresent
+      tag: "1.17.0"
     imagePullSecrets:
       - name: regcred
 
   # The vendored subchart is named retail-ai upstream; the key has to match it. What the objects
   # are called is set below and is ours to choose.
   retail-ai:
-    resources:
-      requests:
-        cpu: 500m
-        memory: 1Gi
-        nvidia.com/gpu: "0"
-      limits:
-        cpu: 500m
-        memory: 1Gi
-        nvidia.com/gpu: "0"
     imagePullSecrets:
       - name: regcred
     # Traffic reaches the agent through the gateway component, which is where authentication
     # happens; an Ingress here would be a second, unauthenticated door.
     ingress:
       enabled: false
+    # The public, token-gated autopilot webhook trigger, which bypasses the authenticating
+    # proxy by design. Off: nothing in this deployment is triggered from outside it, and an
+    # extra Ingress is an extra hostname to register, resolve and defend.
+    webhookIngress:
+      enabled: false
     gatekeeper:
       enabled: false
+    # A NetworkPolicy belongs to the cluster space, which already isolates the namespace, and
+    # a deployment that ships its own is refused.
+    networkPolicy:
+      enabled: false
+    metrics:
+      podMonitor:
+        enabled: false
+    licensing:
+      clusterUid:
+        # The api reads no cluster UID (`licensing.clusterUid.source: static` above), so the
+        # ServiceAccount and the ClusterRole this would create have no reader — and a cluster
+        # space cannot carry cluster-scoped objects in the first place.
+        enabled: false
+
     back:
+      replicaCount: 1
+      # One process serves HTTP and another drains the queues. Both Deployments are the same
+      # `api` service as far as the config service is concerned, so the role cannot come from
+      # the configuration document: the worker's own Deployment sets RAI_PROCESS_ROLE=worker,
+      # and this is the other half of the pair. Without it the web pod would also drain the
+      # queues and every autopilot run would be started twice.
+      extraEnv:
+        - name: RAI_PROCESS_ROLE
+          value: web
+      resources:
+        requests:
+          cpu: "1"
+          memory: 4Gi
+          nvidia.com/gpu: "0"
+        limits:
+          cpu: "1"
+          memory: 4Gi
+          nvidia.com/gpu: "0"
+      config:
+        args:
+          - apps/api/dist/main.js
+        # Has to sit under the container's memory limit. The upstream default is 16384, which
+        # is a 16 GiB heap ceiling in a 4 GiB cgroup: node would let the heap grow past the
+        # limit and the kernel would kill the pod rather than node running a collection.
+        maxOldSpaceSize: 3072
+        port: 80
+      # `/healthz` answers 503 while the chat's JetStream transport is down — a pod that
+      # accepts messages and answers none. Readiness takes it out of the Service until it
+      # recovers; deliberately not liveness, which would turn a NATS outage into a crash loop.
+      readinessProbe:
+        httpGet:
+          path: /healthz
+          port: http
+        initialDelaySeconds: 20
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 6
+      # `/livez`, not `/healthz`: it runs `SELECT 1` through the api's own pool, which is the
+      # one failure a restart actually fixes — a pool left holding sockets to a database pod
+      # that was replaced underneath it.
+      livenessProbe:
+        httpGet:
+          path: /livez
+          port: http
+        initialDelaySeconds: 60
+        periodSeconds: 10
+        timeoutSeconds: 6
+        failureThreshold: 3
       image:
         repository: registry.aggregion.com/gh/aivoagent/agent/backend
-        pullPolicy: Always
-        tag: develop-452
+        pullPolicy: IfNotPresent
+        tag: "1.17.0"
+
+    # The background queues: autopilot runs, signal evaluation, the schema-catalog refresh
+    # that reads a newly registered data source, reference-book sync and the knowledge index.
+    # New in this chart version, and not optional — an autopilot in a deployment without a
+    # worker is a row in a table that never runs.
+    worker:
+      enabled: true
+      replicaCount: 1
+      resources:
+        requests:
+          cpu: "1"
+          memory: 4Gi
+          nvidia.com/gpu: "0"
+        limits:
+          cpu: "1"
+          memory: 4Gi
+          nvidia.com/gpu: "0"
+      config:
+        maxOldSpaceSize: 3072
+      readinessProbe:
+        httpGet:
+          path: /healthz
+          port: http
+        initialDelaySeconds: 20
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 6
+      livenessProbe:
+        httpGet:
+          path: /livez
+          port: http
+        initialDelaySeconds: 60
+        periodSeconds: 10
+        timeoutSeconds: 6
+        failureThreshold: 3
+
     front:
+      replicaCount: 1
+      resources:
+        requests:
+          cpu: 250m
+          memory: 512Mi
+          nvidia.com/gpu: "0"
+        limits:
+          cpu: 250m
+          memory: 512Mi
+          nvidia.com/gpu: "0"
       image:
         repository: registry.aggregion.com/gh/aivoagent/agent/frontend
-        pullPolicy: Always
-        tag: develop-448
+        pullPolicy: IfNotPresent
+        tag: "1.17.0"

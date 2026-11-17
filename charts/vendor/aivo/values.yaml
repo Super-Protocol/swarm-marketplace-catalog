@@ -19,10 +19,15 @@ identity:
   enabled: true
   replicaCount: 1
 
-kafka-llm-proxy:
-  enabled: true
-  replicaCount: 1
-
 retail-ai:
   enabled: true
   replicaCount: 1
+
+# First-party MCP connectors (AIV-2337), one subchart each, both off. Enabling
+# one deploys it; the api uses it once it is also listed in
+# `config.config.services.api.mcp.globalServers` — see README.md.
+mcp-telegram:
+  enabled: false
+
+mcp-email:
+  enabled: false

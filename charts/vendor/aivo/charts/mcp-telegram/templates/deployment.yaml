@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mcp-telegram.fullname" . }}
+  labels:
+    {{- include "mcp-telegram.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "mcp-telegram.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- if or .Values.global.caCert.enabled .Values.podAnnotations }}
+      annotations:
+        {{- if .Values.global.caCert.enabled }}
+        # NODE_EXTRA_CA_CERTS is read once when node starts — a rotated chain
+        # has to roll the pods to take effect.
+        checksum/ca-cert: {{ .Values.global.caCert.content | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      labels:
+        {{- include "mcp-telegram.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # The connector never talks to the Kubernetes API.
+      automountServiceAccountToken: false
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: {{ .Chart.Name }}
+        {{- with .Values.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        env:
+        - name: PORT
+          value: {{ .Values.port | quote }}
+        {{- range $name, $value := .Values.config }}
+        {{- if and (not (kindIs "invalid" $value)) (ne (toString $value) "") }}
+        - name: {{ $name }}
+          value: {{ toString $value | quote }}
+        {{- end }}
+        {{- end }}
+        {{- if .Values.global.caCert.enabled }}
+        - name: NODE_EXTRA_CA_CERTS
+          value: /etc/ssl/certs/x5-ca-chain.pem
+        {{- end }}
+        {{- with .Values.existingSecret }}
+        envFrom:
+        - secretRef:
+            name: {{ . }}
+        {{- end }}
+        ports:
+        - name: http
+          containerPort: {{ .Values.port }}
+          protocol: TCP
+        {{- with .Values.livenessProbe }}
+        livenessProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.readinessProbe }}
+        readinessProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        {{- if .Values.global.caCert.enabled }}
+        - name: ca-cert
+          mountPath: /etc/ssl/certs/x5-ca-chain.pem
+          subPath: ca-chain.pem
+          readOnly: true
+        {{- end }}
+      volumes:
+      - name: tmp
+        emptyDir:
+          sizeLimit: 16Mi
+      {{- if .Values.global.caCert.enabled }}
+      - name: ca-cert
+        configMap:
+          name: {{ .Release.Name }}-ca-cert
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

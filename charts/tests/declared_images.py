@@ -28,7 +28,12 @@ import yaml
 
 def rendered_images(chart: str, values: str) -> set[str]:
     output = subprocess.run(
-        ["helm", "template", "cr", f"charts/{chart}", "--namespace", "confidential-router", "--values", values],
+        # `--skip-tests`, the flag the marketplace renders with: a `helm test` hook is a Pod
+        # the cloud never applies, so its image is not one the listing has to declare — and
+        # requiring it would put `busybox` in the listing of anything that vendors a chart
+        # with a `wget` test pod in it.
+        ["helm", "template", "cr", f"charts/{chart}", "--skip-tests",
+         "--namespace", "confidential-router", "--values", values],
         capture_output=True,
         text=True,
         check=True,

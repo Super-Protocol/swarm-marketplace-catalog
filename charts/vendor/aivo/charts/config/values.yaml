@@ -26,16 +26,29 @@ podAnnotations: {}
 # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
 podLabels: {}
 
-podSecurityContext: {}
-  # fsGroup: 2000
+# Образы платформы уже non-root: backend объявляет `USER nestjs`, frontend —
+# `USER nextjs`, оба под номером 1001, и файлы приложения принадлежат группе
+# 1001 (`--chown=nestjs:nodejs`). Значения здесь ничего не меняют в поведении —
+# они делают это ПРОВЕРЯЕМЫМ: проверка ИБ читает securityContext манифеста, а
+# не метаданные образа, и «мы собираем образы правильно» она не видит
+# (AIV-1590).
+#
+# readOnlyRootFilesystem не включается: Next.js держит кэш рендера в /app/.next
+# внутри образа (frontend.dockerfile заводит этот каталог отдельным chown), и
+# запись туда идёт на каждом запросе.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  seccompProfile:
+    type: RuntimeDefault
 
-securityContext: {}
-  # capabilities:
-  #   drop:
-  #   - ALL
-  # readOnlyRootFilesystem: true
-  # runAsNonRoot: true
-  # runAsUser: 1000
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  capabilities:
+    drop:
+      - ALL
 
 # This is for setting up a service more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/
 service:
@@ -97,19 +110,118 @@ tolerations: []
 
 affinity: {}
 
+# Placement of the replicas across nodes (AIV-2669). The service is stateless —
+# every replica answers every request — so a second replica only buys anything
+# if it sits on another node: a soft `kubernetes.io/hostname` anti-affinity
+# against its own pods, merged with `affinity` above (an `affinity` that carries
+# its own `podAntiAffinity` replaces it). `required: true` makes the term hard —
+# for a cluster with at least `replicaCount` + 1 worker nodes; with fewer, the
+# extra pod stays Pending. Costs nothing at one replica.
+podAntiAffinity:
+  enabled: true
+  required: false
+
+# `auto` renders a PodDisruptionBudget once `replicaCount` (or, under the HPA,
+# `autoscaling.minReplicas`) is above one, so a node drain cannot take every
+# replica at once; `true` / `false` decide it outright. `maxUnavailable` wins
+# over `minAvailable` when set; exactly one of them has to carry a value.
+podDisruptionBudget:
+  enabled: auto
+  minAvailable: 1
+  maxUnavailable: ""
+
 clusterDomain: cluster.local
+
+# LOCAL DEVIATION from aivoagent/helm-charts — see charts/vendor/aivo/VENDORED.md.
+#
+# Values the configuration document refers to by name instead of carrying. Write
+# `password: "${ANALYST_DB_PASSWORD}"` in `config.services.*` and
+# `ANALYST_DB_PASSWORD: "..."` here: the rendered ConfigMap keeps the reference and this map
+# is rendered into a Secret. An init container substitutes one into the other before the
+# service reads `conf/`, and it fails closed — a `${NAME}` the overlay does not carry stops
+# the pod rather than reaching a service as the literal string `${NAME}`.
+#
+# Two kinds of value belong here and nothing else does: a CREDENTIAL, which must not be in
+# a ConfigMap that is digested and published, and a value that is DIFFERENT IN EVERY
+# DEPLOYMENT — the public hostname is the only one of those — which would otherwise make
+# this document's digest the consumer's rather than the version's. Everything else stays in
+# the ConfigMap, where it is attested.
+#
+# Empty: an installation that says nothing here renders exactly as it did before, with the
+# configuration in the ConfigMap and no init container.
+configOverlay: {}
 
 config:
   args:
   - apps/config/dist/main.js
   port: 80
   services:
+    # Реквизиты Keycloak, которыми пользуются backend-сервисы. Собственная база
+    # сервиса identity — это `identity.db` ниже, это разные вещи.
     identityService:
       clientId: identity
       clientSecret: glGxGPzKCuySzcJa9Bjm2nrhyHdIn5CS
       endpoint: http://kc-keycloak
       realm: master
+
+    # Секция конфигурации сервиса identity. Пусто по умолчанию: блок `db`
+    # появился в AIV-1294 и рендерится, только если он здесь задан.
+    #
+    # Образ до AIV-1294 лишний ключ игнорирует, образ после — без него не
+    # проходит валидацию конфига и не стартует. Поэтому чарт не подставляет
+    # ничего сам: порядок обновления установки — сначала база и этот блок,
+    # потом новый образ (profiles/universal/README.md, «База identity»).
+    #
+    #   identity:
+    #     db:
+    #       type: postgresql
+    #       config:
+    #         host: aivo-postgresql
+    #         port: 5432
+    #         username: aivo
+    #         password: ...
+    #         database: aivo_identity
+    #         # необязательные: schema (по умолчанию public), ssl, logging,
+    #         # migrationsRun (по умолчанию true — миграции на старте)
+    #
+    # Здесь же выбирается режим tenancy (AIV-1291). Ключ `provider`
+    # необязателен и по умолчанию равен `keycloak` — установка, которая о нём
+    # не знает, рендерится ровно так же, как до AIV-1354:
+    #
+    #   identity:
+    #     # keycloak (по умолчанию) — организации и роли из нашего Keycloak,
+    #     #                           реквизиты берутся из identityService выше;
+    #     # local                    — Keycloak заказчика: Admin API нет,
+    #     #                           тенанты и роли живут в базе identity и
+    #     #                           раздаются по группам из x-auth-claims.
+    #     provider: local
+    #     local:
+    #       # Группы администраторов установки. Загрузочный ключ: без него в
+    #       # пустую корпоративную установку не войти вовсе. Пустой список —
+    #       # нормальное состояние установки, где первый администратор уже
+    #       # записан в БД (docs/corporate-install.md в aivoagent/agent).
+    #       bootstrapAdminGroups:
+    #         - /Corp/IT/AivoAdmins
+    #     # Копии залогинившихся пользователей (AIV-1298). Блок необязателен:
+    #     # у каждого ключа есть значение по умолчанию.
+    #     directory:
+    #       # Какие персональные поля копируются в нашу БД. Полный набор:
+    #       # username, email, firstName, lastName, displayName.
+    #       profileFields: [username, email, firstName, lastName, displayName]
+    #       sync:
+    #         # В режиме `local` читать список пользователей realm'а нечем,
+    #         # и фоновая синхронизация там инертна в любом случае.
+    #         enabled: false
+    #
+    # Режим `local` требует config.services.api.authClaims.trust: jwks — без
+    # него api берёт пользователя из x-auth-subject и групп не получает вовсе.
+    # Чарт отказывается рендерить такую пару.
+    identity: {}
     api:
+      # In-cluster URL service discovery returns for `api`. Empty = derived from
+      # the release name the same way the retail-ai subchart names its backend
+      # Service (see `config.apiServiceUrl`).
+      serviceUrl: ""
       cors:
         origin: true
         credentials: true
@@ -137,6 +249,23 @@ config:
           synchronize: false
           autoLoadEntities: true
           logging: false
+          # Pool of the api's own PostgreSQL connections, per process (AIV-2018,
+          # AIV-2371). Omitted here on purpose: every key keeps the api's own
+          # default, and an installation that says nothing gets exactly the
+          # behaviour it had before the key existed.
+          #
+          # `max` is what a multi-replica installation has to decide: it counts
+          # PER PROCESS, so the server sees it once per `back` pod and once per
+          # `worker` pod, on top of the two pools of `checkpointer.pool` below.
+          # The arithmetic is in «Соединения к PostgreSQL» of the retail-ai
+          # chart's README.
+          # pool:
+          #   max: 10                       # pooled clients per process
+          #   connectionTimeoutMs: 5000     # deadline to acquire a client
+          #   idleTimeoutMs: 10000
+          #   keepAlive: true               # notice a peer that vanished
+          #   keepAliveInitialDelayMs: 30000
+          #   statementTimeoutMs: 120000    # server-side ceiling; 0 disables
       embeddings:
         provider: openai
         model: text-embedding-3-small
@@ -155,17 +284,24 @@ config:
           autoRemove: true
       recursionLimit: 10
       llmSmart:
-        provider: openai
+        provider: openai          # openai | google | deepseek
         apiKey: "sk-your-openai-api-key-here"
         model: gpt-4o
         temperature: 0.7
-        # baseURL: ""  # Optional: for OpenAI provider
-      llmFast:
-        provider: openai
-        apiKey: "sk-your-openai-api-key-here"
-        model: gpt-4o-mini
-        temperature: 0.7
-        # baseURL: ""  # Optional: for OpenAI provider
+        # baseURL: ""  # Optional: endpoint of the chosen provider. For openai /
+        #              # deepseek it is the OpenAI-compatible URL (…/v1); for
+        #              # google it is the native API root without a version —
+        #              # the SDK appends /{apiVersion}/models/{model}:{task}.
+      # llmFast — только для установок до 1.0 (AIV-1998). Начиная с 1.0 схема
+      # api этого ключа не знает: один прогон агента идёт по одной модели.
+      # Значения по умолчанию здесь нет намеренно — иначе установка, которая
+      # ключ не задаёт, получает в конфиге чужой пример модели.
+      # llmFast:
+      #   provider: openai        # openai | google | deepseek
+      #   apiKey: "sk-your-openai-api-key-here"
+      #   model: gpt-4o-mini
+      #   temperature: 0.7
+      #   baseURL: ""             # Optional: see llmSmart.baseURL above.
       langsmith:
         endpoint: https://eu.api.smith.langchain.com
         # apiKey: ""  # Optional
@@ -179,12 +315,45 @@ config:
       checkpointer:
         type: memory
         # uri: ""  # Required for postgres type
+        # Pools of the LangGraph checkpointer and of its long-term store — two
+        # pools of the same shape as `db.config.pool` above, configured by this
+        # one block (AIV-2018, AIV-2371). Only read for `type: postgres`.
+        # pool:
+        #   max: 10
+        #   connectionTimeoutMs: 5000
+        #   idleTimeoutMs: 10000
+        #   keepAlive: true
+        #   keepAliveInitialDelayMs: 30000
+        #   statementTimeoutMs: 120000
+      # Dashboard refresh (AIV-1629, AIV-1687, AIV-2371). Omitted: every key
+      # keeps the api's own default.
+      #
+      # `datasourceConcurrency` is the per-process limiter on widget queries
+      # against ONE tenant datasource, so the installation's real ceiling is
+      # this number times the number of `worker` pods. Divide it by the worker
+      # replica count to keep the warehouse load where it was at one worker.
+      # dashboardRefresh:
+      #   datasourceConcurrency: 4
+      #   enqueueTimeoutMs: 5000
+      #   previewWidgetTimeoutMs: 60000
+      #   previewDeadlineMs: 120000
+      #   previewJobDeadlineMs: 300000
+      #   previewDatasetTtlSeconds: 900
       nats:
         url: nats://nats:4222
+        # Копий стрима событий агента (AGENT_EVENTS) в JetStream. Не задано — у
+        # api 1, единственное, что принимает одиночный брокер. У кластера NATS
+        # — 3: стрим в одной копии уходит вместе со своим узлом (AIV-2666).
+        # streamReplicas: 3
       memory:
         enabled: true
         maxMessages: 5
         summarizeThreshold: 50
+        # `false` counts history tokens exactly with tiktoken, `true` uses
+        # chars/4. Exact counting is offline-safe since api AIV-2426: the BPE
+        # tables ship inside the image and nothing is downloaded at runtime, so
+        # a stand with no egress does not need `true`. Overlays that set it for
+        # the closed perimeter (rai-prod) may keep it or drop it.
         approximateTokenCounting: false
       fileStorage:
         type: s3
@@ -194,6 +363,7 @@ config:
           accessKeyId: ""
           secretAccessKey: ""
           # endpoint: ""  # Optional: for MinIO compatibility
+          # publicEndpoint: ""  # Optional: browser-facing host for presigned download URLs, when `endpoint` is in-cluster
       fileUpload:
         maxFileSize: 1048576  # 1MB in bytes
         indexTextFiles: true
@@ -219,6 +389,17 @@ config:
         port: 6379
         # password: ""  # Optional
         db: 0
+        # Valkey/Redis behind Sentinel (AIV-2667) — the charts/valkey release in
+        # `architecture: sentinel`. With it set the api resolves the master via
+        # the sentinels and `host`/`port` are unused. Needs an api with
+        # aivoagent/agent#1158 (and #1164 to survive the master's node dying). `password` is the sentinels' own; the
+        # charts/valkey release uses the data password for both.
+        # sentinel:
+        #   masterName: mymaster
+        #   nodes:
+        #     - host: aivo-redis
+        #       port: 26379
+        #   password: ""
       # stt:
       #   provider: openai
       #   apiKey: ""
@@ -226,22 +407,27 @@ config:
       #   baseUrl: ""  # Optional: override base URL
       #   maxDurationSeconds: 120
       #   maxFileSizeMb: 25
-    kafkaLlmProxy:
-      kafka:
-        brokers:
-          - kafka:9092
-        groupId: kafka-llm-proxy
-        requestsTopic: llm-requests
-        responsesTopic: llm-responses
-        # clarificationResponsesTopic: llm-clarification-responses
-        ssl:
-          enabled: false
-          # caFile: ""
-          # certFile: ""
-          # keyFile: ""
-        requestTimeoutMs: 300000
-        taskName: generate_sql_from_messages
-        userId: "00000000-0000-0000-0000-000000000001"
+      # Licensing (AIV-892). Omit the block to take the api's defaults: enforce,
+      # with the cluster UID read from the kube-system namespace (the RBAC for
+      # that ships with the retail-ai chart).
+      #
+      # Set `enforcement: report-only` BEFORE upgrading an installation that has
+      # not been issued a license yet — otherwise it starts in restricted mode
+      # and agent functionality goes off. Remove it once the license is loaded.
+      #
+      # `clusterUid.source: static` is for development stands only; the value it
+      # returns is whatever it was told to say, so a license bound to it proves
+      # nothing about where the platform is running.
+      # licensing:
+      #   enforcement: enforce      # or report-only
+      #   installationName: "RetailServices prod"
+      #   platformVersion: "2026.8.0"
+      #   expiryWarningDays: 30    # 0 disables the expiry banner
+      #   uidMismatchGraceDays: 14 # 0 restricts on a UID mismatch immediately
+      #   statusCacheMs: 30000
+      #   clusterUid:
+      #     source: kubernetes      # or static (dev stands)
+      #     value: ""               # used with source: static
     instance:
       instanceId: kkk
       # Locales offered in the UI. Omit (or leave empty) for all supported ones
@@ -253,10 +439,12 @@ config:
         graphqlHttp: http://localhost:3004/graphql
         graphqlWs: ws://localhost:3004/graphql
       brand:
-        name: Aivo
-        # theme:
-        #   primaryColor: "#4B72E7"
-        #   secondaryColor: "#000000"
+        name: DeepDive
+        # https:// link of the «Документация» button in the section menu
+        # (AIV-3005). Unset — no button; the global admin can still set one.
+        # docsUrl: https://docs.godeepdive.ru
+        # No `theme` (AIV-2678): colours, the built-in theme and text size are set
+        # in the global admin («Внешний вид») and stored in the database.
         logoSvg:
           dark: |-
             <svg width="137" height="40" viewBox="0 0 137 40" fill="none" xmlns="http://www.w3.org/2000/svg">

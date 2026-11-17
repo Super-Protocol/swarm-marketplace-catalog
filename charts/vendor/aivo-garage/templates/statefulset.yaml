@@ -1,0 +1,257 @@
+{{- include "garage.validateCluster" . }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "garage.fullname" . }}
+  labels:
+    {{- include "garage.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "garage.fullname" . }}-headless
+  {{- if .Values.cluster.enabled }}
+  # Кластерный режим: по поду на рабочий узел. Parallel, а не OrderedReady:
+  # Ready под становится только когда раскладка применена, а применяет её
+  # нулевой под, дождавшись ролей ВСЕХ узлов, — при поочерёдном старте второй
+  # под не появился бы никогда.
+  replicas: {{ int .Values.cluster.replicas }}
+  podManagementPolicy: Parallel
+  {{- else }}
+  # Одна реплика. `--single-node` ниже отказывается работать в кластере, где
+  # появился второй узел, — и это ровно то поведение, которое здесь нужно:
+  # раскладка на два узла с replication_factor 1 разложила бы половину
+  # разделов на под, у которого свой том и свои данные.
+  replicas: 1
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "garage.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "garage.labels" . | nindent 8 }}
+        # Метка отбора — та же, что в селекторе сервисов; см. _helpers.tpl.
+        app.kubernetes.io/component: server
+      annotations:
+        # Правка конфигурации или ключей должна доезжать до работающего пода:
+        # garage.toml читается один раз, на старте.
+        checksum/config: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      # В API Kubernetes сервер не ходит: обнаружение узлов ему не нужно, узел
+      # один. В кластерном режиме тоже не ходит — соседей контейнер `peer`
+      # находит по DNS headless-сервиса, а не встроенным kubernetes_discovery,
+      # которому нужны CRD и права на неё.
+      automountServiceAccountToken: false
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: garage
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # Команда целиком, потому что образ собран из scratch: entrypoint в
+          # нём — сам бинарь, оболочки нет, и подменить нечего.
+          #
+          # --single-node: узел сам заводит раскладку кластера при первом
+          # запуске, беря ёмкость от размера тома. Без этого флага раскладку
+          # пришлось бы применять снаружи, зная идентификатор узла, который
+          # существует только после первого старта, — а до этого момента
+          # сервер отвечает 503 на всё, включая /health, и под не становится
+          # Ready никогда.
+          #
+          # --default-access-key: ключ доступа заводится из переменных
+          # окружения ниже. На уже заведённом ключе с ДРУГИМ секретом сервер
+          # отказывается стартовать («Access key … is associated with a secret
+          # key different than the one given»), и это правильно: сменить
+          # секрет у существующего ключа Garage не даёт, такая установка
+          # молча отвечала бы 403 обоим потребителям.
+          #
+          # В кластерном режиме обоих флагов нет: сервер с ними отказывается
+          # стартовать («can only be used in single-node mode»). Раскладку там
+          # заводит контейнер `peer`, ключ доступа — Job инициализации.
+          command:
+            - /garage
+            - server
+          {{- if not .Values.cluster.enabled }}
+            - --single-node
+            - --default-access-key
+          env:
+            - name: GARAGE_DEFAULT_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "garage.fullname" . }}
+                  key: access-key-id
+            - name: GARAGE_DEFAULT_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "garage.fullname" . }}
+                  key: secret-access-key
+          {{- end }}
+          ports:
+            - name: s3
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+            - name: rpc
+              containerPort: 3901
+              protocol: TCP
+            - name: admin
+              containerPort: {{ .Values.adminPort }}
+              protocol: TCP
+          # В кластерном режиме /health — только у readiness. Ответ этой ручки
+          # там зависит от СОСЕДЕЙ: без кворума она отвечает 503 на исправном
+          # процессе, и liveness на ней перезапускал бы уцелевший узел ровно
+          # тогда, когда он нужнее всего. Живость процесса — это открытый
+          # админ-порт.
+          startupProbe:
+            {{- if .Values.cluster.enabled }}
+            tcpSocket:
+              port: admin
+            {{- else }}
+            httpGet:
+              path: /health
+              port: admin
+            {{- end }}
+            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: admin
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+          livenessProbe:
+            {{- if .Values.cluster.enabled }}
+            tcpSocket:
+              port: admin
+            {{- else }}
+            httpGet:
+              path: /health
+              port: admin
+            {{- end }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            # Пофайлово, а не каталогом: в /etc образа нет ничего, но
+            # монтировать каталог поверх пути, который сервер ищет по
+            # умолчанию, — привычка, из-за которой ClickHouse в этом же
+            # комплекте прятал собственную конфигурацию образа (AIV-1594).
+            - name: config
+              mountPath: /etc/garage.toml
+              subPath: garage.toml
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/garage
+        {{- if .Values.cluster.enabled }}
+        # Соседи и раскладка кластера; что и почему — в garage.peerScript
+        # (_helpers.tpl). Тот же busybox, что у Job'а: образов в поставке не
+        # прибавляется.
+        - name: peer
+          image: "{{ .Values.initImage.repository }}:{{ .Values.initImage.tag }}"
+          imagePullPolicy: {{ .Values.initImage.pullPolicy }}
+          {{- with .Values.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.peerResources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # Зона узла Garage — рабочий узел Kubernetes, на котором стоит под.
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: HEADLESS
+              value: {{ include "garage.fullname" . }}-headless
+            - name: REPLICAS
+              value: {{ int .Values.cluster.replicas | quote }}
+            - name: CAPACITY
+              value: {{ include "garage.capacityBytes" . | quote }}
+            - name: ADMIN_PORT
+              value: {{ .Values.adminPort | quote }}
+            - name: RPC_PORT
+              value: "3901"
+            - name: INTERVAL
+              value: {{ int .Values.cluster.peerInterval | quote }}
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "garage.fullname" . }}
+                  key: admin-token
+          command: ["/bin/sh", "-eu", "-c"]
+          args:
+            - |
+              {{- include "garage.peerScript" . | nindent 14 }}
+        {{- end }}
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ include "garage.fullname" . }}
+            items:
+              - key: garage.toml
+                path: garage.toml
+        {{- if not .Values.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.affinity }}
+      affinity:
+        {{- toYaml .Values.affinity | nindent 8 }}
+      {{- else if .Values.cluster.enabled }}
+      # По поду на рабочий узел: две копии объекта на одной машине отказ этой
+      # машины не переживают.
+      affinity:
+        podAntiAffinity:
+          {{- if eq .Values.cluster.podAntiAffinity "required" }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "garage.selectorLabels" . | nindent 18 }}
+          {{- else }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "garage.selectorLabels" . | nindent 20 }}
+          {{- end }}
+      {{- end }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - {{ .Values.persistence.accessMode }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size | quote }}
+  {{- end }}

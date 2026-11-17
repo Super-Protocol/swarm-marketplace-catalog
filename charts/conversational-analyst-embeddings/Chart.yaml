@@ -1,0 +1,10 @@
+apiVersion: v2
+name: conversational-analyst-embeddings
+description: >-
+  The analyst's embedding model, served inside the deployment's own namespace over an
+  OpenAI-compatible endpoint, from weights pinned by sha256. CPU only.
+type: application
+version: 0.1.0
+# Text Embeddings Inference. Bumping it is a chart change: the backend selection,
+# the flags and the pooling behaviour move with it.
+appVersion: "1.8"

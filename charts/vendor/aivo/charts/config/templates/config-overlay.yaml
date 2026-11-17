@@ -1,0 +1,39 @@
+{{- if .Values.configOverlay }}
+{{- /*
+LOCAL DEVIATION from aivoagent/helm-charts — see charts/vendor/aivo/VENDORED.md.
+
+The whole platform configuration is one YAML document the config service reads from
+`conf/services.yaml`. Upstream renders it into a ConfigMap, which is the right answer for an
+installation an engineer applies by hand and the wrong one here, for two reasons.
+
+It carries every credential the services need — the database passwords, the Redis password,
+the object-store secret key, the Keycloak client secret, the model access key — and a
+marketplace deployment's manifests are digested into signed evidence served publicly at
+`/.well-known/swarm-evidence`. A credential in a ConfigMap is a credential published.
+
+And it carries values that are different in every deployment — the public hostname, in the
+UI's GraphQL endpoints and its logout URL — so the document's digest would be the
+consumer's rather than the version's.
+
+The alternative everybody reaches for first, excluding `/data/services.yaml` from the
+evidence, pays for both with the whole configuration: the deployment would attest its images
+and prove nothing about where its model lives or what it may reach. That is the one thing
+this digest is worth having.
+
+So the document is split instead. The ConfigMap keeps every endpoint, model id, threshold
+and egress allowlist, attested in full, with each withheld value written as a `${NAME}`
+reference; this Secret carries what those names stand for, and the platform lifts every
+rendered Secret out of the bundle and seals it for the target. An init container substitutes
+one into the other at boot. A reader of the evidence sees the complete configuration and, at
+each withheld value, the name of what was withheld and why there is a name there at all.
+*/ -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "app.fullname" . }}-config-overlay
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  overlay.json: {{ .Values.configOverlay | toJson | quote }}
+{{- end }}

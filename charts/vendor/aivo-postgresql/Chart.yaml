@@ -1,0 +1,17 @@
+apiVersion: v2
+name: postgresql
+description: >-
+  PostgreSQL 16 + pgvector для установок Aivo внутри кластера: одна реплика,
+  один PVC, базы и роли создаются при первой инициализации.
+type: application
+version: 0.1.0
+# Образ pgvector/pgvector — официальный postgres той же мажорной версии с
+# собранным расширением vector. Образы bitnami/postgresql его НЕ содержат
+# (проверено на 16.6.0-debian-12-r0 и 17.3.0-debian-12-r1: каталог
+# share/extension без vector), поэтому чарт bitnami здесь не подходит.
+appVersion: "16.8"
+keywords:
+  - postgresql
+  - pgvector
+sources:
+  - https://github.com/pgvector/pgvector
