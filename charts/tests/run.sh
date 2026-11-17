@@ -94,7 +94,9 @@ while IFS=$'\t' read -r name chart repo version; do
     rendered=$(helm template "$release" "charts/$chart" \
       --namespace "$namespace" --values "$values" 2>&1) || { fail "$name (render)"; printf '%s\n' "$rendered" | sed 's/^/        /'; continue; }
   fi
-  filtered=$(printf '%s\n' "$rendered" | own_documents "$chart")
+  # bcrypt salts are random on every render (htpasswd in a Secret), so mask the hash.
+  filtered=$(printf '%s\n' "$rendered" | own_documents "$chart" \
+    | sed -E 's/\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}/<bcrypt>/g')
 
   if [ -n "$update" ]; then
     printf '%s' "$filtered" > "$golden"

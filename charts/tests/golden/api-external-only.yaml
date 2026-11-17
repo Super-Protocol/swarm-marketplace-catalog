@@ -246,6 +246,17 @@ metadata:
     swarm.io/exclude-evidence-fields: "/spec/template/metadata/annotations/checksum~1public-config,/spec/template/metadata/annotations/checksum~1mail"
 spec:
   replicas: 1
+  # One router-api process at a time, never two (SUP-601). A rolling update at
+  # `replicaCount: 1` is `maxSurge: 1, maxUnavailable: 0` — the new pod goes
+  # Ready *beside* the old one — and for that window two processes write one
+  # `external_endpoints` table, each reading the other sidecar's in-memory
+  # verdict back through the database, which ADR-008 §8 exists to forbid. The
+  # new pod's reset-to-pending also discards the old pod's live verdict while
+  # the old pod is still serving every request. SUP-600 is what that overlap
+  # produced once. The cost is that a publish is a short hard outage instead of
+  # a handover, which is the honest shape of restarting a single pod anyway.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: confidential-router-api
@@ -284,7 +295,7 @@ spec:
         # PostgreSQL accepts connections, which is exactly the wait this pod needs
         # and is why there is no separate wait-for-database container.
         - name: migrate
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:6edbac2ef4b8a3ee22a72901517f98ee25e7699b8a7cbd2d7e01ac50213e4e06
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:9e1fce1b4759e0678a7afbed952c4df2153e900e8cda28ef3bfafb3dcb2f5f0f
           imagePullPolicy: IfNotPresent
           args: ["migrate"]
           securityContext:
@@ -404,7 +415,7 @@ spec:
               nvidia.com/gpu: "0"
       containers:
         - name: router-api
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:6edbac2ef4b8a3ee22a72901517f98ee25e7699b8a7cbd2d7e01ac50213e4e06
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:9e1fce1b4759e0678a7afbed952c4df2153e900e8cda28ef3bfafb3dcb2f5f0f
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -557,7 +568,7 @@ spec:
         # nothing writable: a static binary on a read-only root filesystem,
         # running as the image's own non-root uid rather than the API's.
         - name: gatekeeper
-          image: ghcr.io/super-protocol/confidential-router/gatekeeper@sha256:4569f7c8a00bc14ef3eb65fb61c584aed93a2897e907b733416901ea6831066a
+          image: ghcr.io/super-protocol/confidential-router/gatekeeper@sha256:c6bc7903b634c17e89e397c308d738decc5d109f40d572fe970f79be11db378e
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

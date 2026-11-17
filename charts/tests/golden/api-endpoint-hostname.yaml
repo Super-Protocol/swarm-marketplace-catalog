@@ -216,6 +216,17 @@ metadata:
     swarm.io/exclude-evidence-fields: "/spec/template/metadata/annotations/checksum~1public-config,/spec/template/metadata/annotations/checksum~1mail"
 spec:
   replicas: 1
+  # One router-api process at a time, never two (SUP-601). A rolling update at
+  # `replicaCount: 1` is `maxSurge: 1, maxUnavailable: 0` — the new pod goes
+  # Ready *beside* the old one — and for that window two processes write one
+  # `external_endpoints` table, each reading the other sidecar's in-memory
+  # verdict back through the database, which ADR-008 §8 exists to forbid. The
+  # new pod's reset-to-pending also discards the old pod's live verdict while
+  # the old pod is still serving every request. SUP-600 is what that overlap
+  # produced once. The cost is that a publish is a short hard outage instead of
+  # a handover, which is the honest shape of restarting a single pod anyway.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: confidential-router-api
@@ -254,7 +265,7 @@ spec:
         # PostgreSQL accepts connections, which is exactly the wait this pod needs
         # and is why there is no separate wait-for-database container.
         - name: migrate
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:6edbac2ef4b8a3ee22a72901517f98ee25e7699b8a7cbd2d7e01ac50213e4e06
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:9e1fce1b4759e0678a7afbed952c4df2153e900e8cda28ef3bfafb3dcb2f5f0f
           imagePullPolicy: IfNotPresent
           args: ["migrate"]
           securityContext:
@@ -367,7 +378,7 @@ spec:
               nvidia.com/gpu: "0"
       containers:
         - name: router-api
-          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:6edbac2ef4b8a3ee22a72901517f98ee25e7699b8a7cbd2d7e01ac50213e4e06
+          image: ghcr.io/super-protocol/confidential-router/router-api@sha256:9e1fce1b4759e0678a7afbed952c4df2153e900e8cda28ef3bfafb3dcb2f5f0f
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

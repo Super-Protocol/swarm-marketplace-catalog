@@ -139,11 +139,11 @@ controlCenter:
   alertmanager:
     resources:
       requests:
-        cpu: 50m
+        cpu: 100m
         memory: 256Mi
         nvidia.com/gpu: "0"
       limits:
-        cpu: 50m
+        cpu: 100m
         memory: 256Mi
         nvidia.com/gpu: "0"
 
