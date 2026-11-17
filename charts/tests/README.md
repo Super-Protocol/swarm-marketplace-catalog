@@ -65,8 +65,9 @@ cannot answer the question:
 - **The heaviest pod the charts render is within the `maxPod` the listing declares**
   (`max_pod.py`). `resources.maxPod` is what the cloud requires one node to be able to hold, and
   the LimitRange `max` of the space. Declared below the heaviest pod the charts actually render,
-  the pod is placed on a node that cannot hold it or refused at admission — the same outage
-  `limitrange.py` exists for, arriving from the listing rather than from a chart. The unit is the
+  the pod is refused at admission by a LimitRange sized from it, or stays Pending because
+  placement chose a cluster for a pod smaller than the real one — the same outage `limitrange.py`
+  exists for, arriving from the listing rather than from a chart. The unit is the
   POD, not the container `limitrange.py` weighs: a pod's demand is its containers' limits summed,
   or its heaviest init container, whichever is larger, and four admissible 200m containers are an
   800m pod. A listing that declares no `maxPod` passes — the cloud falls back to

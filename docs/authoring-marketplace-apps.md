@@ -198,8 +198,9 @@ two are the same number. For a composed one they are not: declare `maxPod` or th
 whole quota lands on one pod and refuses the listing on any cloud whose nodes are smaller than its
 entire quota (SUP-824).
 
-Declaring it **too small** is worse than omitting it — the pod is placed on a node that cannot hold
-it, or refused at admission by the LimitRange. Check it against the render, not against values.yaml:
+Declaring it **too small** is worse than omitting it — the pod is refused at admission by a
+LimitRange sized from it, or stays Pending because the cluster was chosen for a pod smaller than the
+real one. Check it against the render, not against values.yaml:
 `charts/tests/max_pod.py` does exactly that, and `conversational-analyst` is the worked example.
 
 ---

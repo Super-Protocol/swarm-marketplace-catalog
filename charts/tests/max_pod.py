@@ -5,10 +5,11 @@ A listing's `resources.maxPod` is the heaviest pod its charts actually render.
 `resources.min` is the cluster space's quota and `resources.maxPod` is the
 heaviest single pod inside it. The cloud uses `maxPod` twice: to require that
 one node can hold that pod, and as the LimitRange `max` of the space. Declared
-too small, both bite — the pod is scheduled onto a node that cannot hold it, or
-refused at admission by the LimitRange — and neither presents as a resource
-declaration that was wrong. It presents as "the app is broken" (SUP-824, and
-SUP-238 for the LimitRange half).
+too small, both bite — the pod is refused at admission by a LimitRange sized
+from it, or stays Pending because placement chose a cluster for a pod smaller
+than the real one — and neither presents as a resource declaration that was
+wrong. It presents as "the app is broken" (SUP-824, and SUP-238 for the
+LimitRange half).
 
 Omitting `maxPod` is safe: the cloud falls back to `min`. Declaring it is what
 needs checking, and only the render can check it, so:
