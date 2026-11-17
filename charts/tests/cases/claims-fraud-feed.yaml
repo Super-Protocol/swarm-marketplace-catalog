@@ -1,0 +1,14 @@
+# claims-fraud-feed as the confidential-claims-fraud listing renders it.
+bootstrapServers: claims-kafka:9092
+intervalSeconds: "5"
+conflictEvery: "10"
+payer:
+  username: payer
+  password: test-payer
+  topic: claims
+  providerId: HOSP-B
+hospital:
+  username: hospital
+  password: test-hospital
+  topic: clinical.events
+  hospitalId: HOSP-B

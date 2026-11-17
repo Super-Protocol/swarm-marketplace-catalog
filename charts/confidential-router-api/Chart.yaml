@@ -106,7 +106,290 @@ type: application
 # next (SUP-300). No template change on top of 0.12.0 and no values change
 # besides the two digests; anyone pinning a deployment's evidence digest
 # re-pins once for 0.12.0's dropped line and the new images together.
-version: 0.12.1
+#
+# 0.13.0 (SUP-409) adds `mail.replyTo`, written to the Secret as
+# `mail-reply-to` and read as `CR_API_MAIL__REPLY_TO`. The sender on a
+# deployment is a no-reply address on a domain that need not receive mail at
+# all — `router.superprotocol.com` has no MX, and a probe against Google's MX
+# returned 5.1.3 for every address on it — so without this a reply, or a bounce
+# a human returns by hand, reaches nothing. Unset writes no key and sends no
+# header, so a deployment that says nothing sends what it sent before.
+#
+# The value is not optional for the chart's own default, which is why this is a
+# minor and not a patch: `image.digest` moves to `main-5de9e7d`, the first
+# router build whose config schema knows the key. The schema is strict, so the
+# two must move together — 0.12.1's image refuses to boot on a Secret carrying
+# `mail-reply-to`, the same trap 0.12.0's ⚠ above described. Riding along from
+# the same head, because an image is a head and not a cherry-pick: the lifted
+# 5s upstream deadline and 1 MiB `/v1` body cap (SUP-339) and a documentation
+# fix in the console's VS Code steps. The gatekeeper sidecar does not move.
+#
+# 0.13.1 (SUP-434) re-pins the router API and its egress sidecar to
+# `main-37ed4ba`, the head of the deploy train this version exists to carry. No
+# template change and no values change besides the two digests, so this is a
+# patch: the rendered documents are 0.13.0's, and only what runs inside them
+# moves.
+#
+# The sidecar is the reason the train leaves at all, and it is the first time
+# this chart has moved it since 0.12.1. A re-attestation that failed latched the
+# gatekeeper into deny until the next five-minute tick, so a six-second upstream
+# blip cost ten minutes of refusals; it now re-attests on demand when a request
+# meets a denial (SUP-422). The server-side half of that fix is this container
+# and nothing else, which is why a reconfigure could never have delivered it.
+#
+# Arriving from the same head, because an image is a head and not a cherry-pick:
+# an invite-only deployment no longer mails a sign-in code to an address it would
+# refuse to register (SUP-410), and evidence coverage no longer reads 0% for a
+# generation served through an external model endpoint, with no ratio shown
+# where no request was coverable (SUP-421, SUP-429, SUP-430). `mail.replyTo`
+# arrived in 0.13.0 and is unchanged here.
+#
+# 0.13.2 (SUP-424) re-pins the router API to `main-7b7aaba`. The metering a
+# user is billed against is now honest: every streamed first token is timed
+# even when the stream opens with a tool call rather than text, a rate nothing
+# could measure reads as absent instead of as a fabricated number — a
+# two-token completion no longer claims 2000 tok/s — and a ledger usage row is
+# priced to four decimals, so a sub-cent charge is a number and not `-$0.00`.
+#
+# A patch, and the second one in this train: 0.13.1 was published and the chart
+# repository is append-only, so SUP-424 arriving after that merge is a new
+# version rather than an edit. No template change and no values change besides
+# the one digest. The egress sidecar does not move — `7b7aaba` changes no Go
+# code at all, so release `0.3.2` is the same gatekeeper source this head would
+# produce.
+#
+# 0.13.3 (SUP-459) re-pins the router API to `main-c668239`, the head of the
+# second production train. A streamed request now carries SSE comment
+# heartbeats while the upstream is still thinking, so the stream opens
+# immediately and nothing between the client and this deployment times the
+# connection out during a long prefill (SUP-449) — the fix a VS Code chat
+# session needs, because that client does not retry a turn it loses. From the
+# same head: an upstream 4xx about the request reaches the client as that 4xx
+# instead of a 502 (SUP-448), `/v1/completions` answers for every chat model
+# and `/v1/models` reports capabilities the deployment actually has (SUP-450),
+# the deployment bundle carries API keys so a rebuild no longer voids every
+# user's key (SUP-445), and an endpoint edit keeps the approved deployment it
+# was pinned to instead of silently clearing the digest (SUP-435).
+#
+# A patch: no template change and no values change besides the one digest. The
+# egress sidecar does not move — `c668239` changes no Go code under
+# `apps/gatekeeper`, so release `0.3.2` is the same gatekeeper source this head
+# would produce.
+#
+# 0.13.4 (SUP-459) re-pins the router API to `main-e670363`. The train 0.13.3
+# was cut for did not leave — it was held while the product was tested by hand,
+# and three analytics fixes merged while it waited, so the version that ships
+# carries eight commits rather than five. On top of 0.13.3: the feedback
+# funnel's `feedback_grant_applied` reaches PostHog, where the binding had no
+# call site at all (SUP-465); the console's event ingest moves from
+# `POST /v1/analytics/events` — which matched an EasyPrivacy path rule and was
+# therefore cancelled in the browser for much of a developer audience — to
+# `POST /v1/console-events`, with the old path still answering identically for
+# one release (SUP-463); and `/health` now reports whether analytics is
+# configured and how many events it has dropped, so a rebuild that forgets the
+# PostHog key is visible instead of silent (SUP-464).
+#
+# A patch again: no template change, no values change besides the one digest,
+# and `/v1` is already a prefix path on the Ingress, so the new ingest route
+# needs nothing here. The egress sidecar does not move — `e670363` changes no
+# Go code under `apps/gatekeeper`.
+#
+# 0.13.5 (SUP-522) re-pins the router API to `main-5bf6f33`, one commit over
+# 0.13.4's `e670363`: the log sanitiser `/privacy` credits, and the upstream
+# error body out of the log (SUP-497). Two halves, one commit.
+# `libs/server-common/src/lib/logging/redact.ts` grows a second list,
+# `DEFAULT_CONTENT_KEYS` (`messages`, `prompt`, `input`, `content`, `choices`,
+# `delta`, `text`, `completion`, `embedding`), matched on the whole key so
+# `contextLength` and `contentType` survive, wired into every structured record
+# through the `formatters.log` hook — the filter standing between a body and a
+# log line that §5 and §13 of `/privacy` describe, and which did not exist.
+# And `apps/router-api/src/app/api/v1/upstream-failure.ts` stops handing a
+# non-2xx body's text to `logger.warn`: `describeUpstreamError` carries the
+# status, the OpenAI-shaped `type` and `param` when the body parsed that way,
+# and the body's length — never its text. That interpolated line was the only
+# path that ever put request content into an operational log, and the sanitiser
+# above could not have caught it. The caller still receives the upstream's own
+# wording on the wire, which is what SUP-448 needed it for.
+#
+# A patch: no template change, no values change besides the one digest. The
+# egress sidecar does not move — `5bf6f33` changes no Go code under
+# `apps/gatekeeper`, so release `0.3.2` is the same gatekeeper source this head
+# would produce.
+#
+# 0.13.6 (SUP-578) re-pins the router API to `main-91922ec`, ten commits over
+# 0.13.5's `5bf6f33` — a SHA `main` no longer carries, since the branch was
+# rewritten on 2026-10-26; the tree it named is now `6ce7c4a`, and that is
+# where this delta starts. Two of the ten carry a migration, and one moves the
+# egress sidecar, which has not moved since 0.19.1.
+#
+# What the API image gains:
+#   * SUP-517, SUP-535 — an external upstream that stops serving is detected
+#     and a human is mailed. The failure run is projected beside the verdict —
+#     `lastSuccessAt`, `lastFailureAt`, `notServingSince`,
+#     `consecutiveFailures` (migration `1760300000000-ExternalEndpointLiveness`)
+#     — and both thresholds, `externalEndpoints.outage.afterFailures` and
+#     `.afterNoSuccess`, carry defaults. The alert leaves the process by the
+#     mail transport the sign-in codes already use: `alerts.emails` is empty by
+#     default and falls back to `auth.adminEmails`, so this chart emits no new
+#     key and the listing grows no parameter — deliberately, because a channel
+#     needing a new parameter would be unset on the deployment the outage
+#     happens on. `/health` gains an `alerts` block; its `unconfigured` state
+#     is the one that says outages are detected and nobody is told.
+#   * SUP-466 — which client sent each request, as a closed-set dimension
+#     (migration `GenerationClient1760200000000`).
+#   * SUP-542 — which model each `/v1` request asked for, recorded beside it.
+#   * SUP-479 — the health document served at `/admin/health`, for an operator
+#     who cannot reach `/health` from outside the cluster. `/admin` is already
+#     a prefix path on this chart's Ingress, so nothing here moves for it.
+#   * SUP-551, SUP-556 — mail the provider accepted and then discarded becomes
+#     visible to the operator, and a recipient whose address the provider drops
+#     has a way back.
+#
+# The sidecar moves to `main-91922ec` for SUP-537: a reconciling supervisor
+# that keeps every listener the configuration declares. There is no published
+# gatekeeper release at this head — `0.3.2` (2026-10-20) predates it — so until
+# one is cut the verifier in this pod is ahead of the binary a user downloads.
+#
+# A patch, as 0.13.5 was: no template change, and no values change besides the
+# two digests.
+#
+# 0.13.7 (SUP-599) re-pins the router API to `main-d2ed74b`, two commits over
+# 0.13.6's `91922ec`.
+#
+#   * SUP-598 — `models` resolved "which endpoint is live" through
+#     `latestForMany`, which loaded every `evidence_snapshots` row ever written
+#     and reduced it in process. The query's cost therefore grew with the
+#     history, and production's console Keys page reached 8-23 s. It now reads
+#     one snapshot per endpoint. No migration and no schema change: a question
+#     the database could always answer cheaply, finally asked that way.
+#   * SUP-583 — the egress sidecar's own verdicts stopped being discarded, and
+#     a stale verdict expires instead of standing in for a live answer. The
+#     sidecar serves health (`apps/gatekeeper/pkg/sidecar/health.go`) and the
+#     admin client reads it, so an endpoint the sidecar cannot verify is
+#     reported unverified rather than silently last-known-good.
+#
+# The sidecar moves with it, to `main-d2ed74b`, for that health endpoint. There
+# is still no published gatekeeper release at this head — `0.3.2` (2026-10-20)
+# predates both SUP-537 and SUP-583 — so the verifier in this pod remains ahead
+# of the binary a user downloads, as it has been since 0.13.6.
+#
+# `docker/router-api/entrypoint.sh` gains a heap-sizing step with its own test,
+# which changes the image and no rendered template.
+# It is the fix for a real production failure: router-api killed itself at a
+# heap of ~557 MB inside a 1Gi container, because Node sized the old space from
+# the host rather than the cgroup. The ceiling is derived at boot now.
+#
+# SUP-583's own chart half is deliberately **not** here. The sidecar binary at
+# this head answers `gatekeeper-sidecar --healthcheck`, but the pod probe that
+# would run it is PR #78 (chart 0.14.0), still open against `main` and
+# unreviewed. So this train carries the binary's half and not the probe: a
+# wedged sidecar is caught by `expireVerdict` in the API — which is the half
+# that protects the trust chain — but Kubernetes still will not restart it.
+# 0.14.0 is the follow-up, and it is a minor bump, not this patch.
+#
+# A patch, as 0.13.6 was: no template change, and no values change besides the
+# two digests.
+#
+# 0.13.8 (SUP-601) sets `strategy: { type: Recreate }` on the Deployment. No
+# image moves and no value changes: this is about how a publish replaces the
+# pod, not about what runs in it.
+#
+# Without it Kubernetes rolls the Deployment with `maxSurge: 1,
+# maxUnavailable: 0`, so at this chart's `replicaCount: 1` the new pod boots
+# and goes Ready *beside* the old one. For that window two router-api
+# processes write one `external_endpoints` table — and those rows are a
+# projection of a verdict a particular sidecar holds in memory (ADR-008 §8),
+# so each pod ends up reading the other sidecar's verdict through the
+# database. §8 exists to forbid exactly that. The new pod also resets every
+# row to `pending` while the old pod is still taking every request, which
+# recovers on the next poll but is a self-inflicted gap in `/v1` meanwhile.
+#
+# SUP-600 is what the overlap produced once: the new pod built an empty
+# catalogue from the rows it had just reset, the old pod re-verified them from
+# its own sidecar, the new pod then saw no transition of its own and served
+# `/v1/models` empty and 503 `attestation_failed` for the life of the pod,
+# every train, until an operator cycled the endpoint by hand. confidential-
+# router#179 makes router-api robust to the overlap, so this is no longer the
+# fix that keeps production up — it removes the condition rather than survives
+# it, and both halves above disappear with one pod at a time.
+#
+# The trade-off, stated rather than hidden: `Recreate` tears the old pod down
+# before starting the new one, so a publish becomes a short hard outage
+# instead of a handover. At one replica that is the honest description of a
+# restart — a single pod's rollout was never seamless for in-flight requests —
+# and a deploy train already runs inside a maintenance window.
+#
+# `confidential-router-ui` deliberately keeps the default: it is stateless,
+# shares nothing between pods, and has nothing to gain from the outage.
+#
+# A patch, as 0.11.1's Ingress path was: one more field in the attested
+# Deployment, no values and no image. `/spec/strategy` is attested like the
+# rest of the object, so anyone pinning this deployment's evidence digest
+# re-pins once.
+# 0.13.9 (SUP-603) re-pins the router API and its egress sidecar to
+# `main-f507761`, one commit over 0.13.7's `d2ed74b`. It inherits
+# `strategy: { type: Recreate }` from 0.13.8 unchanged — 0.13.8 set that field
+# and moved no image, so this is the version that carries both halves of the
+# SUP-600 story at once, and it is the one a listing has to pin to get either.
+#
+# The commit is confidential-router#179, SUP-600. The external catalogue is
+# re-derived from the `external_endpoints` rows on **every** status pass rather
+# than only on a pass that itself projected a flip; `refresh()` is serialised;
+# and `/health` publishes `externalEndpoints.routable` beside `serving`, with
+# `routable < serving` for two consecutive passes promoting `status` to
+# `outage`.
+#
+# What that fixes is the failure every deploy train had to be nursed through by
+# hand. A new pod reset the rows to `pending`, built its catalogue from them —
+# empty — and then saw no transition of its own on any later pass, because the
+# old pod had already re-verified the rows. So the empty catalogue stood for the
+# life of the pod: `/v1/models` empty, every completion a 503
+# `attestation_failed`, until an operator cycled the endpoint. Rebuilding from
+# the rows unconditionally means the catalogue cannot outlive the state it was
+# derived from, whoever wrote that state.
+#
+# 0.13.8 removes the condition (one pod at a time) and this removes the
+# fragility (a pod that cannot get stuck on a stale catalogue). They are
+# complementary, not alternatives, which is why the train ships them together.
+# No migration: the change touches `external-catalog.service.ts`,
+# `external-endpoint-status.service.ts`, `external-endpoint-health.ts`,
+# `external-endpoint-liveness.ts` and the health DTO, and no schema.
+#
+# A patch: no template change, and no values change besides the two digests.
+#
+# The sidecar digest moves even though `f507761` touches no Go. The image is
+# rebuilt per commit, so a new digest is what re-pins the attested evidence —
+# and there is a second reason it is worth reading rather than assuming here. A
+# scheduled `Release gatekeeper` workflow rebuilds and re-pushes `main-<sha>`
+# nightly, so this tag resolved to `sha256:e9d296c8…` after #179 merged and to
+# `sha256:28112070…` after the 2026-11-04T03:20Z run, at the same `headSha`.
+# The two images are the same sidecar: identical `rootfs`, identical layer
+# digests, identical runtime config, differing only in the label
+# `org.opencontainers.image.created`. The digest below is what the tag resolved
+# to when this version was cut. Still no published gatekeeper release at this
+# head — `0.3.2` (2026-10-20) predates SUP-537, SUP-583 and this — so the
+# verifier in this pod remains ahead of the binary `releases/latest` hands a
+# user, as it has been since 0.13.6.
+
+# 0.13.10 (SUP-615) re-pins the router API and its egress sidecar to
+# `main-0c5f34f`, one commit over 0.13.9's `f507761`
+# (confidential-router#180). Template-wise nothing moves: `strategy:
+# { type: Recreate }` and every value stay as 0.13.9 left them.
+#
+# What the new image carries is the refresh of a relayed external-upstream
+# evidence copy. The old skip was keyed on the evidence digest, which says
+# *what* an upstream is running and does not move while its deployment stands,
+# so the bring-up fetch was the only copy ever filed and it aged past the
+# 24-hour window every verifier applies. A filed copy is now re-fetched once
+# the row's `fetchedAt` passes `externalEndpoints.evidenceRefreshAfter` (1h),
+# and past `evidenceStaleAfter` (6h) the status pass logs an `ERROR` and raises
+# an operator alert through the existing mail channel. Both keys default inside
+# the image and are not chart values, so no deployment parameter changes and a
+# deployment on 0.13.9's values gets the new behaviour by moving the digest.
+#
+# No migration: service logic and two config defaults, no entity or schema
+# change.
+version: 0.13.10
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous

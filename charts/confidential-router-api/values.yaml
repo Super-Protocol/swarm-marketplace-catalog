@@ -16,7 +16,7 @@
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-router/router-api
-  digest: sha256:367aab943e948fb5443e6839212bdb5965a9d3791966626eadede79c44ec7ab0
+  digest: sha256:9e1fce1b4759e0678a7afbed952c4df2153e900e8cda28ef3bfafb3dcb2f5f0f
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -318,6 +318,14 @@ mail:
   from: ""
   # Display name in front of `from`; the router's default is "Confidential Router".
   fromName: ""
+  # Where a reply goes (SUP-409). `from` is a no-reply address, and the domain it
+  # sits on need not receive mail at all, so without this a reply — or a bounce a
+  # human returns by hand — reaches nothing. Unset sends no `Reply-To` header,
+  # which is what every deployment before chart 0.13.0 did.
+  #
+  # Needs a router image carrying `mail.replyTo` (confidential-router#130 on).
+  # The config schema is strict: an older image refuses to boot on this key.
+  replyTo: ""
   resendApiKey: ""
   smtp:
     host: ""
@@ -329,8 +337,8 @@ mail:
     password: ""
   # Read every key above from a Secret of your own instead — the same key names
   # this chart writes (`mail-provider`, `mail-from`, `mail-from-name`,
-  # `mail-resend-api-key`, `smtp-host`, `smtp-port`, `smtp-security`,
-  # `smtp-user`, `smtp-password`).
+  # `mail-reply-to`, `mail-resend-api-key`, `smtp-host`, `smtp-port`,
+  # `smtp-security`, `smtp-user`, `smtp-password`).
   existingSecret: ""
 
 # Which models this deployment serves: a plain list of Ollama model names. This
@@ -464,15 +472,17 @@ externalEndpoints:
   #
   # The build has to be one whose supervisor *waits* while the rendered file has
   # no endpoint (confidential-router SUP-229, `main-481445c` or later; pinned:
-  # `main-82769ff`, which also verifies Azure CVM roots, SUP-251, looks
-  # measurements up in the real registry layout, SUP-255, and closes an idle
-  # upstream connection before it is reused, SUP-289): a fresh deployment
-  # renders exactly that, and an older build exits on it and keeps the API pod
-  # un-Ready (SUP-248). `charts/tests/sidecar_boot.sh` checks it.
+  # `main-37ed4ba`, published as gatekeeper release `0.3.2`, which also verifies
+  # Azure CVM roots, SUP-251, looks measurements up in the real registry layout,
+  # SUP-255, closes an idle upstream connection before it is reused, SUP-289,
+  # and re-attests on demand instead of latching deny until the next tick,
+  # SUP-422): a fresh deployment renders exactly that, and an older build exits
+  # on it and keeps the API pod un-Ready (SUP-248).
+  # `charts/tests/sidecar_boot.sh` checks it.
   image:
     registry: ghcr.io
     repository: super-protocol/confidential-router/gatekeeper
-    digest: sha256:e57e4f2f1952d6b369086a72e28ea42f7d8ac93f4dc39b76217bfb8bf9c1958b
+    digest: sha256:c6bc7903b634c17e89e397c308d738decc5d109f40d572fe970f79be11db378e
     tag: ""
     pullPolicy: IfNotPresent
 

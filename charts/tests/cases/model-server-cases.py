@@ -37,6 +37,8 @@ CASES = {
     "model-server-gemma": ("gemma-2-2b-it", "gemma.models.example", 8192, 0.85),
     "model-server-qwen-fp8": (
         "qwen3-coder-30b-a3b-instruct-fp8", "qwen-coder.models.example", 65536, 0.85),
+    "model-server-qwen-next-fp8": (
+        "qwen3-coder-next-fp8", "qwen-coder-next.models.example", 262144, 0.9),
 }
 
 # The one case that is not a listing: two of the models above on a single card,

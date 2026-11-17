@@ -43,5 +43,60 @@ type: application
 # (SUP-300). It also carries the field-level sign-up refusals and the key-form
 # copy (SUP-295) and the evidence-derived TEE label everywhere it is shown
 # (SUP-260). No template change.
-version: 0.2.10
+#
+# 0.2.11 (SUP-434) pins `main-37ed4ba`: the console half of evidence coverage —
+# a generation served through a verified external model endpoint counts as
+# covered, and a page with nothing coverable on it says so instead of showing
+# 0% (SUP-421, SUP-429, SUP-430). The profile heatmap stops reading 0 signed
+# days for an account served entirely by external endpoints. No template change.
+#
+# 0.2.12 (SUP-424) pins `main-7b7aaba`: the console reads the metering the API
+# now records honestly. A streamed turn that opens with a tool call shows a
+# TTFT instead of an em dash, a Speed cell nothing could measure shows an em
+# dash instead of a fabricated rate, and a ledger amount is rendered to four
+# decimals so a sub-cent charge is not displayed as `-$0.00`. The Activity
+# tile's hint names its sample sizes. No template change.
+#
+# 0.2.13 (SUP-459) pins `main-c668239` for the second production train. The
+# console half of it is the admin data-migration screen, which now reports the
+# API keys an export carries and an import restored (SUP-445); the rest of the
+# train is API behaviour the console reads unchanged. No template change.
+#
+# 0.2.14 (SUP-459) pins `main-e670363`. The console's half of the three
+# analytics fixes that joined the train while it was held: the feedback card
+# and prompt emit the funnel events that had no call site (SUP-465), and the
+# browser posts its events to `/v1/console-events` instead of a path an
+# ad-blocker rule cancelled (SUP-463). No template change.
+#
+# 0.2.15 (SUP-522) pins `main-5bf6f33`. SUP-497 is API and server-common
+# logging, so the console's own code does not change — but both halves ship
+# from one revision, and a console built from a head the API is not pinned to
+# is a question nobody should have to ask at an incident. No template change.
+#
+# 0.2.16 (SUP-578) pins `main-91922ec`. The console's own code moves in
+# SUP-542's event taxonomy — the explainer video click is named and the
+# waitlist click it was already sending is written down — together with the
+# router-ui test that watches the path the feedback click really posts to
+# (SUP-486). No template change.
+#
+# 0.2.17 (SUP-599) pins `main-d2ed74b`. The console's own code moves only where
+# SUP-583 widened the endpoint-status vocabulary the admin section renders —
+# `endpoint-status.ts`, the generated GraphQL types and the vocabulary test
+# behind them. SUP-598, the fix this train is cut for, is API-side. Both halves
+# ship from one revision, so the console is rebuilt from the head the API is
+# pinned to. No template change.
+# 0.2.18 (SUP-603) pins `main-f507761`. SUP-600 is entirely API-side — the
+# external catalogue, the status pass and the health DTO — so the console's own
+# code does not move at all. It is rebuilt and re-pinned because both halves of
+# a train ship from one revision: a console built from a head the API is not
+# pinned to is a question nobody should have to answer at an incident. No
+# template change.
+
+# 0.2.19 (SUP-615) re-pins the console to `main-0c5f34f`. The console's own
+# change is one string: the chat's evidence panel now names the party that let
+# a bundle age — the host when the page read it from the host, this router when
+# the page read this router's relayed copy. The old sentence said the former in
+# both cases, which pointed a reader at the wrong deployment for 37 hours. No
+# template change.
+version: 0.2.19
 appVersion: "0.4.1"

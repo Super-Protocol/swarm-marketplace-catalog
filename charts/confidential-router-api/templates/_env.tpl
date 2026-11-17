@@ -150,8 +150,15 @@ Resend or nothing, so the attested env list — and the evidence digest — says
 nothing about the operator's mail setup. A key the Secret does not carry leaves
 its variable unset, and a deployment with no mail sets none of them, which is
 also what keeps an image older than the `mail` section booting.
+
+`CR_API_MAIL__REPLY_TO` (SUP-409) joins that list on the same terms, with one
+caveat the others no longer have: the router's config schema is strict, so an
+image that predates `mail.replyTo` refuses to boot on a Secret that carries
+`mail-reply-to`. Leaving `mail.replyTo` unset is what keeps such an image
+working, exactly as an unset `mail.provider` does — and `Chart.yaml` pins an
+image that has the key.
 */}}
-{{- range $variable, $key := dict "CR_API_MAIL__PROVIDER" "mail-provider" "CR_API_MAIL__FROM" "mail-from" "CR_API_MAIL__FROM_NAME" "mail-from-name" "CR_API_MAIL__RESEND_API_KEY" "mail-resend-api-key" "CR_API_MAIL__SMTP__HOST" "smtp-host" "CR_API_MAIL__SMTP__PORT" "smtp-port" "CR_API_MAIL__SMTP__SECURITY" "smtp-security" "CR_API_MAIL__SMTP__USER" "smtp-user" "CR_API_MAIL__SMTP__PASSWORD" "smtp-password" }}
+{{- range $variable, $key := dict "CR_API_MAIL__PROVIDER" "mail-provider" "CR_API_MAIL__FROM" "mail-from" "CR_API_MAIL__FROM_NAME" "mail-from-name" "CR_API_MAIL__REPLY_TO" "mail-reply-to" "CR_API_MAIL__RESEND_API_KEY" "mail-resend-api-key" "CR_API_MAIL__SMTP__HOST" "smtp-host" "CR_API_MAIL__SMTP__PORT" "smtp-port" "CR_API_MAIL__SMTP__SECURITY" "smtp-security" "CR_API_MAIL__SMTP__USER" "smtp-user" "CR_API_MAIL__SMTP__PASSWORD" "smtp-password" }}
 - name: {{ $variable }}
   valueFrom:
     secretKeyRef:

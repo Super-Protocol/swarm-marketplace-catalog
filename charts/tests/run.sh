@@ -105,7 +105,9 @@ while IFS=$'\t' read -r name chart repo version; do
     rendered=$(helm template "$release" "charts/$chart" \
       --namespace "$namespace" --values "$values" 2>&1) || { fail "$name (render)"; printf '%s\n' "$rendered" | sed 's/^/        /'; continue; }
   fi
-  filtered=$(printf '%s\n' "$rendered" | own_documents "$chart")
+  # bcrypt salts are random on every render (htpasswd in a Secret), so mask the hash.
+  filtered=$(printf '%s\n' "$rendered" | own_documents "$chart" \
+    | sed -E 's/\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}/<bcrypt>/g')
 
   if [ -n "$update" ]; then
     printf '%s' "$filtered" > "$golden"
@@ -1204,7 +1206,7 @@ refuses "a volume sized for one of two models" "the download would fail with the
 # The three things a published endpoint must not expose, asserted on the render
 # rather than trusted to the values file.
 note "swarm-model-server publishes only what authenticates"
-for case in model-server-llama model-server-gemma model-server-qwen-fp8 model-server-two-engines; do
+for case in model-server-llama model-server-gemma model-server-qwen-fp8 model-server-qwen-next-fp8 model-server-two-engines; do
   rendered=$(helm template ms charts/swarm-model-server --namespace model-server \
     --values "charts/tests/cases/$case.yaml" 2>&1) || { fail "$case (render)"; continue; }
   problems=""
@@ -1240,7 +1242,7 @@ done
 # it is held constant here and only the things a deployment really chooses — the
 # namespace, the hostname and the generated key — are varied.
 note "two deployments of a model listing differ only in the hostname"
-for case in model-server-llama model-server-gemma model-server-qwen-fp8 model-server-two-engines; do
+for case in model-server-llama model-server-gemma model-server-qwen-fp8 model-server-qwen-next-fp8 model-server-two-engines; do
   render_ms() {
     helm template ms-fixed charts/swarm-model-server --namespace "$2" \
       --values "charts/tests/cases/$case.yaml" \
@@ -1265,13 +1267,14 @@ done
 # cloud acts on, and `evidence.exclude` in the listing is what the marketplace
 # reads to show it beside the digest.
 note "each model listing declares the exclusion its chart annotates"
-# Each listing against its own golden. Feeding one golden to all three would
+# Each listing against its own golden. Feeding one golden to all of them would
 # still check every listing's declaration, but would only ever resolve the
 # llama render's pointer — and a pointer is an index, so the whole point of
 # resolving it is that it is checked against the object it indexes.
 for pair in "llama-3-2-3b-instruct:model-server-llama" \
             "gemma-2-2b-it:model-server-gemma" \
-            "qwen3-coder-30b-a3b-instruct-fp8:model-server-qwen-fp8"; do
+            "qwen3-coder-30b-a3b-instruct-fp8:model-server-qwen-fp8" \
+            "qwen3-coder-next-fp8:model-server-qwen-next-fp8"; do
   app="${pair%%:*}"
   case_name="${pair##*:}"
   if output=$(python3 - "apps/$app/app.yaml" "charts/tests/golden/$case_name.yaml" <<'PYTHON'
@@ -1368,7 +1371,7 @@ inventory_shape swarm-model-server model-server-two-engines swarm-model-server:s
 # lines, each of which renders perfectly from one side and serves nothing from
 # the other (SUP-332).
 note "every engine in the pod is published, authenticated and alone on its port"
-for case in model-server-llama model-server-gemma model-server-qwen-fp8 model-server-two-engines; do
+for case in model-server-llama model-server-gemma model-server-qwen-fp8 model-server-qwen-next-fp8 model-server-two-engines; do
   if output=$(python3 charts/tests/engine_routing.py "$case" 2>&1); then
     printf '%s\n' "$output"
   else
@@ -1455,7 +1458,7 @@ else
   printf '%s\n' "$output" | sed 's/^/        /'
 fi
 
-for app in llama-3-2-3b-instruct gemma-2-2b-it qwen3-coder-30b-a3b-instruct-fp8; do
+for app in llama-3-2-3b-instruct gemma-2-2b-it qwen3-coder-30b-a3b-instruct-fp8 qwen3-coder-next-fp8; do
   if output=$(python3 - "apps/$app/app.yaml" <<'PYTHON'
 import pathlib, sys, yaml
 sys.path.insert(0, "charts/tests/smoke")

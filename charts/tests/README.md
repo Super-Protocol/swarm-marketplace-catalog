@@ -27,7 +27,7 @@ The release name and namespace are fixed per listing (`cr` / `confidential-route
 | `litellm-one-model` / `litellm-three-models` | the same list on the other side, so the two charts' model names can be diffed against each other |
 | `litellm-no-models` | an empty selection: no proxy at all — one inert ConfigMap, because a marketplace component has to render something for the cloud to accept it (SUP-245) |
 | `api-bootstrap-token` | the SUP-95 auth seam: the one `CR_API_*` env var, rendered only when a token is set |
-| `api-mail-smtp` | SMTP mail configured (SUP-269), with `magicLink.enabled: false` as the listing sets it — the emailed code is the only mail sign-in: every mail value — provider, sender, host, port, security, user, password — in the Secret, and the attested env list the same `optional` references every other case renders |
+| `api-mail-smtp` | SMTP mail configured (SUP-269), with `magicLink.enabled: false` as the listing sets it — the emailed code is the only mail sign-in: every mail value — provider, sender, reply-to, host, port, security, user, password — in the Secret, and the attested env list the same `optional` references every other case renders |
 | `api-invite-only` | the SUP-173 auth seam: `requireInviteForSignUp` rendered only while it is on, so the chart stays bootable on an image that predates the key |
 | `api-signup-grant` | the SUP-249 billing seam: `signupGrantMicros` rendered from whole USD only while it is above zero, so the chart stays bootable on an image that predates the key |
 | `api-endpoint-hostname` | an endpoint that names a hostname of its own: a parameter, so it is rendered as a literal rather than as `${ROUTER_PUBLIC_HOSTNAME}`, and the public ConfigMap does not carry that key at all (SUP-211) |

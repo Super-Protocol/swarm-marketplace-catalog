@@ -18,6 +18,7 @@ mail:
   provider: smtp
   from: no-reply@confidential-router.example
   fromName: Confidential Router
+  replyTo: support@confidential-router.example
   smtp:
     host: smtp.confidential-router.example
     port: 587
