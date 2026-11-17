@@ -14,9 +14,9 @@ data, and the whole thing can be thrown away and rebuilt in under three seconds.
 A clinic holds two kinds of record and a tool that only reads one of them is not reading the
 chart.
 
-**Structured** — eleven ClickHouse tables, ~133,000 rows at the default size. Aggregates over
-this are meaningful: an adenoma detection rate of 38%, 1,700-odd surveillance recalls genuinely
-past due, a per-endoscopist withdrawal time.
+**Structured** — eleven ClickHouse tables, ~131,000 rows at the default size. Aggregates over
+this are meaningful: an adenoma detection rate of 38.8%, 1,511 surveillance recalls genuinely
+past due (1,149 of them by more than a year), a per-endoscopist withdrawal time.
 
 **Free text** — 44 clinical documents in PDF, DOCX and plain text. Each one names a patient, a
 date of birth and a medical record number, because that is what a clinical document does. They
@@ -55,7 +55,7 @@ is the thing standing between a named patient and software nobody approved.
 | `cbdh_providers` | Clinician or coordinator | Endoscopists, pathologists, surveillance coordinators, abstractors. NPIs all begin with 9, so none can collide with an issued number. |
 | `cbdh_patients` | Patient | Identifying: name, date of birth, MRN, address, telephone, payer, preferred language, status. |
 | `cbdh_encounters` | Office or telehealth visit | Pre-procedure, results review, and the new-patient visit at which outside records were requested. |
-| `cbdh_procedures` | Endoscopic procedure | Colonoscopy, sigmoidoscopy, EGD. `report_source` decides whether the rest of the record exists. |
+| `cbdh_procedures` | Endoscopic procedure | Colonoscopy, sigmoidoscopy, EGD. `report_source` decides whether the rest of the record exists; `procedure_type` decides whether there is a colon to make a statement about. |
 | `cbdh_findings` | Polyp or lesion | Segment, size, Paris morphology, resection method, piecemeal flag. |
 | `cbdh_pathology` | Specimen | Histology, dysplasia grade, margin, lab turnaround, and the `adenoma` / `advanced_histology` flags every rule turns on. |
 | `cbdh_surveillance_recommendations` | Recommendation | Interval, due date, risk tier, and `basis` — the rule in words, so it can be checked. |
@@ -83,6 +83,11 @@ into on its own:
 - **`cbdh_surveillance_recommendations.superseded_by`** — only the recommendation with this empty can
   be overdue. Without that, every historical recommendation on a patient with a long history
   looks past due.
+- **`cbdh_procedures.cecal_intubation`** — null, not zero, for a flexible sigmoidoscopy. A
+  sigmoidoscopy examines the left colon and stops by design; counting it as a colonoscopy that
+  failed to reach the cecum both wrecks the cecal intubation rate and, if it is allowed to
+  generate a "repeat within 3 months", fills the overdue cohort with patients nothing is wrong
+  with. It did, in the first draft of this generator: 584 of them.
 
 ## Clinical content
 
@@ -97,14 +102,25 @@ disagreements, and finding one is a real finding.
 Nothing here is clinical advice, and the guideline function is a demonstration artefact rather
 than a certified implementation.
 
+The anatomy is consistent too, which matters for the same reason. A colonoscopy that was
+abandoned at the splenic flexure has no polyp recorded beyond the descending colon, in the tables
+and in the prose; a sigmoidoscopy has none past the descending colon at all. A polyp reported in
+a part of the colon the scope never entered is the first thing a gastroenterologist notices, and
+the point at which they stop believing the rest.
+
 ## Generating and loading
 
 ```bash
 cd generate
-./generate.py --out ./out                   # 12,000 patients, ~133,000 rows, 44 documents
+./generate.py --out ./out                   # 12,000 patients, ~131,000 rows, 44 documents
 ./generate.py --out ./out --patients 3000   # smaller
-./selftest.py                               # determinism, integrity, the gaps, the card
+./selftest.py                               # determinism, integrity, the gaps, the anatomy, the card
+./selftest.py --patients 12000              # what CI runs as its second pass
 ```
+
+`selftest.py` is what `.github/workflows/dataset-definitions.yml` runs on any change under
+`datasets/`. It needs PyYAML to read the card and `pdftotext` to confirm a generated PDF still
+extracts as text with its identifiers intact.
 
 `out/` gets the TSV tables, a `schema.sql`, a `load.sh`, the documents in `notes/`, and a
 `MANIFEST.md` — the operator's crib sheet, which names the five contradicting documents and says

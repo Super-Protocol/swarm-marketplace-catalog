@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check the generated corpus against the properties the demonstration depends on.
 
-    ./selftest.py              # a small corpus, roughly fifteen seconds
+    ./selftest.py              # a small corpus, well under a second
     ./selftest.py --patients 12000
 
 What it asserts is not "the script ran". It is the set of claims the dataset card
@@ -22,11 +22,23 @@ point while this was being written:
   * **The planted contradictions are present**, all five, and each names a patient
     who exists.
   * **Nothing is dated in the future** relative to the as-of date.
+  * **Nothing was found where the scope never went.** A flexible sigmoidoscopy is
+    not a failed colonoscopy and earns no surveillance interval; an abandoned
+    colonoscopy reports no polyp beyond the point it was abandoned at. Both of
+    these were wrong in the first draft, and the first put 265 phantom patients
+    into the overdue cohort the demonstration is about.
+  * **A planted contradiction sits on a live recommendation**, not one a later
+    colonoscopy already answered.
+  * **Nobody is screened before screening starts** — "average-risk screening,
+    age-appropriate" never appears on a patient under 45.
+  * **An outreach outcome is possible on its channel**, and attempts ascend in
+    date order.
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import os
 import re
@@ -38,7 +50,10 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+import constants  # noqa: E402
 import generate  # noqa: E402
+import notes  # noqa: E402
+import vocabulary  # noqa: E402
 
 AS_OF = generate.AS_OF.isoformat()
 
@@ -210,25 +225,48 @@ def main() -> int:
     check(not backwards, "pathology is never reported before the specimen arrived")
 
     print("\ndocuments")
-    notes = os.path.join(first, "notes")
+    notes_dir = os.path.join(first, "notes")
     registered = {r["document_filename"] for r in tables["clinical_documents"] if r["document_filename"]}
-    on_disk = set(os.listdir(notes))
+    on_disk = set(os.listdir(notes_dir))
     check(registered == on_disk, f"clinical_documents names exactly the files on disk ({len(on_disk)})")
     check(
-        all(os.path.getsize(os.path.join(notes, name)) > 500 for name in on_disk),
+        all(os.path.getsize(os.path.join(notes_dir, name)) > 500 for name in on_disk),
         "no generated document is a stub",
     )
     formats = {os.path.splitext(name)[1] for name in on_disk}
     check(formats == {".pdf", ".docx", ".txt"}, f"all three formats are produced ({sorted(formats)})")
 
     manifest = open(os.path.join(first, "MANIFEST.md"), encoding="utf-8").read()
-    import notes as notes_module
 
-    for contradiction in notes_module.CONTRADICTIONS:
+    for contradiction in notes.CONTRADICTIONS:
         check(
-            contradiction["kind"] in manifest,
+            f"`{contradiction['key']}`" in manifest or contradiction["consequence"] in manifest,
             f"the planted contradiction {contradiction['key']!r} reached the manifest",
         )
+
+    # A contradiction on a superseded recommendation is moot: "the record holds
+    # seven years" is not a finding when the next colonoscopy happened two years
+    # ago and closed the recall. Two of the five landed there in the first draft.
+    superseded = {
+        r["procedure_id"]: r["superseded_by"]
+        for r in tables["surveillance_recommendations"]
+        if r["superseded_by"]
+    }
+    contradiction_procs = re.findall(r"procedure `(PROC-\d+)`", manifest)
+    check(
+        len(contradiction_procs) >= len(notes.CONTRADICTIONS),
+        f"the manifest names a procedure for each contradiction ({len(contradiction_procs)})",
+    )
+    moot = [p for p in contradiction_procs if p in superseded]
+    check(not moot, f"no planted contradiction sits on a superseded recommendation ({moot})")
+    completed = {
+        r["recommendation_id"] for r in tables["recalls"] if r["recall_status"] == "completed"
+    }
+    rec_for_proc = {
+        r["procedure_id"]: r["recommendation_id"] for r in tables["surveillance_recommendations"]
+    }
+    closed = [p for p in contradiction_procs if rec_for_proc.get(p) in completed]
+    check(not closed, f"no planted contradiction sits on an already-closed recall ({closed})")
 
     # Every identifying document must actually identify somebody who exists: a
     # note naming an MRN that is not in `patients` would make the reconciliation
@@ -238,11 +276,109 @@ def main() -> int:
     for name in sorted(on_disk):
         if not name.endswith(".txt"):
             continue
-        text = open(os.path.join(notes, name), encoding="utf-8").read()
+        text = open(os.path.join(notes_dir, name), encoding="utf-8").read()
         found = re.findall(r"CB-\d{7}", text)
         check(bool(found) and all(m in mrns for m in found), f"{name} names a real MRN")
         named += 1
     check(named > 0, "the text notes carry medical record numbers")
+
+    print("\nanatomy: nothing is found where the scope never went")
+    segment_reach = {name: index for index, name in enumerate(constants.REACH_ORDER)}
+    findings_by_proc: dict[str, list[dict]] = {}
+    for row in tables["findings"]:
+        findings_by_proc.setdefault(row["procedure_id"], []).append(row)
+
+    sigmoidoscopies = [
+        p for p in tables["procedures"] if p["procedure_type"] == "Flexible sigmoidoscopy"
+    ]
+    structured_sig = [s for s in sigmoidoscopies if s["report_source"] == "Structured capture"]
+    check(len(structured_sig) > 0, f"the corpus contains sigmoidoscopies ({len(structured_sig)})")
+    check(
+        all(s["cecal_intubation"] == "\\N" for s in structured_sig),
+        "no sigmoidoscopy claims a cecal intubation result — it was never going there",
+    )
+    check(
+        not any("Incomplete" in s["completion_status"] for s in structured_sig),
+        "no sigmoidoscopy is recorded as an incomplete colonoscopy",
+    )
+    sig_ids = {s["procedure_id"] for s in structured_sig}
+    rec_proc = {r["procedure_id"] for r in tables["surveillance_recommendations"]}
+    check(
+        not (sig_ids & rec_proc),
+        f"no sigmoidoscopy earns a colonic surveillance interval "
+        f"({len(sig_ids & rec_proc)} do)",
+    )
+    beyond_left = [
+        f
+        for s in structured_sig
+        for f in findings_by_proc.get(s["procedure_id"], [])
+        if segment_reach[f["segment"]] >= constants.SIGMOIDOSCOPY_REACH
+    ]
+    check(not beyond_left, f"no sigmoidoscopy finds a polyp past the descending colon ({len(beyond_left)})")
+
+    incomplete = [
+        p
+        for p in tables["procedures"]
+        if p["report_source"] == "Structured capture" and p["cecal_intubation"] == "0"
+    ]
+    check(len(incomplete) > 0, f"some colonoscopies did fail to reach the cecum ({len(incomplete)})")
+    in_the_cecum = [
+        f
+        for p in incomplete
+        for f in findings_by_proc.get(p["procedure_id"], [])
+        if f["segment"] == "Cecum"
+    ]
+    check(
+        not in_the_cecum,
+        f"no incomplete colonoscopy reports a polyp in the cecum it never reached "
+        f"({len(in_the_cecum)})",
+    )
+
+    print("\nindications match the patient")
+    dob = {p["patient_id"]: p["date_of_birth"] for p in tables["patients"]}
+
+    def age_at(patient_id: str, on: str) -> int:
+        born = dt.date.fromisoformat(dob[patient_id])
+        day = dt.date.fromisoformat(on)
+        return (day - born).days // 365
+
+    too_young = [
+        p
+        for p in tables["procedures"]
+        if p["indication"].startswith("Average-risk")
+        and age_at(p["patient_id"], p["procedure_date"]) < constants.SCREENING_START_AGE
+    ]
+    check(
+        not too_young,
+        f"nobody is given average-risk, age-appropriate screening under "
+        f"{constants.SCREENING_START_AGE} ({len(too_young)})",
+    )
+
+    print("\noutreach is possible as recorded")
+    possible = {
+        channel: {outcome for outcome, _ in outcomes}
+        for channel, outcomes in vocabulary.OUTCOMES_BY_CHANNEL.items()
+    }
+    impossible = [
+        o
+        for o in tables["recall_outreach"]
+        if o["outcome"] not in possible[o["channel"]]
+        and not (
+            o["outcome"] in vocabulary.CLOSING_OUTCOMES
+            and o["channel"] in vocabulary.TWO_WAY_CHANNELS
+        )
+    ]
+    check(not impossible, f"no outreach outcome is impossible on its channel ({len(impossible)})")
+    by_recall: dict[str, list[dict]] = {}
+    for row in tables["recall_outreach"]:
+        by_recall.setdefault(row["recall_id"], []).append(row)
+    out_of_order = [
+        recall
+        for recall, rows in by_recall.items()
+        if [r["attempt_date"] for r in sorted(rows, key=lambda r: int(r["attempt_no"]))]
+        != sorted(r["attempt_date"] for r in rows)
+    ]
+    check(not out_of_order, f"attempts ascend in date order on every recall ({len(out_of_order)})")
 
     print("\nthe dataset card is the agent's only grounding")
     card_path = os.path.join(os.path.dirname(HERE), "data.yaml")
@@ -299,7 +435,7 @@ def main() -> int:
     if shutil.which("pdftotext"):
         sample = sorted(n for n in on_disk if n.endswith(".pdf"))[0]
         text = subprocess.run(
-            ["pdftotext", "-layout", os.path.join(notes, sample), "-"],
+            ["pdftotext", "-layout", os.path.join(notes_dir, sample), "-"],
             capture_output=True,
             text=True,
             check=True,

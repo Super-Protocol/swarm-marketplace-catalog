@@ -11,10 +11,9 @@ in it is a property of the seed.
 
 from __future__ import annotations
 
-import datetime as dt
 import os
 
-AS_OF = dt.date(2026, 11, 17)
+from constants import AS_OF
 
 
 def _rows(world, table: str) -> list[dict]:

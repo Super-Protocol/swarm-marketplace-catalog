@@ -43,26 +43,23 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import guidelines as gl  # noqa: E402
 import vocabulary as vocab  # noqa: E402
+from constants import (  # noqa: E402
+    ABANDON_POINTS,
+    AS_OF,
+    DEFAULT_DATABASE,
+    DEFAULT_PATIENTS,
+    DEFAULT_SEED,
+    DEFAULT_TABLE_PREFIX,
+    HISTORY_START,
+    REACH_ORDER,
+    SCREENING_START_AGE,
+    SIGMOIDOSCOPY_REACH,
+    reachable_segments,
+)
 from guidelines import Specimen  # noqa: E402
 
-AS_OF = dt.date(2026, 11, 17)
-HISTORY_START = dt.date(2019, 1, 7)
-DEFAULT_SEED = 710
-DEFAULT_PATIENTS = 12000
-
-#: Tables are prefixed and live in an existing database rather than one of their
-#: own, because that is what the marketplace stand's ClickHouse can actually
-#: serve: the account the marketplace holds there carries
-#: `CREATE DATABASE, CREATE TABLE ON marketplace.*` and nothing wider, so a
-#: `cypressbay_gi` database cannot be created without host access to that server.
-#: The prefix is therefore part of the published names — the dataset card declares
-#: `cbdh_patients`, not `patients` — and it matches the clinic datasets already on
-#: that stand, which live in `marketplace` as `roczen_*` and `autonomyx_*`.
-#:
-#: A ClickHouse you do own takes `--database cypressbay_gi --table-prefix ""`;
-#: change the card's `database` to match if you publish from there.
-DEFAULT_DATABASE = "marketplace"
-DEFAULT_TABLE_PREFIX = "cbdh_"
+# Where the tables go, the as-of date and the colon's anatomy all live in
+# constants.py, imported above.
 
 #: Share of colonoscopies that were performed somewhere else and reached this
 #: practice as a document rather than as structured capture. These are the
@@ -232,6 +229,17 @@ class Procedure:
     sedation: str
     asa: str
     complication: str
+    completion_status: str = ""
+    #: How many segments of REACH_ORDER the scope actually examined. A complete
+    #: colonoscopy is 6; a sigmoidoscopy is 3; an abandoned colonoscopy is
+    #: whatever it got to. Nothing may be found beyond it.
+    reach: int = len(REACH_ORDER)
+    #: Where the examination was abandoned, in words, or "" if it was not.
+    abandoned_at: str = ""
+    #: The later examination that superseded this one's recommendation, if any.
+    #: Filled in by build_surveillance, read by notes.py — a contradiction
+    #: planted on a recommendation a later scope already answered is moot.
+    superseded_by: str = ""
     lesions: list[Lesion] = field(default_factory=list)
     recommendation: gl.Recommendation | None = None
     pathologist: Provider | None = None
@@ -433,7 +441,7 @@ class World:
                 given_name=given,
                 dob=dob,
                 sex=sex,
-                phone=f"(941) {rng.randint(200, 989)}-{rng.randint(1000, 9999)}",
+                phone=f"({rng.choice(vocab.FICTION_AREA_CODES)}) 555-0{rng.randint(100, 199)}",
                 email=f"{given.lower()}.{family.lower()}{rng.randint(11, 99)}@example.org",
                 address=f"{rng.randint(12, 8940)} {rng.choice(vocab.STREETS)}",
                 city=[s for s in vocab.SITES if s[0] == site_id][0][2],
@@ -471,6 +479,20 @@ class World:
             )
 
     # -- procedures, findings, pathology ------------------------------------
+
+    def _indication(self, kind: str, age: int) -> str:
+        """Why the procedure was done, given how old the patient was that day.
+
+        Average-risk screening begins at 45 in the US, so "age-appropriate" is a
+        claim about the patient and not a label to sprinkle. A younger patient is
+        scoped for a reason — a first-degree relative, a syndrome, a symptom — and
+        a product lead who screens for a living reads "average-risk screening,
+        age-appropriate" on a 28-year-old as a sign the data was never looked at.
+        """
+        pool = vocab.INDICATIONS_BY_TYPE[kind]
+        if kind == "Screening colonoscopy" and age < SCREENING_START_AGE:
+            pool = vocab.EARLY_SCREENING_INDICATIONS
+        return self.rng.choice(pool)
 
     def _lesion_count(self, kind: str) -> int:
         rng = self.rng
@@ -545,7 +567,7 @@ class World:
             if date >= AS_OF:
                 date = AS_OF - dt.timedelta(days=rng.randint(1, 600))
             kind = weighted(rng, vocab.PROCEDURE_TYPES)
-            indication = rng.choice(vocab.INDICATIONS_BY_TYPE[kind])
+            indication = self._indication(kind, patient.age_on(date))
             outside = kind != "EGD" and rng.random() < OUTSIDE_REPORT_SHARE
             provider = rng.choice(self.endoscopists)
 
@@ -593,10 +615,31 @@ class World:
             bbps = {"Excellent": rng.randint(8, 9), "Good": rng.randint(6, 7),
                     "Fair": rng.randint(5, 6), "Poor": rng.randint(2, 4)}[prep]
             prep_adequate = bbps >= 6
-            complete = kind != "Flexible sigmoidoscopy" and rng.random() < (
-                0.996 if prep_adequate else 0.82
-            )
             withdrawal = round(max(6.0, rng.gauss(11.4, 2.6)), 1) if kind != "EGD" else None
+
+            # How far the scope got, and whether that counts as a failure.
+            #
+            # A flexible sigmoidoscopy examines the left colon and stops, by
+            # design. It is NOT an incomplete colonoscopy: calling it one gave
+            # every one of them a "cecum not reached, repeat in 3 months" recall
+            # and put hundreds of phantom patients into the overdue cohort the
+            # demonstration is about. A colonoscopy that failed to reach the
+            # cecum is a different thing and keeps its repeat.
+            abandoned_at = ""
+            if kind == "Flexible sigmoidoscopy":
+                reach, cecal, completion = (
+                    SIGMOIDOSCOPY_REACH,
+                    None,
+                    "Complete to the extent intended — left colon only",
+                )
+            elif kind == "EGD":
+                reach, cecal, completion = len(REACH_ORDER), None, "Complete — upper tract"
+            elif rng.random() < (0.996 if prep_adequate else 0.82):
+                reach, cecal, completion = len(REACH_ORDER), 1, "Complete to cecum"
+            else:
+                abandoned_at, reach = rng.choice(ABANDON_POINTS)
+                cecal, completion = 0, "Incomplete — cecum not reached"
+
             procedure = Procedure(
                 procedure_id=self.next_id("PROC"),
                 patient=patient,
@@ -608,15 +651,22 @@ class World:
                 report_source="Structured capture",
                 prep_quality=prep,
                 bbps_total=bbps,
-                cecal_intubation=1 if complete else 0,
+                cecal_intubation=cecal,
                 withdrawal_min=withdrawal,
                 sedation=weighted(rng, vocab.SEDATION),
                 asa=weighted(rng, vocab.ASA_CLASS),
                 complication=weighted(rng, vocab.COMPLICATIONS),
+                completion_status=completion,
+                reach=reach,
+                abandoned_at=abandoned_at,
             )
 
+            within_reach = set(reachable_segments(procedure.reach))
             for _lesion in range(self._lesion_count(kind)):
-                segment = weighted(rng, vocab.SEGMENTS)
+                # Nothing is found past where the scope stopped.
+                segment = weighted(
+                    rng, [(name, w) for name, w in vocab.SEGMENTS if name in within_reach]
+                )
                 size_mm = weighted(
                     rng,
                     [(rng.randint(2, 5), 52), (rng.randint(6, 9), 26),
@@ -655,7 +705,13 @@ class World:
             specimens = [
                 Specimen(l.size_mm, l.histology, l.dysplasia, l.piecemeal) for l in resected
             ]
-            procedure.recommendation = gl.recommend(specimens, prep_adequate, complete)
+            # `complete` here means "the whole colon was examined", which is what
+            # the guideline turns on. A sigmoidoscopy never satisfies it, and it
+            # is excluded from surveillance entirely in build_surveillance — the
+            # recommendation computed here is simply never published for one.
+            procedure.recommendation = gl.recommend(
+                specimens, prep_adequate, procedure.cecal_intubation == 1
+            )
             procedure.pathologist = rng.choice(self.pathologists) if resected else None
             procedure.lab = weighted(rng, [(vocab.LABS[0], 68), (vocab.LABS[1], 24), (vocab.LABS[2], 8)])
             procedure.accession = f"{date.year}-CP-{rng.randint(10000, 99999)}"
@@ -681,7 +737,7 @@ class World:
             withdrawal_time_min=procedure.withdrawal_min,
             sedation=procedure.sedation,
             asa_class=procedure.asa,
-            completion_status="Complete to cecum" if procedure.cecal_intubation else "Incomplete",
+            completion_status=procedure.completion_status,
             complication=procedure.complication,
         )
         for lesion in procedure.lesions:
@@ -720,11 +776,13 @@ class World:
                 histology=lesion.histology,
                 dysplasia_grade=lesion.dysplasia,
                 adenoma=1 if lesion.histology in gl.ADENOMA_HISTOLOGIES else 0,
+                # The same predicate the guideline function uses, not a
+                # restatement of it: a published flag that disagrees with the rule
+                # it stands for is worse than no flag, because the card tells the
+                # agent to trust it.
                 advanced_histology=1
-                if (
-                    lesion.size_mm >= 10
-                    or lesion.dysplasia == "High-grade"
-                    or lesion.histology in ("Tubulovillous adenoma", "Villous adenoma")
+                if gl.is_advanced(
+                    Specimen(lesion.size_mm, lesion.histology, lesion.dysplasia, lesion.piecemeal)
                 )
                 else 0,
                 margin_status=lesion.margin,
@@ -807,7 +865,13 @@ class World:
         rng = self.rng
         by_patient: dict[str, list[Procedure]] = {}
         for procedure in self.procedures:
-            if procedure.report_source != "Structured capture" or procedure.kind == "EGD":
+            if procedure.report_source != "Structured capture":
+                continue
+            # An upper endoscopy says nothing about the colon, and neither does a
+            # flexible sigmoidoscopy: two thirds of the colon was never looked at,
+            # so there is no surveillance interval to set. Both are examinations
+            # in their own right, not failures.
+            if procedure.kind in ("EGD", "Flexible sigmoidoscopy"):
                 continue
             by_patient.setdefault(procedure.patient.patient_id, []).append(procedure)
         for series in by_patient.values():
@@ -839,6 +903,7 @@ class World:
                     else "Endoscopist at discharge",
                     superseded_by=successor.procedure_id if successor else "",
                 )
+                procedure.superseded_by = successor.procedure_id if successor else ""
                 self._emit_recall(procedure, recommendation_id, due, successor)
 
     def _emit_recall(
@@ -870,7 +935,12 @@ class World:
             status = "moved_away"
         elif days_past < -90:
             status = "not_yet_due"
-        elif days_past < 0:
+        elif days_past <= 0:
+            # Due today is due, not overdue. The boundary matters because
+            # `days_overdue` is published as a measure: an "overdue" recall
+            # carrying zero days is a row that contradicts its own status, and a
+            # cohort defined by that status then has a member nothing is wrong
+            # with.
             status = weighted(
                 rng, [("scheduled", 46), ("due_soon", 42), ("declined", 6), ("deferred_medical", 6)]
             )
@@ -901,37 +971,28 @@ class World:
                 if status in ("overdue", "lost_to_follow_up")
                 else [(0, 18), (1, 40), (2, 28), (3, 10), (4, 4)],
             )
+        # Attempts march forward in order, and the outcome has to be possible on
+        # the channel it came through: a letter is not answered by voicemail, and
+        # a portal message does not come back undeliverable by post. These are
+        # exactly the rows the coordinator-note scenario cross-checks, so a
+        # mismatch there is a contradiction nobody planted.
         first_attempt = due - dt.timedelta(days=rng.randint(0, 60))
+        attempt_date = first_attempt
         for attempt_no in range(1, attempts + 1):
-            attempt_date = min(
-                AS_OF - dt.timedelta(days=1),
-                first_attempt + dt.timedelta(days=(attempt_no - 1) * rng.randint(9, 70)),
-            )
-            if status == "overdue":
-                outcome = weighted(
-                    rng,
-                    [("No answer", 30), ("Voicemail left", 24), ("Wrong or disconnected number", 14),
-                     ("Mail returned undeliverable", 9), ("Portal message unread", 13),
-                     ("Reached — will call back", 10)],
-                )
-            elif status == "lost_to_follow_up":
-                outcome = weighted(
-                    rng,
-                    [("Wrong or disconnected number", 42), ("Mail returned undeliverable", 33),
-                     ("No answer", 25)],
-                )
-            elif status == "declined":
-                outcome = (
-                    "Reached — declined"
-                    if attempt_no == attempts
-                    else weighted(rng, [("No answer", 50), ("Voicemail left", 50)])
-                )
-            else:
-                outcome = (
-                    "Reached — appointment scheduled"
-                    if attempt_no == attempts
-                    else weighted(rng, vocab.OUTREACH_OUTCOMES[:2])
-                )
+            if attempt_no > 1:
+                attempt_date = attempt_date + dt.timedelta(days=rng.randint(9, 70))
+            attempt_date = min(AS_OF - dt.timedelta(days=1), attempt_date)
+            channel = weighted(rng, vocab.OUTREACH_CHANNELS)
+            reached = ""
+            if status == "declined" and attempt_no == attempts:
+                reached = "Reached — declined"
+            elif status in ("due_soon", "scheduled", "completed") and attempt_no == attempts:
+                reached = "Reached — appointment scheduled"
+            if reached and channel not in vocab.TWO_WAY_CHANNELS:
+                # Nobody is "reached" by a letter. The contact that closed the
+                # recall was the call back, so that is the attempt recorded.
+                channel = "Telephone"
+            outcome = reached or weighted(rng, vocab.OUTCOMES_BY_CHANNEL[channel])
             last_outreach = attempt_date
             self.tables["recall_outreach"].add(
                 outreach_id=self.next_id("OUT"),
@@ -939,7 +1000,7 @@ class World:
                 patient_id=patient.patient_id,
                 attempt_no=attempt_no,
                 attempt_date=attempt_date,
-                channel=weighted(rng, vocab.OUTREACH_CHANNELS),
+                channel=channel,
                 outcome=outcome,
                 coordinator_id=coordinator.provider_id,
             )

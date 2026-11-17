@@ -189,7 +189,10 @@ spec:
           - name: phone
             type: string
             role: dimension
-            description: "Telephone number on file. The number recall outreach dials."
+            description: >-
+              Telephone number on file — the number recall outreach dials. Every one is in the
+              North American fiction range (`555-0100` to `555-0199`), so patients share numbers;
+              outside that range a generated number belongs to a real person.
           - name: email
             type: string
             role: dimension
@@ -337,16 +340,23 @@ spec:
             role: dimension
             description: >-
               Screening colonoscopy / Surveillance colonoscopy / Diagnostic colonoscopy /
-              Flexible sigmoidoscopy / EGD. The first three are full colonoscopies; a
-              sigmoidoscopy examines the left colon only and never reaches the cecum; an EGD is
-              an upper endoscopy and generates no colonic surveillance.
+              Flexible sigmoidoscopy / EGD. Only the first three examine the whole colon, and
+              only they appear in `cbdh_surveillance_recommendations`. A flexible sigmoidoscopy
+              examines the left colon and stops — by design, not by failure, so it has no
+              `cecal_intubation` result and earns no surveillance interval; there is nothing to
+              say about a colon two thirds of which was not looked at. An EGD is an upper
+              endoscopy and says nothing about the colon at all. Restrict any colonoscopy quality
+              figure to the three colonoscopy types.
           - name: indication
             type: string
             role: dimension
             description: >-
               Why the procedure was done, e.g. 'Average-risk colorectal cancer screening,
               age-appropriate', 'Positive fecal immunochemical test', 'Post-polypectomy
-              surveillance, prior adenoma'.
+              surveillance, prior adenoma'. Average-risk screening begins at 45, so
+              'age-appropriate' appears only on patients who were 45 or older on the day;
+              a younger patient scoped for screening carries the reason instead — a
+              first-degree relative, Lynch syndrome, familial adenomatous polyposis.
           - name: report_source
             type: string
             role: dimension
@@ -373,9 +383,12 @@ spec:
             role: dimension
             nullable: true
             description: >-
-              1 when the cecum was reached, 0 when it was not. A colonoscopy that did not reach
+              1 when the cecum was reached, 0 when it was not. A COLONOSCOPY that did not reach
               the cecum did not examine the whole colon and is a repeat, not a surveillance
-              decision. Null for an outside report.
+              decision. Null where the question does not apply: an outside report, an EGD, and a
+              flexible sigmoidoscopy — which was never going to the cecum, so counting it as a
+              failure overstates the failure rate badly. Compute a cecal intubation rate over the
+              three colonoscopy types only.
           - name: withdrawal_time_min
             type: number
             role: measure
@@ -396,7 +409,13 @@ spec:
             type: string
             role: dimension
             description: >-
-              'Complete to cecum' / 'Incomplete' / 'Unknown — outside report not abstracted'.
+              'Complete to cecum' — a colonoscopy that reached the cecum.
+              'Incomplete — cecum not reached' — one that did not; it has to be repeated.
+              'Complete to the extent intended — left colon only' — a flexible sigmoidoscopy,
+              which is a finished examination and not a failed colonoscopy.
+              'Complete — upper tract' — an EGD.
+              'Unknown — outside report not abstracted' — performed elsewhere; the document says
+              and no column does.
           - name: complication
             type: string
             role: dimension
@@ -430,7 +449,10 @@ spec:
             description: >-
               Cecum / Ascending colon / Transverse colon / Descending colon / Sigmoid colon /
               Rectum, from the far end of the colon to the near. The first three are the proximal
-              colon, where serrated lesions concentrate and are easiest to miss.
+              colon, where serrated lesions concentrate and are easiest to miss. A finding is
+              never recorded beyond where that examination's scope actually reached: a
+              sigmoidoscopy has findings no further in than the descending colon, and a
+              colonoscopy with `cecal_intubation = 0` has none in the cecum.
           - name: size_mm
             type: integer
             role: measure
@@ -543,8 +565,11 @@ spec:
             type: integer
             role: measure
             description: >-
-              1 when the lesion was 10 mm or larger, or carried high-grade dysplasia, or was
-              villous. These are the lesions that put a patient on a three-year interval.
+              1 when the lesion is one of the ones that earns a three-year interval on its own:
+              10 mm or larger, or high-grade dysplasia, or tubulovillous or villous histology, or
+              a traditional serrated adenoma, or a sessile serrated lesion with any dysplasia.
+              The flag and `cbdh_surveillance_recommendations.basis` are computed from the same
+              rule, so they cannot disagree.
           - name: margin_status
             type: string
             role: dimension
@@ -746,10 +771,15 @@ spec:
             type: string
             role: dimension
             description: >-
-              'No answer' / 'Voicemail left' / 'Reached — appointment scheduled' / 'Reached — will
-              call back' / 'Reached — declined' / 'Wrong or disconnected number' / 'Mail returned
-              undeliverable' / 'Portal message unread'. The last three mean the contact details on
-              file are wrong, which is a different problem from a patient who will not come.
+              What the attempt ended in, and it is always something that channel can produce: a
+              telephone call ends 'No answer', 'Voicemail left', 'Wrong or disconnected number',
+              'Reached — will call back', 'Reached — declined' or 'Reached — appointment
+              scheduled'; a letter ends 'No response to letter' or 'Mail returned undeliverable';
+              a portal message ends 'Portal message unread' or 'Portal message read, no reply';
+              an SMS ends 'No reply to text message' or 'Text message undeliverable'.
+              'Wrong or disconnected number', 'Mail returned undeliverable' and 'Text message
+              undeliverable' mean the contact details on file are wrong — a different problem
+              from a patient who will not come, and a different fix.
           - name: coordinator_id
             type: string
             role: dimension

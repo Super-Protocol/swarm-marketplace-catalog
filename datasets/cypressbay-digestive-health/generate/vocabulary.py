@@ -88,6 +88,13 @@ STREETS = [
     "Loggerhead Trail", "Buttonwood Place", "Cordgrass Avenue", "Snook Harbour Road",
 ]
 
+#: The North American fiction range is 555-0100 to 555-0199. Outside it, a
+#: generated number is somebody's: `(941) 2xx-xxxx` is real Sarasota exchanges,
+#: and twelve thousand of them mostly belong to a person who did not consent to
+#: being in a demonstration. A hundred numbers per area code means patients share
+#: them, which is the honest trade and is stated on the card.
+FICTION_AREA_CODES = ["941", "813", "727", "239"]
+
 LANGUAGES = [
     ("English", 76), ("Spanish", 17), ("Haitian Creole", 4), ("Portuguese", 2),
     ("Vietnamese", 1),
@@ -114,6 +121,17 @@ PROCEDURE_TYPES = [
     ("Diagnostic colonoscopy", 17),
     ("Flexible sigmoidoscopy", 4),
     ("EGD", 4),
+]
+
+#: Why a patient under 45 is having a *screening* colonoscopy. Average-risk
+#: screening begins at 45 in the US, so "age-appropriate" is false below it and a
+#: younger patient is scoped for a reason that has to be stated.
+EARLY_SCREENING_INDICATIONS = [
+    "First-degree relative with colorectal cancer, screening begun 10 years early",
+    "Two first-degree relatives with colorectal cancer",
+    "Lynch syndrome, known pathogenic variant — surveillance program",
+    "Familial adenomatous polyposis, known family mutation",
+    "Serrated polyposis syndrome in a first-degree relative",
 ]
 
 INDICATIONS_BY_TYPE = {
@@ -223,15 +241,54 @@ RECALL_STATUSES = [
 
 OUTREACH_CHANNELS = [("Telephone", 44), ("Patient portal", 24), ("Letter", 19), ("SMS", 13)]
 
-OUTREACH_OUTCOMES = [
-    ("No answer", 26),
-    ("Voicemail left", 21),
-    ("Reached — appointment scheduled", 17),
-    ("Reached — will call back", 11),
-    ("Reached — declined", 5),
-    ("Wrong or disconnected number", 8),
-    ("Mail returned undeliverable", 5),
-    ("Portal message unread", 7),
+#: What an outreach attempt can end in, by the channel it went out on. Split by
+#: channel because the flat list produced rows that cannot happen: a telephone
+#: call that came back "mail returned undeliverable", a letter answered by
+#: voicemail, a portal message returned by the post office. The coordinator-note
+#: scenario asks the model to cross-check outreach against the narrative, so an
+#: impossible row there is a contradiction nobody planted and nobody can resolve.
+OUTCOMES_BY_CHANNEL = {
+    "Telephone": [
+        ("No answer", 34),
+        ("Voicemail left", 30),
+        ("Wrong or disconnected number", 14),
+        ("Reached — will call back", 13),
+        ("Reached — declined", 5),
+        ("Reached — appointment scheduled", 4),
+    ],
+    "Letter": [
+        ("No response to letter", 62),
+        ("Mail returned undeliverable", 38),
+    ],
+    "Patient portal": [
+        ("Portal message unread", 58),
+        ("Portal message read, no reply", 30),
+        ("Reached — will call back", 12),
+    ],
+    "SMS": [
+        ("No reply to text message", 64),
+        ("Text message undeliverable", 24),
+        ("Reached — will call back", 12),
+    ],
+}
+
+#: Channels a patient can answer on. A letter is the only one-way channel here:
+#: an outreach attempt that ends "reached" cannot have been a letter, so a recall
+#: closed on a letter attempt is recorded as the call back that actually closed it.
+TWO_WAY_CHANNELS = {"Telephone", "Patient portal", "SMS"}
+
+#: The two outcomes that close a recall. They are assigned deterministically — the
+#: last attempt against a recall that ended scheduled or declined — rather than
+#: sampled, so they are listed apart from the per-channel pools.
+CLOSING_OUTCOMES = {"Reached — declined", "Reached — appointment scheduled"}
+
+#: The outcomes that mean the contact details on file are wrong, rather than that
+#: the patient will not come. Different problem, different fix — and the
+#: coordinator notes are about exactly that distinction.
+UNREACHABLE_OUTCOMES = [
+    "Wrong or disconnected number",
+    "Mail returned undeliverable",
+    "Text message undeliverable",
 ]
 
 DEFERRAL_REASONS = [

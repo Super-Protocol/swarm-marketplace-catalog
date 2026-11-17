@@ -19,10 +19,14 @@ import zipfile
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
+from constants import AS_OF
+
 # A fixed point in time, so the rendered bytes do not depend on when they were
-# rendered. 2026-11-17 is the generator's as-of date.
-FIXED_PDF_DATE = "D:20261117000000Z"
-FIXED_ZIP_TIME = (2026, 11, 17, 0, 0, 0)
+# rendered. It is the generator's as-of date, derived rather than retyped: a
+# document stamped a day after the last row in the tables is a small lie that
+# nothing would have caught.
+FIXED_PDF_DATE = f"D:{AS_OF.strftime('%Y%m%d')}000000Z"
+FIXED_ZIP_TIME = (AS_OF.year, AS_OF.month, AS_OF.day, 0, 0, 0)
 
 PAGE_W, PAGE_H = 612, 792  # US Letter, in points: these are US clinic documents
 MARGIN_X, MARGIN_TOP, MARGIN_BOTTOM = 54, 54, 54
@@ -361,8 +365,8 @@ def write_docx(path: str, title: str, lines: Sequence[Line]) -> None:
         ' xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"'
         ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
         f"<dc:title>{_xml_escape(title)}</dc:title>"
-        '<dcterms:created xsi:type="dcterms:W3CDTF">2026-11-17T00:00:00Z</dcterms:created>'
-        '<dcterms:modified xsi:type="dcterms:W3CDTF">2026-11-17T00:00:00Z</dcterms:modified>'
+        f'<dcterms:created xsi:type="dcterms:W3CDTF">{AS_OF.isoformat()}T00:00:00Z</dcterms:created>'
+        f'<dcterms:modified xsi:type="dcterms:W3CDTF">{AS_OF.isoformat()}T00:00:00Z</dcterms:modified>'
         "</cp:coreProperties>"
     )
 

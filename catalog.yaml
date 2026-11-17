@@ -147,8 +147,8 @@ datasets:
       readUser: ${CYPRESSBAY_READ_USER}
       readPassword: ${CYPRESSBAY_READ_PASSWORD}
     statistics:
-      sizeBytes: "18874368"
-      recordCount: "133376"
+      sizeBytes: "18270748"
+      recordCount: "131126"
       format: ClickHouse MergeTree
       usability: 9.7
       provenanceScore: 100

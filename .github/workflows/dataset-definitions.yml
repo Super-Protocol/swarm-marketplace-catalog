@@ -1,0 +1,60 @@
+# Checks over `datasets/`.
+#
+# `apps/tests/run.sh` covers `apps/` and says in its own comments that
+# `datasets/` has no check yet. This is that check for the one dataset in here
+# that generates its own data: it regenerates the corpus twice and asserts the
+# properties the published card claims — byte-level reproducibility, referential
+# integrity, the deliberate gaps between the tables and the documents, and that
+# the card declares exactly the tables and columns the schema creates.
+#
+# The last one is why this runs in CI rather than by hand. A consuming agent
+# builds its whole knowledge of the database from the card's table and column
+# descriptions, so a column renamed in the generator and not in the card does not
+# fail a render or a lint — it silently teaches the agent something false.
+
+name: Dataset definitions
+
+on:
+  pull_request:
+    paths:
+      - 'datasets/**'
+      - '.github/workflows/dataset-definitions.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'datasets/**'
+      - '.github/workflows/dataset-definitions.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  cypressbay-digestive-health:
+    name: cypressbay-digestive-health self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # PyYAML parses the dataset card for the card-versus-schema comparison.
+      # poppler-utils provides pdftotext, which is how the test confirms a
+      # generated PDF still extracts as text with its identifiers intact — the
+      # documents exist to be read by something, so "it is a valid PDF" is not
+      # the property worth checking.
+      - name: Install what the self-test reads with
+        run: |
+          python -m pip install --disable-pip-version-check pyyaml
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends poppler-utils
+
+      - name: Self-test
+        run: python3 datasets/cypressbay-digestive-health/generate/selftest.py
+
+      # The default corpus is what the stand runs on, and some properties only
+      # appear at that size — every planted contradiction has to find a record it
+      # can contradict, and each coordinator note a patient it fits.
+      - name: Self-test at the published size
+        run: python3 datasets/cypressbay-digestive-health/generate/selftest.py --patients 12000

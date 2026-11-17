@@ -40,43 +40,78 @@ import random
 import docwriters as dw
 import guidelines as gl
 import vocabulary as vocab
+from constants import ABANDON_POINTS, AS_OF, REACH_ORDER, SCREENING_START_AGE, reachable_segments
 from docwriters import blank, body, h1, h2, mono, rule
-
-AS_OF = dt.date(2026, 11, 17)
 
 N_OUTSIDE_PACKETS = 20
 N_QUALITY_REVIEW = 12
 N_REFERRAL_LETTERS = 6
 N_RECALL_NOTES = 6  # one per entry in RECALL_NARRATIVES
 
-#: The five planted disagreements, in the order they are applied to the
-#: quality-review sample. `kind` is what the document says that the record does
-#: not; `consequence` is what the record should have been.
+#: The five planted disagreements, in the order they are placed on the
+#: quality-review sample.
+#:
+#: `describe` is a function, not a sentence, and that is the whole point. These
+#: used to be static strings, and the strings drifted from the rows they claimed
+#: to describe the moment the seed moved a lesion: the manifest announced "the
+#: record calls it a 12 mm hot snare" over a record that said 4 mm cold snare.
+#: The manifest is the operator's script — somebody reads it aloud next to the
+#: live data — so every word of it is now derived from the record it is about.
+#:
+#: Each `describe` takes the lesion or procedure as the RECORD has it, before the
+#: document's correction, and returns what the document says the record does not.
+
+
+def _grade(dysplasia: str) -> str:
+    """A dysplasia grade in running prose. "none dysplasia" is not English."""
+    return "no dysplasia" if dysplasia == "None" else f"{dysplasia.lower()} dysplasia"
+
+
 CONTRADICTIONS = [
     {
         "key": "high-grade-dysplasia",
-        "kind": "Pathology reports high-grade dysplasia; the record carries low-grade",
-        "consequence": "interval should be 36 months, not what the record holds",
+        "describe": lambda before, procedure: (
+            f"Pathology reports high-grade dysplasia in the "
+            f"{before.segment.lower()} specimen; the record carries "
+            f"{_grade(before.dysplasia)} on a {before.size_mm} mm "
+            f"{before.histology.lower()}"
+        ),
+        "consequence": "a 3-year interval, on the grade alone",
     },
     {
         "key": "piecemeal-emr",
-        "kind": "A 26 mm lesion removed piecemeal; the record calls it a 12 mm hot snare",
-        "consequence": "interval should be 6 months to confirm clearance",
+        "describe": lambda before, procedure: (
+            f"A 26 mm lesion removed piecemeal by endoscopic mucosal resection; the record "
+            f"calls it {_article(before.size_mm)} {before.size_mm} mm "
+            f"{before.resection.lower()}"
+        ),
+        "consequence": "6 months to confirm clearance of the resection site",
     },
     {
         "key": "serrated-not-hyperplastic",
-        "kind": "Sessile serrated lesion with dysplasia; the record says hyperplastic polyp",
-        "consequence": "interval should be 36 months, not a screening interval",
+        "describe": lambda before, procedure: (
+            f"Sessile serrated lesion with dysplasia in the {before.segment.lower()}; the record "
+            f"says {before.histology.lower()}, {_grade(before.dysplasia)}"
+        ),
+        "consequence": "a 3-year interval, not a screening interval",
     },
     {
         "key": "incomplete-exam",
-        "kind": "Cecum not reached and preparation inadequate; the record says complete, prep good",
-        "consequence": "this is a repeat within 3 months, not a surveillance decision",
+        "describe": lambda before, procedure: (
+            f"The cecum was not reached and the preparation was inadequate; the record says "
+            f"{procedure.completion_status.lower()}, preparation {procedure.prep_quality.lower()} "
+            f"(Boston {procedure.bbps_total} of 9)"
+        ),
+        "consequence": "a repeat within 3 months, not a surveillance decision",
     },
     {
         "key": "carcinoma",
-        "kind": "Invasive adenocarcinoma in the polypectomy specimen; the record says tubulovillous adenoma",
-        "consequence": "multidisciplinary referral, not routine surveillance",
+        "describe": lambda before, procedure: (
+            f"Invasive adenocarcinoma on deeper levels through the {before.segment.lower()} "
+            f"polypectomy specimen; the record says {before.histology.lower()}, "
+            f"{_grade(before.dysplasia)}"
+        ),
+        "consequence": "multidisciplinary review, not routine surveillance",
     },
 ]
 
@@ -128,18 +163,23 @@ def _article(word_or_number) -> str:
 
 def _prose_lesion(index: int, lesion) -> list:
     morphology = lesion.morphology.split(" — ")[-1]
-    retrieval = (
-        "Retrieved in fragments and submitted in a single container."
-        if lesion.piecemeal
-        else "Retrieved and submitted in a separate container."
-    )
     if lesion.resection.startswith("Not resected"):
-        retrieval = "Not resected. " + lesion.resection.split(" — ")[-1].capitalize() + "."
+        # "Removed by not resected" is what a sentence built from a column looks
+        # like when the column says the opposite of what the sentence assumes.
+        disposition = (
+            "Not resected: " + lesion.resection.split(" — ")[-1].rstrip(".") + "."
+        )
+    else:
+        disposition = f"Removed by {lesion.resection.lower()}. " + (
+            "Retrieved in fragments and submitted in a single container."
+            if lesion.piecemeal
+            else "Retrieved and submitted in a separate container."
+        )
     return [
         mono(f"  Polyp {index}"),
         body(
             f"    {_article(lesion.size_mm).capitalize()} {lesion.size_mm} mm {morphology} lesion in "
-            f"{_segment_phrase(lesion.segment)}. Removed by {lesion.resection.lower()}. {retrieval}"
+            f"{_segment_phrase(lesion.segment)}. {disposition}"
         ),
     ]
 
@@ -177,12 +217,26 @@ def _outside_packet(procedure, facility: str, received_on: dt.date, rng: random.
     bbps = {"Excellent": 9, "Good": 7, "Fair": 5, "Poor": 3}[prep]
     prep_adequate = bbps >= 6
     complete = prep_adequate and rng.random() < 0.94
+
+    # Decide how far the scope got BEFORE deciding what it found. The other order
+    # produces a report that abandons the examination in the transverse colon and
+    # then lists two polyps in the cecum, which is the first thing a
+    # gastroenterologist notices and the point at which they stop reading.
+    if procedure.kind == "Flexible sigmoidoscopy":
+        abandoned_at, reach = "", 3
+    elif complete:
+        abandoned_at, reach = "", len(REACH_ORDER)
+    else:
+        abandoned_at, reach = rng.choice(ABANDON_POINTS)
+    within_reach = set(reachable_segments(reach))
     withdrawal = round(max(6.0, rng.gauss(10.8, 2.4)), 1)
 
     lesions = []
     count = rng.choice([0, 1, 1, 2, 2, 3, 3, 4, 5, 7])
     for _ in range(count):
-        segment = _weighted_choice(rng, vocab.SEGMENTS)
+        segment = _weighted_choice(
+            rng, [(name, w) for name, w in vocab.SEGMENTS if name in within_reach]
+        )
         size_mm = rng.choice(
             [rng.randint(2, 5)] * 5 + [rng.randint(6, 9)] * 3 + [rng.randint(10, 19)] * 2
             + [rng.randint(20, 35)]
@@ -390,9 +444,19 @@ def _quality_review(procedure, rng: random.Random, contradiction: dict | None) -
     addendum: list = []
 
     key = contradiction["key"] if contradiction else None
+    #: The lesion as the RECORD has it, kept before the document corrects it, so
+    #: the manifest can describe the disagreement from both sides.
+    before = None
+    abandoned_at = ""
 
     if key == "high-grade-dysplasia":
-        target = _first(lesions, lambda l: l.histology in gl.ADENOMA_HISTOLOGIES)
+        target = _first(
+            lesions,
+            lambda l: l.histology in gl.ADENOMA_HISTOLOGIES
+            and l.dysplasia == "Low-grade"
+            and l.size_mm >= 6,
+        )
+        before = dataclasses.replace(target)
         target.dysplasia = "High-grade"
         addendum = [
             h2("PATHOLOGY ADDENDUM"),
@@ -404,11 +468,16 @@ def _quality_review(procedure, rng: random.Random, contradiction: dict | None) -
             ),
         ]
     elif key == "piecemeal-emr":
-        target = lesions[0]
+        # An adenoma, not a hyperplastic polyp: a 26 mm hyperplastic lesion taken
+        # piecemeal earns no six-month scar check, so planting it there would
+        # produce a contradiction with no consequence.
+        target = _first(lesions, lambda l: l.histology in gl.ADENOMA_HISTOLOGIES)
+        before = dataclasses.replace(target)
         target.size_mm = 26
         target.resection = "Endoscopic mucosal resection, piecemeal"
         target.piecemeal = True
         target.margin = "Cannot be assessed — piecemeal specimen"
+        target.complete_resection = "Endoscopically complete, piecemeal"
         addendum = [
             h2("ENDOSCOPIST'S NOTE"),
             body(
@@ -419,28 +488,42 @@ def _quality_review(procedure, rng: random.Random, contradiction: dict | None) -
             ),
         ]
     elif key == "serrated-not-hyperplastic":
-        target = _first(lesions, lambda l: True)
+        target = _first(lesions, lambda l: l.histology == "Hyperplastic polyp")
+        before = dataclasses.replace(target)
+        # The segment is left exactly as the record has it. Moving it to the
+        # ascending colon made the lesion commoner but made the document disagree
+        # with the record about a second fact, and a reader cannot then tell which
+        # disagreement is the planted one.
         target.histology = "Sessile serrated lesion"
         target.dysplasia = "Low-grade"
-        target.segment = "Ascending colon"
         addendum = [
             h2("PATHOLOGY ADDENDUM"),
             body(
-                "The ascending colon polyp shows dilated, boot-shaped crypt bases with lateral "
-                "extension along the muscularis mucosae, with a focus of cytologic dysplasia. "
-                "This is a sessile serrated lesion with dysplasia, not a hyperplastic polyp. "
-                "Surveillance at three years is indicated."
+                f"The {target.segment.lower()} polyp shows dilated, boot-shaped crypt bases with "
+                "lateral extension along the muscularis mucosae, with a focus of cytologic "
+                "dysplasia. This is a sessile serrated lesion with dysplasia, not a hyperplastic "
+                "polyp. Surveillance at three years is indicated."
             ),
         ]
     elif key == "incomplete-exam":
         complete = False
         prep, bbps = "Poor", 3
+        # Where the scope stopped is derived from what it found, not chosen: the
+        # abandonment point has to lie beyond the most proximal polyp in the
+        # report, or the document describes polyps in a colon it never reached.
+        # That is the first thing a gastroenterologist notices.
+        deepest = max(
+            (REACH_ORDER.index(l.segment) for l in lesions),
+            default=0,
+        )
+        candidates = [point for point in ABANDON_POINTS if point[1] > deepest]
+        abandoned_at, reach = candidates[0] if candidates else ABANDON_POINTS[-1]
         addendum = [
             h2("ENDOSCOPIST'S NOTE"),
             body(
                 "Preparation was inadequate throughout, with semi-solid residue that could not be "
                 "cleared by irrigation (Boston Bowel Preparation Scale 3 of 9). The scope was "
-                "withdrawn at the hepatic flexure. The cecum was NOT reached and the examination "
+                f"withdrawn at {abandoned_at}. The cecum was NOT reached and the examination "
                 "must be regarded as incomplete. Repeat with a split-dose preparation within "
                 "three months."
             ),
@@ -448,17 +531,22 @@ def _quality_review(procedure, rng: random.Random, contradiction: dict | None) -
     elif key == "carcinoma":
         target = _first(
             lesions, lambda l: l.histology in ("Tubulovillous adenoma", "Tubular adenoma")
-        ) or lesions[0]
+        )
+        before = dataclasses.replace(target)
         target.histology = "Adenocarcinoma"
         target.dysplasia = "High-grade"
+        original_margin = target.margin.lower()
+        target.margin = "Involved — tumor within 0.4 mm of the cautery margin"
         addendum = [
             h2("PATHOLOGY ADDENDUM"),
             body(
                 f"Deeper levels through the {target.segment.lower()} polypectomy specimen show "
                 "invasive moderately differentiated adenocarcinoma extending into the submucosa, "
-                "with tumor within 0.4 mm of the cautery margin and lymphovascular invasion "
-                "identified. This is no longer an adenoma. The case requires colorectal "
-                "multidisciplinary review; a routine surveillance interval is not appropriate."
+                "with lymphovascular invasion identified. The margin reported as "
+                f"{original_margin} on the original levels is involved on the deeper ones, with "
+                "tumor within 0.4 mm of the cautery edge. This is no longer an adenoma. The case "
+                "requires colorectal multidisciplinary review; a routine surveillance interval is "
+                "not appropriate."
             ),
         ]
 
@@ -490,7 +578,8 @@ def _quality_review(procedure, rng: random.Random, contradiction: dict | None) -
                 f"The cecum was intubated and photo-documented. Withdrawal time "
                 f"{procedure.withdrawal_min} minutes."
                 if complete
-                else "The cecum was not reached."
+                else f"The examination was abandoned at {abandoned_at or 'the splenic flexure'}; "
+                "the cecum was not reached."
             )
             + f" Complication: {procedure.complication.lower() if procedure.complication != 'None' else 'none'}."
         ),
@@ -536,7 +625,7 @@ def _quality_review(procedure, rng: random.Random, contradiction: dict | None) -
             f"{(procedure.date + dt.timedelta(days=2)).strftime('%m/%d/%Y')} at {site}."
         ),
     ]
-    return lines, corrected, recommendation
+    return lines, corrected, recommendation, before
 
 
 def _first(items, predicate):
@@ -577,19 +666,53 @@ def _referral_letter(patient, procedure, rng: random.Random) -> list:
             "Caloosa Family Health",
         ]
     )
-    letter_date = AS_OF - dt.timedelta(days=rng.randint(20, 400))
+    # Everything the letter asserts about time is computed from the procedure it
+    # is about. Picking the interval and the letter date independently produced
+    # letters that cited a colonoscopy two months in their own future, and letters
+    # calling a five-year interval "due within the next few months" three weeks
+    # after the scope.
     size = rng.choice([8, 11, 13, 14, 18, 22])
-    histology = rng.choice(["tubular adenoma", "tubulovillous adenoma", "sessile serrated lesion"])
+    histology = rng.choice(
+        ["Tubular adenoma", "Tubulovillous adenoma", "Sessile serrated lesion"]
+    )
+    piecemeal = size >= 20 and rng.random() < 0.5
+    # The interval the letter quotes is the one this lesion actually earns, from
+    # the same guideline function the rest of the corpus uses. Sampling it
+    # independently gave letters that described a 22 mm adenoma and then quoted a
+    # five-year interval — a disagreement nobody planted, in a document whose
+    # whole job is to carry a surveillance obligation correctly.
+    recommendation = gl.recommend(
+        [gl.Specimen(size, histology, "Low-grade", piecemeal)], True, True
+    )
+    interval_months = recommendation.interval_months
+    due = _due(procedure.date, interval_months)
+    earliest = procedure.date + dt.timedelta(days=30)
+    letter_date = max(earliest, AS_OF - dt.timedelta(days=rng.randint(20, 400)))
+    if letter_date >= AS_OF:
+        letter_date = AS_OF - dt.timedelta(days=rng.randint(7, 30))
+    days_to_due = (due - letter_date).days
+    if days_to_due < -365:
+        standing = "overdue by over a year"
+    elif days_to_due < 0:
+        standing = "overdue"
+    elif days_to_due <= 180:
+        standing = "due within the next few months"
+    else:
+        standing = f"not due until {due.strftime('%B %Y')}"
+
     pronoun = "she" if patient.sex == "F" else "he"
     possessive = "her" if patient.sex == "F" else "his"
     relative = "daughter" if patient.sex == "F" else "son"
-    resection_detail = rng.choice(
-        [
-            "The report notes the lesion was taken in more than one piece and that the base could "
-            "not be fully inspected.",
-            "The margin was reported clear and the resection complete in one piece.",
-            "A clip was placed at the resection site.",
-        ]
+    resection_detail = (
+        "The report notes the lesion was taken in more than one piece and that the base could "
+        "not be fully inspected, which is why the interval below is as short as it is."
+        if piecemeal
+        else rng.choice(
+            [
+                "The margin was reported clear and the resection complete in one piece.",
+                "A clip was placed at the resection site.",
+            ]
+        )
     )
     arrangement = rng.choice(
         [
@@ -600,9 +723,9 @@ def _referral_letter(patient, procedure, rng: random.Random) -> list:
     )
     contact = rng.choice(
         [
-            f" {possessive.capitalize()} {relative} can be reached at (941) "
-            f"{rng.randint(200, 989)}-{rng.randint(1000, 9999)} if {pronoun} cannot be reached "
-            f"directly.",
+            f" {possessive.capitalize()} {relative} can be reached at "
+            f"({rng.choice(vocab.FICTION_AREA_CODES)}) 555-0{rng.randint(100, 199)} if "
+            f"{pronoun} cannot be reached directly.",
             f" {pronoun.capitalize()} is deaf and prefers written contact or the patient portal.",
             f" Please send correspondence in {patient.language}."
             if patient.language != "English"
@@ -632,7 +755,8 @@ def _referral_letter(patient, procedure, rng: random.Random) -> list:
         blank(),
         body(
             f"The relevant history is a colonoscopy on {procedure.date.strftime('%m/%d/%Y')}, "
-            f"performed elsewhere, at which {_article(size)} {size} mm {histology} was removed "
+            f"performed elsewhere, at which {_article(size)} {size} mm {histology.lower()} was "
+            f"removed "
             f"from the "
             f"{rng.choice(['sigmoid colon', 'ascending colon', 'transverse colon', 'rectum'])}. "
             f"{resection_detail} I am enclosing the procedure report and the pathology for your "
@@ -641,10 +765,9 @@ def _referral_letter(patient, procedure, rng: random.Random) -> list:
         blank(),
         body(
             f"The recommendation at the time was a repeat examination in "
-            f"{rng.choice(['three years', 'five years', 'one year'])}, which on my reading of the "
-            f"report is now "
-            + rng.choice(["overdue", "due within the next few months", "overdue by over a year"])
-            + f". I have not been able to confirm whether it was ever arranged — {arrangement}"
+            f"{_interval_phrase(interval_months)}, which puts it due around "
+            f"{due.strftime('%B %Y')} — on my reading of the report that is now {standing}. "
+            f"I have not been able to confirm whether it was ever arranged — {arrangement}"
         ),
         blank(),
         body(f"The best number for {patient.given_name} is {patient.phone}.{contact}"),
@@ -673,6 +796,7 @@ RECALL_NARRATIVES = [
     {
         "key": "deceased",
         "changes_record": True,
+        "sex": "M",
         "text": (
             "Reached the patient's wife. The patient died in the hospital in August; this practice "
             "was never notified and the chart is still active. Death certificate requested from the "
@@ -699,6 +823,12 @@ RECALL_NARRATIVES = [
     {
         "key": "caregiver",
         "changes_record": False,
+        # This note names the patient's relationship to the caller, so it only
+        # fits a woman. It used to be handed out by position and landed on a man
+        # under the shipped seed — "letters addressed to him, not to his mother",
+        # about a male patient. `sex` is what stops that happening again on the
+        # next seed rather than being corrected once.
+        "sex": "F",
         "text": (
             "Spoke to the patient's son. The patient moved into an assisted living facility in "
             "March and the number on file is the old landline. New number taken below. He asks "
@@ -710,6 +840,7 @@ RECALL_NARRATIVES = [
     {
         "key": "transport",
         "changes_record": False,
+        "sex": "F",
         "text": (
             "Patient reached on the fourth attempt. She is not refusing the examination: she "
             "cannot arrange a driver for the sedation and will not come without one. Offered the "
@@ -732,6 +863,7 @@ RECALL_NARRATIVES = [
     {
         "key": "prep-intolerance",
         "changes_record": False,
+        "sex": "F",
         "text": (
             "Patient declined, and asked not to be contacted about this again. The reason she gave "
             "is that the last preparation made her unwell for two days. She was not told that a "
@@ -879,7 +1011,7 @@ def build(world, notes_dir: str, rng: random.Random):
     picks.sort(key=lambda pair: pair[0].procedure_id)
 
     for procedure, contradiction in picks:
-        lines, corrected, recorded = _quality_review(procedure, rng, contradiction)
+        lines, corrected, recorded, before = _quality_review(procedure, rng, contradiction)
         suffix = "report-" + procedure.date.isoformat()
         filename = _slug(procedure.patient, suffix) + ".pdf"
         dw.write_pdf(
@@ -909,16 +1041,32 @@ def build(world, notes_dir: str, rng: random.Random):
                     "mrn": procedure.patient.mrn,
                     "procedure_id": procedure.procedure_id,
                     "note": (
-                        f"{contradiction['kind']}. Record holds "
-                        f"{recorded.interval_months} months ({recorded.risk_tier}); the document "
-                        f"supports {corrected.interval_months} months ({corrected.risk_tier}) — "
-                        f"{contradiction['consequence']}."
+                        f"{contradiction['describe'](before, procedure)}. Record holds "
+                        f"{_interval_phrase(recorded.interval_months)} "
+                        f"({recorded.risk_tier}); the document supports "
+                        f"{_interval_phrase(corrected.interval_months)} "
+                        f"({corrected.risk_tier}) — {contradiction['consequence']}."
                     ),
                 }
             )
 
     # -- referral letters ---------------------------------------------------
-    letter_candidates = [p for p in outside[N_OUTSIDE_PACKETS:]] or outside
+    # A referral for post-polypectomy surveillance on a patient who was 29 at the
+    # procedure is not wrong, but the letter does not say why — and a letter that
+    # does not say why is the thing a product lead stops on. Keep these to the
+    # screening-age population, where the referral explains itself.
+    letter_candidates = [
+        p
+        for p in outside[N_OUTSIDE_PACKETS:]
+        if p.patient.age_on(p.date) >= SCREENING_START_AGE
+    ]
+    if len(letter_candidates) < N_REFERRAL_LETTERS:
+        letter_candidates += [
+            p
+            for p in outside[:N_OUTSIDE_PACKETS]
+            if p.patient.age_on(p.date) >= SCREENING_START_AGE
+            and p not in letter_candidates
+        ]
     for procedure in letter_candidates[:N_REFERRAL_LETTERS]:
         lines = _referral_letter(procedure.patient, procedure, rng)
         filename = _slug(procedure.patient, "referral-letter") + ".docx"
@@ -933,7 +1081,10 @@ def build(world, notes_dir: str, rng: random.Random):
                 "patient_id": procedure.patient.patient_id,
                 "document_type": "Referral letter",
                 "source_facility": "Referring primary care practice",
-                "received_on": AS_OF - dt.timedelta(days=rng.randint(20, 400)),
+                "received_on": min(
+                    AS_OF - dt.timedelta(days=1),
+                    procedure.date + dt.timedelta(days=rng.randint(40, 400)),
+                ),
                 "filename": filename,
                 "format": "docx",
                 "pages": 1,
@@ -953,12 +1104,31 @@ def build(world, notes_dir: str, rng: random.Random):
     overdue.sort(key=lambda r: r["recall_id"])
     rng.shuffle(overdue)
     by_id = {p.patient_id: p for p in world.patients}
-    if len(overdue) < len(RECALL_NARRATIVES):
-        raise RuntimeError(
-            f"only {len(overdue)} overdue recalls with three or more outreach attempts — "
-            f"raise --patients"
+    # Each narrative goes to a patient it can be true about: one that names the
+    # patient's wife needs a man, one that says "his mother" needs a woman.
+    # Pairing them by position is how the shipped seed ended up with a note about
+    # somebody's mother attached to a male patient.
+    taken_recalls: set[str] = set()
+    pairs: list[tuple[dict, dict]] = []
+    for narrative in RECALL_NARRATIVES:
+        match = next(
+            (
+                row
+                for row in overdue
+                if row["recall_id"] not in taken_recalls
+                and ("sex" not in narrative or by_id[row["patient_id"]].sex == narrative["sex"])
+            ),
+            None,
         )
-    for narrative, recall_row in zip(RECALL_NARRATIVES, overdue):
+        if match is None:
+            raise RuntimeError(
+                f"no overdue recall fits the coordinator note {narrative['key']!r} "
+                f"(wanted sex {narrative.get('sex', 'any')}) — raise --patients"
+            )
+        taken_recalls.add(match["recall_id"])
+        pairs.append((narrative, match))
+
+    for narrative, recall_row in pairs:
         patient = by_id[recall_row["patient_id"]]
         lines = _recall_note(patient, recall_row, narrative, rng)
         filename = _slug(patient, f"recall-{recall_row['recall_id'].lower()}") + ".txt"
@@ -999,32 +1169,60 @@ def build(world, notes_dir: str, rng: random.Random):
 
 
 def _eligible(procedure, key: str) -> bool:
+    """Whether this procedure's record can carry this disagreement.
+
+    The first condition is the same for all five and is not about the lesion: the
+    recommendation has to still be the patient's current one. A contradiction
+    planted on a recommendation a later colonoscopy already answered is moot —
+    "the record holds seven years" is not a finding when the next scope happened
+    two years ago and closed the recall. Two of the five landed there before this
+    check existed.
+    """
+    if procedure.superseded_by:
+        return False
     if key == "high-grade-dysplasia":
+        # Six millimetres and up. High-grade dysplasia in a 2 mm polyp happens,
+        # but a reader who sees it reads the corpus as random rather than the
+        # finding as real, and the amendment is what has to be believed here.
         return any(
-            l.histology in gl.ADENOMA_HISTOLOGIES and l.dysplasia == "Low-grade"
+            l.histology in gl.ADENOMA_HISTOLOGIES
+            and l.dysplasia == "Low-grade"
+            and l.size_mm >= 6
             for l in procedure.lesions
         ) and procedure.recommendation.interval_months > 36
     if key == "piecemeal-emr":
         return (
-            len(procedure.lesions) >= 1
-            and not procedure.lesions[0].piecemeal
+            any(
+                l.histology in gl.ADENOMA_HISTOLOGIES and not l.piecemeal and l.size_mm < 20
+                for l in procedure.lesions
+            )
             and procedure.recommendation.interval_months >= 36
         )
     if key == "serrated-not-hyperplastic":
+        # Proximal colon only. Hyperplastic polyps and sessile serrated lesions
+        # are genuinely confusable there and that is where the misclassification
+        # costs something; a rectal serrated lesion with dysplasia reads as an
+        # oddity instead of a miss, and the segment is not moved to suit the
+        # story.
         return (
             len(procedure.lesions) == 1
             and procedure.lesions[0].histology == "Hyperplastic polyp"
+            and procedure.lesions[0].segment
+            in ("Cecum", "Ascending colon", "Transverse colon")
             and procedure.recommendation.interval_months >= 120
+        )
+    if key == "carcinoma":
+        return (
+            any(
+                l.histology in ("Tubulovillous adenoma", "Tubular adenoma")
+                for l in procedure.lesions
+            )
+            and procedure.recommendation.interval_months >= 36
         )
     if key == "incomplete-exam":
         return (
             procedure.cecal_intubation == 1
             and procedure.prep_quality in ("Good", "Excellent")
-            and procedure.recommendation.interval_months >= 36
-        )
-    if key == "carcinoma":
-        return (
-            any(l.histology in ("Tubulovillous adenoma", "Tubular adenoma") for l in procedure.lesions)
             and procedure.recommendation.interval_months >= 36
         )
     return False

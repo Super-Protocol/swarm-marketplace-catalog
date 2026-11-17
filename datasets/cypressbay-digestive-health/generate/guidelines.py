@@ -44,6 +44,23 @@ class Recommendation:
     basis: str
 
 
+def is_advanced(specimen: Specimen) -> bool:
+    """Whether this lesion is one of the ones that earns a three-year interval.
+
+    Exported because `pathology.advanced_histology` is published as a precomputed
+    column, and a precomputed column that disagrees with the rule it stands for is
+    worse than no column: the agent is told to trust it. The flag used to omit
+    traditional serrated adenomas and dysplastic sessile serrated lesions, both of
+    which this function has always treated as advanced.
+    """
+    return (
+        specimen.size_mm >= 10
+        or specimen.dysplasia == "High-grade"
+        or specimen.histology in ("Tubulovillous adenoma", "Villous adenoma", "Traditional serrated adenoma")
+        or (specimen.histology == "Sessile serrated lesion" and specimen.dysplasia != "None")
+    )
+
+
 def recommend(specimens: list[Specimen], prep_adequate: bool, complete: bool) -> Recommendation:
     """The interval a complete examination with this pathology earns.
 
@@ -80,16 +97,7 @@ def recommend(specimens: list[Specimen], prep_adequate: bool, complete: bool) ->
 
     adenomas = [s for s in specimens if s.histology in ADENOMA_HISTOLOGIES]
     serrated = [s for s in specimens if s.histology in SERRATED_HISTOLOGIES]
-    advanced = [
-        s
-        for s in specimens
-        if (
-            s.size_mm >= 10
-            or s.dysplasia == "High-grade"
-            or s.histology in ("Tubulovillous adenoma", "Villous adenoma", "Traditional serrated adenoma")
-            or (s.histology == "Sessile serrated lesion" and s.dysplasia != "None")
-        )
-    ]
+    advanced = [s for s in specimens if is_advanced(s)]
 
     if len(adenomas) + len(serrated) > 10:
         return Recommendation(12, "High", "More than 10 adenomas — 1 year, consider a genetic syndrome")
