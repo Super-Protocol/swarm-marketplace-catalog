@@ -19,6 +19,8 @@ catalog.yaml                   Listing policy: who publishes what, visibility, g
 
 `apps/tests/run.sh` is that sentence as a check: it fetches the schemas at a pinned revision and validates every `app.yaml` against them, then checks what a schema cannot — that a patch has something to patch, that a base key reaches a value the target chart declares, and that a definition whose content changed also changed its `metadata.version`. `charts/tests/run.sh` does the same for the charts, by rendering them and diffing against committed goldens.
 
+Neither of those can say where an image *came from*. `scripts/verify-pins/` traces every first-party digest a chart or a listing pins to the source revision an attestation says built it, and fails when a bundle's pins disagree about that revision — digest → attestation → commit, never tag → digest, for the reason in its README.
+
 ## Chart repository
 
 The charts under `charts/` are packaged by CI and served from GitHub Pages:
