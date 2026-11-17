@@ -170,6 +170,33 @@ analyst_images agent      conversational-analyst-agent      analyst-agent
 analyst_images gateway    conversational-analyst-gateway    analyst-gateway
 analyst_images grounding  conversational-analyst-grounding  analyst-grounding
 
+# `evidence.expectedDigest` promises that every deployment of a version attests the same thing,
+# and by default none of them do: the namespace, the hostname and the consumer's own identity all
+# reach the rendered objects. 4.0.0 declares ten exclusions for that; this is what checks they are
+# enough. Every component, because an exclusion is per object and a listing deploys six charts.
+#
+# The analyst's exclusions are almost all on objects rendered by VENDORED charts — bitnami's
+# Keycloak ConfigMap, the vendored Redis StatefulSet, the aivo config Deployment — which cannot
+# carry an annotation, so they are declared in the definition and the marketplace stamps them on.
+# `evidence_drift.py` honours that path as well as the chart's own annotation; see the note beside
+# `exclusions` in it.
+note "two consumers of the analyst listing attest the same snapshot"
+analyst_drift() {
+  if output=$(python3 charts/tests/evidence_drift.py "conversational-analyst-$1" \
+      "charts/tests/cases/analyst-$1.yaml" conversational-analyst "${@:2}"); then
+    printf '%s\n' "$output" | sed "s/\$/ ($1)/"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/evidence_drift.py conversational-analyst-$1"
+  fi
+}
+analyst_drift platform
+analyst_drift embeddings
+analyst_drift identity 'appHostname={t}.conf-apps.superprotocol.dev'
+analyst_drift agent
+analyst_drift gateway 'appHostname={t}.conf-apps.superprotocol.dev'
+analyst_drift grounding
+
 # The agent's configuration is a ConfigMap the cloud digests and publishes. What must be in
 # it, what must not, and why a golden cannot answer either question: see the file.
 note "the agent's configuration is attested, and carries no credential and no hostname"
