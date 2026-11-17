@@ -326,6 +326,27 @@ mail:
   # Needs a router image carrying `mail.replyTo` (confidential-router#130 on).
   # The config schema is strict: an older image refuses to boot on this key.
   replyTo: ""
+  # Signs the provider's delivery notifications (SUP-551, SUP-553). It is the
+  # Svix signing secret Resend shows when a webhook endpoint is created
+  # (`whsec_…`, at least 16 characters), written to the Secret as
+  # `mail-webhook-secret` and read as `CR_API_MAIL__WEBHOOK_SECRET`.
+  #
+  # Unset, `POST /v1/webhooks/resend` answers 404 and the deployment learns
+  # nothing about what the provider did with a message after the relay took it:
+  # a suppressed address looks exactly like a message still in flight, which is
+  # the state every deployment before this was in — and the state SUP-551's code
+  # has shipped into, visible nowhere, since chart 0.13.6.
+  #
+  # Deliberately **not** inside the `resend` branch of the Secret: production
+  # sends through Resend's *SMTP relay* (`mail.provider: smtp`), and the events
+  # belong to the mail account rather than to the transport. A webhook secret
+  # that only rendered for `provider: resend` would be silently dropped on
+  # exactly the deployment that needs it.
+  #
+  # Needs a router image carrying `mail.webhookSecret` (confidential-router#173
+  # on, in the image this chart pins since 0.13.6). The config schema is strict:
+  # an older image refuses to boot on this key, as with `replyTo` above.
+  webhookSecret: ""
   resendApiKey: ""
   smtp:
     host: ""
@@ -337,8 +358,8 @@ mail:
     password: ""
   # Read every key above from a Secret of your own instead — the same key names
   # this chart writes (`mail-provider`, `mail-from`, `mail-from-name`,
-  # `mail-reply-to`, `mail-resend-api-key`, `smtp-host`, `smtp-port`,
-  # `smtp-security`, `smtp-user`, `smtp-password`).
+  # `mail-reply-to`, `mail-webhook-secret`, `mail-resend-api-key`, `smtp-host`,
+  # `smtp-port`, `smtp-security`, `smtp-user`, `smtp-password`).
   existingSecret: ""
 
 # Which models this deployment serves: a plain list of Ollama model names. This

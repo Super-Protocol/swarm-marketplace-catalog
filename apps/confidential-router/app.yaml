@@ -5,7 +5,7 @@ metadata:
   name: confidential-router
   title: Confidential Router
   description: An OpenAI-compatible endpoint whose deployment publishes signed evidence of what it is running, with a console for keys, credit and generation history.
-  version: "0.19.9"
+  version: "0.20.0"
   category: ai-inference
   sourceRepo: https://github.com/Super-Protocol/confidential-router
   license: Apache-2.0
@@ -90,6 +90,9 @@ ui:
           visible: "params.mailProvider != 'none' || params.billingMode == 'stripe'"
         - parameterId: mailReplyTo
           widget: text
+          visible: "params.mailProvider != 'none'"
+        - parameterId: mailWebhookSecret
+          widget: password
           visible: "params.mailProvider != 'none'"
         - parameterId: smtpHost
           widget: text
@@ -478,6 +481,21 @@ parameters:
       have to receive mail at all — so unless you name a mailbox here, a reply to a sign-in code, and
       a bounce someone forwards back by hand, reaches nothing. Leave it empty to send no `Reply-To`
       header at all.
+    default: ""
+
+  - id: mailWebhookSecret
+    type: string
+    title: Mail webhook signing secret
+    description: >-
+      Lets this deployment hear what the provider did with a message after it took it — bounced,
+      complained about, or dropped because the address is suppressed. Register a webhook endpoint
+      at `https://<API hostname>/v1/webhooks/resend` in the provider's dashboard, subscribe it to
+      the bounce, complaint, suppression and failure events, and paste the `whsec_…` signing
+      secret it shows here. Needed with Resend's SMTP relay as much as with its API: the
+      notifications belong to the mail account, not to the transport. Leave it empty and the
+      endpoint answers 404 — a sign-in code the provider discarded then looks, to the operator and
+      to the person waiting for it, exactly like one still in flight.
+    sensitive: true
     default: ""
 
   - id: smtpHost
@@ -956,7 +974,37 @@ components:
       # images are rebuilt per commit; the gatekeeper's Go code is untouched by
       # `0c5f34f`.
 
-      version: "0.13.10"
+      # 0.20.0 (SUP-553) carries the key that makes SUP-551 do something, on
+      # chart 0.15.0. Both image digests stay where 0.19.9 left them: the router
+      # build pinned below has known `mail.webhookSecret` since
+      # confidential-router#173, which chart 0.13.6 pinned — so for seven trains
+      # the code has been deployed and the key has not existed anywhere in this
+      # listing, and `POST /v1/webhooks/resend` has answered 404 on production
+      # as if nothing were wrong.
+      #
+      # What that costs: nothing the provider says about a message after the
+      # relay accepted it arrives. A sign-in code to a suppressed address is
+      # accepted, discarded, and then reported to the operator as sent and to
+      # the person waiting as "check your spam folder, it can be slow".
+      # `mail.undeliverable.addresses` on `/admin/health` stays `0`, which is
+      # indistinguishable from nothing being wrong. A reconfigure could not
+      # have fixed it twice over: the chart had no such key, and a reconfigure
+      # re-renders the version a deployment was created from.
+      #
+      # So the deploy sheet grows one entry, and it is a credential: the
+      # `whsec_…` signing secret the provider shows when the webhook endpoint
+      # is created. Unset, this listing deploys exactly as 0.19.9 did.
+      #
+      # Riding along, because chart versions are a line and not a menu: 0.14.0
+      # (SUP-583) gives the egress sidecar a liveness probe. It was published
+      # while 0.19.9 was being cut and no listing has pinned it, so this is the
+      # version that delivers it. That is the fix for a sidecar whose admin API
+      # stopped answering on production while the container stayed
+      # `restartCount: 0` and the pod stayed Ready for 4.5 days — the in-pod
+      # case of "Ready is not serving". The probe execs
+      # `gatekeeper-sidecar --healthcheck`, which the sidecar digest below has
+      # answered since 0.13.10, so the two arrive compatible.
+      version: "0.15.0"
     images:
       - name: ghcr.io/super-protocol/confidential-router/router-api
         digest: sha256:9e1fce1b4759e0678a7afbed952c4df2153e900e8cda28ef3bfafb3dcb2f5f0f
@@ -1207,6 +1255,17 @@ components:
             path: mail.replyTo
             value: "{{ params.mailReplyTo }}"
             when: "params.mailProvider != 'none' && params.mailReplyTo != ''"
+
+          # The provider's webhook signing secret (SUP-553), on the same `add`
+          # terms as the Reply-To above and for the same strict-schema reason: an
+          # empty value is a key the router rejects, not a webhook it ignores.
+          # Set for every provider rather than for `resend` alone — production
+          # sends through that provider's SMTP relay and the delivery
+          # notifications are the mail account's.
+          - op: add
+            path: mail.webhookSecret
+            value: "{{ params.mailWebhookSecret }}"
+            when: "params.mailProvider != 'none' && params.mailWebhookSecret != ''"
 
           - op: add
             path: mail.smtp.host

@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.14.0
+    helm.sh/chart: confidential-router-api-0.15.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -19,6 +19,7 @@ stringData:
   mail-from-name: "Confidential Router"
   mail-provider: "smtp"
   mail-reply-to: "support@confidential-router.example"
+  mail-webhook-secret: "whsec_golden_test_not_a_real_webhook_secret"
   password: "golden-test-password"
   postgres-password: "golden-test-password"
   replication-password: "golden-test-password"
@@ -34,7 +35,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api-public
   labels:
-    helm.sh/chart: confidential-router-api-0.14.0
+    helm.sh/chart: confidential-router-api-0.15.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -74,7 +75,7 @@ kind: ConfigMap
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.14.0
+    helm.sh/chart: confidential-router-api-0.15.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -181,7 +182,7 @@ kind: Service
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.14.0
+    helm.sh/chart: confidential-router-api-0.15.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -204,7 +205,7 @@ kind: Deployment
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.14.0
+    helm.sh/chart: confidential-router-api-0.15.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"
@@ -246,12 +247,12 @@ spec:
       annotations:
         # A catalogue change is a config change, and the config is a file: without
         # this the ConfigMap is updated and the running pods keep the old models.
-        checksum/config: f4d84d7a27346b176346f46315e3737a545a60da1a9aaba5453ba4059af7b842
+        checksum/config: 74ffeec8a6747b48068face8e13da939bb57b5aaca480d8de89a303b01d17d0a
         # And a hostname reconfigure is a config change the pod cannot see at all:
         # `envFrom` is read once, when the container starts, so without this the
         # ConfigMap is updated and the running router keeps advertising the old
         # origin.
-        checksum/public-config: 943a62b3440a5a0194bf114e5593eee4522f9c9ac2eea0dda5b219e116672f1a
+        checksum/public-config: e01e79bae757a433dad9fc84197850aca751d52ef0d5405bf9937f3d7a26e82a
         # The mail settings reach the container as env read from the Secret, once,
         # at start — so a reconfigured SMTP server or a rotated password would
         # otherwise sit in the Secret while the router keeps the old one (SUP-269).
@@ -259,7 +260,7 @@ spec:
         # Keyed with `auth.secret`: everything else in the pre-image is either
         # known or guessable, so a bare hash of it would be an offline oracle for
         # the SMTP password to anyone who can read the Deployment.
-        checksum/mail: b12cb63d49a8711e327bb28da9e8ee518cdbd3126790eee10f073d705f188c83
+        checksum/mail: 0f29137b72f01d2ccf105c1535bc0e1ae518c200ad426028f133a2f03c8043fd
       labels:
         app.kubernetes.io/name: confidential-router-api
         app.kubernetes.io/instance: cr
@@ -368,6 +369,12 @@ spec:
                 secretKeyRef:
                   name: confidential-router-api
                   key: smtp-user
+                  optional: true
+            - name: CR_API_MAIL__WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-webhook-secret
                   optional: true
           volumeMounts:
             - name: config
@@ -485,6 +492,12 @@ spec:
                   name: confidential-router-api
                   key: smtp-user
                   optional: true
+            - name: CR_API_MAIL__WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-router-api
+                  key: mail-webhook-secret
+                  optional: true
           # `/health` does a real database round trip, so an unready pod is one
           # that cannot serve rather than one that has merely started.
           startupProbe:
@@ -539,7 +552,7 @@ kind: Ingress
 metadata:
   name: confidential-router-api
   labels:
-    helm.sh/chart: confidential-router-api-0.14.0
+    helm.sh/chart: confidential-router-api-0.15.0
     app.kubernetes.io/name: confidential-router-api
     app.kubernetes.io/instance: cr
     app.kubernetes.io/version: "0.4.1"

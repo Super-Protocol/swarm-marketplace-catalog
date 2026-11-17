@@ -157,8 +157,15 @@ image that predates `mail.replyTo` refuses to boot on a Secret that carries
 `mail-reply-to`. Leaving `mail.replyTo` unset is what keeps such an image
 working, exactly as an unset `mail.provider` does — and `Chart.yaml` pins an
 image that has the key.
+
+`CR_API_MAIL__WEBHOOK_SECRET` (SUP-551, SUP-553) joins on the same terms, and
+for the same reason it is written to the Secret outside the `resend` branch: it
+authenticates the provider's delivery notifications for a deployment that sends
+through that provider's SMTP relay just as much as for one using its API. One
+more entry in the attested env list for everyone, so anyone pinning a digest
+re-pins once — and the list still says nothing about how a deployment mails.
 */}}
-{{- range $variable, $key := dict "CR_API_MAIL__PROVIDER" "mail-provider" "CR_API_MAIL__FROM" "mail-from" "CR_API_MAIL__FROM_NAME" "mail-from-name" "CR_API_MAIL__REPLY_TO" "mail-reply-to" "CR_API_MAIL__RESEND_API_KEY" "mail-resend-api-key" "CR_API_MAIL__SMTP__HOST" "smtp-host" "CR_API_MAIL__SMTP__PORT" "smtp-port" "CR_API_MAIL__SMTP__SECURITY" "smtp-security" "CR_API_MAIL__SMTP__USER" "smtp-user" "CR_API_MAIL__SMTP__PASSWORD" "smtp-password" }}
+{{- range $variable, $key := dict "CR_API_MAIL__PROVIDER" "mail-provider" "CR_API_MAIL__FROM" "mail-from" "CR_API_MAIL__FROM_NAME" "mail-from-name" "CR_API_MAIL__REPLY_TO" "mail-reply-to" "CR_API_MAIL__WEBHOOK_SECRET" "mail-webhook-secret" "CR_API_MAIL__RESEND_API_KEY" "mail-resend-api-key" "CR_API_MAIL__SMTP__HOST" "smtp-host" "CR_API_MAIL__SMTP__PORT" "smtp-port" "CR_API_MAIL__SMTP__SECURITY" "smtp-security" "CR_API_MAIL__SMTP__USER" "smtp-user" "CR_API_MAIL__SMTP__PASSWORD" "smtp-password" }}
 - name: {{ $variable }}
   valueFrom:
     secretKeyRef:
