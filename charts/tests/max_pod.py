@@ -16,7 +16,9 @@ needs checking, and only the render can check it, so:
     pod demand = its containers' limits SUMMED,
                  or its heaviest init container, whichever is larger
 
-per pod, across every component the listing deploys. Note the difference from
+per pod, across every component the listing deploys. (A native sidecar — an init
+container with `restartPolicy: Always` — is summed with the regular ones, since
+it runs beside them.) Note the difference from
 `limitrange.py`, which checks the same manifests per CONTAINER: a pod of four
 200m containers is admissible there and is a 800m pod here.
 
@@ -67,11 +69,20 @@ def pod_demand(doc: dict) -> tuple[int, float] | None:
         # than guessed at, so the two checks do not disagree about the same manifest.
         return (cpu_millicores(cpu) if cpu else 0, memory_mib(memory) if memory else 0)
 
-    regular = [limits(c) for c in (pod.get("containers") or [])]
-    init = [limits(c) for c in (pod.get("initContainers") or [])]
+    # A native sidecar — an init container with `restartPolicy: Always` — runs beside the regular
+    # containers for the life of the pod, so it is summed with them rather than weighed against
+    # them. No chart here renders one today; getting it wrong would under-count a pod, which is
+    # the direction that costs an outage.
+    everything = list(pod.get("containers") or [])
+    init = []
+    for container in pod.get("initContainers") or []:
+        (everything if container.get("restartPolicy") == "Always" else init).append(container)
+
+    concurrent = [limits(c) for c in everything]
+    sequential = [limits(c) for c in init]
     return (
-        max(sum(cpu for cpu, _ in regular), max((cpu for cpu, _ in init), default=0)),
-        max(sum(mem for _, mem in regular), max((mem for _, mem in init), default=0)),
+        max(sum(cpu for cpu, _ in concurrent), max((cpu for cpu, _ in sequential), default=0)),
+        max(sum(mem for _, mem in concurrent), max((mem for _, mem in sequential), default=0)),
     )
 
 
@@ -105,7 +116,14 @@ def main(listing: str, specs: list[str]) -> int:
     allowed_cpu = cpu_millicores(max_pod["cpu"])
     allowed_memory = memory_mib(max_pod["memory"])
 
-    pods = heaviest([tuple(spec.split(":", 2)) for spec in specs])  # type: ignore[misc]
+    components: list[tuple[str, str, str]] = []
+    for spec in specs:
+        parts = spec.split(":", 2)
+        if len(parts) != 3:
+            raise SystemExit(f"  FAIL  {spec!r} is not <component>:<chart>:<case>")
+        components.append((parts[0], parts[1], parts[2]))
+
+    pods = heaviest(components)
     if not pods:
         # Exiting 0 having weighed nothing would read as a pass on a listing whose charts render
         # no pods at all, which is not a thing that happens for a real reason.
