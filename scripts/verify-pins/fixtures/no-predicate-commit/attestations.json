@@ -1,0 +1,59 @@
+{
+  "ghcr.io/super-protocol/confidential-router/router-api@sha256:367aab943e948fb5443e6839212bdb5965a9d3791966626eadede79c44ec7ab0": {
+    "attestations": [
+      {
+        "verificationResult": {
+          "signature": {
+            "certificate": {
+              "buildConfigDigest": "82769ff3fc764ab9c6e176280874175a4e5c09b4",
+              "buildConfigURI": "https://github.com/Super-Protocol/confidential-router/.github/workflows/release-router.yml@refs/heads/main",
+              "buildSignerDigest": "82769ff3fc764ab9c6e176280874175a4e5c09b4",
+              "buildSignerURI": "https://github.com/Super-Protocol/confidential-router/.github/workflows/release-router.yml@refs/heads/main",
+              "buildTrigger": "push",
+              "certificateIssuer": "CN=sigstore-intermediate,O=sigstore.dev",
+              "githubWorkflowName": "Release router images",
+              "githubWorkflowRef": "refs/heads/main",
+              "githubWorkflowRepository": "Super-Protocol/confidential-router",
+              "githubWorkflowSHA": "82769ff3fc764ab9c6e176280874175a4e5c09b4",
+              "githubWorkflowTrigger": "push",
+              "issuer": "https://token.actions.githubusercontent.com",
+              "runInvocationURI": "https://github.com/Super-Protocol/confidential-router/actions/runs/38256760587/attempts/1",
+              "runnerEnvironment": "github-hosted",
+              "sourceRepositoryDigest": "82769ff3fc764ab9c6e176280874175a4e5c09b4",
+              "sourceRepositoryIdentifier": "1351587322",
+              "sourceRepositoryOwnerIdentifier": "82778947",
+              "sourceRepositoryOwnerURI": "https://github.com/Super-Protocol",
+              "sourceRepositoryRef": "refs/heads/main",
+              "sourceRepositoryURI": "https://github.com/Super-Protocol/confidential-router",
+              "sourceRepositoryVisibilityAtSigning": "public",
+              "subjectAlternativeName": "https://github.com/Super-Protocol/confidential-router/.github/workflows/release-router.yml@refs/heads/main"
+            }
+          },
+          "statement": {
+            "predicate": {
+              "buildDefinition": {
+                "resolvedDependencies": [
+                  {
+                    "uri": "pkg:docker/library/node@22",
+                    "digest": {
+                      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                    }
+                  }
+                ]
+              }
+            },
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "subject": [
+              {
+                "digest": {
+                  "sha256": "367aab943e948fb5443e6839212bdb5965a9d3791966626eadede79c44ec7ab0"
+                },
+                "name": "ghcr.io/super-protocol/confidential-router/router-api"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

@@ -73,6 +73,11 @@ cannot answer the question:
   chart itself would pull. A listing overrides the defaults too, which leaves an empty or
   placeholder default invisible until somebody runs `helm install` with no `--set`, or until a
   chart is published to an append-only repository carrying a digest nobody can pull.
+
+  Whether that digest names an image anyone built from a revision we reviewed is a different
+  question, and `digests.py` cannot ask it: a well-formed digest of nothing in particular
+  passes here. `scripts/verify-pins/` asks it, of every chart and every listing, by verifying
+  the attestation over each first-party digest and reading the source commit out of it.
 - **No consumer value in an attested manifest** (`consumer_fields.py`). The two-consumer render
   below cannot see this one: it renders the chart with fixed values, while `consumer.*` is
   resolved by the marketplace when it turns a definition into values — so the gap is the seam
@@ -127,6 +132,17 @@ cannot answer the question:
   list of every route the pinned API mounts, each marked published or internal, against the
   rendered Ingress. The router's source is not here, so when bumping the API image run it with
   `ROUTER_SRC=<checkout>`: a controller route the list does not name fails.
+- **The route scan reads every decorator shape, or says which it cannot**
+  (`route_decorators.py`). That scan reads controllers as text, so its one unacceptable failure is
+  the silent one: a decorator it could not read used to contribute no route, and a route it does
+  not see reads as every route named. `@Post([CONSOLE_EVENTS_PATH, LEGACY_CONSOLE_EVENTS_PATH])`
+  was that miss — the console ingest moved to `/v1/console-events` in SUP-463 and nothing said so
+  (SUP-482). It now reads an empty argument, an inline path, an array of them and a module-level
+  `const NAME = 'path'`, and reports any other shape with its file and line. The `*.controller.ts`
+  name is checked the same way rather than trusted — it is this repository's expectation and not
+  Nest's requirement, so a controller under another name would otherwise be a route nobody reads,
+  which is SUP-275 one filename away. Each shape is exercised here against fixture controllers,
+  and each case asserts either the routes declared or a failure naming where — never nothing.
 - **Mail configuration moves nothing attested** (`mail_invariance.py`). The router case is
   rendered with no mail, with SMTP under two different hosts, senders and credentials, and with
   Resend, and every attested field has to be identical across all four — not merely excluded:

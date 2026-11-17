@@ -1,0 +1,5 @@
+{
+  "ghcr.io/super-protocol/confidential-router/router-api@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd": {
+    "error": "failed to fetch remote image: GET https://ghcr.io/v2/super-protocol/confidential-router/router-api/manifests/sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd: MANIFEST_UNKNOWN: manifest unknown"
+  }
+}

@@ -1,0 +1,78 @@
+# Traces every first-party image pin in this catalog from its digest to the source
+# revision an attestation says built it, and fails the pull request when it cannot.
+#
+# A listing version reaches production by being merged here: publish-charts.yml
+# packages the charts on merge and a deployment pulls the images those charts pin
+# by digest. Until this job existed, the provenance of those digests was a sentence
+# in a pull request body — verified by whoever read it, and by nobody when nobody
+# did. Listing 0.18.3 merged and deployed with no recorded review at all (SUP-313,
+# #66): its digests were right, which is luck rather than a gate.
+#
+# The direction is digest → attestation → commit and never tag → digest. A
+# scheduled release can re-push the same `main-<sha>` tag onto a newly built image
+# (SUP-316), so resolving a tag proves nothing about which revision a deployment
+# is running. See scripts/verify-pins/README.md for what each check is for.
+#
+# Advisory until `main` carries branch protection that makes it required — a red
+# check nothing blocks on is still a claim replaced by machine output, but it is
+# not yet a gate (SUP-318).
+name: Verify pins
+
+on:
+  pull_request:
+    paths:
+      - 'charts/**'
+      - 'apps/**'
+      - 'scripts/verify-pins/**'
+      - '.github/workflows/verify-pins.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'charts/**'
+      - 'apps/**'
+      - 'scripts/verify-pins/**'
+      - '.github/workflows/verify-pins.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # The signed bundle is fetched from the registry first, which needs no access to
+  # the repository that signed it: confidential-s3 is private, and reading its
+  # attestations through the GitHub API with this repository's token is an HTTP 404
+  # (the first run of this job found that). `attestations: read` is here for the
+  # API fallback, which serves an image whose release workflow pushes no bundle to
+  # the registry.
+  attestations: read
+  packages: read
+
+jobs:
+  pins:
+    name: digest provenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install --quiet pyyaml
+
+      # The gate's own behaviour, against recorded attestations and offline. Most of
+      # these shapes cannot be produced live — nobody can push an unattested image
+      # to ghcr.io/super-protocol, or one whose attestation disagrees with its own
+      # signing certificate — so a gate without them is a gate whose failure paths
+      # have never run.
+      - name: The gate behaves as it should
+        run: scripts/verify-pins/run.sh
+
+      # The real thing, against this revision, with live `gh attestation verify`.
+      # The verdict table goes into the job summary, which is the output the pull
+      # request body's provenance claim is replaced by.
+      - name: Every pin in this revision traces to an attested commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh --version | head -1
+          scripts/verify-pins/verify_pins.py
