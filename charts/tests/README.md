@@ -62,6 +62,17 @@ cannot answer the question:
   containers shipped that way before this check existed (SUP-238), and a golden diff held
   every one of their numbers without a word.
 
+- **The heaviest pod the charts render is within the `maxPod` the listing declares**
+  (`max_pod.py`). `resources.maxPod` is what the cloud requires one node to be able to hold, and
+  the LimitRange `max` of the space. Declared below the heaviest pod the charts actually render,
+  the pod is refused at admission by a LimitRange sized from it, or stays Pending because
+  placement chose a cluster for a pod smaller than the real one — the same outage `limitrange.py`
+  exists for, arriving from the listing rather than from a chart. The unit is the
+  POD, not the container `limitrange.py` weighs: a pod's demand is its containers' limits summed,
+  or its heaviest init container, whichever is larger, and four admissible 200m containers are an
+  800m pod. A listing that declares no `maxPod` passes — the cloud falls back to
+  `resources.min`, which is the behaviour every listing had before the field existed (SUP-824).
+
 - **Every object, parsed as a cluster parses it** (`inventory.py`). A template that loses a
   `---` glues two objects into one document; the golden is regenerated from the same broken
   render so the diff is empty, and `helm lint` reads the merged document as the second object
