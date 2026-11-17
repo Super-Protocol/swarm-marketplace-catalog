@@ -12,7 +12,7 @@ metadata:
     endpoint, including one in your own perimeter — and the embeddings that index your schema
     and documents are served from inside the deployment, so neither your data nor its
     description reaches a third party.
-  version: "4.0.0"
+  version: "4.0.1"
   category: ai-agents
   license: Proprietary
   tags:
@@ -22,6 +22,11 @@ metadata:
     - text-to-sql
     - confidential
 
+# ---------------------------------------------------------------------------
+# 4.0.1 declares `resources.maxPod`, and nothing else. No rendered manifest
+# moves, so the digest measured on a deployment of 4.0.0 is the digest this
+# version attests; the bump is the repository's rule that a changed definition
+# changes its version, not a change to the deployment (SUP-824).
 # ---------------------------------------------------------------------------
 # 4.0.0 is the agent 1.17 listing. A major, because it changes what the
 # operator is asked and what the deployment contains, not only its versions:
@@ -442,6 +447,15 @@ resources:
     cpu: "10"
     memory: "28Gi"
     storage: "80Gi"
+  # The heaviest SINGLE pod, which is a different quantity from the quota above and the one a
+  # node has to be able to hold. Without it the cloud assumes the whole 10/28Gi lands on one pod
+  # and refuses this listing on any cloud whose nodes are smaller than its entire quota — which
+  # is every reasonable cloud for a thirteen-pod application (SUP-824). Embeddings is the
+  # heaviest of the pods listed above; `charts/tests/max_pod.py` checks that against the render,
+  # so this stays true when a chart's limits move.
+  maxPod:
+    cpu: "2"
+    memory: "4Gi"
   recommended:
     cpu: "16"
     memory: "48Gi"

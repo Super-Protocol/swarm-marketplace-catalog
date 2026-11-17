@@ -170,6 +170,25 @@ analyst_images agent      conversational-analyst-agent      analyst-agent
 analyst_images gateway    conversational-analyst-gateway    analyst-gateway
 analyst_images grounding  conversational-analyst-grounding  analyst-grounding
 
+# `resources.maxPod` is what the cloud requires ONE node to be able to hold, and the LimitRange
+# `max` of the space. Declared below the heaviest pod the charts render, the pod is placed on a
+# node that cannot hold it or refused at admission — and neither reads as a resource declaration
+# that was wrong. `limitrange.py` above checks the same manifests per container; this is the same
+# arithmetic per POD, which is the unit the cloud schedules (SUP-824).
+note "the heaviest pod the analyst renders is within the maxPod its listing declares"
+if output=$(python3 charts/tests/max_pod.py conversational-analyst \
+      platform:conversational-analyst-platform:analyst-platform \
+      embeddings:conversational-analyst-embeddings:analyst-embeddings \
+      identity:conversational-analyst-identity:analyst-identity \
+      agent:conversational-analyst-agent:analyst-agent \
+      gateway:conversational-analyst-gateway:analyst-gateway \
+      grounding:conversational-analyst-grounding:analyst-grounding); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/max_pod.py conversational-analyst"
+fi
+
 # `evidence.expectedDigest` promises that every deployment of a version attests the same thing,
 # and by default none of them do: the namespace, the hostname and the consumer's own identity all
 # reach the rendered objects. 4.0.0 declares ten exclusions for that; this is what checks they are

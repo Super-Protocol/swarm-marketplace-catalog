@@ -30,7 +30,7 @@ validated against the specification.
 
 A **deployment** happens when someone picks the listing and fills in the form. The marketplace then:
 
-1. creates a **cluster space** — one Kubernetes namespace, sized from the listing's `resources.min`;
+1. creates a **cluster space** — one Kubernetes namespace, quotaed from the listing's `resources.min` and limited per pod by its `resources.maxPod`;
 2. resolves the parameters, generating any it was told to generate;
 3. renders every component with `helm template` — never against a live cluster;
 4. lifts every rendered `Secret` out of the manifests and hands it over separately, sealed for the
@@ -111,6 +111,7 @@ parameters:
 
 resources:
   min:          { cpu: "2", memory: "8Gi", storage: "20Gi" }
+  maxPod:       { cpu: "1", memory: "2Gi" }
   recommended:  { cpu: "4", memory: "16Gi", storage: "50Gi" }
 
 components:
@@ -184,11 +185,22 @@ patch's `when` may read `params` alone, and the specification's §7.3 is the aut
 `consumer` is how an application names its first tenant or administrator without asking the deploying
 user to retype what the marketplace already knows.
 
-### Resources are a quota, not a hint
+### Resources are a quota, not a hint — and the quota is not the heaviest pod
 
 `resources.min` becomes the **cluster space quota**. It has to cover every container's limits at
 once, including sidecars and one-shot jobs. Under-declare it and the heaviest pod is evicted, which
 presents as "the application is broken" rather than "the quota is too small".
+
+`resources.maxPod` is the **heaviest single pod** — its containers' limits summed, or its heaviest
+init container, whichever is larger. A different quantity, and the one the cloud requires *one node*
+to be able to hold; it is also the LimitRange `max` of the space. For a single-pod application the
+two are the same number. For a composed one they are not: declare `maxPod` or the cloud assumes the
+whole quota lands on one pod and refuses the listing on any cloud whose nodes are smaller than its
+entire quota (SUP-824).
+
+Declaring it **too small** is worse than omitting it — the pod is placed on a node that cannot hold
+it, or refused at admission by the LimitRange. Check it against the render, not against values.yaml:
+`charts/tests/max_pod.py` does exactly that, and `conversational-analyst` is the worked example.
 
 ---
 
@@ -461,6 +473,7 @@ Before opening a pull request:
 - [ ] `metadata.version` bumped; the chart version too if the chart changed
 - [ ] Every image pinned to an immutable tag **and** declared in `images:` with its digest
 - [ ] `resources.min` covers the sum of container limits
+- [ ] `resources.maxPod` matches the heaviest pod the charts render, for anything with more than one pod
 - [ ] Every Ingress names its class
 - [ ] Nothing secret outside a `Secret`
 - [ ] Nothing non-deterministic outside a `Secret`
