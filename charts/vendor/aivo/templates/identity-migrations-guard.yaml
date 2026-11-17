@@ -1,0 +1,32 @@
+{{/*
+Проверка, а не объект: файл ничего не рендерит и существует ради одного отказа.
+
+С AIV-1294 identity применяет миграции своей базы на старте
+(`config.services.identity.db.config.migrationsRun`, по умолчанию true). Пока
+это так, реплика у identity должна быть одна: несколько подов пойдут применять
+миграции наперегонки. Гонка переживаемая — DDL идемпотентный, проигравший
+падает и перезапускается, — но платить рестартами за то, что можно запретить
+рендером, незачем.
+
+Установка, которой нужно больше одной реплики, либо гоняет миграции отдельным
+шагом и ставит `migrationsRun: false`, либо ставит образ, в котором identity
+применяет миграции под `pg_advisory_lock` (aivoagent/agent#1159, AIV-2669), и
+говорит об этом чарту: `identity.bootMigrationsLocked: true`. Чарт версию образа
+не знает, поэтому флаг явный: на старом образе он вернул бы гонку.
+
+Значения обеих половин видны только здесь, в родительском чарте: replicaCount
+живёт в сабчарте identity, а блок db — в сабчарте config.
+*/}}
+{{- $identity := .Values.identity | default dict }}
+{{- if dig "enabled" true $identity }}
+{{- $db := dig "config" "services" "identity" "db" dict (.Values.config | default dict) }}
+{{- if and $db (dig "config" "migrationsRun" true $db) (not (dig "bootMigrationsLocked" false $identity)) }}
+{{- $replicas := int (dig "replicaCount" 1 $identity) }}
+{{- if gt $replicas 1 }}
+{{- fail (printf "identity.replicaCount = %d, а миграции применяются на старте: поды пойдут применять их наперегонки. Либо одна реплика, либо образ с миграциями под advisory-локом и identity.bootMigrationsLocked: true, либо config.services.identity.db.config.migrationsRun: false и отдельный прогон миграций." $replicas) }}
+{{- end }}
+{{- if dig "autoscaling" "enabled" false $identity }}
+{{- fail "identity.autoscaling.enabled: true, а миграции применяются на старте: поды пойдут применять их наперегонки. Либо без автомасштабирования, либо образ с миграциями под advisory-локом и identity.bootMigrationsLocked: true, либо config.services.identity.db.config.migrationsRun: false и отдельный прогон миграций." }}
+{{- end }}
+{{- end }}
+{{- end }}

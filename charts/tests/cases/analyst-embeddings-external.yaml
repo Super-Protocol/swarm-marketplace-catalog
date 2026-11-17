@@ -1,0 +1,5 @@
+# The operator brings their own embedding endpoint, so this component renders nothing. The
+# case exists because "renders nothing" is a behaviour, and a chart that quietly rendered a
+# Deployment anyway would put a second embedding server in the namespace.
+enabled: false
+apiKey: SECRET-AAAAAAAAAAAA

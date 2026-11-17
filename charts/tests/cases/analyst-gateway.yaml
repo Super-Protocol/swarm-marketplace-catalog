@@ -1,0 +1,49 @@
+appHostname: alpha.conf-apps.superprotocol.dev
+oauth2proxy:
+  config:
+    clientID: analyst
+    clientSecret: "SECRET-AAAAAAAAAAAA"
+    cookieSecret: "0123456789abcdef0123456789abcdef"
+    configFile: |
+      email_domains = ["*"]
+      skip_provider_button = true
+      reverse_proxy = true
+
+      cookie_secure = true
+      cookie_refresh = "1h"
+      cookie_expire = "168h"
+
+      standard_logging = true
+      auth_logging = true
+  sessionStorage:
+    type: redis
+    redis:
+      clientType: standalone
+      existingSecret: analyst-redis
+      passwordKey: redis-password
+      standalone: { connectionUrl: "redis://analyst-redis-master:6379/3" }
+  alphaConfig:
+    configData:
+      providers:
+        - id: keycloak
+          provider: keycloak-oidc
+          clientID: analyst
+          clientSecret: "SECRET-AAAAAAAAAAAA"
+          loginURL: "https://alpha.conf-apps.superprotocol.dev/auth/realms/master/protocol/openid-connect/auth"
+          redeemURL: http://analyst-keycloak/auth/realms/master/protocol/openid-connect/token
+          oidcConfig:
+            issuerURL: "https://alpha.conf-apps.superprotocol.dev/auth/realms/master"
+            jwksURL: http://analyst-keycloak/auth/realms/master/protocol/openid-connect/certs
+            skipDiscovery: true
+            emailClaim: email
+            groupsClaim: groups
+            userIDClaim: sub
+          scope: openid email profile
+      injectRequestHeaders:
+        - { name: x-auth-subject, values: [ { claimSource: { claim: user } } ] }
+        - { name: x-auth-user, values: [ { claimSource: { claim: user } } ] }
+        - { name: x-auth-email, values: [ { claimSource: { claim: email } } ] }
+      upstreamConfig:
+        upstreams:
+          - { id: backend, path: /graphql, uri: "http://analyst-retail-ai-back" }
+          - { id: frontend, path: /, uri: "http://analyst-retail-ai-front" }

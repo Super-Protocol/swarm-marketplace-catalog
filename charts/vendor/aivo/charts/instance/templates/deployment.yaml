@@ -13,9 +13,16 @@ spec:
       {{- include "app.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
+      {{- if or .Values.global.caCert.enabled .Values.podAnnotations }}
       annotations:
+        {{- if .Values.global.caCert.enabled }}
+        # The CA bundle is a ConfigMap too, and NODE_EXTRA_CA_CERTS is read once
+        # when node starts — a rotated chain has to roll the pods to take effect.
+        checksum/ca-cert: {{ .Values.global.caCert.content | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
       labels:
         {{- include "app.labels" . | nindent 8 }}
@@ -82,9 +89,9 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- with (include "app.roleAffinity" (dict "explicit" .Values.affinity "podAntiAffinity" .Values.podAntiAffinity "selector" (include "app.selectorLabels" .))) }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+        {{- . | nindent 8 }}
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:

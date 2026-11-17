@@ -1,16 +1,30 @@
 {{- /*
-The bindings carry dataset credentials, so they arrive as a Secret rather than a ConfigMap:
-the platform lifts every rendered Secret out of the blueprint and seals it, which keeps the
-passwords out of the deployment evidence the marketplace publishes.
+Everything per-deployment arrives as environment from a Secret; the script and the system
+prompt are a ConfigMap and are attested in full.
+
+0.3.x put the bindings in a Secret — they carry dataset credentials — and then rendered the
+internal credential, the model key and the embeddings key into the Job's `env` as literal
+values. A pod spec is not a safe place for either: it travels in the deployment bundle in
+clear, and `env` is read by anybody who can read the bundle. The Secret below is the whole
+set, and the pod takes it with `envFrom`.
 */ -}}
-{{- $secret := required "internalSecret must be set" .Values.internalSecret }}
+{{- $api := required "api.url must be set: the job drives the agent's own admin API" .Values.api.url }}
+{{- if not .Values.model.name }}{{ fail "model.name must be set: it is the row this job creates in the installation's model registry, and the deployment answers nothing without one" }}{{ end }}
+{{- if not .Values.model.id }}{{ fail "model.id must be set: the model the configured endpoint serves" }}{{ end }}
+{{- if not .Values.model.baseUrl }}{{ fail "model.baseUrl must be set: the OpenAI-compatible endpoint the agent talks to" }}{{ end }}
 apiVersion: v1
 kind: Secret
 metadata:
-  name: analyst-grounding-bindings
+  name: analyst-grounding
 type: Opaque
 stringData:
-  bindings.json: {{ .Values.bindings | quote }}
+  # One object per bound dataset, with its connection and the schema its publisher declared.
+  BINDINGS: {{ .Values.bindings | quote }}
+  # The service account the job reads the realm with, to learn which organisation is the
+  # tenant and which subject administers it.
+  KEYCLOAK_CLIENT_SECRET: {{ required "keycloak.clientSecret must be set" .Values.keycloak.clientSecret | quote }}
+  # The model endpoint's access key, which this job writes into the registry row.
+  MODEL_API_KEY: {{ .Values.model.apiKey | default "" | quote }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -22,10 +36,11 @@ data:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  # A Job's pod template is immutable, so reconfiguring with a different set of datasets has to
-  # produce a different Job. Keying the name off the bindings is what makes rebinding data a
-  # normal operation rather than a redeploy; the superseded Job is pruned with the old bundle.
-  name: analyst-grounding-{{ .Values.bindings | sha256sum | trunc 8 }}
+  # A Job's pod template is immutable, so reconfiguring with a different set of datasets has
+  # to produce a different Job. Keying the name off the bindings and the model is what makes
+  # rebinding data a normal operation rather than a redeploy; the superseded Job is pruned
+  # with the old bundle.
+  name: analyst-grounding-{{ printf "%s|%s|%s" (.Values.bindings | toString) .Values.model.name .Values.model.id | sha256sum | trunc 8 }}
 spec:
   # This waits on the rest of the deployment from inside, so a retry here means the wait
   # itself ran out — rare, and worth a few more attempts before the Job is called failed.
@@ -36,56 +51,39 @@ spec:
       containers:
         - name: ground
           image: {{ .Values.image | quote }}
-          command:
-            - sh
-            - -c
-            - |
-              pip install --quiet --no-cache-dir 'psycopg[binary]' neo4j openai
-              exec python /scripts/ground.py
+          command: [python3, /scripts/ground.py]
+          envFrom:
+            - secretRef:
+                name: analyst-grounding
           env:
-            - name: BINDINGS
-              valueFrom:
-                secretKeyRef:
-                  name: analyst-grounding-bindings
-                  key: bindings.json
-            - name: NEO4J_URI
-              value: {{ .Values.neo4j.uri | quote }}
-            - name: NEO4J_USER
-              value: {{ .Values.neo4j.user | quote }}
-            - name: NEO4J_PASSWORD
-              value: {{ $secret | quote }}
-            - name: NEO4J_DB
-              value: {{ .Values.neo4j.database | quote }}
-            - name: PG_HOST
-              value: {{ .Values.postgres.host | quote }}
-            - name: PG_PORT
-              value: {{ .Values.postgres.port | quote }}
-            - name: PG_USER
-              value: {{ .Values.postgres.user | quote }}
-            - name: PG_PASSWORD
-              value: {{ $secret | quote }}
-            - name: PG_DATABASE
-              value: {{ .Values.postgres.database | quote }}
+            - name: API_URL
+              value: {{ $api | quote }}
             - name: KEYCLOAK_URL
               value: {{ .Values.keycloak.url | quote }}
             - name: KEYCLOAK_REALM
               value: {{ .Values.keycloak.realm | quote }}
             - name: KEYCLOAK_CLIENT_ID
               value: {{ .Values.keycloak.clientId | quote }}
-            - name: KEYCLOAK_CLIENT_SECRET
-              value: {{ $secret | quote }}
-            - name: LLM_PROVIDER
-              value: {{ .Values.llm.provider | quote }}
-            - name: LLM_MODEL
-              value: {{ .Values.llm.model | quote }}
-            - name: LLM_API_KEY
-              value: {{ .Values.llm.apiKey | quote }}
-            - name: EMBED_MODEL
-              value: {{ .Values.embeddings.model | quote }}
-            - name: EMBED_DIM
-              value: {{ .Values.embeddings.dimensions | quote }}
-            - name: OPENAI_API_KEY
-              value: {{ .Values.embeddings.apiKey | quote }}
+            - name: MODEL_NAME
+              value: {{ .Values.model.name | quote }}
+            - name: MODEL_ID
+              value: {{ .Values.model.id | quote }}
+            - name: MODEL_BASE_URL
+              value: {{ .Values.model.baseUrl | quote }}
+            - name: MODEL_TEMPERATURE
+              value: {{ .Values.model.temperature | quote }}
+            - name: LARGE_DATA_ROW_THRESHOLD
+              value: {{ .Values.model.thresholds.largeDataRowThreshold | quote }}
+            - name: LARGE_DATA_SIZE_THRESHOLD
+              value: {{ .Values.model.thresholds.largeDataSizeThreshold | quote }}
+            - name: PREVIEW_ROW_COUNT
+              value: {{ .Values.model.thresholds.previewRowCount | quote }}
+            - name: CONTEXT_WINDOW_SIZE
+              value: {{ .Values.model.contextWindowSize | quote }}
+            - name: MEMORY_TOKEN_BUDGET
+              value: {{ .Values.model.memoryTokenBudget | quote }}
+            - name: SUMMARIZE_TOKEN_THRESHOLD
+              value: {{ .Values.model.summarizeTokenThreshold | quote }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:

@@ -41,7 +41,21 @@ import sys
 
 import yaml
 
-CONSUMER = re.compile(r"\{\{\s*consumer\.[A-Za-z0-9_.]+\s*\}\}")
+CONSUMER = re.compile(r"\{\{\s*consumer\.([A-Za-z0-9_.]+)\s*\}\}")
+
+
+def marker_for(index: int, field: str) -> str:
+    """A probe value shaped like the thing it stands in for.
+
+    One shape does not fit all of them, and a probe that cannot render proves nothing — which
+    is a silent pass, not a visible failure. An address needs an `@` or a chart that validates
+    admin emails refuses it; a slug is a DNS label, and a chart that validates one refuses an
+    address. So the shape comes from the consumer field the expression names.
+    """
+    if field.endswith("email"):
+        return f"consumer-probe-{index}@marker.invalid"
+    # Valid as a DNS label, a slug, a plain name and a Keycloak username alike.
+    return f"consumer-probe-{index}-marker"
 
 # Values a listing is allowed to pass as a literal, with the reason. Empty is the
 # right length for this list.
@@ -65,8 +79,51 @@ def consumer_paths(node, prefix=""):
     elif isinstance(node, list):
         for index, value in enumerate(node):
             yield from consumer_paths(value, f"{prefix}[{index}]")
-    elif isinstance(node, str) and CONSUMER.search(node):
-        yield prefix
+    elif isinstance(node, str):
+        found = CONSUMER.search(node)
+        if found:
+            yield prefix, found.group(1)
+
+
+def helm_path(path: str) -> str:
+    """`a.0.b` as helm addresses it: `a[0].b`."""
+    out = ""
+    for segment in path.split("."):
+        if segment.isdigit():
+            out += f"[{segment}]"
+        else:
+            out += f".{segment}" if out else segment
+    return out
+
+
+def patch_consumer_paths(patches):
+    """Every values path a definition fills from `consumer.*` through a PATCH.
+
+    Not an afterthought — it is where most of them are. A definition that has to put a
+    consumer value somewhere usually declares the key in `base` as an empty string and fills
+    it in a patch, because that is the shape a reader can see the default of. Reading only
+    `base` therefore sees `username: ""`, finds no expression, and reports that the component
+    passes no consumer value at all.
+
+    `conversational-analyst` is exactly that: it passed `consumer.user.email` and
+    `consumer.user.name` to the realm bootstrap in patches for every version up to 4.0.0,
+    with the values landing in a ConfigMap, and this check called it clean each time.
+
+    A patch's `value` may be a scalar or a structure. A scalar at `path` is that path; a
+    structure is walked, and its leaves are addressed under it the same way `base`'s are.
+    """
+    for patch in patches or []:
+        if patch.get("op") == "remove":
+            continue
+        root = patch.get("path", "")
+        value = patch.get("value")
+        if isinstance(value, str):
+            found = CONSUMER.search(value)
+            if found:
+                yield root, found.group(1)
+        else:
+            for suffix, field in consumer_paths(value):
+                yield (f"{root}.{suffix}" if suffix else root), field
 
 
 def main(app: str, requested: list[str]) -> int:
@@ -80,8 +137,11 @@ def main(app: str, requested: list[str]) -> int:
 
     for component in definition["components"]:
         chart = component["source"]["chart"]
-        base = component["deployment"]["values"].get("base", {})
-        paths = sorted(set(consumer_paths(base)))
+        values_block = component["deployment"]["values"]
+        base = values_block.get("base", {})
+        fields = dict(consumer_paths(base))
+        fields.update(dict(patch_consumer_paths(values_block.get("patches"))))
+        paths = sorted(fields)
 
         if not paths:
             print(f"  ok    {app}/{component['name']}: passes no consumer value to {chart}")
@@ -107,8 +167,12 @@ def main(app: str, requested: list[str]) -> int:
         # it, nor that one of them never rendered at all.
         # Shaped like the values they stand in for: the chart refuses an admin
         # address without an `@`, and a probe that cannot render proves nothing.
-        markers = {path: f"consumer-probe-{index}@marker.invalid" for index, path in enumerate(paths)}
-        sets = [f"--set-string={path}={marker}" for path, marker in markers.items()]
+        markers = {path: marker_for(index, fields[path]) for index, path in enumerate(paths)}
+        # A definition addresses a list element with a numeric path segment
+        # (`organizations.0.alias`, which is the only form its schema's path pattern allows);
+        # `helm --set` wants brackets. Translating here rather than storing two spellings
+        # keeps the names this check PRINTS the ones a reader will find in the definition.
+        sets = [f"--set-string={helm_path(path)}={marker}" for path, marker in markers.items()]
         rendered = subprocess.run(
             ["helm", "template", "probe", f"charts/{chart}", "--namespace", app,
              "--values", values, *sets],

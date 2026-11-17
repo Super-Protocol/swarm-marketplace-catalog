@@ -1,0 +1,24 @@
+{{/*
+How many instance pods the cluster may take away at once (AIV-2669).
+
+Rendered for more than one replica by default — `minAvailable: 1` over a single
+pod blocks every node drain instead of protecting anything; `enabled` decides it
+outright. See `app.pdbEnabled`.
+*/}}
+{{- $pdb := .Values.podDisruptionBudget }}
+{{- if $pdb }}
+{{- $replicas := ternary .Values.autoscaling.minReplicas .Values.replicaCount .Values.autoscaling.enabled }}
+{{- if include "app.pdbEnabled" (dict "pdb" $pdb "replicas" $replicas) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "app.fullname" . }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+spec:
+  {{- include "app.pdbSpec" (dict "pdb" $pdb "key" "instance.podDisruptionBudget") | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "app.selectorLabels" . | nindent 6 }}
+{{- end }}
+{{- end }}

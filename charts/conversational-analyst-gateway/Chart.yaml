@@ -2,9 +2,28 @@ apiVersion: v2
 name: conversational-analyst-gateway
 description: Public entry for the analyst — an authenticating reverse proxy in front of it, and the Ingress that routes to both it and the identity provider.
 type: application
-version: 0.3.2
-appVersion: "1.0.0"
+# 0.4.0 changes nothing about who may sign in and two things about what the deployment
+# discloses:
+#
+#   * the session store's Redis password is taken from the platform's own Secret through
+#     the proxy's native `sessionStorage.redis` support, instead of being interpolated into
+#     the proxy's configuration file — which is a ConfigMap, and therefore a credential the
+#     deployment bundle carried in clear and the evidence snapshot would publish;
+#   * the two hostname-derived settings move into a ConfigMap of their own, fed to the pod
+#     with `envFrom`, so the proxy's configuration can be attested in full instead of being
+#     excluded from the digest because the hostname is inside it.
+#
+# And one that is a defect fix: the proxy asked for 50m CPU and 64Mi of memory, both UNDER
+# a cluster space's LimitRange floor of 100m / 128Mi — which refuses the pod. The public
+# door of the deployment was not admitted.
+version: 0.4.0
+appVersion: "1.17.0"
 dependencies:
+  # Aliased without the hyphen, which is not cosmetic: a listing reaches a subchart value
+  # through a patch path, and the specification's path pattern is
+  # `^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+)*$` — a hyphen in a key makes the definition
+  # fail schema validation. The objects keep their names through `fullnameOverride`.
   - name: oauth2-proxy
+    alias: oauth2proxy
     version: 10.1.1
     repository: "file://../vendor/oauth2-proxy"

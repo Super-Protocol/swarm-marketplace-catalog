@@ -1,0 +1,41 @@
+{{- if .Values.metrics.podMonitor.enabled }}
+{{/*
+Scrape of the api's `/metrics` on the web and the worker pods (AIV-2578).
+
+One PodMonitor for both roles: the series already carry `role="web|worker"`,
+and a pod is the unit that has an event loop — a Service would put the web
+pods behind one target and leave the worker, which has no Service, out.
+The worker selector is listed even when `worker.enabled` is false; it then
+simply matches nothing.
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "app.fullname" . }}-api
+  labels:
+    helm.sh/chart: {{ include "app.chart" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- with .Values.metrics.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - {{ include "app.name" . }}-back
+          - {{ include "app.name" . }}-worker
+      - key: app.kubernetes.io/instance
+        operator: In
+        values:
+          - {{ .Release.Name }}
+  podMetricsEndpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.podMonitor.interval }}
+      scrapeTimeout: {{ .Values.metrics.podMonitor.scrapeTimeout }}
+{{- end }}

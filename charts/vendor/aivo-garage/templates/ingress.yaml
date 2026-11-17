@@ -1,0 +1,48 @@
+{{/* Публичный адрес S3-API — для браузера, а не для платформы.
+
+     Платформа ходит в хранилище по сервису внутри кластера, и наружу ей ничего
+     не нужно. Нужно браузеру: файл выгрузки он скачивает по presigned-ссылке,
+     а ссылку api подписывает на хост из `fileStorage.config.publicEndpoint`.
+     Без этого ingress такого хоста нет, и ссылка с адресом сервиса внутри
+     кластера даёт в браузере ERR_NAME_NOT_RESOLVED (AIV-2408).
+
+     Хост в подписи SigV4 — часть канонического запроса, поэтому ingress
+     обязан донести заголовок Host до сервера неизменным (ingress-nginx так и
+     делает) и не переписывать путь: ссылки в стиле path, `/<бакет>/<ключ>`,
+     и сервер сверяет подпись ровно по ним. */}}
+{{- if .Values.ingress.enabled }}
+{{- if not .Values.ingress.host }}
+{{- fail "garage: ingress.enabled требует ingress.host — хост, который пишется в fileStorage.config.publicEndpoint платформы" }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "garage.fullname" . }}
+  labels:
+    {{- include "garage.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "garage.fullname" . }}
+                port:
+                  name: s3
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ default (printf "%s-tls" .Values.ingress.host) .Values.ingress.tls.secretName }}
+  {{- end }}
+{{- end }}

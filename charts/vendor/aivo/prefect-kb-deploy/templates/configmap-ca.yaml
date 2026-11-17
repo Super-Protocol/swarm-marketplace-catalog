@@ -1,9 +1,0 @@
-{{- if .Values.caCertPem }}
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: x5-ca-chain-kb
-data:
-  ca-chain.pem: |
-{{ .Values.caCertPem | indent 4 }}
-{{- end }}

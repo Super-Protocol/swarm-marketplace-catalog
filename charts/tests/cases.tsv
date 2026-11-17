@@ -38,3 +38,11 @@ ollama-gpu	confidential-router-ollama
 ollama-no-models	confidential-router-ollama		
 claims-fraud-platform	confluent-platform		
 claims-fraud-feed	claims-fraud-feed		
+analyst-platform	conversational-analyst-platform		
+analyst-embeddings	conversational-analyst-embeddings		
+analyst-embeddings-external	conversational-analyst-embeddings		
+analyst-identity	conversational-analyst-identity		
+analyst-identity-single	conversational-analyst-identity		
+analyst-agent	conversational-analyst-agent		
+analyst-gateway	conversational-analyst-gateway		
+analyst-grounding	conversational-analyst-grounding		

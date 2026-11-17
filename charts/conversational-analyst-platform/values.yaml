@@ -1,80 +1,108 @@
-# The one credential every in-namespace backing service shares. The deployment's namespace is
-# the trust boundary: nothing outside it can reach these services, and the agent's own
-# configuration has to carry the password in plaintext anyway, so splitting it into six
-# separate secrets would buy appearance rather than isolation.
-internalSecret: ""
-
-# One-shot that creates the databases and roles the agent expects. Same LimitRange rule as
-# every other container: request equals limit.
-postgresBootstrap:
-  resources:
-    requests:
-      cpu: 100m
-      memory: 256Mi
-      nvidia.com/gpu: "0"
-    limits:
-      cpu: 100m
-      memory: 256Mi
-      nvidia.com/gpu: "0"
+# Credentials are not declared here at all. Every password this chart's services take is a
+# value of the subchart that owns it (`postgresql.auth.password`,
+# `postgresql.databases[].password`, `redis.global.redis.password`, `minio.rootPassword`) and
+# the listing fills all of them from the one credential the platform generated for the
+# deployment. Nothing in this chart renders a password into anything but a Secret: the
+# databases, roles and extensions are created by the PostgreSQL chart's init Secret, which is
+# why the ConfigMap of SQL the 0.3.x chart shipped is gone.
 
 # Container registry credentials for the agent's private images. The secret this creates is
 # named `regcred` and is referenced by the identity and agent components.
 imagePullSecret:
-  registry: ghcr.io
+  registry: registry.aggregion.com
   username: ""
   password: ""
 
-neo4j:
-  image: neo4j:5.26.21-community
-  storage: 10Gi
-  heap:
-    initial: 1G
-    max: 2G
-  pagecache: 1G
+# One-shot that proves the databases, roles and the `vector` extension are really there.
+#
+# The vendored PostgreSQL chart creates them from its init Secret, which the official image
+# runs exactly once, on an empty data directory. That is the right place for the work and its
+# startup probe is what keeps the probes from killing the container mid-initialisation — but a
+# missing extension does not announce itself: the agent starts, the knowledge index comes up
+# without its embedding column, and schema search quietly answers from text alone. This Job
+# turns that into an exit code.
+databaseCheck:
+  enabled: true
   resources:
     requests:
-      cpu: 500m
-      memory: 4Gi
+      cpu: 100m
+      memory: 128Mi
       nvidia.com/gpu: "0"
     limits:
-      cpu: 500m
-      memory: 4Gi
+      cpu: 100m
+      memory: 128Mi
       nvidia.com/gpu: "0"
 
 postgresql:
   fullnameOverride: analyst-postgresql
-  global:
-    security:
-      allowInsecureImages: true
   image:
-    registry: docker.io
-    # public.ecr.aws/bitnami is gone; the legacy mirror is what still serves these tags.
-    repository: bitnamilegacy/postgresql
-    tag: 17.3.0-debian-12-r1
-  rbac:
-    create: false
-  serviceAccount:
-    create: true
-  networkPolicy:
-    enabled: false
-  primary:
-    resourcesPreset: none
-    resources:
-      requests:
-        cpu: 250m
-        memory: 512Mi
-        nvidia.com/gpu: "0"
-      limits:
-        cpu: 250m
-        memory: 512Mi
-        nvidia.com/gpu: "0"
-    persistence:
-      size: 8Gi
-    # Network policy belongs to the cluster space, which already isolates the namespace; a
-    # deployment that ships its own is refused. This chart moved the switch under `primary`,
-    # so the top-level one above no longer reaches it.
-    networkPolicy:
-      enabled: false
+    repository: pgvector/pgvector
+    # The version, the PostgreSQL major and the base, all three. `pg17` alone is a moving
+    # tag: it follows the newest pgvector build for PostgreSQL 17, so it would replace the
+    # software under a deployment while leaving the manifests — and the digest the deployment
+    # attests to — unchanged.
+    tag: 0.8.7-pg17-bookworm
+    pullPolicy: IfNotPresent
+  auth:
+    username: postgres
+    password: ""
+  # Created on first initialisation, from the chart's init Secret. `vector` is
+  # what the knowledge index needs and `pg_trgm` is what the semantic model's
+  # member search needs; both are created inside the agent's own database.
+  databases:
+    - name: retail_ai
+      owner: retail_ai_user
+      password: ""
+      extensions: [vector, pg_trgm]
+    # The identity service has had a database of its own since agent 1.14
+    # (AIV-1294) and 1.17 will not start without the `db` block that names it.
+    - name: retail_ai_identity
+      owner: identity_user
+      password: ""
+    # LangGraph's checkpointer — the agent's working state, separate from the
+    # platform database so retention over it cannot touch anything else.
+    - name: retail_ai_checkpointer
+      owner: checkpointer_user
+      password: ""
+    - name: keycloak
+      owner: keycloak_user
+      password: ""
+  service:
+    type: ClusterIP
+    port: 5432
+  persistence:
+    enabled: true
+    # The schema catalog, the semantic model, the knowledge index with its
+    # vectors, the documents and the dialog history all live here. Up from the
+    # 8Gi the 1.16 listing gave it, because the knowledge index is new weight
+    # and an HNSW index is not small.
+    size: 20Gi
+    accessMode: ReadWriteOnce
+  parameters:
+    max_connections: "200"
+    shared_buffers: "1GB"
+    effective_cache_size: "3GB"
+    work_mem: "16MB"
+    maintenance_work_mem: "256MB"
+  # A cluster space's LimitRange has maxLimitRequestRatio 1, so request must
+  # equal limit and both must be declared. The upstream values set a memory
+  # limit without a cpu one, which that LimitRange refuses.
+  resources:
+    requests:
+      cpu: "1"
+      memory: 4Gi
+      nvidia.com/gpu: "0"
+    limits:
+      cpu: "1"
+      memory: 4Gi
+      nvidia.com/gpu: "0"
+  # Parallel index builds take a DSM segment the size of maintenance_work_mem
+  # out of /dev/shm, and the runtime default is 64Mi — which is how a large
+  # HNSW build fails with "No space left on device". tmpfs pages count against
+  # the pod's memory limit, which the 4Gi above covers.
+  shm:
+    enabled: true
+    sizeLimit: 512Mi
 
 redis:
   fullnameOverride: analyst-redis
@@ -121,29 +149,29 @@ nats:
   # The reloader container has no resources field of its own; `merge` is how this chart
   # adds one. Without it LimitRange fills a default limit above the request and the pod
   # is rejected (maxLimitRequestRatio is 1).
+  #
+  # 100m / 128Mi, not the 10m / 32Mi the 0.3.x chart asked for: that is UNDER the cluster
+  # space's LimitRange floor (`min: {cpu: 100m, memory: 128Mi}`), and a LimitRange rejects
+  # the whole pod for one container below it — so the 0.3.x listing rendered a NATS
+  # StatefulSet whose pod admission refused, and the agent's event stream had no broker.
+  # The floor is the floor even for a sidecar that does nothing most of the time.
   reloader:
     merge:
       resources:
         requests:
-          cpu: 10m
-          memory: 32Mi
+          cpu: 100m
+          memory: 128Mi
           nvidia.com/gpu: "0"
         limits:
-          cpu: 10m
-          memory: 32Mi
+          cpu: 100m
+          memory: 128Mi
           nvidia.com/gpu: "0"
-  # Debug toolbox. Its chart renders `resources: {}`, which LimitRange then rejects.
+  # A debug shell, and a published cluster space is frozen — no exec, no port-forward — so
+  # there is nothing it could be used for here. Off: one fewer pod, one fewer container in
+  # the quota, and its `helm test` pod stops being rendered into the bundle as an ordinary
+  # object.
   natsBox:
-    container:
-      resources:
-        requests:
-          cpu: 10m
-          memory: 32Mi
-          nvidia.com/gpu: "0"
-        limits:
-          cpu: 10m
-          memory: 32Mi
-          nvidia.com/gpu: "0"
+    enabled: false
   config:
     monitor:
       enabled: true
@@ -157,10 +185,42 @@ nats:
         pvc:
           size: 10Gi
 
-minio:
-  fullnameOverride: analyst-minio
-  mode: standalone
-  replicas: 1
+# S3 object storage: dialog attachments and query exports. The access key, the RPC secret,
+# the layout and the bucket are all created by the chart from a Secret, with a post-install Job
+# that drives the admin API — the server image is built FROM scratch and has no shell for a CLI
+# to run in.
+garage:
+  fullnameOverride: analyst-garage
+  image:
+    repository: dxflrs/garage
+    tag: "v2.3.0"
+    pullPolicy: IfNotPresent
+  initImage:
+    repository: busybox
+    tag: "1.38.0"
+    pullPolicy: IfNotPresent
+  # Has to match the region every client signs with. Garage checks the region in the SigV4
+  # scope: a mismatch lets a plain PutObject through and answers 400 on ListBuckets and on
+  # every presigned URL — which is a deployment that looks healthy until the first download.
+  region: us-east-1
+  # Filled by the listing from the deployment's own generated credential.
+  credentials:
+    accessKeyId: ""
+    secretAccessKey: ""
+  rpcSecret: ""
+  adminToken: ""
+  # One bucket. The vendor's default list carries a second one for Langfuse, and there is no
+  # Langfuse here: tracing to an address outside the perimeter is the one thing this
+  # deployment must not do.
+  buckets:
+    - agent
+  service:
+    type: ClusterIP
+    port: 3900
+  ingress:
+    enabled: false
+  persistence:
+    size: 20Gi
   resources:
     requests:
       cpu: 250m
@@ -170,43 +230,12 @@ minio:
       cpu: 250m
       memory: 1Gi
       nvidia.com/gpu: "0"
-  # The bucket Job only sets a memory request upstream. A missing CPU request and missing
-  # limits are filled by LimitRange and then rejected.
-  makeBucketJob:
-    resources:
-      requests:
-        cpu: 50m
-        memory: 128Mi
-        nvidia.com/gpu: "0"
-      limits:
-        cpu: 50m
-        memory: 128Mi
-        nvidia.com/gpu: "0"
-  # Upstream ships a default console user, so this container is created too, and its
-  # chart only sets a memory request.
-  makeUserJob:
-    resources:
-      requests:
-        cpu: 50m
-        memory: 128Mi
-        nvidia.com/gpu: "0"
-      limits:
-        cpu: 50m
-        memory: 128Mi
-        nvidia.com/gpu: "0"
-  persistence:
-    size: 20Gi
-  rootUser: root
-  ingress:
-    enabled: false
-  consoleIngress:
-    enabled: false
-  metrics:
-    serviceMonitor:
-      enabled: false
-  buckets:
-    - name: agent
-      policy: none
-      purge: false
-      versioning: false
-      objectlocking: false
+  initResources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+      nvidia.com/gpu: "0"
+    limits:
+      cpu: 100m
+      memory: 128Mi
+      nvidia.com/gpu: "0"

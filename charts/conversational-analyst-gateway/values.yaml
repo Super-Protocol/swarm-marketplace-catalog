@@ -1,6 +1,8 @@
 appHostname: ""
 
 ingress:
+  # Named, always. An Ingress with no class is created, its hostname registered and its DNS
+  # written — and then nothing serves it, which reads as a DNS fault for an hour.
   className: nginx
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: "30m"
@@ -11,7 +13,17 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
 
-oauth2-proxy:
+# Where the agent's sessions are kept. The proxy's own Redis support, rather than a
+# `redis_connection_url` in its configuration file: the chart takes the password from a
+# Secret into an environment variable, so the URL left in the attested configuration carries
+# a host and a database number and nothing else.
+sessionStore:
+  # The platform component's Redis, and the Secret it renders its password into.
+  connectionUrl: redis://analyst-redis-master:6379/3
+  existingSecret: analyst-redis
+  passwordKey: redis-password
+
+oauth2proxy:
   fullnameOverride: analyst-oauth2-proxy
   image:
     tag: v7.14.0
@@ -26,12 +38,28 @@ oauth2-proxy:
     create: true
   alphaConfig:
     enabled: true
+  # 100m / 128Mi is the floor of the LimitRange a cluster space is created with
+  # (`min: {cpu: 100m, memory: 128Mi}`, `maxLimitRequestRatio: 1`), and a LimitRange refuses
+  # the whole pod for one container under it. The 50m / 64Mi this chart asked for until
+  # 0.3.2 is below both.
   resources:
     requests:
-      cpu: 50m
-      memory: 64Mi
+      cpu: 100m
+      memory: 128Mi
       nvidia.com/gpu: "0"
     limits:
-      cpu: 50m
-      memory: 64Mi
+      cpu: 100m
+      memory: 128Mi
       nvidia.com/gpu: "0"
+  # The hostname-derived settings, as environment rather than as configuration — see
+  # templates/public-config.yaml for why that is not a style choice.
+  envFrom:
+    - configMapRef:
+        name: analyst-oauth2-proxy-public
+  # No `checksum/public-config` annotation, deliberately. `envFrom` is read once at start, so
+  # one would normally be needed to roll the pod after a hostname change — but on this
+  # platform a hostname lives in the Ingress, an Ingress is a workload, and a published
+  # cluster space refuses every workload change: the only way to move a hostname is
+  # `unpublish -> reconfigure -> publish`, and the unpublish deletes every Deployment and Pod
+  # in the namespace. The pods come back cold whatever this chart annotates them with, and a
+  # checksum of a per-deployment value is one more thing the digest would have to exclude.

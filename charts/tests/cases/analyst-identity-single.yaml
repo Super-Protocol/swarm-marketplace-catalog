@@ -1,0 +1,22 @@
+# One organisation: the blank second and third entries the listing always sends are an
+# organisation this deployment does not want, not a mistake, and the chart has to read them
+# that way or a single-tenant deployment cannot be expressed at all.
+internalSecret: SECRET-AAAAAAAAAAAA
+appHostname: alpha.conf-apps.superprotocol.dev
+organizations:
+  - { name: "Alpha Clinic", alias: alpha }
+  - { name: "", alias: "" }
+  - { name: "", alias: "" }
+demoUser:
+  username: "ann@alpha.example"
+  email: "ann@alpha.example"
+  firstName: "Ann Alpha"
+  lastName: ""
+keycloak:
+  auth: { adminPassword: SECRET-AAAAAAAAAAAA }
+  externalDatabase: { password: SECRET-AAAAAAAAAAAA }
+  extraEnvVars:
+    - { name: KC_HOSTNAME_STRICT, value: "false" }
+    - { name: KC_HTTP_ENABLED, value: "true" }
+    - { name: KEYCLOAK_EXTRA_ARGS, value: "--features organization" }
+    - { name: RAI_SERVICE_DISCOVERY_URL, value: "http://analyst-service-discovery" }

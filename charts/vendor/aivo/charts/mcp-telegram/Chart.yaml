@@ -1,0 +1,6 @@
+apiVersion: v2
+name: mcp-telegram
+description: First-party MCP connector "Telegram bot - send a message" (AIV-2337). Streamable-HTTP MCP server the api calls in-cluster as a global connector.
+type: application
+version: 0.1.0
+appVersion: "develop"

@@ -1,0 +1,18 @@
+{{/* Только в кластерном режиме: одиночный узел drain выселяет в любом случае,
+     и бюджет с maxUnavailable 0 лишь подвесил бы обслуживание узла.
+
+     В кластере бюджет держит кворум: drain двух рабочих узлов подряд без него
+     увёл бы два пода из трёх, и хранилище встало бы до возвращения первого. */}}
+{{- if and .Values.cluster.enabled .Values.cluster.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "garage.fullname" . }}
+  labels:
+    {{- include "garage.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ int .Values.cluster.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "garage.selectorLabels" . | nindent 6 }}
+{{- end }}

@@ -1,0 +1,150 @@
+# =============================================================================
+# PostgreSQL 16 + pgvector в кластере.
+#
+# Чарт рассчитан на одну инсталляцию Aivo: один узел, один PVC, базы платформы
+# и сопутствующих сервисов создаются при первой инициализации кластера БД.
+# Реплик, переключений и оператора здесь нет — если заказчику нужен отказо-
+# устойчивый PostgreSQL, он подключает свой (внешний вариант компонента).
+# =============================================================================
+
+image:
+  repository: pgvector/pgvector
+  tag: pg16
+  pullPolicy: IfNotPresent
+
+# Реквизит на приватный реестр. В поставке из бандла образ лежит в локальном
+# реестре без аутентификации, поэтому по умолчанию пусто; установка, которая
+# тянет через прокси-реестр с логином (так устроен стенд RS), подставляет сюда
+# имя своего секрета — без него под встаёт в ImagePullBackOff.
+imagePullSecrets: []
+# - name: regcred
+
+# Суперпользователь кластера БД. Пароль обязателен: без него образ не стартует.
+auth:
+  username: postgres
+  password: ""
+  # Имя секрета с ключом `postgres-password`, если пароль не задаётся здесь.
+  existingSecret: ""
+
+# Базы и их владельцы. Создаются ТОЛЬКО при первой инициализации (пустой PVC);
+# на уже развёрнутой БД изменения этого списка ничего не делают.
+#
+#   name        имя базы: [A-Za-z_][A-Za-z0-9_]* (подставляется в SQL как есть)
+#   owner       роль-владелец; создаётся, если её ещё нет; те же символы
+#   password    пароль роли (обязателен, если owner задан); ограничений на
+#               символы нет — в SQL он уходит psql-переменной, а не подстановкой
+#   extensions  расширения, создаваемые в этой базе (vector для КБ)
+#   locale      необязательный блок локали базы (см. ниже)
+databases: []
+# - name: aivo
+#   owner: aivo
+#   password: "..."
+#   extensions: [vector]
+
+# Локаль базы (блок `locale` внутри элемента databases) — необязательна. Без неё
+# CREATE DATABASE наследует локаль кластера, как и раньше.
+#
+# Зачем она бывает нужна. Локаль базы неизменяема после создания, а провайдер
+# libc даёт разный порядок сортировки на glibc и на musl (alpine): база, снятая
+# дампом с одного образа и восстановленная в другой, получает индексы, порядок
+# которых сервер считает верным, а он уже не тот — порча всплывает на первом же
+# уникальном индексе по тексту. Встроенный провайдер (`builtin`, PostgreSQL 17+)
+# от libc не зависит, поэтому база на нём переживает смену образа.
+#
+# - name: aivo_db_next
+#   owner: aivo
+#   password: "..."
+#   extensions: [vector, pg_trgm]
+#   locale:
+#     provider: builtin     # builtin (PostgreSQL >= 17) | icu | libc
+#     builtin: C.UTF-8      # обязателен при provider: builtin
+#     icu: ru-RU            # обязателен при provider: icu
+#     collate: C.UTF-8      # LC_COLLATE
+#     ctype: C.UTF-8        # LC_CTYPE
+#     encoding: UTF8
+#     template: template0   # по умолчанию template0, если блок задан:
+#                           # сменить локаль можно только от него
+
+service:
+  type: ClusterIP
+  port: 5432
+
+persistence:
+  enabled: true
+  size: 100Gi
+  # Пусто — класс по умолчанию (в поставке это local-path).
+  storageClass: ""
+  accessMode: ReadWriteOnce
+
+# Параметры сервера, попадающие в postgresql.conf через аргументы запуска.
+# Значения по умолчанию рассчитаны на ~4 GiB памяти, выделенной поду.
+parameters:
+  max_connections: "200"
+  shared_buffers: "1GB"
+  effective_cache_size: "3GB"
+  work_mem: "16MB"
+  maintenance_work_mem: "256MB"
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 2Gi
+  limits:
+    memory: 4Gi
+
+# Сервер запускается от пользователя postgres (uid 999) — того же, на который
+# entrypoint официального образа переключался сам, когда стартовал от root.
+# Явные значения здесь означают, что контейнер от root не стартует ВОВСЕ: на
+# первом старте entrypoint видит `id -u` = 999, пропускает chown каталога
+# данных и вызывает initdb напрямую (проверено на 0.8.6-pg16). Права на томе
+# при этом даёт не он, а kubelet — по fsGroup.
+#
+# Тому уже существующей установки менять ничего не нужно: каталог данных на нём
+# и так принадлежит 999:999 — его создал тот самый entrypoint под root.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 999
+  runAsGroup: 999
+  fsGroup: 999
+  seccompProfile:
+    type: RuntimeDefault
+
+# Сервер пишет в каталог данных (том), в /var/run/postgresql (emptyDir ниже) и
+# больше никуда, поэтому корневая файловая система монтируется на чтение
+# (проверено на 0.8.6-pg16 под `--read-only`: initdb, создание расширения
+# vector и запись 200k строк проходят). Единственный след — строка
+# `chmod: changing permissions of '/var/run/postgresql'` в журнале: entrypoint
+# пытается поправить права смонтированного каталога и сам же игнорирует отказ.
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# Отдельный /dev/shm для сервера (AIV-2557). Без него у контейнера остаётся
+# дефолт рантайма — 64 МиБ, а параллельная сборка индекса
+# (`max_parallel_maintenance_workers` > 0, по умолчанию 2) берёт там
+# DSM-сегмент размером ≈ `maintenance_work_mem`. При 256 МБ `CREATE INDEX` /
+# `REINDEX` большого индекса и post-data `pg_restore` падают с
+# `could not resize shared memory segment … No space left on device` — так
+# упала проверка бэкапа RS на HNSW-индексе 18.10.
+#
+# Том — `emptyDir` с `medium: Memory`, то есть tmpfs: занятые в нём страницы
+# считаются в лимит памяти пода. `sizeLimit` — потолок, а не резерв: пока
+# сегментов нет, память не занята. Размер берите не меньше
+# `maintenance_work_mem` с запасом и закладывайте его в `resources.limits`.
+#
+# По умолчанию выключено: включение меняет шаблон пода, то есть перезапускает
+# сервер, и это решение конкретной установки, а не обновления чарта.
+shm:
+  enabled: false
+  sizeLimit: 512Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Дополнительные переменные окружения контейнера.
+extraEnv: []

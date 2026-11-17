@@ -1,36 +1,67 @@
-internalSecret: ""
-
-image: python:3.12-slim
-
 # The bindings the platform resolved for the agent's data slot, verbatim: one object per
-# dataset, each with its connection and the schema its publisher declared.
+# dataset, each with its connection and the schema its publisher declared. Carries
+# credentials, so it arrives as a Secret.
 bindings: "[]"
 
-llm:
-  provider: google
-  model: gemini-3.1-pro-preview
-  apiKey: ""
+# Python, for a job that is stdlib-only. 0.3.x pip-installed `psycopg`, `neo4j` and `openai`
+# at boot — three packages fetched from the internet into a deployment whose point is that
+# it reaches nothing, and three more things that can fail while a demonstration is being
+# set up. This job speaks HTTP and JSON and needs none of them.
+# Fully qualified, including `docker.io/library`, because a listing's `images:` allow-list
+# matches on the string the manifest carries and `python` and `docker.io/library/python` are
+# two different entries. The embedding component's fetcher runs the same image under the same
+# name, so the two components declare one digest between them rather than two spellings of it.
+image: docker.io/library/python:3.12.16-slim-bookworm
 
-embeddings:
-  model: text-embedding-3-small
-  dimensions: 1536
-  apiKey: ""
+# Where the job does its work. The api's own admin API, from inside the namespace.
+api:
+  # Empty: the listing fills it from `{{ components.agent.release }}`, because the subcharts
+  # name their objects after the release.
+  url: ""
 
-neo4j:
-  uri: bolt://neo4j:7687
-  user: neo4j
-  database: neo4j
-
-postgres:
-  host: analyst-postgresql
-  port: 5432
-  user: retail_ai_user
-  database: retail_ai
-
+# Who the job acts as. The agent takes the caller's identity from `x-auth-subject`, the
+# header the authenticating proxy stamps on every request that reaches it from outside; this
+# job is inside the namespace and presents the subject of the administrator the realm
+# bootstrap created. That account is the installation administrator, which is what the model
+# registry and data-source registration require.
 keycloak:
   url: http://analyst-keycloak/auth
   realm: master
   clientId: identity
+  # The confidential client's secret, which the realm bootstrap set to the deployment's
+  # internal credential. Rendered into a Secret, never into the pod spec.
+  clientSecret: ""
+
+# The primary model, as the registry row this job creates. Everything here is also in the
+# agent's attested configuration; the registry is where the api actually reads it from, and
+# the two come from one set of listing parameters so they cannot disagree.
+model:
+  # The name an administrator sees in the model list and a user sees in the dialog picker.
+  name: ""
+  # OpenAI-compatible endpoint, ending in /v1.
+  baseUrl: ""
+  # The model id that endpoint serves.
+  id: ""
+  temperature: 0.7
+  # The endpoint's access key. Rendered into a Secret, never into the pod spec.
+  apiKey: ""
+  # What the agent does with a result too large to put in front of the model. These are the
+  # product's defaults, named here because with the model inside the perimeter they stop
+  # being a confidentiality control and become a context-budget one — and that is a
+  # specific, checkable thing to be able to tell somebody.
+  #
+  #   largeDataRowThreshold   rows above which a result is kept in object storage and the
+  #                           model is given a preview and a summary instead
+  #   largeDataSizeThreshold  the same ceiling in bytes
+  #   previewRowCount         how many rows of such a result the model does see
+  thresholds:
+    largeDataRowThreshold: 100
+    largeDataSizeThreshold: 102400
+    previewRowCount: 20
+  # The model's own context window and how much of it the conversation may take.
+  contextWindowSize: 128000
+  memoryTokenBudget: 16000
+  summarizeTokenThreshold: 20000
 
 resources:
   requests:

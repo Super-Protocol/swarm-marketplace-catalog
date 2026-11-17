@@ -140,7 +140,13 @@ def main(only: str | None) -> int:
     failures = 0
     for name, chart in cases(only):
         rendered = subprocess.run(
-            ["helm", "template", "release", f"charts/{chart}",
+            # `--skip-tests`, because that is what the marketplace renders with
+            # (`chart-renderer.ts`): a `helm test` hook is a Pod a chart offers to run
+            # against a finished release, there is no release here, and the cloud never
+            # applies one. Without this flag the check fails on vendored charts that ship a
+            # `wget` test pod with no resources — a container that will never exist, which is
+            # a failure nobody can act on and which teaches people to ignore this check.
+            ["helm", "template", "release", f"charts/{chart}", "--skip-tests",
              "--namespace", chart, "--values", f"charts/tests/cases/{name}.yaml"],
             capture_output=True, text=True, check=True,
         ).stdout

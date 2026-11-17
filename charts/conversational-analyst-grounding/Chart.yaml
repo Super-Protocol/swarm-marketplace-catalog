@@ -1,6 +1,18 @@
 apiVersion: v2
 name: conversational-analyst-grounding
-description: Turns the datasets bound to the agent into everything it needs to answer questions about them — data sources, a knowledge graph and a domain briefing.
+description: Turns the datasets bound to the agent into everything it needs to answer questions about them — a model in the registry, registered data sources, an annotated schema catalogue and a domain briefing.
 type: application
-version: 0.3.2
-appVersion: "1.0.0"
+# 0.4.0 is a rewrite, not a bump, because the thing the 0.3.x job built no longer exists.
+#
+# Agent 1.17 has no knowledge graph: `knowledge_base_providers` and
+# `tenant_knowledge_bases` are not tables any more, Neo4j is not a backend the api knows,
+# and what a tenant knows is the schema catalogue, the semantic model and its documents —
+# all in PostgreSQL. The 0.3.x job's inserts would fail on the first missing table.
+#
+# It also stopped writing SQL. Registration, annotation and the model registry are driven
+# through the api's own admin API, which is the only way the work has its intended effect:
+# registering a source ENQUEUES the catalogue read, and an annotation re-projects the
+# knowledge index that schema search actually looks in. The same rows written by hand leave
+# an agent that cannot find a table it can see.
+version: 0.4.0
+appVersion: "1.17.0"

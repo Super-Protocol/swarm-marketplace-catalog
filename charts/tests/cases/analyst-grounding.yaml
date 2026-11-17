@@ -1,0 +1,10 @@
+bindings: '[{"dataset":"clinic","title":"Clinic","connection":{"host":"gate","port":9500,"username":"u","password":"p","database":"d"},"schema":{"tables":[{"name":"procedures","description":"One row per procedure","columns":[{"name":"patient_id","description":"Patient","role":"dimension","references":"patients.id"},{"name":"performed_on","description":"When","type":"date","role":"dimension"},{"name":"findings","description":"How many","type":"integer","role":"measure"}]}]}}]'
+api:
+  url: http://analyst-retail-ai-back
+keycloak:
+  clientSecret: SECRET-AAAAAAAAAAAA
+model:
+  name: In-perimeter model
+  baseUrl: https://model.internal/v1
+  id: medgemma-27b
+  apiKey: SECRET-AAAAAAAAAAAA

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: mcp-email
+description: First-party MCP connector "Email - send a message via SMTP" (AIV-2337). Streamable-HTTP MCP server the api calls in-cluster as a global connector.
+type: application
+version: 0.1.0
+appVersion: "develop"

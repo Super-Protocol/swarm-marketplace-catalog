@@ -15,16 +15,29 @@ podAnnotations: {}
 # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
 podLabels: {}
 
-podSecurityContext: {}
-  # fsGroup: 2000
+# Образы платформы уже non-root: backend объявляет `USER nestjs`, frontend —
+# `USER nextjs`, оба под номером 1001, и файлы приложения принадлежат группе
+# 1001 (`--chown=nestjs:nodejs`). Значения здесь ничего не меняют в поведении —
+# они делают это ПРОВЕРЯЕМЫМ: проверка ИБ читает securityContext манифеста, а
+# не метаданные образа, и «мы собираем образы правильно» она не видит
+# (AIV-1590).
+#
+# readOnlyRootFilesystem не включается: Next.js держит кэш рендера в /app/.next
+# внутри образа (frontend.dockerfile заводит этот каталог отдельным chown), и
+# запись туда идёт на каждом запросе.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  seccompProfile:
+    type: RuntimeDefault
 
-securityContext: {}
-  # capabilities:
-  #   drop:
-  #   - ALL
-  # readOnlyRootFilesystem: true
-  # runAsNonRoot: true
-  # runAsUser: 1000
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  capabilities:
+    drop:
+      - ALL
 
 # This block is for setting up the ingress for more information can be found here: https://kubernetes.io/docs/concepts/services-networking/ingress/
 ingress:
@@ -37,6 +50,24 @@ ingress:
   tls: false
   oauth2ProxyServiceName: "aivo-oauth2-proxy"
 
+# Dedicated ingress that exposes ONLY the public, token-gated autopilot webhook
+# trigger path straight to the backend, bypassing oauth2-proxy (AIV-530 / AIV-536).
+# Disabled by default; enable per environment alongside the app host. When tls is
+# false the path rides the app host's existing TLS server (e.g. the oauth2-proxy
+# ingress); set tls + clusterIssuer to have cert-manager manage a dedicated cert.
+webhookIngress:
+  enabled: false
+  className: nginx
+  host: ""
+  # Regex (use-regex is set on the ingress) matching exactly the trigger endpoint.
+  path: "/tenants/[^/]+/autopilot/webhook/[^/]+/trigger"
+  tls: false
+  clusterIssuer: ""
+  annotations: {}
+
+# Shared by the `back` and `front` pods. `back.resources` / `front.resources`
+# override it per role, and `worker.resources` is separate from both — a multi-replica
+# installation sizes the three independently (AIV-2368).
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious
   # choice for the user. This also increases chances charts run on environments with little
@@ -50,9 +81,14 @@ resources: {}
   #   memory: 128Mi
 
 # This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+# Fallback for `back` and `worker` only. Only the api answers `/healthz` and
+# `/livez`; the `front` is a Next.js server with neither route and reads its own
+# `front.readinessProbe` / `front.livenessProbe` alone (AIV-2737). Per-role keys
+# below are what a delivery should set — `back.livenessProbe` /
+# `back.readinessProbe` and `worker.livenessProbe` / `worker.readinessProbe`.
 livenessProbe: {}
   # httpGet:
-  #   path: /healthz
+  #   path: /livez
   #   port: http
 readinessProbe: {}
   # httpGet:
@@ -60,6 +96,9 @@ readinessProbe: {}
   #   port: http
 
 # This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/
+# Applies to the BACKEND only: the chart renders a single HPA, targeting the
+# `-back` Deployment. When enabled, `back.replicaCount` is ignored (the HPA owns
+# the count); `front.replicaCount` is unaffected.
 autoscaling:
   enabled: false
   minReplicas: 1
@@ -75,8 +114,212 @@ affinity: {}
 
 clusterDomain: cluster.local
 
+# Prometheus scrape of the api's own `/metrics` (AIV-2578). The web and the
+# worker pods both answer it on their `http` port, unauthenticated like
+# `/healthz` — so it is meant for an in-cluster scraper only, never routed out.
+# Today it carries `aivo_api_event_loop_lag_seconds{role,quantile}` and friends:
+# the signal that would have told the 19.10 RS incident apart from a Postgres
+# problem in minutes rather than two hours.
+#
+# Off by default: it needs the prometheus-operator CRDs, and the endpoint only
+# exists from the api build that carries agent#1096 — enabling it against an
+# older image turns every api pod into a down target. Turn it on together with
+# that image.
+metrics:
+  podMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    # Extra labels on the PodMonitor itself, for a Prometheus whose
+    # `podMonitorSelector` is not empty (e.g. `release: <kube-prometheus-stack>`).
+    labels: {}
+
+# Licensing (AIV-892). The api binds its license to the UID of the `kube-system`
+# namespace and reads it from the apiserver with its own ServiceAccount, so the
+# chart ships the ServiceAccount plus a ClusterRole granting `get` on that one
+# namespace and nothing else.
+#
+# Disable only where the api runs with `licensing.clusterUid.source: static`
+# (a development stand); on a real installation the api would then report
+# CLUSTER_UID_UNAVAILABLE and could not produce a license request.
+licensing:
+  clusterUid:
+    enabled: true
+    namespace: kube-system
+    rbac:
+      # Who creates the ClusterRole and the ClusterRoleBinding that grant the
+      # read of this namespace's UID.
+      #
+      # `false` is the customer's own cluster: the installing role holds no
+      # rights on cluster-scoped objects (and, per AIV-2042, must not), so the
+      # cluster administrator applies both objects before the install
+      # (AIV-2099). The ServiceAccount the api reads the UID with is still
+      # created by the chart — the binding has to name that very account.
+      create: true
+
 back:
+  # Extra environment variables for the api pods, appended after the chart's
+  # own (`NODE_OPTIONS`, `PORT`, `RAI_PROCESS_ROLE`, ...). Plain env entries,
+  # e.g. `[{name: LOG_LEVEL, value: debug}]` — the api logger reads its level
+  # from `LOG_LEVEL` only, not from the config service (AIV-2510). Not for
+  # secrets: use a Secret and `valueFrom` instead of a literal value.
+  extraEnv: []
+  # Overrides the shared `readinessProbe` for the api pods alone. `/healthz`
+  # there is not "the process is alive": it answers 503 while the chat's
+  # JetStream transport is down, which is a pod that accepts messages and
+  # answers none of them (AIV-1481). A readiness probe is what takes such a pod
+  # out of the Service until it recovers by itself; deliberately NOT a liveness
+  # probe — restarting the pod does not bring the broker back, and would turn a
+  # NATS outage into a crash loop.
+  readinessProbe: {}
+  # Overrides the shared `livenessProbe` for the api pods alone, and the route to
+  # point it at is `/livez`, NOT `/healthz` (AIV-2018).
+  #
+  # `/livez` runs `SELECT 1` through the api's PostgreSQL pool and answers 503
+  # when the database does not come back. That is the one failure a restart
+  # actually fixes: on 2026-09-28 the RS `next` PostgreSQL pod was recreated
+  # with a new IP, every pooled socket in the api was left hanging against a
+  # server that no longer existed, and the pod served nothing for 16 hours with
+  # `Ready=1` — because `/healthz` never touches the database.
+  #
+  # `timeoutSeconds` has to exceed the api's own `db.config.livenessTimeoutMs`
+  # (5 s by default): the probe answers 503 rather than hanging, and kubelet
+  # should read that answer instead of timing out on it. `failureThreshold: 3`
+  # with `periodSeconds: 10` means ~30 s of continuous failure before a restart,
+  # so a brief database failover does not recycle every api pod at once.
+  livenessProbe: {}
+  # httpGet:
+  #   path: /livez
+  #   port: http
+  # initialDelaySeconds: 30
+  # periodSeconds: 10
+  # timeoutSeconds: 6
+  # failureThreshold: 3
+  # Ignored when autoscaling.enabled is true — the backend HPA owns the count.
   replicaCount: 1
+  # How long a web pod may keep working after SIGTERM before the kubelet kills
+  # it. The pod that accepted a chat mutation is the pod generating the answer,
+  # and on shutdown the api drains those streams before it closes the NATS
+  # connection (AIV-2366): Kubernetes' 30 seconds is a request-serving budget
+  # and cuts an agent turn off mid-answer — on every rolling update today, and
+  # at an arbitrary moment once an HPA scales the Deployment in. 630 seconds is
+  # the api's own drain ceiling — `chat.shutdownDrainTimeoutMs`, 600 s since
+  # AIV-2405 (an answer that fans out into subtasks runs 3–10 minutes, and the
+  # earlier 120 s lost every one of them on every deploy) — plus room to wind
+  # the abandoned answers down and close the transports after it. A rolling
+  # update of `back` stretches to ~10 minutes per pod, but only while a long
+  # answer is actually being written on it. The kubelet's
+  # budget has to stay the larger of the two, so raise them together or neither:
+  # a grace period below the drain ceiling means SIGKILL arrives first and the
+  # drain was pointless.
+  #
+  # The `preStopSleepSeconds` pause below is spent out of the same budget, before
+  # SIGTERM is even sent, so the rule is
+  #   grace >= preStopSleepSeconds + chat.shutdownDrainTimeoutMs/1000 + 20
+  # i.e. 630 >= 8 + 600 + 20 today.
+  terminationGracePeriodSeconds: 630
+  # Seconds the pod keeps serving after it is marked for termination, before
+  # the kubelet sends SIGTERM (AIV-2402). Removing a terminating pod from the
+  # EndpointSlice and reprogramming kube-proxy and the ingress upstreams is
+  # asynchronous: for a moment after deletion traffic still lands on the pod. A
+  # pod with no open streams drains instantly, Nest closes its listener about a
+  # second after SIGTERM, and those last packets are REJECTed — a transport
+  # ECONNREFUSED for the client (3 of 995 requests on a staging rollout in
+  # AIV-2371). The pause covers the convergence; once an HPA scales the
+  # Deployment in, this happens on every scale-in. Runs `sleep` from the image
+  # (busybox in the backend image). `0` drops the preStop hook entirely.
+  preStopSleepSeconds: 8
+  # How a new image replaces the running one.
+  #
+  # `maxSurge: 1` is the number that matters here, and not for capacity: the api
+  # has no migration step — every pod runs the schema diff and the LangGraph
+  # checkpointer's `setup()` itself, at boot. Images before AIV-2367 did that
+  # with no lock between pods, so two pods of a NEW image starting at the same
+  # moment ran the same DDL concurrently and one died on `already exists`; one
+  # new pod at a time made that race impossible whatever the replica count.
+  # Since AIV-2367 / AIV-2375 the boot DDL runs under `pg_advisory_lock` and
+  # the race is gone on every path, a fresh multi-replica install included —
+  # the setting stays for installations still on an older image.
+  #
+  # `maxUnavailable: 0` keeps the serving capacity whole through the update: an
+  # old pod leaves only once its replacement is Ready. At one replica this is
+  # what the chart effectively did already (25% of 1 rounds down to 0
+  # unavailable and up to 1 surge); it starts to differ from the Kubernetes
+  # default at three replicas and above.
+  #
+  # An empty `type` renders no `strategy` at all, which is how an installation
+  # hands the choice back to Kubernetes' own default (RollingUpdate, 25%/25%).
+  # `rollingUpdate` is written only alongside `type: RollingUpdate` — the
+  # apiserver rejects an object that carries both `Recreate` and a
+  # `rollingUpdate` block, so switching the type is enough.
+  #
+  # Written field by field rather than as one block on purpose: a null or an
+  # empty map in a PARENT values file does not clear a subchart's default (it
+  # does nothing at all on helm 3.16, the version this repo's CI pins), so a
+  # block-level escape hatch would be one that works on the agent's helm and
+  # not on the customer's.
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  # Keep two web pods off one node when the cluster can manage it — a soft term,
+  # so a single-node stand still schedules them (see `app.podAntiAffinity` in
+  # _helpers.tpl). It costs nothing at one replica. An `affinity` below that
+  # carries its own `podAntiAffinity` replaces this one; one that only pins a
+  # node pool is merged with it.
+  #
+  # `required: true` makes the term hard (AIV-2669): for a cluster with at least
+  # as many worker nodes as replicas plus the surge pod, where a soft term could
+  # leave both replicas on one node after a failure and lose the role whole on
+  # the next one. Below that node count the extra pod stays Pending.
+  podAntiAffinity:
+    enabled: true
+    required: false
+  # How many web pods the cluster may take away at once (AIV-2368).
+  #
+  # `auto` renders the budget as soon as `replicaCount` — or, under the HPA,
+  # `autoscaling.minReplicas` — is above one, and renders nothing at one replica,
+  # where `minAvailable: 1` protects nothing and blocks every node drain instead.
+  # `true` / `false` decide it outright.
+  #
+  # `minAvailable: 1` is the floor that keeps the api reachable through a drain.
+  # Set `maxUnavailable` instead (it wins when set) to let the allowance grow
+  # with the replica count — a budget that frees one pod at a time makes
+  # draining a big node slow. Empty means "not set", and exactly one of the two
+  # has to carry a value: a `spec` with neither is rejected by the apiserver, so
+  # the chart refuses to render rather than hand it over. `enabled: false` is
+  # the way to turn the budget off — emptying the block does not do it, see
+  # `updateStrategy` above.
+  podDisruptionBudget:
+    enabled: auto
+    minAvailable: 1
+    maxUnavailable: ""
+  # Resources of a backend pod; falls back to the shared `resources` when unset.
+  # Its own key because that shared one is the front's as well, and the two do
+  # not scale on the same thing.
+  #
+  # Unset means no requests at all. That is survivable on a single-replica stand
+  # and stops being survivable with several: the scheduler packs pods it knows
+  # nothing about onto one node (so the anti-affinity above is the only thing
+  # spreading them), and an HPA on CPU utilisation has no denominator to compute
+  # against — `autoscaling.enabled` without requests simply does not scale. A
+  # starting point for a multi-replica api, to be corrected from what the pods
+  # really use:
+  #
+  #   requests: {cpu: "1", memory: "4Gi"}
+  #   limits: {memory: "12Gi"}
+  #
+  # Memory is the binding resource — `config.maxOldSpaceSize` is the V8 heap cap
+  # in MiB and the limit has to stay above it, or the pod is OOMKilled at the
+  # moment the heap is doing what it was told it could. No CPU limit on purpose:
+  # a throttled event loop arrives as chat latency, which is the thing being
+  # scaled for.
+  resources: {}
+  # Overrides the ServiceAccount the backend pod runs as. Empty means the one
+  # this chart creates when licensing.clusterUid.enabled is true, and the
+  # namespace default otherwise.
+  serviceAccountName: ""
   image:
     repository: localhost:32123/vaultee-back
     pullPolicy: Always
@@ -89,15 +332,209 @@ back:
   service:
     type: ClusterIP
     port: 80
+  # Who may reach the api's port at all (AIV-1295).
+  #
+  # The api believes the caller's identity — and their groups, which become
+  # roles — because of the headers oauth2-proxy puts on the request. The proxy
+  # overwrites those headers, so nothing outside the cluster can set them; this
+  # is about what is already inside it, where a pod that can open a connection
+  # to this port could otherwise present any claim set it liked. The api's own
+  # signature and proxy-token checks are the inner fence and are always on; this
+  # is the outer one.
+  #
+  # Off by default. It only does anything on a CNI that enforces NetworkPolicy
+  # (Canal on RKE2 does), and a `from` list missing one real caller takes the
+  # platform down rather than degrading it — kubelet health probes in particular
+  # arrive from the node and may need an `ipBlock` entry in `extraIngress`.
+  # Enable it once the peers are known to be complete for the installation.
+  #
+  # Enabled with no peers at all does not render: an ingress rule with an empty
+  # `from` matches EVERY source rather than none, so it would open the port it
+  # is meant to close. The template fails the release instead.
+  networkPolicy:
+    enabled: false
+    # Allow the oauth2-proxy pods. Labels match the upstream oauth2-proxy chart;
+    # override when the proxy is deployed under another name or another chart.
+    fromAuthProxy: true
+    authProxyPodLabels:
+      app.kubernetes.io/name: oauth2-proxy
+    # Extra peers for the same rule — e.g. the ingress controller serving the
+    # token-gated webhook path, or a monitoring namespace:
+    #   - namespaceSelector:
+    #       matchLabels:
+    #         kubernetes.io/metadata.name: ingress-nginx
+    extraFrom: []
+    # Whole additional ingress rules, appended verbatim. This is where an
+    # `ipBlock` for node-sourced health probes goes.
+    extraIngress: []
+
+# The api's background queues on their own pods (AIV-1265). Off by default: the
+# backend then keeps draining the queues itself, exactly as before.
+#
+# Turning it on moves every Bull consumer — reference-book sync, autopilot runs,
+# event dispatch, dashboard refreshes, documentation jobs — off the pods serving
+# user requests, so a heavy job can no longer compete with chat latency for CPU
+# or for the connection pool. The backend is switched to the `web` role in the
+# same breath, so nothing is consumed twice.
+worker:
+  enabled: false
+  # Same as `back.extraEnv`, for the queue-draining pods. Set separately: a
+  # worker does not inherit `back.extraEnv`.
+  extraEnv: []
+  # Same as `back.readinessProbe`, for the pods that drain the queues. No
+  # Service points at them, so this changes no routing — it is how a worker
+  # that cannot publish the agent's events stops counting as Ready.
+  readinessProbe: {}
+  # Same as `back.livenessProbe`, and needed for the same reason: a worker runs
+  # every job through the same PostgreSQL pool, so a pool wedged on sockets to a
+  # database that was replaced underneath the pod stops it draining the queue
+  # just as surely as it stops a backend answering `/graphql` (AIV-2018).
+  livenessProbe: {}
+  # httpGet:
+  #   path: /livez
+  #   port: http
+  # initialDelaySeconds: 30
+  # periodSeconds: 10
+  # timeoutSeconds: 6
+  # failureThreshold: 3
+  replicaCount: 1
+  # Same as `back.updateStrategy`, against the same race: a worker boots the
+  # identical process against the identical database, so two new-image workers
+  # starting together collide on the same DDL.
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  # Resources of a worker pod. Background jobs are the heavy, bursty half of the
+  # api's work, so this is deliberately separate from the backend's `resources`
+  # — and it does NOT fall back to the shared key: a worker sized like a web pod
+  # is either starved during a sync or holding a reservation it uses once a day.
+  # A starting point for a multi-replica stand, to be corrected from real usage:
+  #
+  #   requests: {cpu: "1", memory: "6Gi"}
+  #   limits: {memory: "16Gi"}
+  #
+  # Requests are what make `kubernetes.io/hostname` spreading mean anything and
+  # what an HPA would later need; the memory headroom is larger than the web
+  # pod's because a reference-book sync holds whole batches of rows and their
+  # embeddings in the heap at once.
+  resources: {}
+  # How long a worker pod may keep working after SIGTERM before the kubelet
+  # kills it. Kubernetes gives 30 seconds by default, which is sized for a
+  # request-serving pod: a background job is not a request. On SIGTERM the
+  # shutdown hook closes the queues and waits for the job that is already
+  # running, and a reference-book sync — hundreds of thousands of rows through
+  # upsert plus embeddings — does not finish in 30 seconds. Killed mid-flight
+  # the job is not lost (Bull hands the stalled job to another pod), it is
+  # restarted from the beginning, which is what every rolling update would then
+  # cost. Five minutes is the compromise: long enough for a chunk of a sync,
+  # short enough that a node drain still completes in a reasonable time. A job
+  # that cannot finish within it has to checkpoint, not ask for a bigger number.
+  # `preStopSleepSeconds` below comes out of this budget too.
+  terminationGracePeriodSeconds: 300
+  # Same pause as `back.preStopSleepSeconds` (AIV-2402). A worker sits behind no
+  # Service, but it answers the healthz probe and shares the backend's shutdown
+  # path, and a role-wide pause keeps both Deployments ending the same way.
+  # `0` drops the preStop hook entirely.
+  preStopSleepSeconds: 8
+  # Keep two worker pods off one node when the cluster can manage it; see
+  # `back.podAntiAffinity`. Worker against worker only — a worker and a backend
+  # pod are allowed to share a node, since the point of the split is which
+  # process does the work, not which machine.
+  podAntiAffinity:
+    enabled: true
+    required: false
+  # Same as `back.podDisruptionBudget`. Losing every worker at once does not
+  # take the platform down — jobs wait in Redis and a stalled one is handed to
+  # the next consumer — but it restarts whatever was running from the beginning,
+  # which is exactly what `terminationGracePeriodSeconds` above exists to avoid.
+  podDisruptionBudget:
+    enabled: auto
+    minAvailable: 1
+    maxUnavailable: ""
+  # Fall back to the shared placement when unset.
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  config:
+    # Defaults to back.config.maxOldSpaceSize when unset.
+    maxOldSpaceSize: ""
 
 front:
   replicaCount: 1
+  # How a new UI image replaces the running one — same keys and the same
+  # reasoning as `back.updateStrategy`: an old pod leaves only once its
+  # replacement is Ready, so a rollout never leaves the ingress without a
+  # front upstream (the 502s of the RS rollout on 2026-10-26, AIV-2737).
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  # Seconds the pod keeps serving after it is marked for termination, before
+  # SIGTERM — the same convergence pause as `back.preStopSleepSeconds`. Runs
+  # `sleep` from the image (busybox in the node alpine base). `0` drops the
+  # preStop hook.
+  preStopSleepSeconds: 8
+  # Empty leaves Kubernetes' 30 s. The front holds no long streams — the chat
+  # streams go to the api — so 30 s covers the pause above plus Next's own
+  # shutdown; raise it together with `preStopSleepSeconds`.
+  terminationGracePeriodSeconds: ""
+  # What takes a UI pod into the Service. Without it a new pod is Ready the
+  # moment its container starts, before the Next.js server listens, and the
+  # surge pod of a rollout takes traffic it can only refuse (AIV-2737). `/` is
+  # what the image's own HEALTHCHECK asks (frontend.dockerfile) and answers 200
+  # without an upstream call. The shared `readinessProbe` is NOT a fallback for
+  # the front: it points at the api's `/healthz`.
+  readinessProbe:
+    httpGet:
+      path: /
+      port: http
+    initialDelaySeconds: 3
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  # Off by default, as for the api: a restart is rarely what a stuck UI needs.
+  livenessProbe: {}
+  # httpGet:
+  #   path: /
+  #   port: http
+  # initialDelaySeconds: 30
+  # periodSeconds: 20
+  # timeoutSeconds: 5
+  # failureThreshold: 3
+  # Resources of a UI pod; falls back to the shared `resources` when unset.
+  resources: {}
+  # Same as `back.podAntiAffinity` / `back.podDisruptionBudget`, for the UI pods
+  # (AIV-2669). They read the shared `affinity`, so an `affinity` there that
+  # carries its own `podAntiAffinity` replaces this one for the front as well.
+  podAntiAffinity:
+    enabled: true
+    required: false
+  podDisruptionBudget:
+    enabled: auto
+    minAvailable: 1
+    maxUnavailable: ""
   image:
     repository: localhost:32123/front
     pullPolicy: Always
     tag: "latest"
   config:
     port: 8080
+    # Node refuses a request whose headers exceed 16 KiB by default, and the auth
+    # proxy stamps `x-auth-claims` on the DOCUMENT request as well as on
+    # /graphql: a user with a large group list got a bare 431 and a blank white
+    # page, with no chance for the app to say why (AIV-1295). Next's standalone
+    # server builds its own http.Server, so the limit can only be raised from
+    # outside the process. Keep it in step with the api's
+    # `authClaims.maxHeaderBytes`. Required: an installation that overrides this
+    # key with an empty value gets `--max-http-header-size=` in NODE_OPTIONS and
+    # a pod that never starts, so the chart refuses to render instead (AIV-1330).
+    maxHttpHeaderSize: 65536
+    # Heap cap for the front pod; empty leaves Node's own default. It shares one
+    # NODE_OPTIONS with the header limit above — see front.deployment.yaml.
+    maxOldSpaceSize: ""
   service:
     type: ClusterIP
     port: 80

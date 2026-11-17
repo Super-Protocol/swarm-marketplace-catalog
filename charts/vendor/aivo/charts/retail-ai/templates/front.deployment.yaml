@@ -5,8 +5,19 @@ metadata:
   labels:
     {{- include "app.labelsFront" . | nindent 4 }}
 spec:
-  {{- if not .Values.autoscaling.enabled }}
+  {{- /* `autoscaling` drives the backend HPA only — there is no HPA for the
+       front, so its replica count is always taken from values. */}}
   replicas: {{ .Values.front.replicaCount }}
+  {{- /* Same shape as `back.updateStrategy` — see back.deployment.yaml. */}}
+  {{- with .Values.front.updateStrategy }}
+  {{- if .type }}
+  strategy:
+    type: {{ .type }}
+    {{- if and (eq .type "RollingUpdate") .rollingUpdate }}
+    rollingUpdate:
+      {{- toYaml .rollingUpdate | nindent 6 }}
+    {{- end }}
+  {{- end }}
   {{- end }}
   selector:
     matchLabels:
@@ -23,6 +34,9 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
+      {{- with .Values.front.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -40,6 +54,20 @@ spec:
         image: "{{ .Values.front.image.repository }}:{{ .Values.front.image.tag | default .Chart.AppVersion }}"
         imagePullPolicy: {{ .Values.front.image.pullPolicy }}
         env:
+        {{- /* Every Node flag the front pod needs, in ONE variable, because
+             `NODE_OPTIONS` is one variable: the image sets the header limit
+             itself (frontend.dockerfile), and a Deployment that sets
+             NODE_OPTIONS for anything else replaces that value whole. The white
+             page that comes back is visible to nothing but the HTTP parser, so
+             the chart states both flags rather than relying on the image
+             surviving the next edit here (AIV-1295, AIV-1315).
+
+             `required` rather than a default, because an empty value is not a
+             missing one: it renders `--max-http-header-size=` and Node refuses
+             that argument outright, so the pod never starts and the reason is
+             a CrashLoopBackOff instead of a rendering error (AIV-1330). */}}
+        - name: NODE_OPTIONS
+          value: "--max-http-header-size={{ required "front.config.maxHttpHeaderSize is empty: Node refuses to start with a bare --max-http-header-size=. Set the header limit (bytes) or remove the key to take the chart default." .Values.front.config.maxHttpHeaderSize }}{{ with .Values.front.config.maxOldSpaceSize }} --max-old-space-size={{ . }}{{ end }}"
         - name: PORT
           value: {{ .Values.front.config.port | quote }}
         - name: RAI_SERVICE_DISCOVERY_URL
@@ -48,15 +76,27 @@ spec:
         - name: http
           containerPort: {{ .Values.front.config.port }}
           protocol: TCP
-        {{- with .Values.livenessProbe }}
+        {{- with (int .Values.front.preStopSleepSeconds) }}
+        # Keeps the pod serving while it leaves the EndpointSlice and the ingress
+        # upstreams catch up; SIGTERM only follows the hook (AIV-2737).
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sleep", "{{ . }}"]
+        {{- end }}
+        {{- /* The front's own probes only. The shared `livenessProbe` /
+             `readinessProbe` point at the api's `/livez` / `/healthz`, which
+             the Next.js server does not answer, so they are not a fallback
+             here (AIV-2737). */}}
+        {{- with .Values.front.livenessProbe }}
         livenessProbe:
           {{- toYaml . | nindent 12 }}
         {{- end }}
-        {{- with .Values.readinessProbe }}
+        {{- with .Values.front.readinessProbe }}
         readinessProbe:
           {{- toYaml . | nindent 12 }}
         {{- end }}
-        {{- with .Values.resources }}
+        {{- with (.Values.front.resources | default .Values.resources) }}
         resources:
           {{- toYaml . | nindent 12 }}
         {{- end }}
@@ -89,9 +129,9 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- with (include "app.roleAffinity" (dict "explicit" .Values.affinity "podAntiAffinity" .Values.front.podAntiAffinity "selector" (include "app.selectorLabelsFront" .))) }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+        {{- . | nindent 8 }}
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:

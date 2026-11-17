@@ -1,0 +1,79 @@
+{{- /*
+Proves what the PostgreSQL chart's init Secret was supposed to do actually happened.
+
+The official postgres image runs /docker-entrypoint-initdb.d exactly once, on an empty data
+directory, and nothing re-runs it. If one statement in there does not take effect, the server is
+up, healthy and answering — and the agent that depends on it fails much later and much less
+legibly: a role that was never created reads as "authentication failed" against a live database,
+and a `vector` extension that was never created reads as an assistant that cannot find a table.
+
+This Job is the exit code for that. It asserts each database, each role and the two extensions
+the agent needs, and says which one is missing. Read-only; safe to re-run, and it is re-created
+on every reconfigure because a Job's pod template is immutable.
+*/ -}}
+{{- if .Values.databaseCheck.enabled }}
+{{- $host := .Values.postgresql.fullnameOverride | default "analyst-postgresql" }}
+{{- $databases := list }}
+{{- range .Values.postgresql.databases }}{{ $databases = append $databases .name }}{{ end }}
+{{- $roles := list }}
+{{- range .Values.postgresql.databases }}{{- if .owner }}{{ $roles = append $roles .owner }}{{ end }}{{ end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Follows the expectation it checks, because a Job's pod template cannot be updated in place.
+  name: analyst-database-check-{{ printf "%s|%s" (join "," $databases) (join "," $roles) | sha256sum | trunc 8 }}
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: check
+          image: "{{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}"
+          command:
+            - bash
+            - -c
+            - |
+              set -Eeuo pipefail
+              for _ in $(seq 1 120); do
+                pg_isready -h "$PGHOST" -U postgres >/dev/null 2>&1 && break
+                sleep 5
+              done
+              missing=""
+              one() { psql -tAqX -h "$PGHOST" -U postgres -d "$1" -c "$2"; }
+              {{- range $databases }}
+              [ "$(one postgres "SELECT 1 FROM pg_database WHERE datname = '{{ . }}'")" = 1 ] \
+                || missing="$missing database:{{ . }}"
+              {{- end }}
+              {{- range $roles }}
+              [ "$(one postgres "SELECT 1 FROM pg_roles WHERE rolname = '{{ . }}'")" = 1 ] \
+                || missing="$missing role:{{ . }}"
+              {{- end }}
+              {{- range .Values.postgresql.databases }}
+              {{- $db := .name }}
+              {{- range .extensions }}
+              [ "$(one {{ $db }} "SELECT 1 FROM pg_extension WHERE extname = '{{ . }}'")" = 1 ] \
+                || missing="$missing extension:{{ $db }}.{{ . }}"
+              {{- end }}
+              {{- end }}
+              if [ -n "$missing" ]; then
+                echo "PostgreSQL initialisation is incomplete:$missing" >&2
+                echo "The init script runs only on an empty data directory — this volume was" >&2
+                echo "initialised without it, or a statement in it aborted the rest." >&2
+                exit 1
+              fi
+              echo "databases, roles and extensions are in place"
+          env:
+            - name: PGHOST
+              value: {{ $host | quote }}
+            # The superuser password, from the Secret the PostgreSQL chart renders — never
+            # a literal in this pod spec, which travels in the deployment bundle and lands
+            # in the evidence snapshot.
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $host | quote }}
+                  key: postgres-password
+          resources:
+            {{- toYaml .Values.databaseCheck.resources | nindent 12 }}
+{{- end }}

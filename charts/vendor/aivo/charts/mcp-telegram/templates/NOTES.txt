@@ -1,0 +1,23 @@
+MCP connector "Telegram - send a message" is deployed as
+  http://{{ include "mcp-telegram.fullname" . }}:{{ .Values.service.port }}/mcp
+
+The api uses it only once it is listed as a global connector in the api
+configuration (umbrella values):
+
+  config:
+    config:
+      services:
+        api:
+          mcp:
+            globalServers:
+              - slug: telegram
+                name: Telegram
+                url: http://{{ include "mcp-telegram.fullname" . }}:{{ .Values.service.port }}/mcp
+
+Tenants then switch it on in "MCP servers" -> "Built-in connectors" (opt-in,
+off by default) and enter their own bot token and chats under "Configure" —
+tenant credentials never live in this chart.
+
+Health:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "mcp-telegram.fullname" . }} {{ .Values.service.port }}
+  curl -s http://127.0.0.1:{{ .Values.service.port }}/healthz

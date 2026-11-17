@@ -1,0 +1,27 @@
+{{- /*
+The two proxy settings that are the operator's hostname, and nothing else.
+
+An evidence exclusion names a whole JSON Pointer, so a hostname interpolated into a rendered
+configuration document cannot be excluded on its own: the only pointer available is
+`/data/<the whole file>`, and dropping that hides the proxy's entire configuration from the
+snapshot — every cookie setting, the session store, the logging. That is what listing 3.0.9
+did, and it is the wrong half to keep.
+
+So the hostname does not go in there. It goes here, in a ConfigMap of its own that is excluded
+whole and whose name a reader of the evidence can see, and reaches the pod as environment.
+oauth2-proxy reads `OAUTH2_PROXY_<SETTING>` for every setting it has, so this costs nothing.
+
+The pod reads `envFrom` once, at start, so a hostname reconfigure needs the checksum annotation
+below to roll it — and that annotation is derived from the hostname too, so it is excluded
+alongside.
+*/ -}}
+{{- $host := required "appHostname must be set" .Values.appHostname }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: analyst-oauth2-proxy-public
+  annotations:
+    swarm.io/exclude-evidence-fields: "/data"
+data:
+  OAUTH2_PROXY_REDIRECT_URL: {{ printf "https://%s/oauth2/callback" $host | quote }}
+  OAUTH2_PROXY_WHITELIST_DOMAINS: {{ $host | quote }}

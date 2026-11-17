@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "mcp-telegram.fullname" . }}-test-connection"
+  labels:
+    {{- include "mcp-telegram.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  # Hook pod of `helm test`, scanned like the rest of the chart (AIV-1590). The
+  # uid is arbitrary: wget only reads the network.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: wget
+      image: busybox
+      securityContext:
+        allowPrivilegeEscalation: false
+        privileged: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+      command: ['wget']
+      args: ['-q', '-O', '-', 'http://{{ include "mcp-telegram.fullname" . }}:{{ .Values.service.port }}/healthz']
+  restartPolicy: Never
