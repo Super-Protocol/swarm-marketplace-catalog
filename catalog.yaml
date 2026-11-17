@@ -22,6 +22,14 @@ organizations:
   - slug: reset-health
     name: Reset Health
     verifiedPublisher: true
+  # The clinic in the gastroenterology demonstration: a six-site GI network that
+  # owns its own records and publishes them to its own operator under the gate.
+  # It is a separate organisation from reset-health deliberately — the boundary
+  # the stand demonstrates is the tenant, so the clinic whose data it is cannot
+  # be the same publisher as everybody else's.
+  - slug: cypress-bay-digestive
+    name: Cypress Bay Digestive Health
+    verifiedPublisher: true
   # An internal platform team, which is who publishes third-party infrastructure in a company's own
   # marketplace. Deliberately not "Confluent": the publisher of a listing is whoever stands behind
   # it on this marketplace, and that is not the vendor here.
@@ -115,6 +123,37 @@ datasets:
       provenanceScore: 94
       provenanceAttested: true
 
+  # The one identifying clinical card on this catalog. The two above are
+  # de-identified and prove nothing about reading a chart; this one carries names,
+  # dates of birth and medical record numbers, because a surveillance tool has to
+  # know which patient is overdue. `access.mode: gateway` is therefore load-bearing
+  # rather than decorative, and the usage terms below say what the data is instead
+  # of pretending it needs protecting.
+  - path: datasets/cypressbay-digestive-health
+    organization: cypress-bay-digestive
+    sourceType: clickhouse
+    visibility: restricted
+    price: Not for sale
+    expectedUpdate: On demand (regenerated from the committed generator)
+    usageTerms: >-
+      Synthetic demonstration data. No real patient is represented and no record is derived from
+      one, so it may be loaded, queried and shown freely. It is not a substitute for real data in
+      any evaluation that claims clinical validity.
+    # Its own credential, not the one the two de-identified clinic cards share:
+    # those point at a different ClickHouse, and a reader account is scoped to the
+    # tables of one dataset here. On the marketplace stand this is `cbdh_reader`,
+    # which holds SELECT on the eleven `cbdh_*` tables and nothing else.
+    secrets:
+      readUser: ${CYPRESSBAY_READ_USER}
+      readPassword: ${CYPRESSBAY_READ_PASSWORD}
+    statistics:
+      sizeBytes: "18270732"
+      recordCount: "131126"
+      format: ClickHouse MergeTree
+      usability: 9.7
+      provenanceScore: 100
+      provenanceAttested: true
+
   - path: datasets/autonomyx-inflammation-monitoring
     organization: reset-health
     sourceType: clickhouse
@@ -149,6 +188,12 @@ grants:
     apps: [conversational-analyst]
   - dataset: autonomyx-inflammation-monitoring
     organizations: [reset-health, aivo]
+    apps: [conversational-analyst]
+  # The clinic grants its own organisation and the operator's. Which organisations
+  # appear here is the whole of the tenant boundary the gastroenterology stand
+  # demonstrates, so adding one is a decision and not housekeeping.
+  - dataset: cypressbay-digestive-health
+    organizations: [cypress-bay-digestive, aivo]
     apps: [conversational-analyst]
 
 reviews:
