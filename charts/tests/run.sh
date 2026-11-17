@@ -211,7 +211,20 @@ analyst_drift() {
 }
 analyst_drift platform
 analyst_drift embeddings
-analyst_drift identity 'appHostname={t}.conf-apps.superprotocol.dev'
+# The consumer's own identity varies too, not only the hostname. This is the one component any
+# of `consumer.*` reaches — the deploying person's address and name, and the organisation the
+# marketplace names the first tenant after — and varying only the hostname is exactly how
+# `confidential-router` published the deployer's address for four versions with this check green
+# (SUP-241). It passes because those values reach the bootstrap Secret, whose contents the
+# canonical rules strip; render one of them into the attested ConfigMap instead and this case
+# fails naming the field.
+analyst_drift identity \
+  'appHostname={t}.conf-apps.superprotocol.dev' \
+  'demoUser.email=deployer-{t}@example.test' \
+  'demoUser.username=deployer-{t}@example.test' \
+  'demoUser.firstName=Deployer-{t}' \
+  'organizations[0].name=Org-{t}' \
+  'organizations[0].alias=org-{t}'
 # The generated credentials vary too, not only the hostname. The agent's overlay Secret holds
 # three of them (`modelApiKey`, `embeddingsApiKey`, `internalSecret`), the marketplace generates
 # each one per deployment, and the chart hashes the Secret into `checksum/config-overlay` to roll
