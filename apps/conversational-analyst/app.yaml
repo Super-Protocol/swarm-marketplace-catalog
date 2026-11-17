@@ -12,7 +12,7 @@ metadata:
     endpoint, including one in your own perimeter — and the embeddings that index your schema
     and documents are served from inside the deployment, so neither your data nor its
     description reaches a third party.
-  version: "4.0.1"
+  version: "4.0.2"
   category: ai-agents
   license: Proprietary
   tags:
@@ -22,6 +22,11 @@ metadata:
     - text-to-sql
     - confidential
 
+# ---------------------------------------------------------------------------
+# 4.0.2 corrects the one `evidence.exclude` entry whose `match.name` named an
+# object no deployment renders, and declares the digest that correction makes
+# stable. Two deployments of 4.0.0 attested different snapshots because of that
+# entry, so until this version there was no digest to declare (SUP-823).
 # ---------------------------------------------------------------------------
 # 4.0.1 declares `resources.maxPod`, and nothing else. No rendered manifest
 # moves, so the digest measured on a deployment of 4.0.0 is the digest this
@@ -1154,20 +1159,21 @@ outputs:
 # kind — they ARE configuration, so what this deployment may reach cannot be widened without
 # the digest saying so.
 evidence:
-  # NOT DECLARED YET, and deliberately left absent rather than carried over.
+  # Measured, not derived, on `sup823a` (build-448-release) on 2026-11-17.
   #
-  # `expectedDigest` cannot be derived from charts — a cluster defaults fields no template
-  # writes — so it takes two deployments: deploy this version, read
-  # `GET <cloud baseUrl>/api/v1/deployments/<cloudDeploymentId>/evidence`, declare the digest it
-  # published, deploy again and confirm `matchesExpected`. Adding the value later changes no
-  # rendered manifest, so the digest measured on this version is valid for the version that
-  # declares it.
+  # Two deployments of 4.0.0, differing only in the hostname and the namespace, attested
+  # different snapshots — one field apart, the one the corrected exclusion above now covers.
+  # Excluding it makes those two snapshots byte-identical, and the value below is what they
+  # then digest to. A third deployment, of this definition with the value declared, attested
+  # exactly it and reported `matchesExpected: true`.
   #
-  # 3.0.9 shipped the digest 3.0.6 had measured. A declared digest that is wrong is worse than
-  # none: the gate refuses a deployment that is doing exactly what the listing says, and the
-  # refusal reads as tampering.
-  #
-  # expectedDigest: "<measured on a real deployment of 4.0.0>"
+  # Declared rather than left absent because the gate holds a deployment to it: a wrong digest
+  # refuses a deployment that is doing exactly what the listing says, which is how 3.0.9's
+  # carried-over 3.0.6 digest failed. Adding this line changes no rendered manifest, so a
+  # deployment of the definition without it attests the same snapshot as one with it; the
+  # exclusion fix is the only thing in this version that moves the digest, and it moves it
+  # on purpose.
+  expectedDigest: "a94af2a0502da61d59d9903c35b822cafb5e4d8548d08b6455fc701c162e68d8"
   exclude:
     # Every deployment lives in a namespace of its own. The platform strips this itself; it is
     # declared because the listing page shows the exclusions from the definition only, and a
@@ -1195,7 +1201,17 @@ evidence:
     # value that is different in every deployment by design. Charts put them on their pods to
     # roll them when a credential changes, which is the right behaviour and not something to
     # turn off.
-    - match: { kind: Deployment, name: analyst-config }
+    #
+    # The agent's chart is the one component that does not pin a `fullnameOverride`, so its
+    # objects are named from the Helm release rather than from `analyst`. The marketplace
+    # derives that release as `<listing name>-<component name>` — `conversational-analyst-agent`
+    # — which is deterministic for every deployment and every consumer, and is the name that has
+    # to be matched here: `match.name` is an exact string compare against the rendered object
+    # (`evidenceExclusionsFor`), with no patterns and no expressions.
+    #
+    # Through 4.0.1 this entry said `analyst-config`, matched nothing, and was the only reason
+    # two deployments of this version attested different snapshots (SUP-823).
+    - match: { kind: Deployment, name: conversational-analyst-agent-config }
       fields:
         - "/spec/template/metadata/annotations/checksum~1config-overlay"
     - match: { kind: Deployment, name: analyst-oauth2-proxy }
