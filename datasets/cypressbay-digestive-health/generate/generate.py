@@ -240,6 +240,10 @@ class Procedure:
     #: Filled in by build_surveillance, read by notes.py — a contradiction
     #: planted on a recommendation a later scope already answered is moot.
     superseded_by: str = ""
+    #: What became of the recall this procedure's recommendation generated. Also
+    #: filled in by build_surveillance and also read by notes.py, for the same
+    #: reason: a closed recall has no next action to be wrong about.
+    recall_status: str = ""
     lesions: list[Lesion] = field(default_factory=list)
     recommendation: gl.Recommendation | None = None
     pathologist: Provider | None = None
@@ -1005,6 +1009,7 @@ class World:
                 coordinator_id=coordinator.provider_id,
             )
 
+        procedure.recall_status = status
         self.tables["recalls"].add(
             recall_id=recall_id,
             recommendation_id=recommendation_id,

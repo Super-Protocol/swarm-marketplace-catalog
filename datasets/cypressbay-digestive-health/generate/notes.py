@@ -40,7 +40,14 @@ import random
 import docwriters as dw
 import guidelines as gl
 import vocabulary as vocab
-from constants import ABANDON_POINTS, AS_OF, REACH_ORDER, SCREENING_START_AGE, reachable_segments
+from constants import (
+    ABANDON_POINTS,
+    AS_OF,
+    LIVE_RECALL_STATUSES,
+    REACH_ORDER,
+    SCREENING_START_AGE,
+    reachable_segments,
+)
 from docwriters import blank, body, h1, h2, mono, rule
 
 N_OUTSIDE_PACKETS = 20
@@ -824,11 +831,12 @@ RECALL_NARRATIVES = [
         "key": "caregiver",
         "changes_record": False,
         # This note names the patient's relationship to the caller, so it only
-        # fits a woman. It used to be handed out by position and landed on a man
-        # under the shipped seed — "letters addressed to him, not to his mother",
-        # about a male patient. `sex` is what stops that happening again on the
-        # next seed rather than being corrected once.
+        # fits a woman, and it puts her in assisted living with early dementia,
+        # which only fits an older one — it landed on a 41-year-old once. `sex`
+        # and `min_age` are what stop both happening again on the next seed
+        # rather than being corrected once each.
         "sex": "F",
+        "min_age": 70,
         "text": (
             "Spoke to the patient's son. The patient moved into an assisted living facility in "
             "March and the number on file is the old landline. New number taken below. He asks "
@@ -931,7 +939,14 @@ def build(world, notes_dir: str, rng: random.Random):
     scripted: list[dict] = []
 
     # -- outside records packets -------------------------------------------
-    outside = sorted(world.outside_procedures, key=lambda p: p.procedure_id)
+    # Active patients only, in every cohort. A records packet awaiting
+    # abstraction on a patient who has died is realistic and is exactly what a
+    # real queue contains; it is also a demonstration that ends in "there is
+    # nothing to do about this one".
+    outside = sorted(
+        (p for p in world.outside_procedures if p.patient.status == "active"),
+        key=lambda p: p.procedure_id,
+    )
     rng.shuffle(outside)
     for procedure in outside[:N_OUTSIDE_PACKETS]:
         facility = rng.choice(vocab.SOURCE_FACILITIES)
@@ -1110,20 +1125,35 @@ def build(world, notes_dir: str, rng: random.Random):
     # somebody's mother attached to a male patient.
     taken_recalls: set[str] = set()
     pairs: list[tuple[dict, dict]] = []
+
+    def fits(narrative: dict, row: dict) -> bool:
+        patient = by_id[row["patient_id"]]
+        # Active only. The deceased note is the one exception that proves the
+        # rule and it still needs an active patient: the finding IS that the
+        # chart is open and still sending letters to a family who have buried
+        # him, which is only true if the record does not know.
+        if patient.status != "active":
+            return False
+        if "sex" in narrative and patient.sex != narrative["sex"]:
+            return False
+        if "min_age" in narrative and patient.age_on(AS_OF) < narrative["min_age"]:
+            return False
+        return True
+
     for narrative in RECALL_NARRATIVES:
         match = next(
             (
                 row
                 for row in overdue
-                if row["recall_id"] not in taken_recalls
-                and ("sex" not in narrative or by_id[row["patient_id"]].sex == narrative["sex"])
+                if row["recall_id"] not in taken_recalls and fits(narrative, row)
             ),
             None,
         )
         if match is None:
             raise RuntimeError(
                 f"no overdue recall fits the coordinator note {narrative['key']!r} "
-                f"(wanted sex {narrative.get('sex', 'any')}) — raise --patients"
+                f"(wanted sex {narrative.get('sex', 'any')}, age "
+                f"{narrative.get('min_age', 'any')}+) — raise --patients"
             )
         taken_recalls.add(match["recall_id"])
         pairs.append((narrative, match))
@@ -1171,14 +1201,28 @@ def build(world, notes_dir: str, rng: random.Random):
 def _eligible(procedure, key: str) -> bool:
     """Whether this procedure's record can carry this disagreement.
 
-    The first condition is the same for all five and is not about the lesion: the
-    recommendation has to still be the patient's current one. A contradiction
-    planted on a recommendation a later colonoscopy already answered is moot —
-    "the record holds seven years" is not a finding when the next scope happened
-    two years ago and closed the recall. Two of the five landed there before this
-    check existed.
+    The first three conditions are the same for all five and none of them is about
+    the lesion. The record has to have a next action left in it, because that is
+    what the document is going to prove wrong:
+
+      * the recommendation must still be the patient's current one — "the record
+        holds seven years" is not a finding when the next scope happened two years
+        ago;
+      * the recall it generated must still be live — not completed, declined,
+        deferred, transferred out or closed on a death;
+      * the patient must be active.
+
+    The last two exist because the first was not enough. With only the supersession
+    check, the showcase incomplete-exam document landed on a patient who had died:
+    the manifest told the operator the right answer was "a repeat within three
+    months", and the assistant reading the record would have answered, correctly,
+    that the patient was dead. A demonstration cannot recover from that.
     """
     if procedure.superseded_by:
+        return False
+    if procedure.recall_status not in LIVE_RECALL_STATUSES:
+        return False
+    if procedure.patient.status != "active":
         return False
     if key == "high-grade-dysplasia":
         # Six millimetres and up. High-grade dysplasia in a 2 mm polyp happens,

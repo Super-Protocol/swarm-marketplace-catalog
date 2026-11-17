@@ -27,8 +27,11 @@ point while this was being written:
     colonoscopy reports no polyp beyond the point it was abandoned at. Both of
     these were wrong in the first draft, and the first put 265 phantom patients
     into the overdue cohort the demonstration is about.
-  * **A planted contradiction sits on a live recommendation**, not one a later
-    colonoscopy already answered.
+  * **A planted document is about a record that can still be acted on** — a live
+    recall, a recommendation no later colonoscopy has answered, and an active
+    patient. The showcase incomplete-exam document landed on a patient who had
+    died once, and the manifest went on telling the operator the right answer was
+    "a repeat within three months".
   * **Nobody is screened before screening starts** — "average-risk screening,
     age-appropriate" never appears on a patient under 45.
   * **An outreach outcome is possible on its channel**, and attempts ascend in
@@ -38,8 +41,10 @@ point while this was being written:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import hashlib
+import io
 import os
 import re
 import shutil
@@ -59,10 +64,15 @@ AS_OF = generate.AS_OF.isoformat()
 
 failures: list[str] = []
 
+#: Suppresses the `ok` lines. The seed sweep runs the same assertions over a
+#: dozen corpora and only the failures are worth reading.
+QUIET = False
+
 
 def check(condition: bool, message: str) -> None:
     if condition:
-        print(f"  ok    {message}")
+        if not QUIET:
+            print(f"  ok    {message}")
     else:
         print(f"  FAIL  {message}")
         failures.append(message)
@@ -98,9 +108,83 @@ def tree_digest(directory: str) -> str:
     return digest.hexdigest()
 
 
-def run(out: str, patients: int, seed: int) -> None:
-    code = generate.main(["--out", out, "--patients", str(patients), "--seed", str(seed)])
+def run(out: str, patients: int, seed: int, quiet: bool = False) -> None:
+    """Generate one corpus. `quiet` swallows the generator's own row-count table,
+    which is worth reading once and not once per seed in a sweep."""
+    sink = io.StringIO() if quiet else contextlib.nullcontext()
+    with contextlib.redirect_stdout(sink) if quiet else contextlib.nullcontext():
+        code = generate.main(["--out", out, "--patients", str(patients), "--seed", str(seed)])
     assert code == 0
+
+
+def check_placement(directory: str, tables: dict[str, list[dict]]) -> None:
+    """The assertions that depend on WHICH records the generator happened to pick.
+
+    Separated out because these are the ones a single seed cannot vouch for. Every
+    defect this generator has shipped was of this shape — a contradiction planted
+    on a superseded recommendation, a coordinator note about somebody's mother
+    attached to a man, the showcase document on a patient who had died — and each
+    was invisible under the one seed that was run and present under half the
+    others. Measured: without the `_eligible` guards, 7 of 16 seeds put a planted
+    contradiction on a non-active patient. `--seeds` runs this over a range.
+    """
+    manifest = open(os.path.join(directory, "MANIFEST.md"), encoding="utf-8").read()
+
+    for contradiction in notes.CONTRADICTIONS:
+        check(
+            f"`{contradiction['key']}`" in manifest or contradiction["consequence"] in manifest,
+            f"the planted contradiction {contradiction['key']!r} reached the manifest",
+        )
+
+    # A contradiction on a superseded recommendation is moot: "the record holds
+    # seven years" is not a finding when the next colonoscopy happened two years
+    # ago and closed the recall. Two of the five landed there in the first draft.
+    superseded = {
+        r["procedure_id"]: r["superseded_by"]
+        for r in tables["surveillance_recommendations"]
+        if r["superseded_by"]
+    }
+    contradiction_procs = re.findall(r"procedure `(PROC-\d+)`", manifest)
+    check(
+        len(contradiction_procs) >= len(notes.CONTRADICTIONS),
+        f"the manifest names a procedure for each contradiction ({len(contradiction_procs)})",
+    )
+    moot = [p for p in contradiction_procs if p in superseded]
+    check(not moot, f"no planted contradiction sits on a superseded recommendation ({moot})")
+    # Closed is not only "completed". A recall shut because the patient refused,
+    # was deferred on clinical grounds, transferred out or died has no next action
+    # left in it either, and a document proving the record wrong about a recall
+    # with no next action proves nothing. The first version of this check looked
+    # at `completed` alone and let the showcase incomplete-exam document land on a
+    # patient who had died.
+    status_for_rec = {r["recommendation_id"]: r["recall_status"] for r in tables["recalls"]}
+    rec_for_proc = {
+        r["procedure_id"]: r["recommendation_id"] for r in tables["surveillance_recommendations"]
+    }
+    closed = [
+        f"{p}:{status_for_rec.get(rec_for_proc.get(p, ''), 'none')}"
+        for p in contradiction_procs
+        if status_for_rec.get(rec_for_proc.get(p, "")) not in constants.LIVE_RECALL_STATUSES
+    ]
+    check(not closed, f"every planted contradiction sits on a live recall ({closed})")
+
+    # Every document the manifest hands the operator has to be about somebody the
+    # practice can still act on, in all three cohorts. A chart-abstraction queue
+    # containing dead patients is realistic; a demonstration that ends in "there
+    # is nothing to do about this one" is not.
+    status_for_mrn = {p["mrn"]: p["patient_status"] for p in tables["patients"]}
+    named_mrns = sorted(set(re.findall(r"CB-\d{7}", manifest)))
+    check(
+        len(named_mrns) >= 5,
+        f"the manifest names the patients its documents are about ({len(named_mrns)})",
+    )
+    inactive = [
+        f"{mrn}:{status_for_mrn.get(mrn, 'unknown')}"
+        for mrn in named_mrns
+        if status_for_mrn.get(mrn) != "active"
+    ]
+    check(not inactive, f"the patient behind every planted document is active ({inactive})")
+
 
 
 def main() -> int:
@@ -108,6 +192,13 @@ def main() -> int:
     parser.add_argument("--patients", type=int, default=1500)
     parser.add_argument("--seed", type=int, default=generate.DEFAULT_SEED)
     parser.add_argument("--keep", action="store_true", help="do not delete the generated corpora")
+    parser.add_argument(
+        "--seeds",
+        type=int,
+        default=1,
+        help="also run the placement assertions over this many consecutive seeds "
+        "(default 1 — just the one below). A generator is not vouched for by one seed.",
+    )
     args = parser.parse_args()
 
     workdir = tempfile.mkdtemp(prefix="cbdh-selftest-")
@@ -236,37 +327,7 @@ def main() -> int:
     formats = {os.path.splitext(name)[1] for name in on_disk}
     check(formats == {".pdf", ".docx", ".txt"}, f"all three formats are produced ({sorted(formats)})")
 
-    manifest = open(os.path.join(first, "MANIFEST.md"), encoding="utf-8").read()
-
-    for contradiction in notes.CONTRADICTIONS:
-        check(
-            f"`{contradiction['key']}`" in manifest or contradiction["consequence"] in manifest,
-            f"the planted contradiction {contradiction['key']!r} reached the manifest",
-        )
-
-    # A contradiction on a superseded recommendation is moot: "the record holds
-    # seven years" is not a finding when the next colonoscopy happened two years
-    # ago and closed the recall. Two of the five landed there in the first draft.
-    superseded = {
-        r["procedure_id"]: r["superseded_by"]
-        for r in tables["surveillance_recommendations"]
-        if r["superseded_by"]
-    }
-    contradiction_procs = re.findall(r"procedure `(PROC-\d+)`", manifest)
-    check(
-        len(contradiction_procs) >= len(notes.CONTRADICTIONS),
-        f"the manifest names a procedure for each contradiction ({len(contradiction_procs)})",
-    )
-    moot = [p for p in contradiction_procs if p in superseded]
-    check(not moot, f"no planted contradiction sits on a superseded recommendation ({moot})")
-    completed = {
-        r["recommendation_id"] for r in tables["recalls"] if r["recall_status"] == "completed"
-    }
-    rec_for_proc = {
-        r["procedure_id"]: r["recommendation_id"] for r in tables["surveillance_recommendations"]
-    }
-    closed = [p for p in contradiction_procs if rec_for_proc.get(p) in completed]
-    check(not closed, f"no planted contradiction sits on an already-closed recall ({closed})")
+    check_placement(first, tables)
 
     # Every identifying document must actually identify somebody who exists: a
     # note naming an MRN that is not in `patients` would make the reconciliation
@@ -442,6 +503,32 @@ def main() -> int:
         ).stdout
         check("MRN:" in text, f"{sample} extracts as text with its identifiers intact")
         check("?" not in text.replace("? ", ""), f"{sample} extracts without mojibake")
+
+    if args.seeds > 1:
+        print(f"\nthe same placement assertions over {args.seeds} seeds")
+        global QUIET
+        for seed in range(args.seed, args.seed + args.seeds):
+            corpus = os.path.join(workdir, f"seed-{seed}")
+            before = len(failures)
+            try:
+                run(corpus, args.patients, seed, quiet=True)
+            except Exception as error:  # a generator that cannot place a document
+                check(False, f"seed {seed}: the generator refused — {error}")
+                continue
+            seed_schema = open(
+                os.path.join(corpus, "schema.sql"), encoding="utf-8"
+            ).read()
+            seed_tables = {
+                name: load(corpus, seed_schema, name) for name in generate.TABLES
+            }
+            QUIET = True
+            try:
+                check_placement(corpus, seed_tables)
+            finally:
+                QUIET = False
+            if len(failures) == before:
+                print(f"  ok    seed {seed}")
+            shutil.rmtree(corpus)
 
     if not args.keep:
         shutil.rmtree(workdir)

@@ -83,6 +83,11 @@ into on its own:
 - **`cbdh_surveillance_recommendations.superseded_by`** — only the recommendation with this empty can
   be overdue. Without that, every historical recommendation on a patient with a long history
   looks past due.
+- **`cbdh_recalls.recall_status`** — a recall is only *live* when it is `not_yet_due`,
+  `due_soon`, `scheduled`, `overdue` or `lost_to_follow_up`. The rest are closed, and a document
+  that proves the record wrong about a closed recall proves nothing: "the right answer is a
+  repeat within three months" is not an answer about a patient who has died. Every planted
+  document therefore sits on a live recall and an active patient.
 - **`cbdh_procedures.cecal_intubation`** — null, not zero, for a flexible sigmoidoscopy. A
   sigmoidoscopy examines the left colon and stops by design; counting it as a colonoscopy that
   failed to reach the cecum both wrecks the cecal intubation rate and, if it is allowed to
@@ -115,12 +120,20 @@ cd generate
 ./generate.py --out ./out                   # 12,000 patients, ~131,000 rows, 44 documents
 ./generate.py --out ./out --patients 3000   # smaller
 ./selftest.py                               # determinism, integrity, the gaps, the anatomy, the card
-./selftest.py --patients 12000              # what CI runs as its second pass
+./selftest.py --patients 12000 --seeds 8    # what CI runs as its second pass
 ```
 
 `selftest.py` is what `.github/workflows/dataset-definitions.yml` runs on any change under
 `datasets/`. It needs PyYAML to read the card and `pdftotext` to confirm a generated PDF still
 extracts as text with its identifiers intact.
+
+`--seeds` matters more than it looks. Every defect this generator has shipped was
+**placement-dependent** — a contradiction planted on a recommendation a later colonoscopy had
+already answered, a coordinator note about somebody's mother attached to a man, the showcase
+document on a patient who had died — and each one was invisible under the single seed that was
+run and present under about half the others. Without the `_eligible` guards, 7 of 16 seeds put a
+planted contradiction on a patient the practice could no longer act on. One seed does not vouch
+for a generator, so CI re-runs the placement assertions over eight.
 
 `out/` gets the TSV tables, a `schema.sql`, a `load.sh`, the documents in `notes/`, and a
 `MANIFEST.md` — the operator's crib sheet, which names the five contradicting documents and says

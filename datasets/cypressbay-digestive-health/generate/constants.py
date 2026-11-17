@@ -71,6 +71,17 @@ SIGMOIDOSCOPY_REACH = 3  # rectum, sigmoid, descending
 #: The age at which average-risk colorectal cancer screening begins in the US.
 SCREENING_START_AGE = 45
 
+#: Recall statuses that still have a next action in them. Everything else is
+#: closed: the examination happened, the patient refused, moved, or died.
+#:
+#: This set is what a planted document has to sit on. A document that proves the
+#: record is wrong proves nothing when the record is closed — "the right answer is
+#: a repeat within three months" is not an answer about a patient who died, and an
+#: assistant that reads the row will say so, correctly, in front of the customer.
+LIVE_RECALL_STATUSES = frozenset(
+    {"not_yet_due", "due_soon", "scheduled", "overdue", "lost_to_follow_up"}
+)
+
 
 def reachable_segments(reach: int) -> list[str]:
     """The segments a scope that got `reach` segments in could have examined."""

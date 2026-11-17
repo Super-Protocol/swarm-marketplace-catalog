@@ -56,5 +56,16 @@ jobs:
       # The default corpus is what the stand runs on, and some properties only
       # appear at that size — every planted contradiction has to find a record it
       # can contradict, and each coordinator note a patient it fits.
-      - name: Self-test at the published size
-        run: python3 datasets/cypressbay-digestive-health/generate/selftest.py --patients 12000
+      #
+      # `--seeds` re-runs the placement assertions over a range, and that is the
+      # part worth having in CI. Every defect this generator has shipped was
+      # placement-dependent: a contradiction planted on a recommendation a later
+      # colonoscopy had answered, a coordinator note about somebody's mother
+      # attached to a man, the showcase document on a patient who had died. Each
+      # was invisible under the one seed that was run and present under half the
+      # others — measured, for the last of them, at 7 of 16. One seed does not
+      # vouch for a generator. Eight seeds at full size take about 30 seconds.
+      - name: Self-test at the published size, across seeds
+        run: |
+          python3 datasets/cypressbay-digestive-health/generate/selftest.py \
+            --patients 12000 --seeds 8
