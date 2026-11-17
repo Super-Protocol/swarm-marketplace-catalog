@@ -65,6 +65,23 @@ SECRET_STRIPPED = ("/data", "/stringData", "/immutable")
 
 SHAPES = [("a", "space-a"), ("b", "space-b")]
 
+# The kinds a cloud's collector actually scans — `EVIDENCE_COLLECTION_KINDS` in swarm-cloud's
+# deployment-evidence-canonical, read off `origin/develop` (2026-11-17).
+#
+# Comparing anything else reports differences that can never reach a digest, and the comparison
+# then cannot converge however much a listing excludes. `Job` is the one that bites: its name is
+# routinely derived — a hash of the consumer, or of the dataset bindings — so a chart that renders
+# one fails this check forever, with "rendered for one consumer and not the other" about an object
+# no cloud attests. `PersistentVolumeClaim` is out for the mirror reason: the instances a
+# `volumeClaimTemplates` makes exist online and not in a rendered manifest (SUP-416).
+#
+# `Pod` is collected and then dropped by the canonical rules, so there is nothing to compare.
+COLLECTED_KINDS = frozenset({
+    "Ingress", "Service", "Deployment", "StatefulSet", "DaemonSet", "CronJob",
+    "HorizontalPodAutoscaler", "PodDisruptionBudget", "ConfigMap", "Secret",
+    "ServiceAccount", "Role", "RoleBinding",
+})
+
 
 def escape(token: str) -> str:
     """RFC 6901: `~` is `~0` and `/` is `~1`, in that order."""
@@ -80,7 +97,7 @@ def render(chart: str, values: str, tag: str, namespace: str, overrides: list[st
 
     documents = {}
     for document in yaml.safe_load_all(manifests):
-        if document:
+        if document and document.get("kind") in COLLECTED_KINDS:
             documents[(document["kind"], document["metadata"]["name"])] = document
     return documents
 
@@ -155,8 +172,23 @@ def main(chart: str, values: str, app: str, overrides: list[str]) -> int:
             failures += 1
             continue
 
-        exclusions = declared(here)
-        for pointer in exclusions:
+        # What excludes a field is the annotation on the object as the CLOUD receives it, and the
+        # marketplace builds that by merging the chart's own annotation with every entry of the
+        # definition's `evidence.exclude` that matches the object (`stampEvidenceExclusions` in
+        # deployment-bundle.service.ts). So a definition entry genuinely excludes the field, and a
+        # check that only accepted the chart's annotation would refuse the one case the authoring
+        # guide names for the definition: an object rendered by a third-party chart, which cannot
+        # be annotated at all. Every `conversational-analyst` exclusion is of that kind — bitnami's
+        # Keycloak ConfigMap, the vendored Redis StatefulSet, the aivo config Deployment.
+        #
+        # The strictness this drops is still enforced, in the other direction, below: an exclusion
+        # on an object THIS chart owns must be in the chart's annotation, so "annotate your own
+        # chart" survives.
+        exclusions = declared(here) + [
+            pointer for kind_, name_, pointer in (from_listing or ())
+            if (not kind_ or kind_ == kind) and (not name_ or name_ == name)
+        ]
+        for pointer in declared(here):
             if not resolves(here, pointer):
                 print(f"  FAIL  {kind}/{name} excludes {pointer}, which the rendered object has no field at")
                 failures += 1
