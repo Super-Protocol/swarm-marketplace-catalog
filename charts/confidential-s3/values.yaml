@@ -58,7 +58,7 @@ gateway:
   image:
     registry: ghcr.io
     repository: super-protocol/confidential-s3/gateway
-    digest: sha256:63149695e3e69bc041e319e72f4c198d0cf14b18a56c8d6a4d8eb5a320f47509
+    digest: sha256:a7cf9ed56f79cd9f5a35f8ff66b6b11ec261620d76b6c39e51cbd91a0d9c1191
     tag: ""
     pullPolicy: IfNotPresent
   replicaCount: 1
@@ -108,7 +108,7 @@ api:
   image:
     registry: ghcr.io
     repository: super-protocol/confidential-s3/api
-    digest: sha256:192a6d74ab493720ad817ba8e424307b1149c40a036e95eebc8791f2975894a2
+    digest: sha256:99bb3193982551c76e687f65a32d9ecce1beb3f63c58eb6502b52ed701f98252
     tag: ""
     pullPolicy: IfNotPresent
   replicaCount: 1
@@ -150,7 +150,7 @@ console:
   image:
     registry: ghcr.io
     repository: super-protocol/confidential-s3/console
-    digest: sha256:63af03a01c7a79ff93f25b83d072016579e12a122834b66d502c69ad671b2870
+    digest: sha256:2157650a08c26348d34e68475b847e2c08fb0e78c85039ceb050567403341ba7
     tag: ""
     pullPolicy: IfNotPresent
   replicaCount: 1
