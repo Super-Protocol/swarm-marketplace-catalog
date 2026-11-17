@@ -472,12 +472,17 @@ externalEndpoints:
   #
   # The build has to be one whose supervisor *waits* while the rendered file has
   # no endpoint (confidential-router SUP-229, `main-481445c` or later; pinned:
-  # `main-37ed4ba`, published as gatekeeper release `0.3.2`, which also verifies
-  # Azure CVM roots, SUP-251, looks measurements up in the real registry layout,
-  # SUP-255, closes an idle upstream connection before it is reused, SUP-289,
-  # and re-attests on demand instead of latching deny until the next tick,
-  # SUP-422): a fresh deployment renders exactly that, and an older build exits
-  # on it and keeps the API pod un-Ready (SUP-248).
+  # `main` at `0c5f34f`, which also verifies Azure CVM roots, SUP-251, looks
+  # measurements up in the real registry layout, SUP-255, closes an idle
+  # upstream connection before it is reused, SUP-289, re-attests on demand
+  # instead of latching deny until the next tick, SUP-422, and answers
+  # `--healthcheck`, SUP-583): a fresh deployment renders exactly that, and an
+  # older build exits on it and keeps the API pod un-Ready (SUP-248).
+  #
+  # Since chart 0.14.0 the sidecar has a liveness probe that execs
+  # `gatekeeper-sidecar --healthcheck`, so a build older than `0c5f34f` is not
+  # merely stale here — it has no such flag, and the probe would restart the
+  # container every two minutes for ever.
   # `charts/tests/sidecar_boot.sh` checks it.
   image:
     registry: ghcr.io

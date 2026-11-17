@@ -41,6 +41,7 @@ The release name and namespace are fixed per listing (`cr` / `confidential-route
 | `s3-external-postgres` | `postgresql.enabled: false` with a DSN of the deployment's own |
 | `s3-explicit-credentials` | a real master key and a real Garage credential instead of seeds; the chart checks both shapes rather than trusting them |
 | `s3-large-volumes` | the large end of the form, and the engine's layout capacity, which is derived from the data volume rather than set beside it |
+| `model-server-two-engines` | two models on one card (SUP-332): the `engines` shape — one container, two command lines in the attested `engines.json`, a weights manifest and a prefix each, and the only case with no listing behind it, because nothing published serves two models yet |
 
 The model server was otwld's `ollama` chart up to listing 0.12.x. It is
 `confidential-router-ollama` from 0.13.0, because a router serving only external
@@ -68,11 +69,43 @@ cannot answer the question:
   here, to the confidential-s3 gateway's Service, and it presented as an S3 endpoint answering
   503 through an Ingress pointing at nothing.
 
+- **Every engine in the pod is published, authenticated and alone on its port**
+  (`engine_routing.py`). Three agreements between the Ingress, the Service and the engines' own
+  command lines, each of which renders perfectly from one side while serving nothing from the
+  other: the published path is the engine's own `--root-path` (publish `/coder/v1` to an engine
+  that was not told that prefix and every request is a 404), the Ingress backend is that engine's
+  port (crossing two differs by one digit and serves each model under the other's name, with the
+  pod Ready), and nothing published escapes `/v1`. It also holds the two things that are true of
+  one engine or ten: the key is on no command line — including the ones that moved into a
+  ConfigMap — and exactly one container asks for the card while every other one asks for zero in
+  writing.
+
+- **A prefixed path is authenticated, not merely routed** (`root_path_guard.py`). The assumption
+  the whole shared-card routing rests on, and the only one whose failure is a security hole rather
+  than an outage: vLLM compares a request's path against `("/v1", "/v2", "/inference")` to decide
+  whether to demand the key, so an engine that routed `/coder/v1/...` without stripping its root
+  path first would serve an unauthenticated inference endpoint on a public hostname. It holds
+  because the middleware strips `scope["root_path"]` and Starlette strips it again; the check drives
+  vLLM's middleware, copied verbatim, over a FastAPI app as an ASGI app. The versions that serve are
+  the pinned image's — this is the canary for the semantics moving under a later engine bump.
+
+- **The supervisor does what Kubernetes would have done for a second container**
+  (`supervisor_guard.py`). Engines that share a GPU share a container, because a device is
+  allocated to a container; so noticing that one died, stopping it on a delete and keeping its logs
+  apart are all this repository's job now. Exercised with fake engines — an engine is whatever
+  `engines.json` says it is — over every promise `files/run-engines.py` makes, plus the readiness
+  probe beside it, which is the only thing that makes "Ready" mean both models.
+
 - **Every image pinned by a real digest** (`digests.py`). The cases set their image digests
   explicitly, so the goldens stay stable across an image bump — and say nothing about what the
   chart itself would pull. A listing overrides the defaults too, which leaves an empty or
   placeholder default invisible until somebody runs `helm install` with no `--set`, or until a
   chart is published to an append-only repository carrying a digest nobody can pull.
+
+  Whether that digest names an image anyone built from a revision we reviewed is a different
+  question, and `digests.py` cannot ask it: a well-formed digest of nothing in particular
+  passes here. `scripts/verify-pins/` asks it, of every chart and every listing, by verifying
+  the attestation over each first-party digest and reading the source commit out of it.
 - **No consumer value in an attested manifest** (`consumer_fields.py`). The two-consumer render
   below cannot see this one: it renders the chart with fixed values, while `consumer.*` is
   resolved by the marketplace when it turns a definition into values — so the gap is the seam
@@ -127,6 +160,17 @@ cannot answer the question:
   list of every route the pinned API mounts, each marked published or internal, against the
   rendered Ingress. The router's source is not here, so when bumping the API image run it with
   `ROUTER_SRC=<checkout>`: a controller route the list does not name fails.
+- **The route scan reads every decorator shape, or says which it cannot**
+  (`route_decorators.py`). That scan reads controllers as text, so its one unacceptable failure is
+  the silent one: a decorator it could not read used to contribute no route, and a route it does
+  not see reads as every route named. `@Post([CONSOLE_EVENTS_PATH, LEGACY_CONSOLE_EVENTS_PATH])`
+  was that miss — the console ingest moved to `/v1/console-events` in SUP-463 and nothing said so
+  (SUP-482). It now reads an empty argument, an inline path, an array of them and a module-level
+  `const NAME = 'path'`, and reports any other shape with its file and line. The `*.controller.ts`
+  name is checked the same way rather than trusted — it is this repository's expectation and not
+  Nest's requirement, so a controller under another name would otherwise be a route nobody reads,
+  which is SUP-275 one filename away. Each shape is exercised here against fixture controllers,
+  and each case asserts either the routes declared or a failure naming where — never nothing.
 - **Mail configuration moves nothing attested** (`mail_invariance.py`). The router case is
   rendered with no mail, with SMTP under two different hosts, senders and credentials, and with
   Resend, and every attested field has to be identical across all four — not merely excluded:

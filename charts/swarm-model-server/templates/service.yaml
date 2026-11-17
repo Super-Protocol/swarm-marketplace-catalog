@@ -1,3 +1,5 @@
+{{- $e := dict -}}
+{{- include "swarm-model-server.engines" (dict "ctx" . "out" $e) -}}
 apiVersion: v1
 kind: Service
 metadata:
@@ -7,9 +9,13 @@ metadata:
 spec:
   type: {{ .Values.service.type }}
   ports:
-    - name: http
-      port: {{ .Values.service.port }}
-      targetPort: http
+    {{- /* One port per engine. They share a pod, so they cannot share a port;
+           the Ingress routes each engine's prefix to the port named here. */}}
+    {{- range $engine := $e.engines }}
+    - name: {{ $engine.portName }}
+      port: {{ $engine.servicePort }}
+      targetPort: {{ $engine.portName }}
       protocol: TCP
+    {{- end }}
   selector:
     {{- include "swarm-model-server.selectorLabels" . | nindent 4 }}

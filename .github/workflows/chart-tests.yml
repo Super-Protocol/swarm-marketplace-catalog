@@ -39,10 +39,16 @@ jobs:
         with:
           python-version: '3.12'
 
-      # For the evidence-drift check, which reads the rendered objects rather
-      # than grepping them: an exclusion is a JSON pointer, and whether it still
-      # lands on the field it names is not a question `grep` can answer.
-      - run: pip install --quiet pyyaml
+      # pyyaml for the evidence-drift check, which reads the rendered objects
+      # rather than grepping them: an exclusion is a JSON pointer, and whether it
+      # still lands on the field it names is not a question `grep` can answer.
+      #
+      # fastapi for root_path_guard.py, which is a canary rather than a copy of
+      # the engine: the versions that serve are the pinned image's, and what this
+      # catches is `--root-path` stopping short of authenticating the prefixed
+      # path in a *later* framework than the one measured against. Without it the
+      # check skips with a note, which is a check nobody runs.
+      - run: pip install --quiet pyyaml fastapi
 
       - name: Lint, render, diff
         run: charts/tests/run.sh

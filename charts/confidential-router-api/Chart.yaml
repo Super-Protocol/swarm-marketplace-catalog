@@ -389,7 +389,48 @@ type: application
 #
 # No migration: service logic and two config defaults, no entity or schema
 # change.
-version: 0.13.10
+#
+# 0.14.0 (SUP-583) gives the egress sidecar a liveness probe. It had neither
+# probe, so when its admin API stopped answering on production the container
+# stayed `restartCount: 0`, `Ready` stayed true, the pod stayed Ready and
+# nothing restarted it for 4.5 days — while the router went on serving a model
+# whose verdict it could no longer re-check. This is the in-pod version of
+# "Ready is not serving", and it is the second time that family has cost us
+# production time.
+#
+# A minor and not a patch: the template changes, so the attested pod spec gains
+# a block and anyone pinning this deployment's evidence digest re-pins once. No
+# values change, and the `readinessProbe` this block has always argued against
+# is still absent — "is it serving?" needs a verdict, and a probe that reported
+# healthy while every endpoint was fail-closed would be worse than none.
+#
+# The probe is an `exec` of `gatekeeper-sidecar --healthcheck`, and both halves
+# of that are load-bearing. The admin listener is on loopback, which the kubelet
+# cannot dial — it probes the pod IP — so an `httpGet` would mean a listener on
+# an interface ADR-008 does not grant this container; and that listener does not
+# exist at all until router-api has rendered an endpoint, so an `httpGet` would
+# restart the state every deployment ships in, for ever. The check inside the
+# container is healthy while there is nothing to run, healthy when the admin API
+# answers whatever it says, and unhealthy only when a runnable configuration has
+# an admin API that does not answer.
+#
+# The `⚠ not publishable` this entry carried while the branch sat is cleared,
+# and not by this change: `--healthcheck` is new in confidential-router#176,
+# and 0.13.10 moved both `externalEndpoints.image.digest` and `image.digest` to
+# builds of `main` at `0c5f34f` — six days past #176's merge — so the binary the
+# probe execs has the flag and the two router-api halves of SUP-583 are in the
+# API image beside it. A probe against the pre-#176 build would have exec'd a
+# binary that prints usage and exits 2, and Kubernetes would have restarted the
+# sidecar every two minutes for ever; that is the state 0.13.10 walked out of.
+#
+# So no digest moves here and no listing has to move an override: a listing
+# pinning this chart version gets an image that answers the probe. What a
+# listing must not do is take this chart version with an `externalEndpoints.
+# image.digest` override older than `0c5f34f`. This is the follow-up the
+# SUP-537 train named: it shipped the binary's half of SUP-583 and left the
+# probe to 0.14.0, so a wedged sidecar has been caught by `expireVerdict` in
+# the API and by nothing that could restart the container.
+version: 0.14.0
 appVersion: "0.4.1"
 dependencies:
   # Three PostgreSQL instances under Patroni, one per node, with synchronous
