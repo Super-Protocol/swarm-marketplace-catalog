@@ -1,0 +1,29 @@
+{{/*
+How many web pods the cluster may take away at once (AIV-2368).
+
+Without a budget a node drain evicts every api pod it hosts in one go, and with
+two replicas on one node — which is what happens on a cluster small enough for
+the soft anti-affinity to give up — that is the whole backend at once. The
+eviction API honours this; a `kubectl delete pod` does not, and neither does a
+node that fails.
+
+Rendered only for more than one replica by default; `enabled` decides it
+outright, see `app.pdbEnabled`.
+*/}}
+{{- $pdb := .Values.back.podDisruptionBudget }}
+{{- if $pdb }}
+{{- $replicas := ternary .Values.autoscaling.minReplicas .Values.back.replicaCount .Values.autoscaling.enabled }}
+{{- if include "app.pdbEnabled" (dict "pdb" $pdb "replicas" $replicas) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "app.fullname" . }}-back
+  labels:
+    {{- include "app.labelsBack" . | nindent 4 }}
+spec:
+  {{- include "app.pdbSpec" (dict "pdb" $pdb "key" "retail-ai.back.podDisruptionBudget") | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "app.selectorLabelsBack" . | nindent 6 }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,16 @@
+imagePullSecret:
+  username: marketplace-reader
+  password: REGTOKEN
+postgresql:
+  auth: { password: "SECRET-AAAAAAAAAAAA" }
+  databases:
+    - { name: retail_ai, owner: retail_ai_user, password: "SECRET-AAAAAAAAAAAA", extensions: [vector, pg_trgm] }
+    - { name: retail_ai_identity, owner: identity_user, password: "SECRET-AAAAAAAAAAAA" }
+    - { name: retail_ai_checkpointer, owner: checkpointer_user, password: "SECRET-AAAAAAAAAAAA" }
+    - { name: keycloak, owner: keycloak_user, password: "SECRET-AAAAAAAAAAAA" }
+redis:
+  global: { redis: { password: "SECRET-AAAAAAAAAAAA" } }
+garage:
+  credentials: { accessKeyId: analyst-s3, secretAccessKey: "SECRET-AAAAAAAAAAAA" }
+  rpcSecret: "SECRET-AAAAAAAAAAAA"
+  adminToken: "SECRET-AAAAAAAAAAAA"

@@ -1,0 +1,51 @@
+{{- if .Values.networkPolicy.enabled }}
+{{/*
+Ingress fence around the connector (AIV-2337 §4): only the api pods may call a
+tool that sends messages to the outside world.
+
+Enabled with no peers at all is refused outright rather than rendered, exactly
+as retail-ai's back.networkpolicy.yaml does. An ingress rule whose `from` is
+empty does not close the port, it opens it: per the NetworkPolicy API, "if this
+field is empty or missing, this rule matches all sources". That would leave the
+fence standing wide open while looking installed, which is worse than not
+having it.
+*/}}
+{{- $fromApi := and .Values.networkPolicy.fromApi .Values.networkPolicy.apiPodNames }}
+{{- if and (not $fromApi) (not .Values.networkPolicy.extraFrom) }}
+{{- fail "mcp-telegram.networkPolicy is enabled with no peers: fromApi is off (or apiPodNames is empty) and extraFrom is empty, which renders `from:` empty — and an empty `from` matches EVERY source rather than none." }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mcp-telegram.fullname" . }}
+  labels:
+    {{- include "mcp-telegram.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "mcp-telegram.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- if $fromApi }}
+        # The api pods of this release — the only caller of the connector.
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  {{- toYaml .Values.networkPolicy.apiPodNames | nindent 18 }}
+        {{- end }}
+        {{- with .Values.networkPolicy.extraFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: http
+    {{- with .Values.networkPolicy.extraIngress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

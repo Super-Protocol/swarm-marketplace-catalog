@@ -1,19 +1,40 @@
 apiVersion: v2
 name: conversational-analyst-platform
-description: Backing services for the analyst — PostgreSQL, Redis, NATS, MinIO and a Neo4j knowledge graph.
+description: Backing services for the analyst — PostgreSQL with pgvector, Redis, NATS and S3 object storage.
 type: application
-version: 0.3.2
-appVersion: "1.0.0"
+# 0.4.0 is the 1.17 platform. Three things changed.
+#
+#   * PostgreSQL now has to carry `pgvector`: the schema catalogue, the semantic
+#     model and the knowledge index live there, and without the extension the
+#     index comes up with no embedding column and schema search silently answers
+#     from text alone.
+#   * The Neo4j knowledge graph is GONE. Agent 1.17 has no graph backend at all,
+#     so a Neo4j in this namespace was 10Gi of storage and 4Gi of quota nothing
+#     connected to.
+#   * Object storage is Garage, not MinIO. Not a preference: MinIO's images stopped
+#     being anonymously pullable (`quay.io/minio/minio` and `docker.io/minio/minio`
+#     both refuse an unauthenticated manifest request for every tag, checked
+#     2026-11-17), so the two the 0.3.x chart pinned cannot be fetched — and the
+#     agent keeps every uploaded file and every export in that bucket. Garage is
+#     also what the vendor's own 1.x delivery profile ships.
+version: 0.4.0
+appVersion: "1.17.0"
 dependencies:
+  # Not the bitnami chart: its images do not ship the `vector` extension
+  # (checked upstream on 16.6.0-debian-12-r0 and 17.3.0-debian-12-r1), and
+  # without it the agent's knowledge index has no embedding column and schema
+  # search silently degrades to text alone. This is the vendor's own chart over
+  # `pgvector/pgvector`, which also creates the databases, roles and extensions
+  # from a Secret rather than from a ConfigMap.
   - name: postgresql
-    version: 16.4.10
-    repository: "file://../vendor/postgresql"
+    version: 0.1.0
+    repository: "file://../vendor/aivo-postgresql"
   - name: redis
     version: 20.7.1
     repository: "file://../vendor/redis"
   - name: nats
     version: 2.12.3
     repository: "file://../vendor/nats"
-  - name: minio
-    version: 5.0.11
-    repository: "file://../vendor/minio"
+  - name: garage
+    version: 0.2.0
+    repository: "file://../vendor/aivo-garage"

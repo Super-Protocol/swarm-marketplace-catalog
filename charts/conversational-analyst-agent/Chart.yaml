@@ -1,9 +1,22 @@
 apiVersion: v2
 name: conversational-analyst-agent
-description: The analyst itself — backend, frontend and its supporting services.
+description: The analyst itself — backend, background worker, frontend and its supporting services.
 type: application
-version: 0.4.2
-appVersion: "1.0.0"
+# 0.5.0 is the 1.17 agent, and the change is not an image bump.
+#
+#   * The model is no longer a configuration value. `llmSmart` / `llmFast` are gone from
+#     the api's own schema: a model is a row in the installation's registry, chosen per
+#     dialog, and something has to put the first one there (the grounding component does).
+#   * The knowledge base is no longer a graph. The schema catalog, the semantic model and
+#     the knowledge index live in PostgreSQL with pgvector; Neo4j is not a backend the api
+#     knows about any more.
+#   * The identity service has a database of its own and will not start without it.
+#   * Autopilots and signals run on background queues, which need the `worker` Deployment
+#     the 0.4.x chart did not have.
+#   * The configuration document is split: endpoints and thresholds attested in a
+#     ConfigMap, credentials in a Secret (see charts/vendor/aivo/VENDORED.md).
+version: 0.5.0
+appVersion: "1.17.0"
 dependencies:
   - name: aivo
     version: 0.1.0

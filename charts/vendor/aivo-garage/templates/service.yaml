@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "garage.fullname" . }}
+  labels:
+    {{- include "garage.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: s3
+      port: {{ .Values.service.port }}
+      targetPort: s3
+      protocol: TCP
+  selector:
+    {{- include "garage.selectorLabels" . | nindent 4 }}
+---
+{{/* Headless-сервис нужен StatefulSet'у: без него у пода нет стабильного имени.
+     Здесь у него есть и вторая работа — по нему в админ-API ходит Job, который
+     заводит бакеты.
+
+     publishNotReadyAddresses — обычная для StatefulSet'а вещь: имя пода обязано
+     резолвиться с первой секунды, а не с момента, когда он стал Ready. Здесь у
+     флага есть и второй смысл: Job, который заводит бакеты, ходит по этому же
+     имени, и с ним его ожидание выглядит как «ждём garage» в собственном
+     журнале, а не как «no route to host» на сервисе без адресов.
+
+     Порт S3 здесь тоже есть — headless-сервис обязан описывать порты пода
+     целиком, иначе StatefulSet теряет часть DNS-записей. */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "garage.fullname" . }}-headless
+  labels:
+    {{- include "garage.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: s3
+      port: {{ .Values.service.port }}
+      targetPort: s3
+      protocol: TCP
+    - name: admin
+      port: {{ .Values.adminPort }}
+      targetPort: admin
+      protocol: TCP
+  selector:
+    {{- include "garage.selectorLabels" . | nindent 4 }}

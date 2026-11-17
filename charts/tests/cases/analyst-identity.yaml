@@ -1,0 +1,23 @@
+internalSecret: "SECRET-AAAAAAAAAAAA"
+appHostname: alpha.conf-apps.superprotocol.dev
+# Three organisations: a clinic that owns the data, the operator that runs the agent, and a
+# partner that brings its own model. The product has only `org-admin` and `org-member`, so the
+# tenant IS the boundary and three of them are how one party is shown to be out of another's
+# reach. `analyst-identity-single` is the same chart with the second and third left blank.
+organizations:
+  - { name: "Alpha Clinic", alias: "alpha" }
+  - { name: "Alpha Operations", alias: "operator" }
+  - { name: "Beta Pharma", alias: "pharma" }
+demoUser:
+  username: "ann@alpha.example"
+  email: "ann@alpha.example"
+  firstName: "Ann Alpha"
+  lastName: ""
+keycloak:
+  auth: { adminPassword: "SECRET-AAAAAAAAAAAA" }
+  externalDatabase: { password: "SECRET-AAAAAAAAAAAA" }
+  extraEnvVars:
+    - { name: KC_HOSTNAME_STRICT, value: "false" }
+    - { name: KC_HTTP_ENABLED, value: "true" }
+    - { name: KEYCLOAK_EXTRA_ARGS, value: "--features organization" }
+    - { name: RAI_SERVICE_DISCOVERY_URL, value: "http://analyst-service-discovery" }

@@ -1,0 +1,143 @@
+{{- if .Values.worker.enabled }}
+# The api's background queues, run by their own pods (AIV-1265).
+#
+# Same image, same args, same centralized config as the backend — the one thing
+# that differs is RAI_PROCESS_ROLE, which the config service cannot express
+# because it answers per service identity and both Deployments are the `api`
+# service. A worker pod boots without an HTTP adapter: it drains the queues and
+# answers `/healthz`, nothing else, so it is deliberately NOT behind the backend
+# Service and carries its own labels.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "app.fullname" . }}-worker
+  labels:
+    {{- include "app.labelsWorker" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicaCount }}
+  {{- with .Values.worker.updateStrategy }}
+  {{- if .type }}
+  strategy:
+    type: {{ .type }}
+    {{- if and (eq .type "RollingUpdate") .rollingUpdate }}
+    rollingUpdate:
+      {{- toYaml .rollingUpdate | nindent 6 }}
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "app.selectorLabelsWorker" . | nindent 6 }}
+  template:
+    metadata:
+      {{- if or .Values.global.caCert.enabled .Values.podAnnotations }}
+      annotations:
+        {{- if .Values.global.caCert.enabled }}
+        # The CA bundle is a ConfigMap too, and NODE_EXTRA_CA_CERTS is read once
+        # when node starts — a rotated chain has to roll the pods to take effect.
+        checksum/ca-cert: {{ .Values.global.caCert.content | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      labels:
+        {{- include "app.labelsWorker" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      # A job in flight survives the rolling update instead of being restarted
+      # from scratch on the next pod: the shutdown hook gets this long to close
+      # the queues and let the running job finish (AIV-1288).
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
+      {{- with (include "app.backServiceAccountName" .) }}
+      # The same account the backend runs as: a worker evaluates the license on
+      # the same graph and needs the kube-system namespace UID too (AIV-892).
+      serviceAccountName: {{ . }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: {{ .Chart.Name }}
+        {{- with .Values.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        image: "{{ .Values.back.image.repository }}:{{ .Values.back.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.back.image.pullPolicy }}
+        args: {{ .Values.back.config.args }}
+        env:
+        - name: NODE_OPTIONS
+          value: "--max-old-space-size={{ .Values.worker.config.maxOldSpaceSize | default .Values.back.config.maxOldSpaceSize }}"
+        - name: PORT
+          value: {{ .Values.back.config.port | quote }}
+        - name: RAI_PROCESS_ROLE
+          value: worker
+        - name: RAI_SERVICE_DISCOVERY_URL
+          value: http://{{ .Release.Name }}-service-discovery
+        {{- if .Values.global.caCert.enabled }}
+        - name: NODE_EXTRA_CA_CERTS
+          value: /etc/ssl/certs/x5-ca-chain.pem
+        {{- end }}
+        {{- with .Values.worker.extraEnv }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        ports:
+        # Serves the healthz probe and nothing else; there is no Service in
+        # front of it.
+        - name: http
+          containerPort: {{ .Values.back.config.port }}
+          protocol: TCP
+        {{- with (int .Values.worker.preStopSleepSeconds) }}
+        # Keeps the pod serving while it leaves the EndpointSlice and kube-proxy /
+        # the ingress catch up; SIGTERM only follows the hook (AIV-2402).
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sleep", "{{ . }}"]
+        {{- end }}
+        {{- with (.Values.worker.livenessProbe | default .Values.livenessProbe) }}
+        livenessProbe:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- with (.Values.worker.readinessProbe | default .Values.readinessProbe) }}
+        readinessProbe:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- with .Values.worker.resources }}
+        resources:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- if .Values.global.caCert.enabled }}
+        volumeMounts:
+        - name: ca-cert
+          mountPath: /etc/ssl/certs/x5-ca-chain.pem
+          subPath: ca-chain.pem
+          readOnly: true
+        {{- end }}
+      {{- if .Values.global.caCert.enabled }}
+      volumes:
+        - name: ca-cert
+          configMap:
+            name: {{ .Release.Name }}-ca-cert
+      {{- end }}
+      {{- with .Values.worker.nodeSelector | default .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (include "app.roleAffinity" (dict "explicit" (.Values.worker.affinity | default .Values.affinity) "podAntiAffinity" .Values.worker.podAntiAffinity "selector" (include "app.selectorLabelsWorker" .))) }}
+      affinity:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations | default .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -17,6 +17,25 @@ data:
         {{- if .Values.config.services.ui.logoutUrl }}
         logoutUrl: {{ .Values.config.services.ui.logoutUrl | quote }}
         {{- end }}
+        {{- with .Values.config.services.ui.analytics }}
+        # Product analytics, posthog-js in the browser (AIV-1074, docs/analytics.md
+        # in aivoagent/agent). Omitted entirely unless set, so the UI's own default
+        # (disabled) applies and a stand without PostHog sends nothing.
+        #
+        # `enabled` is guarded with `hasKey`, not truthiness: `enabled: false` is a
+        # meaningful value (an explicit kill-switch on a stand that has host/key
+        # configured) and an `if` would drop it.
+        analytics:
+          {{- if hasKey . "enabled" }}
+          enabled: {{ .enabled }}
+          {{- end }}
+          {{- if .posthogHost }}
+          posthogHost: {{ .posthogHost | quote }}
+          {{- end }}
+          {{- if .posthogKey }}
+          posthogKey: {{ .posthogKey | quote }}
+          {{- end }}
+        {{- end }}
         {{- end }}
     - name: instance
       version: '*'
@@ -37,14 +56,10 @@ data:
           {{- if .Values.config.services.instance.brand.title }}
           title: {{ .Values.config.services.instance.brand.title | quote }}
           {{- end }}
-          {{- if .Values.config.services.instance.brand.theme }}
-          theme:
-            {{- if .Values.config.services.instance.brand.theme.primaryColor }}
-            primaryColor: {{ .Values.config.services.instance.brand.theme.primaryColor | quote }}
-            {{- end }}
-            {{- if .Values.config.services.instance.brand.theme.secondaryColor }}
-            secondaryColor: {{ .Values.config.services.instance.brand.theme.secondaryColor | quote }}
-            {{- end }}
+          {{- if .Values.config.services.instance.brand.docsUrl }}
+          # The «Документация» button in the section menu (AIV-3005); omitted —
+          # no button, unless the global admin («Внешний вид») sets a link.
+          docsUrl: {{ .Values.config.services.instance.brand.docsUrl | quote }}
           {{- end }}
           {{- if .Values.config.services.instance.brand.favicon }}
           favicon: |-
@@ -93,6 +108,46 @@ data:
             synchronize: {{ .Values.config.services.api.db.config.synchronize }}
             autoLoadEntities: {{ .Values.config.services.api.db.config.autoLoadEntities }}
             logging: {{ .Values.config.services.api.db.config.logging }}
+            {{- /*
+              Deadlines of the api's own PostgreSQL pool (AIV-2018), and the
+              size of it (AIV-2371). Rendered only when the installation sets
+              the block, so a configuration that says nothing here keeps the
+              api's own defaults — `max: 10`, a 5 s acquire deadline, TCP
+              keepalive on, a 120 s server-side statement ceiling — and the
+              rendered ConfigMap of an existing stand does not move.
+
+              `max` is the key a multi-replica installation has to answer for:
+              it is per PROCESS, so the server sees it once per `back` and once
+              per `worker` pod, alongside the two pools of
+              `checkpointer.pool` below. See «Соединения к PostgreSQL» in the
+              retail-ai chart's README for the arithmetic.
+
+              Booleans go through `hasKey`, not truthiness: `keepAlive: false`
+              is a meaningful value and an `if` would drop it and hand back the
+              opposite default. `statementTimeoutMs` is the same case — 0 means
+              "no ceiling" and must survive.
+            */}}
+            {{- with .Values.config.services.api.db.config.pool }}
+            pool:
+              {{- if hasKey . "max" }}
+              max: {{ .max }}
+              {{- end }}
+              {{- if hasKey . "connectionTimeoutMs" }}
+              connectionTimeoutMs: {{ .connectionTimeoutMs }}
+              {{- end }}
+              {{- if hasKey . "idleTimeoutMs" }}
+              idleTimeoutMs: {{ .idleTimeoutMs }}
+              {{- end }}
+              {{- if hasKey . "keepAlive" }}
+              keepAlive: {{ .keepAlive }}
+              {{- end }}
+              {{- if hasKey . "keepAliveInitialDelayMs" }}
+              keepAliveInitialDelayMs: {{ .keepAliveInitialDelayMs }}
+              {{- end }}
+              {{- if hasKey . "statementTimeoutMs" }}
+              statementTimeoutMs: {{ .statementTimeoutMs }}
+              {{- end }}
+            {{- end }}
         embeddings:
           provider: {{ .Values.config.services.api.embeddings.provider }}
           model: {{ .Values.config.services.api.embeddings.model | quote }}
@@ -127,22 +182,47 @@ data:
             region: {{ .Values.config.services.api.pythonExecutor.config.region | quote }}
             {{- end }}
         recursionLimit: {{ .Values.config.services.api.recursionLimit }}
+        {{- /*
+          baseURL пишется на ЛЮБОМ провайдере, у которого он задан (AIV-1708).
+          Схема api принимает его у всех трёх (`OpenAiConfigSchema`,
+          `GoogleConfigSchema`, `DeepSeekConfigSchema`), и у google это не
+          OpenAI-совместимый адрес, а корень нативного API без версии: SDK сам
+          дописывает `/{apiVersion}/models/{model}:{task}` (AIV-1340). Условие
+          `provider == openai` осталось с тех пор, когда google базового
+          адреса не принимал вовсе, и молча выбрасывало адрес у установки,
+          настроенной на Google-совместимый шлюз.
+          Пустое значение по-прежнему не пишется: `baseURL: ""` у нативного
+          клиента означал бы запросы к пустому адресу, а не «к провайдеру по
+          умолчанию».
+        */}}
         llmSmart:
           provider: {{ .Values.config.services.api.llmSmart.provider }}
           apiKey: {{ .Values.config.services.api.llmSmart.apiKey | quote }}
           model: {{ .Values.config.services.api.llmSmart.model | quote }}
           temperature: {{ .Values.config.services.api.llmSmart.temperature }}
-          {{- if and (eq .Values.config.services.api.llmSmart.provider "openai") .Values.config.services.api.llmSmart.baseURL }}
+          {{- if .Values.config.services.api.llmSmart.baseURL }}
           baseURL: {{ .Values.config.services.api.llmSmart.baseURL | quote }}
           {{- end }}
+        {{- /*
+          llmFast пишется, только если установка его задала (AIV-1998). На 1.0
+          ключа нет в схеме api вовсе — `refactor(api): one model per run —
+          llmFast is gone`, — и установка, которая его не задаёт, не должна
+          получать в конфиге блок с примером из values этого чарта
+          (`sk-your-openai-api-key-here` / `gpt-4o-mini`): api 1.0 такой ключ
+          молча отбросит, а человек, читающий ConfigMap стенда, увидит модель,
+          которой там нет. Установки на 0.x задают ключ у себя и рендерятся
+          как раньше.
+        */}}
+        {{- with .Values.config.services.api.llmFast }}
         llmFast:
-          provider: {{ .Values.config.services.api.llmFast.provider }}
-          apiKey: {{ .Values.config.services.api.llmFast.apiKey | quote }}
-          model: {{ .Values.config.services.api.llmFast.model | quote }}
-          temperature: {{ .Values.config.services.api.llmFast.temperature }}
-          {{- if and (eq .Values.config.services.api.llmFast.provider "openai") .Values.config.services.api.llmFast.baseURL }}
-          baseURL: {{ .Values.config.services.api.llmFast.baseURL | quote }}
+          provider: {{ .provider }}
+          apiKey: {{ .apiKey | quote }}
+          model: {{ .model | quote }}
+          temperature: {{ .temperature }}
+          {{- if .baseURL }}
+          baseURL: {{ .baseURL | quote }}
           {{- end }}
+        {{- end }}
         langsmith:
           endpoint: {{ .Values.config.services.api.langsmith.endpoint | quote }}
           {{- if .Values.config.services.api.langsmith.apiKey }}
@@ -166,8 +246,78 @@ data:
           {{- if and (eq .Values.config.services.api.checkpointer.type "postgres") .Values.config.services.api.checkpointer.uri }}
           uri: {{ .Values.config.services.api.checkpointer.uri | quote }}
           {{- end }}
+          {{- /*
+            Pools of the LangGraph checkpointer and of its long-term store
+            (AIV-2018, AIV-2371). One block configures both: they are two pools
+            of the same schema against the same database, created side by side.
+            Configured separately from `db.config.pool` above because the
+            checkpointer may point at another PostgreSQL instance than the
+            application database — on the demo staging stand it does.
+
+            `type: memory` has no pool at all, so the block is only rendered
+            for `postgres`: a `pool` next to `type: memory` is refused by the
+            api's discriminated union rather than ignored.
+          */}}
+          {{- if eq .Values.config.services.api.checkpointer.type "postgres" }}
+          {{- with .Values.config.services.api.checkpointer.pool }}
+          pool:
+            {{- if hasKey . "max" }}
+            max: {{ .max }}
+            {{- end }}
+            {{- if hasKey . "connectionTimeoutMs" }}
+            connectionTimeoutMs: {{ .connectionTimeoutMs }}
+            {{- end }}
+            {{- if hasKey . "idleTimeoutMs" }}
+            idleTimeoutMs: {{ .idleTimeoutMs }}
+            {{- end }}
+            {{- if hasKey . "keepAlive" }}
+            keepAlive: {{ .keepAlive }}
+            {{- end }}
+            {{- if hasKey . "keepAliveInitialDelayMs" }}
+            keepAliveInitialDelayMs: {{ .keepAliveInitialDelayMs }}
+            {{- end }}
+            {{- if hasKey . "statementTimeoutMs" }}
+            statementTimeoutMs: {{ .statementTimeoutMs }}
+            {{- end }}
+          {{- end }}
+          {{- end }}
+        {{- /*
+          Dashboard refresh (AIV-1629, AIV-1687, AIV-2371). Rendered only when
+          set, so every key keeps the api's own default otherwise.
+
+          `datasourceConcurrency` is the one a multi-replica installation has
+          to answer for: the limiter is in-memory, per process, so the real
+          ceiling on queries against ONE tenant datasource is this number times
+          the count of processes that drain the refresh queue — the `worker`
+          pods. Divide it by the worker replica count to keep the load on the
+          customer's warehouse where it was at one worker.
+        */}}
+        {{- with .Values.config.services.api.dashboardRefresh }}
+        dashboardRefresh:
+          {{- if hasKey . "datasourceConcurrency" }}
+          datasourceConcurrency: {{ .datasourceConcurrency }}
+          {{- end }}
+          {{- if hasKey . "enqueueTimeoutMs" }}
+          enqueueTimeoutMs: {{ .enqueueTimeoutMs }}
+          {{- end }}
+          {{- if hasKey . "previewWidgetTimeoutMs" }}
+          previewWidgetTimeoutMs: {{ .previewWidgetTimeoutMs }}
+          {{- end }}
+          {{- if hasKey . "previewDeadlineMs" }}
+          previewDeadlineMs: {{ .previewDeadlineMs }}
+          {{- end }}
+          {{- if hasKey . "previewJobDeadlineMs" }}
+          previewJobDeadlineMs: {{ .previewJobDeadlineMs }}
+          {{- end }}
+          {{- if hasKey . "previewDatasetTtlSeconds" }}
+          previewDatasetTtlSeconds: {{ .previewDatasetTtlSeconds }}
+          {{- end }}
+        {{- end }}
         nats:
           url: {{ .Values.config.services.api.nats.url | quote }}
+          {{- with .Values.config.services.api.nats.streamReplicas }}
+          streamReplicas: {{ . | int }}
+          {{- end }}
         memory:
           enabled: {{ .Values.config.services.api.memory.enabled }}
           maxMessages: {{ .Values.config.services.api.memory.maxMessages }}
@@ -180,8 +330,21 @@ data:
             bucket: {{ .Values.config.services.api.fileStorage.config.bucket | quote }}
             accessKeyId: {{ .Values.config.services.api.fileStorage.config.accessKeyId | quote }}
             secretAccessKey: {{ .Values.config.services.api.fileStorage.config.secretAccessKey | quote }}
-            {{- if .Values.config.services.api.fileStorage.config.endpoint }}
-            endpoint: {{ .Values.config.services.api.fileStorage.config.endpoint | quote }}
+            {{- with .Values.config.services.api.fileStorage.config.endpoint }}
+            {{- /* Auto-prepend https:// if the endpoint value lacks a URL scheme.
+                   Some object-storage providers (e.g. Hetzner Object Storage)
+                   document the bare hostname; the AWS SDK rejects it as
+                   "Invalid endpoint" before any network call. */}}
+            endpoint: {{ ternary . (printf "https://%s" .) (or (hasPrefix "http://" .) (hasPrefix "https://" .)) | quote }}
+            {{- end }}
+            {{- /* The host a browser reaches the bucket on, when it differs from
+                   `endpoint` (AIV-2123). Download links are presigned URLs, and
+                   the api signs them against this host: an in-cluster endpoint
+                   such as http://aivo-garage:3900 produces a URL the browser
+                   cannot resolve (AIV-2408). Rendered only when set, so an
+                   installation without it keeps its ConfigMap byte for byte. */}}
+            {{- with .Values.config.services.api.fileStorage.config.publicEndpoint }}
+            publicEndpoint: {{ ternary . (printf "https://%s" .) (or (hasPrefix "http://" .) (hasPrefix "https://" .)) | quote }}
             {{- end }}
         fileUpload:
           maxFileSize: {{ .Values.config.services.api.fileUpload.maxFileSize }}
@@ -191,6 +354,59 @@ data:
           {{- range .Values.config.services.api.fileUpload.textMimeTypes }}
           - {{ . | quote }}
           {{- end }}
+        {{- with .Values.config.services.api.fileIngest }}
+        fileIngest:
+          enabled: {{ .enabled }}
+          {{- if .insertBatchSize }}
+          insertBatchSize: {{ .insertBatchSize }}
+          {{- end }}
+          {{- /* Ingest ceilings (AIV-2739). Rendered only when set, so the api
+                 defaults (maxRows 5M, maxXlsxBytes 50 MB, jobTimeoutMs 10 min)
+                 hold and an installation without the keys keeps its ConfigMap
+                 byte for byte. maxXlsxBytes is further capped by
+                 fileUpload.maxFileSize. */}}
+          {{- if .maxRows }}
+          maxRows: {{ int64 .maxRows }}
+          {{- end }}
+          {{- if .maxXlsxBytes }}
+          maxXlsxBytes: {{ int64 .maxXlsxBytes }}
+          {{- end }}
+          {{- if .jobTimeoutMs }}
+          jobTimeoutMs: {{ int64 .jobTimeoutMs }}
+          {{- end }}
+          {{- if .typeInferenceRows }}
+          typeInferenceRows: {{ int64 .typeInferenceRows }}
+          {{- end }}
+          {{- with .convertibleMimeTypes }}
+          convertibleMimeTypes:
+          {{- range . }}
+          - {{ . | quote }}
+          {{- end }}
+          {{- end }}
+          {{- with .convertibleExtensions }}
+          convertibleExtensions:
+          {{- range . }}
+          - {{ . | quote }}
+          {{- end }}
+          {{- end }}
+        {{- end }}
+        {{- /* File data sources «Таблица Excel/CSV» (AIV-2679). The api
+               defaults to `enabled: false`; rendered only when set, so an
+               installation without the key keeps its ConfigMap byte for byte. */}}
+        {{- with .Values.config.services.api.sharedTables }}
+        sharedTables:
+          enabled: {{ .enabled }}
+          {{- if .draftTtlSeconds }}
+          draftTtlSeconds: {{ .draftTtlSeconds }}
+          {{- end }}
+        {{- end }}
+        {{- /* LLM spend: currency, model prices, budgets (AIV-2745). The api
+               defaults to `enabled: false`; rendered only when set, so an
+               installation without the key keeps its ConfigMap byte for byte. */}}
+        {{- with .Values.config.services.api.billing }}
+        billing:
+          enabled: {{ .enabled }}
+        {{- end }}
         redis:
           host: {{ .Values.config.services.api.redis.host | quote }}
           port: {{ .Values.config.services.api.redis.port }}
@@ -198,6 +414,28 @@ data:
           password: {{ .Values.config.services.api.redis.password | quote }}
           {{- end }}
           db: {{ .Values.config.services.api.redis.db }}
+          {{- with .Values.config.services.api.redis.sentinel }}
+          # Valkey через Sentinel (AIV-2667, charts/valkey `architecture:
+          # sentinel`): адрес master'а api спрашивает у sentinel'ов, `host` и
+          # `port` выше тогда не используются. Понимает api с
+          # aivoagent/agent#1158 (отказ узла master'а переживает с #1164);
+          # более ранний такой секции не знает, молча её
+          # отбрасывает и идёт на host:port — а у релиза в режиме sentinel порта
+          # данных на сервисе нет, и ошибка соединения видна сразу.
+          {{- if not .nodes }}
+          {{- fail "config.services.api.redis.sentinel.nodes: нужен хотя бы один sentinel" }}
+          {{- end }}
+          sentinel:
+            masterName: {{ .masterName | default "mymaster" | quote }}
+            nodes:
+              {{- range .nodes }}
+              - host: {{ required "config.services.api.redis.sentinel.nodes[].host обязателен" .host | quote }}
+                port: {{ .port | default 26379 }}
+              {{- end }}
+            {{- if .password }}
+            password: {{ .password | quote }}
+            {{- end }}
+          {{- end }}
         {{- if .Values.config.services.api.stt }}
         stt:
           provider: {{ .Values.config.services.api.stt.provider }}
@@ -209,34 +447,311 @@ data:
           maxDurationSeconds: {{ .Values.config.services.api.stt.maxDurationSeconds | default 120 }}
           maxFileSizeMb: {{ .Values.config.services.api.stt.maxFileSizeMb | default 25 }}
         {{- end }}
-    - name: kafka-llm-proxy
-      config: |
-        port: {{ .Values.config.port }}
-        kafka:
-          brokers:
-          {{- range .Values.config.services.kafkaLlmProxy.kafka.brokers }}
-          - {{ . | quote }}
+        {{- with .Values.config.services.api.licensing }}
+        # Licensing (AIV-892). Omitted entirely unless set, so the api's own
+        # defaults (enforce, cluster UID from the kube-system namespace) apply.
+        #
+        # The day counts are guarded with `hasKey`, not truthiness: 0 is a
+        # meaningful value for both (no warning window / no DR grace) and an
+        # `if` would drop it and silently hand back the api default.
+        licensing:
+          {{- if .enforcement }}
+          enforcement: {{ .enforcement | quote }}
           {{- end }}
-          groupId: {{ .Values.config.services.kafkaLlmProxy.kafka.groupId }}
-          requestsTopic: {{ .Values.config.services.kafkaLlmProxy.kafka.requestsTopic }}
-          responsesTopic: {{ .Values.config.services.kafkaLlmProxy.kafka.responsesTopic }}
-          {{- if .Values.config.services.kafkaLlmProxy.kafka.clarificationResponsesTopic }}
-          clarificationResponsesTopic: {{ .Values.config.services.kafkaLlmProxy.kafka.clarificationResponsesTopic }}
+          {{- if .installationName }}
+          installationName: {{ .installationName | quote }}
           {{- end }}
-          ssl:
-            enabled: {{ .Values.config.services.kafkaLlmProxy.kafka.ssl.enabled }}
-            {{- if .Values.config.services.kafkaLlmProxy.kafka.ssl.caFile }}
-            caFile: {{ .Values.config.services.kafkaLlmProxy.kafka.ssl.caFile | quote }}
+          {{- if .platformVersion }}
+          platformVersion: {{ .platformVersion | quote }}
+          {{- end }}
+          {{- if hasKey . "expiryWarningDays" }}
+          expiryWarningDays: {{ .expiryWarningDays }}
+          {{- end }}
+          {{- if hasKey . "uidMismatchGraceDays" }}
+          uidMismatchGraceDays: {{ .uidMismatchGraceDays }}
+          {{- end }}
+          {{- if hasKey . "statusCacheMs" }}
+          statusCacheMs: {{ .statusCacheMs }}
+          {{- end }}
+          {{- with .clusterUid }}
+          clusterUid:
+            source: {{ .source | quote }}
+            {{- if .value }}
+            value: {{ .value | quote }}
             {{- end }}
-            {{- if .Values.config.services.kafkaLlmProxy.kafka.ssl.certFile }}
-            certFile: {{ .Values.config.services.kafkaLlmProxy.kafka.ssl.certFile | quote }}
+          {{- end }}
+        {{- end }}
+        {{- with .Values.config.services.api.authClaims }}
+        # Trust in the headers oauth2-proxy stamps on a request (AIV-1295,
+        # docs/auth-claims-contract.md in aivoagent/agent). Omitted entirely
+        # unless set, so the api default (`trust: disabled`, identity from
+        # `x-auth-subject`) applies and an installation that says nothing here
+        # behaves exactly as it did before.
+        #
+        # `trust: jwks` makes `x-auth-claims` — the ID token signed by the
+        # customer's Keycloak — the identity source, verified against the realm's
+        # JWKS. Groups ride in it, and groups become roles, so this is the hop
+        # where a forged header would be a self-issued role.
+        #
+        # maxHeaderBytes is guarded with `hasKey` rather than truthiness only for
+        # symmetry with the counters above; 0 would be nonsense here, but a
+        # silently dropped cap would not be obvious either.
+        authClaims:
+          trust: {{ .trust | quote }}
+          {{- if .issuer }}
+          # ALWAYS the public realm URL: Keycloak signs with the issuer from its
+          # own hostname configuration, whichever address we reached it by.
+          issuer: {{ .issuer | quote }}
+          {{- end }}
+          {{- if .audience }}
+          audience: {{ .audience | quote }}
+          {{- end }}
+          {{- if .jwksUri }}
+          # Internal address when the api cannot reach Keycloak on the public
+          # domain; empty means <issuer>/protocol/openid-connect/certs.
+          jwksUri: {{ .jwksUri | quote }}
+          {{- end }}
+          {{- if hasKey . "jwksCacheTtlMs" }}
+          jwksCacheTtlMs: {{ .jwksCacheTtlMs }}
+          {{- end }}
+          {{- if hasKey . "jwksMinRefetchMs" }}
+          jwksMinRefetchMs: {{ .jwksMinRefetchMs }}
+          {{- end }}
+          {{- if hasKey . "jwksTimeoutMs" }}
+          jwksTimeoutMs: {{ .jwksTimeoutMs }}
+          {{- end }}
+          {{- if hasKey . "clockToleranceSeconds" }}
+          clockToleranceSeconds: {{ .clockToleranceSeconds }}
+          {{- end }}
+          {{- if hasKey . "maxHeaderBytes" }}
+          maxHeaderBytes: {{ .maxHeaderBytes }}
+          {{- end }}
+          {{- if .proxyToken }}
+          proxyToken: {{ .proxyToken | quote }}
+          {{- end }}
+        {{- end }}
+        {{- with .Values.config.services.api.analytics }}
+        # Server-side product analytics, posthog-node (AIV-1075, docs/analytics.md
+        # in aivoagent/agent). Same key names as the `ui` section above, but a
+        # separate switch on purpose: turning analytics on for the browser does
+        # nothing for domain events and vice versa. Omitted entirely unless set,
+        # so the api default (disabled) applies.
+        #
+        # posthogHost must be an absolute http(s) URL here — the backend has no
+        # origin to resolve a same-origin path against, unlike the browser.
+        analytics:
+          {{- if hasKey . "enabled" }}
+          enabled: {{ .enabled }}
+          {{- end }}
+          {{- if .posthogHost }}
+          posthogHost: {{ .posthogHost | quote }}
+          {{- end }}
+          {{- if .posthogKey }}
+          posthogKey: {{ .posthogKey | quote }}
+          {{- end }}
+          {{- if hasKey . "flushAt" }}
+          flushAt: {{ .flushAt }}
+          {{- end }}
+          {{- if hasKey . "flushIntervalMs" }}
+          flushIntervalMs: {{ .flushIntervalMs }}
+          {{- end }}
+          {{- if hasKey . "requestTimeoutMs" }}
+          requestTimeoutMs: {{ .requestTimeoutMs }}
+          {{- end }}
+        {{- end }}
+        {{- with .Values.config.services.api.mcp }}
+        # Admin-connected MCP servers (AIV-2332 / AIV-2335). Only `apps/api`
+        # reads this section — it is the one service that talks to an MCP server
+        # and the one that serves the admin screen. Omitted entirely unless set,
+        # so an installation that says nothing about MCP gets the api's own
+        # documented defaults (`enabled: true`, 10 servers and 50 tools per
+        # tenant, 30 s per call, an empty egress allowlist) rather than this
+        # chart's opinion about them.
+        #
+        # `enabled` and `denyPrivateRanges` are guarded with `hasKey`, not
+        # truthiness: `false` is the meaningful value for both — one is the
+        # feature kill-switch, the other turns off the half of the egress guard
+        # that refuses private ranges — and an `if` would drop it and silently
+        # hand back the api default, which in both cases is the opposite.
+        #
+        # `egress.allowHosts` is the one key an installation administrator
+        # normally has to set, and the only way past BOTH the private-range and
+        # the internal-name refusals: an in-cluster connector Service is a
+        # dotless name on a 10.x address over plain http, which is exactly what
+        # the guard exists to refuse. Entries match exactly, or as a suffix when
+        # they begin with a dot (`.mcp.svc.cluster.local`). There are no
+        # wildcards in the api's matcher, so an entry here is always a
+        # deliberate, named exception — the chart does not invent any.
+        mcp:
+          {{- if hasKey . "enabled" }}
+          enabled: {{ .enabled }}
+          {{- end }}
+          {{- if .maxServersPerTenant }}
+          maxServersPerTenant: {{ .maxServersPerTenant }}
+          {{- end }}
+          {{- if .maxToolsPerTenant }}
+          maxToolsPerTenant: {{ .maxToolsPerTenant }}
+          {{- end }}
+          {{- if .maxToolDescriptionChars }}
+          maxToolDescriptionChars: {{ .maxToolDescriptionChars }}
+          {{- end }}
+          {{- if .maxToolSchemaChars }}
+          maxToolSchemaChars: {{ .maxToolSchemaChars }}
+          {{- end }}
+          {{- if .callTimeoutMs }}
+          callTimeoutMs: {{ .callTimeoutMs }}
+          {{- end }}
+          {{- if .connectTimeoutMs }}
+          connectTimeoutMs: {{ .connectTimeoutMs }}
+          {{- end }}
+          {{- if hasKey . "toolsCacheTtlSeconds" }}
+          toolsCacheTtlSeconds: {{ .toolsCacheTtlSeconds }}
+          {{- end }}
+          {{- with .egress }}
+          egress:
+            {{- with .allowHosts }}
+            allowHosts:
+            {{- range . }}
+            - {{ . | quote }}
             {{- end }}
-            {{- if .Values.config.services.kafkaLlmProxy.kafka.ssl.keyFile }}
-            keyFile: {{ .Values.config.services.kafkaLlmProxy.kafka.ssl.keyFile | quote }}
             {{- end }}
-          requestTimeoutMs: {{ .Values.config.services.kafkaLlmProxy.kafka.requestTimeoutMs }}
-          taskName: {{ .Values.config.services.kafkaLlmProxy.kafka.taskName }}
-          userId: {{ .Values.config.services.kafkaLlmProxy.kafka.userId | quote }}
+            {{- if hasKey . "denyPrivateRanges" }}
+            denyPrivateRanges: {{ .denyPrivateRanges }}
+            {{- end }}
+          {{- end }}
+          {{- with .globalServers }}
+          # Connectors shipped with the installation (AIV-2337): api upserts one
+          # platform-level `mcp_servers` row per entry at boot, and tenants
+          # opt in per connector. The host of each `url` is allowlisted for
+          # egress implicitly — the subchart Services
+          # (`http://<release>-mcp-telegram:8931/mcp`) need no `allowHosts`
+          # entry. An empty list renders nothing.
+          #
+          # `authHeaders` values land in this ConfigMap as given: they carry
+          # the connector's optional MCP_AUTH_TOKEN, the second barrier behind
+          # the connector's NetworkPolicy.
+          globalServers:
+            {{- range . }}
+            - slug: {{ required "config.services.api.mcp.globalServers[].slug is required" .slug | quote }}
+              name: {{ required "config.services.api.mcp.globalServers[].name is required" .name | quote }}
+              url: {{ required "config.services.api.mcp.globalServers[].url is required" .url | quote }}
+              {{- if .description }}
+              description: {{ .description | quote }}
+              {{- end }}
+              {{- with .authHeaders }}
+              authHeaders:
+                {{- range $header, $value := . }}
+                {{ $header | quote }}: {{ $value | quote }}
+                {{- end }}
+              {{- end }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
+        {{- with .Values.config.services.api.feedbackPrompt }}
+        # The reaction detector behind the "rate this answer" invitation
+        # (AIV-2441): `generateSuggestions` also judges whether the user reacted
+        # to an earlier answer, and the api emits a `feedback_prompt` stream
+        # event. Omitted entirely unless set, so the api default (off) applies.
+        #
+        # `enabled` is guarded with `hasKey`, not truthiness, so an explicit
+        # `false` still reaches the api as the kill-switch it is.
+        feedbackPrompt:
+          {{- if hasKey . "enabled" }}
+          enabled: {{ .enabled }}
+          {{- end }}
+        {{- end }}
+        {{- with .Values.config.services.api.feedbackPrompts }}
+        # The policy behind that invitation (AIV-2440): the per-thread cap, the
+        # per-user interval and the soft opt-out after ignored invitations.
+        # Omitted entirely unless set, so the api defaults (on, 24 h, 1 per
+        # thread, 2 ignored) apply.
+        #
+        # Every key is guarded with `hasKey`, not truthiness: `enabled: false`
+        # is the kill-switch and `minHoursBetweenPrompts: 0` is a meaningful
+        # "no interval", and an `if` would drop both.
+        feedbackPrompts:
+          {{- if hasKey . "enabled" }}
+          enabled: {{ .enabled }}
+          {{- end }}
+          {{- if hasKey . "minHoursBetweenPrompts" }}
+          minHoursBetweenPrompts: {{ .minHoursBetweenPrompts }}
+          {{- end }}
+          {{- if hasKey . "maxPromptsPerThread" }}
+          maxPromptsPerThread: {{ .maxPromptsPerThread }}
+          {{- end }}
+          {{- if hasKey . "ignoredPromptsToOptOut" }}
+          ignoredPromptsToOptOut: {{ .ignoredPromptsToOptOut }}
+          {{- end }}
+        {{- end }}
+        {{- with .Values.config.services.api.signals }}
+        # Business signals (AIV-2464 / AIV-2466): the signalEmit tool, the
+        # Signals feed and outgoing signal webhooks. Omitted entirely unless
+        # set, so the api defaults apply (on, 3-day cooldown, 10 signals per
+        # run, chain depth 3, 90-day journal, 50 per page, webhooks 10 s /
+        # 3 attempts / 10 s backoff / 10 per tenant, empty egress allowlist).
+        #
+        # Every key is guarded with `hasKey`, not truthiness: `enabled: false`
+        # is the kill-switch, `denyPrivateRanges: false` turns off half of the
+        # webhook egress guard, and `publicBaseUrl: ''` is the documented
+        # "relative link" — an `if` would drop all three.
+        #
+        # `webhook.egress.allowHosts` has the same format and matcher as
+        # `mcp.egress.allowHosts` (exact, or suffix when it begins with a dot)
+        # and is a separate list: a host allowed for MCP is not thereby
+        # allowed as a webhook recipient.
+        signals:
+          {{- if hasKey . "enabled" }}
+          enabled: {{ .enabled }}
+          {{- end }}
+          {{- if hasKey . "cooldownDays" }}
+          cooldownDays: {{ .cooldownDays }}
+          {{- end }}
+          {{- if hasKey . "maxSignalsPerRun" }}
+          maxSignalsPerRun: {{ .maxSignalsPerRun }}
+          {{- end }}
+          {{- if hasKey . "maxChainDepth" }}
+          maxChainDepth: {{ .maxChainDepth }}
+          {{- end }}
+          {{- if hasKey . "eventRetentionDays" }}
+          eventRetentionDays: {{ .eventRetentionDays }}
+          {{- end }}
+          {{- with .feed }}
+          feed:
+            {{- if hasKey . "pageSize" }}
+            pageSize: {{ .pageSize }}
+            {{- end }}
+          {{- end }}
+          {{- if hasKey . "publicBaseUrl" }}
+          publicBaseUrl: {{ .publicBaseUrl | quote }}
+          {{- end }}
+          {{- with .webhook }}
+          webhook:
+            {{- if hasKey . "timeoutMs" }}
+            timeoutMs: {{ .timeoutMs }}
+            {{- end }}
+            {{- if hasKey . "maxAttempts" }}
+            maxAttempts: {{ .maxAttempts }}
+            {{- end }}
+            {{- if hasKey . "backoffMs" }}
+            backoffMs: {{ .backoffMs }}
+            {{- end }}
+            {{- if hasKey . "maxPerTenant" }}
+            maxPerTenant: {{ .maxPerTenant }}
+            {{- end }}
+            {{- with .egress }}
+            egress:
+              {{- with .allowHosts }}
+              allowHosts:
+              {{- range . }}
+              - {{ . | quote }}
+              {{- end }}
+              {{- end }}
+              {{- if hasKey . "denyPrivateRanges" }}
+              denyPrivateRanges: {{ .denyPrivateRanges }}
+              {{- end }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
     - name: service-discovery
       # version: '*'
       config: |
@@ -259,23 +774,127 @@ data:
             url: http://{{ .Release.Name }}-instance
           - name: api
             version: 0.0.0
-            url: http://{{ .Release.Name }}-api
+            url: {{ include "config.apiServiceUrl" . }}
           - name: config
             version: 0.0.0
             url: http://{{ .Release.Name }}-config
           - name: service-discovery
             version: 0.0.0
             url: http://{{ .Release.Name }}-service-discovery
-          - name: kafka-llm-proxy
-            version: 0.0.0
-            url: http://{{ .Release.Name }}-kafka-llm-proxy
     - name: identity
       # version: '*'
       config: |
         port: {{ .Values.config.port }}
-        provider: keycloak
+{{- /* Режим tenancy (AIV-1291, docs/corporate-tenancy-mode.md в aivoagent/agent).
+     Значение по умолчанию — `keycloak`: установка, которая об этом ключе не
+     знает, рендерится ровно так же, как до AIV-1354.
+
+       keycloak — Keycloak наш: организации и роли берутся из него, identity
+                  ходит в Admin API реквизитами `identityService` ниже;
+       local    — Keycloak корпоративный: Admin API нам не дают, тенанты и роли
+                  живут в базе identity и раздаются по группам из подписанного
+                  claim set'а, который приносит oauth2-proxy.
+
+     Реквизиты Keycloak рендерятся ТОЛЬКО в режиме `keycloak`. Схема конфигурации
+     identity — размеченное объединение по `provider`, и лишний блок `keycloak`
+     она не игнорирует, а отвергает: у корпоративной установки клиентских
+     реквизитов нет вовсе, и конфигурация, которая их несёт, описывает не тот
+     режим, в котором собирается работать. */}}
+        {{- $tenancy := dig "identity" "provider" "keycloak" .Values.config.services }}
+        {{- if not (has $tenancy (list "keycloak" "local")) }}
+        {{- fail (printf "config.services.identity.provider: ожидается \"keycloak\" или \"local\", получено %q" $tenancy) }}
+        {{- end }}
+        provider: {{ $tenancy }}
+        {{- if eq $tenancy "keycloak" }}
         keycloak:
           clientId: {{ .Values.config.services.identityService.clientId }}
           clientSecret: {{ .Values.config.services.identityService.clientSecret }}
           endpoint: {{ .Values.config.services.identityService.endpoint }}
           realm: {{ .Values.config.services.identityService.realm }}
+        {{- else }}
+{{- /* Группы, чьи участники администрируют установку. Это загрузочный ключ, и без
+     него первую корпоративную установку не развернуть: чтобы войти в админку,
+     нужна роль, роль даёт правило маппинга, а первое правило пишется из админки.
+     Пустой список допустим намеренно — так выглядит установка, у которой первый
+     администратор уже записан в `installation_admin` и загрузочный ключ снят
+     (docs/corporate-install.md, шаг 7). */}}
+        {{- $bootstrapAdmins := dig "identity" "local" "bootstrapAdminGroups" (list) .Values.config.services }}
+        local:
+          {{- if $bootstrapAdmins }}
+          bootstrapAdminGroups:
+          {{- range $bootstrapAdmins }}
+          - {{ . | quote }}
+          {{- end }}
+          {{- else }}
+          # Пусто: администраторы установки берутся только из `installation_admin`.
+          bootstrapAdminGroups: []
+          {{- end }}
+{{- /* Режим `local` получает группы пользователя из `x-auth-claims`, а этот
+     заголовок api читает, только когда ему велено ему доверять. С `trust:
+     disabled` пользователь опознаётся по `x-auth-subject`, групп у него нет ни
+     одной, и корпоративная установка встречает каждого вошедшего отказом
+     NO_TENANT_MEMBERSHIP — отказом, который выглядит как «правила маппинга
+     написаны неверно», а не как «половина конфигурации не включена». Дешевле
+     не отрендериться. */}}
+        {{- if ne (dig "api" "authClaims" "trust" "disabled" .Values.config.services) "jwks" }}
+        {{- fail "config.services.identity.provider: \"local\" требует config.services.api.authClaims.trust: jwks — иначе api берёт пользователя из x-auth-subject, групп не получает вовсе и корпоративный режим не даёт доступа никому" }}
+        {{- end }}
+        {{- end }}
+{{- /* Копии залогинившихся пользователей (AIV-1298). Блок необязателен целиком: у
+     каждого ключа внутри есть значение по умолчанию, а состав `profileFields`
+     согласуется со службой безопасности заказчика отдельно, поэтому чарт не
+     подставляет здесь ничего сам. */}}
+        {{- $directory := dig "identity" "directory" dict .Values.config.services }}
+        {{- if or $directory.profileFields (hasKey $directory "sync") }}
+        directory:
+          {{- with $directory.profileFields }}
+          profileFields:
+          {{- range . }}
+          - {{ . | quote }}
+          {{- end }}
+          {{- end }}
+          {{- with $directory.sync }}
+          sync:
+            {{- if hasKey . "enabled" }}
+            enabled: {{ .enabled }}
+            {{- end }}
+            {{- if hasKey . "intervalMinutes" }}
+            intervalMinutes: {{ .intervalMinutes }}
+            {{- end }}
+            {{- if hasKey . "initialDelaySeconds" }}
+            initialDelaySeconds: {{ .initialDelaySeconds }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
+{{- /* Собственная база identity (AIV-1294, docs/identity-database.md в
+     aivoagent/agent). Блок рендерится, только если он задан в значениях: чарт
+     синхронизируют в argo-репозитории отдельно от бампа образа, и безусловный
+     `db` сломал бы установку со старым образом раньше, чем у неё появится база.
+
+     Булевы значения — через hasKey, а не через if: `false` здесь осмысленно
+     (особенно migrationsRun: false у установки, которая гоняет миграции
+     отдельным шагом), и `if` молча вернул бы противоположное значение. */}}
+        {{- with (dig "identity" "db" dict .Values.config.services) }}
+        # База сервиса identity. Обязательна в обоих режимах tenancy: в режиме
+        # `keycloak` из неё работают user_profile и observed_group.
+        db:
+          type: {{ .type }}
+          config:
+            host: {{ .config.host | quote }}
+            port: {{ .config.port }}
+            username: {{ .config.username | quote }}
+            password: {{ .config.password | quote }}
+            database: {{ .config.database | quote }}
+            {{- if .config.schema }}
+            schema: {{ .config.schema | quote }}
+            {{- end }}
+            {{- if hasKey .config "ssl" }}
+            ssl: {{ .config.ssl }}
+            {{- end }}
+            {{- if hasKey .config "logging" }}
+            logging: {{ .config.logging }}
+            {{- end }}
+            {{- if hasKey .config "migrationsRun" }}
+            migrationsRun: {{ .config.migrationsRun }}
+            {{- end }}
+        {{- end }}

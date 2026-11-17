@@ -1,0 +1,150 @@
+{{- if .Values.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analyst-embeddings
+  labels:
+    {{- include "analyst-embeddings.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "analyst-embeddings.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "analyst-embeddings.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        # Downloads the weights and refuses to hand over anything the manifest did not
+        # name, by sha256. Idempotent: a restarted pod with a populated volume re-hashes
+        # and starts in under a minute instead of downloading 1.25 GiB again.
+        #
+        # This is the one outbound connection the deployment makes, it is made once, at
+        # boot, to a declared host, for bytes whose hashes are in the attested manifest
+        # beside it — and no data of the operator's is in the request. That is a different
+        # thing from an inference call to a hosted provider, which is what this component
+        # exists to remove.
+        - name: fetch-weights
+          image: {{ include "analyst-embeddings.imageRef" .Values.fetcher.image | quote }}
+          imagePullPolicy: {{ .Values.fetcher.image.pullPolicy }}
+          command: [python3, /opt/weights/fetch-weights.py]
+          env:
+            - name: WEIGHTS_MANIFEST
+              value: /opt/weights/manifest.json
+            - name: WEIGHTS_DIR
+              value: {{ .Values.model.dir | quote }}
+            - name: HF_ENDPOINT
+              value: {{ .Values.model.weights.endpoint | quote }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.fetcher.resources | nindent 12 }}
+          volumeMounts:
+            - name: weights
+              mountPath: {{ dir .Values.model.dir | quote }}
+            - name: manifest
+              mountPath: /opt/weights
+              readOnly: true
+      containers:
+        - name: embeddings
+          image: {{ include "analyst-embeddings.imageRef" .Values.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Flags, not env, for everything that is not a secret: the arguments are part of
+          # what the evidence attests, so a reader sees the model directory, the pooling
+          # and the batch ceilings this endpoint really runs with.
+          #
+          # `--hostname 0.0.0.0` is explicit because Kubernetes sets HOSTNAME to the pod
+          # name, the server reads HOSTNAME as an address to bind, finds it is not one,
+          # warns and falls back. Saying it here removes the warning and the dependence on
+          # that fallback.
+          args:
+            - --model-id
+            - {{ .Values.model.dir | quote }}
+            - --pooling
+            - {{ .Values.model.pooling | quote }}
+            - --max-batch-tokens
+            - {{ .Values.model.maxBatchTokens | quote }}
+            - --max-client-batch-size
+            - {{ .Values.model.maxClientBatchSize | quote }}
+            - --hostname
+            - 0.0.0.0
+            - --port
+            - {{ .Values.service.targetPort | quote }}
+            - --json-output
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: analyst-embeddings-auth
+                  key: api-key
+            # Nothing is to be fetched at serving time: the weights are already on the
+            # volume, verified, and a model file that went missing must fail loudly rather
+            # than be quietly re-downloaded unverified.
+            - name: HF_HUB_OFFLINE
+              value: "1"
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+          # `/health` is outside the server's authentication, which is what makes it usable
+          # as a probe, and it answers only once the model is loaded and warmed.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: weights
+              mountPath: {{ dir .Values.model.dir | quote }}
+              readOnly: true
+      volumes:
+        - name: manifest
+          configMap:
+            name: analyst-embeddings-weights
+        - name: weights
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: analyst-embeddings-weights
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

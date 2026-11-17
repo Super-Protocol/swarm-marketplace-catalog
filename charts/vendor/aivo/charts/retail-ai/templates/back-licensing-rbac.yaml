@@ -1,0 +1,70 @@
+{{- if .Values.licensing.clusterUid.enabled }}
+{{/*
+Licensing cluster identity (AIV-892).
+
+A license is bound to the UID of the `kube-system` namespace — the apiserver
+mints it at cluster creation and nothing in the platform can choose it, which is
+what makes it a usable installation identity. The api reads it with its own
+ServiceAccount token.
+
+The RBAC below is the whole surface: `get` on one named, cluster-scoped object.
+It grants no read of the namespace's contents. `namespaces` is cluster-scoped,
+so the binding has to be a ClusterRoleBinding even though it names a single
+object.
+
+Turn the block off (`licensing.clusterUid.enabled: false`) only where the api is
+configured with `licensing.clusterUid.source: static` — a development stand.
+
+A second, separate switch is `licensing.clusterUid.rbac.create: false`: the api
+still reads the UID, but the two cluster-scoped objects are NOT rendered because
+someone else applies them. That is an installation into the customer's own
+cluster, where the installing role holds no rights on cluster-scoped objects at
+all (AIV-2042) and the cluster administrator applies the ClusterRole and the
+ClusterRoleBinding before the install (AIV-2099). The ServiceAccount stays with
+the chart in that case — the binding an administrator writes has to name the
+account the deployment actually runs as, and that name is the chart's.
+
+The subject of the binding is the SAME resolved name the deployment runs as
+(`app.backServiceAccountName`), so a `back.serviceAccountName` override cannot
+leave the pod running as one account while the permission sits on another. When
+the operator supplies that override they own the account, so the chart does not
+create one.
+*/}}
+{{- if not .Values.back.serviceAccountName }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "app.fullname" . }}-back
+  labels:
+    {{- include "app.labelsBack" . | nindent 4 }}
+{{- end }}
+{{- if .Values.licensing.clusterUid.rbac.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "app.fullname" . }}-back-cluster-uid
+  labels:
+    {{- include "app.labelsBack" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    resourceNames: [{{ .Values.licensing.clusterUid.namespace | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "app.fullname" . }}-back-cluster-uid
+  labels:
+    {{- include "app.labelsBack" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "app.fullname" . }}-back-cluster-uid
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "app.backServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}

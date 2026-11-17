@@ -1,0 +1,252 @@
+---
+# Source: conversational-analyst-identity/templates/bootstrap-job.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: analyst-keycloak-bootstrap-env
+type: Opaque
+stringData:
+  # The realm administrator password, the OIDC client secret and the first administrator's
+  # own details. `consumer.*` values land here and only here: the deploying person's address
+  # has no business in a snapshot that is published, and an evidence exclusion would leave it
+  # in the bundle anyway.
+  KC_ADMIN_PASSWORD: "SECRET-AAAAAAAAAAAA"
+  CLIENT_SECRET: "SECRET-AAAAAAAAAAAA"
+  APP_URL: "https://alpha.conf-apps.superprotocol.dev"
+  APP_HOST: "alpha.conf-apps.superprotocol.dev"
+  ADMIN_USERNAME: "ann@alpha.example"
+  ADMIN_EMAIL: "ann@alpha.example"
+  ADMIN_FIRST_NAME: "Ann Alpha"
+  ADMIN_LAST_NAME: ""
+  ADMIN_PASSWORD: "SECRET-AAAAAAAAAAAA"
+  # One `name|alias` per line, in order; the first is the administrator's own.
+  ORGANIZATIONS: "Alpha Clinic|alpha"
+---
+# Source: conversational-analyst-identity/templates/keycloak-env.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: analyst-keycloak-env
+  labels:
+    app.kubernetes.io/name: conversational-analyst-identity
+    app.kubernetes.io/instance: analyst
+type: Opaque
+stringData:
+  KC_HOSTNAME: "https://alpha.conf-apps.superprotocol.dev/auth"
+---
+# Source: conversational-analyst-identity/templates/bootstrap-job.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: analyst-keycloak-bootstrap
+data:
+  bootstrap.sh: |
+    #!/bin/bash
+    # Deliberately not `set -e`: almost every step here is "create it unless it is already
+    # there", and kcadm reports that as a non-zero exit with "already exists" on stderr. The
+    # steps that must not fail quietly check their own result and exit.
+    set -u
+    KCADM=/opt/bitnami/keycloak/bin/kcadm.sh
+    CFG="--config /tmp/kcadm.config"
+    SRV=http://analyst-keycloak/auth
+    REALM=master
+
+    for v in KC_ADMIN_PASSWORD CLIENT_SECRET APP_URL APP_HOST ADMIN_USERNAME ADMIN_PASSWORD ORGANIZATIONS; do
+      if [ -z "${!v}" ]; then echo "$v is empty — the bootstrap Secret is incomplete"; exit 1; fi
+    done
+
+    echo "== waiting for keycloak =="
+    for _ in $(seq 1 120); do
+      curl -sf "$SRV/realms/$REALM" >/dev/null && break
+      sleep 5
+    done
+
+    $KCADM config credentials $CFG --server "$SRV" --realm "$REALM" \
+      --user admin --password "$KC_ADMIN_PASSWORD" || exit 1
+
+    echo "== identity client =="
+    $KCADM create $CFG clients -r "$REALM" \
+      -s clientId=identity -s enabled=true -s protocol=openid-connect \
+      -s publicClient=false -s serviceAccountsEnabled=true \
+      -s standardFlowEnabled=true -s directAccessGrantsEnabled=true \
+      -s 'redirectUris=["/*"]' -s 'webOrigins=["/*"]' \
+      -s secret="$CLIENT_SECRET" 2>&1 | tail -1
+
+    echo "== identity service-account roles =="
+    for role in manage-realm manage-users view-users query-users query-groups manage-clients view-clients view-realm; do
+      $KCADM add-roles $CFG -r "$REALM" --uusername service-account-identity \
+        --cclientid "$REALM-realm" --rolename "$role" 2>&1 | tail -1
+    done
+
+    echo "== analyst client =="
+    $KCADM create $CFG clients -r "$REALM" \
+      -s clientId=analyst -s enabled=true -s protocol=openid-connect \
+      -s publicClient=false -s serviceAccountsEnabled=false \
+      -s standardFlowEnabled=true -s directAccessGrantsEnabled=true \
+      -s "redirectUris=[\"$APP_URL/*\"]" -s "webOrigins=[\"$APP_URL\"]" \
+      -s "rootUrl=$APP_URL" -s "baseUrl=$APP_URL" \
+      -s secret="$CLIENT_SECRET" \
+      -s 'attributes."post.logout.redirect.uris"='"$APP_URL"'/*' 2>&1 | tail -1
+
+    echo "== first administrator =="
+    $KCADM create $CFG users -r "$REALM" \
+      -s username="$ADMIN_USERNAME" -s email="$ADMIN_EMAIL" \
+      -s emailVerified=true -s enabled=true \
+      -s firstName="$ADMIN_FIRST_NAME" -s lastName="$ADMIN_LAST_NAME" 2>&1 | tail -1
+    $KCADM set-password $CFG -r "$REALM" --username "$ADMIN_USERNAME" \
+      --new-password "$ADMIN_PASSWORD" 2>&1 | tail -1
+
+    # Two different grants, and both are needed.
+    #
+    # The REALM role `admin` is Keycloak's own: this is the operator's account, and they are
+    # the one who has to add colleagues and wire an external identity provider. (The
+    # `realm-admin` composite people reach for first belongs to a managed realm's
+    # realm-management client and does not exist in `master`.)
+    #
+    # The CLIENT role `admin` in the `identity` client's namespace is what makes them the
+    # AGENT's installation administrator. Agent 1.17 reads installation-wide roles from that
+    # one client's namespace and deliberately ignores realm roles, so the realm grant alone
+    # — which is all 0.5.3 did — leaves the administrator holding nothing in the product: no
+    # model registry, no data sources, no schema.
+    echo "== realm administrator =="
+    $KCADM add-roles $CFG -r "$REALM" --uusername "$ADMIN_USERNAME" --rolename admin 2>&1 | tail -1
+
+    echo "== installation administrator (client role identity:admin) =="
+    $KCADM create $CFG "clients/$($KCADM get $CFG clients -r "$REALM" -q clientId=identity --fields id --format csv --noquotes | head -1)/roles" \
+      -r "$REALM" -s name=admin -s 'description=Administers the installation: models, data sources, schema' 2>&1 | tail -1
+    $KCADM add-roles $CFG -r "$REALM" --uusername "$ADMIN_USERNAME" \
+      --cclientid identity --rolename admin 2>&1 | tail -1
+
+    echo "== organizations =="
+    T=$(curl -s -X POST "$SRV/realms/$REALM/protocol/openid-connect/token" \
+      -d grant_type=client_credentials -d client_id=identity -d client_secret="$CLIENT_SECRET" \
+      | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+    if [ -z "$T" ]; then echo "  could not obtain a service-account token for the identity client"; exit 1; fi
+    api() { curl -s -H "Authorization: Bearer $T" -H "Content-Type: application/json" "$@"; }
+
+    api -X PUT "$SRV/admin/realms/$REALM" -d '{"organizationsEnabled":true}' \
+      -o /dev/null -w "  realm org-enable: %{http_code}\n"
+
+    ADMIN_UID=$(api "$SRV/admin/realms/$REALM/users?username=$ADMIN_USERNAME&exact=true" \
+      | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
+    if [ -z "$ADMIN_UID" ]; then echo "  could not resolve the administrator's user id"; exit 1; fi
+
+    # The `/org` root of the group tree agent 1.17 derives org-scoped roles from. Created
+    # once; each organisation gets a child of it below.
+    # Every id below is read by splitting the response on `{` and taking the id off the
+    # object whose name matches, NOT by matching the whole body: Keycloak returns a group
+    # with its children nested inside it, and a greedy `.*"id":"..."` over that body comes
+    # back with the id of the DEEPEST child — so the `/org` lookup would answer with
+    # `/org/<org>/admins` and the tree would be rebuilt one level too deep.
+    org_group_id() { tr '{' '\n' | sed -n "/\"name\":\"$1\"/s/.*\"id\":\"\([^\"]*\)\".*/\1/p" | head -1; }
+
+    ORG_ROOT_ID=$(api "$SRV/admin/realms/$REALM/groups?search=org&exact=true" | org_group_id org)
+    if [ -z "$ORG_ROOT_ID" ]; then
+      api -X POST "$SRV/admin/realms/$REALM/groups" -d '{"name":"org"}' -o /dev/null -w "  /org group: %{http_code}\n"
+      ORG_ROOT_ID=$(api "$SRV/admin/realms/$REALM/groups?search=org&exact=true" | org_group_id org)
+    fi
+    if [ -z "$ORG_ROOT_ID" ]; then echo "  could not create or find the /org group"; exit 1; fi
+
+    # `name` may contain spaces, so the list is read as `name|alias` lines rather than
+    # through a shell word split — and the organisation is found by listing rather than by
+    # searching, because interpolating a name with a space into a query string produced a
+    # request Keycloak answered with nothing at all.
+    # A here-string and not a pipe: a `while` fed by a pipe runs in a subshell, where the
+    # `exit 1`s below would end the subshell and leave the Job reporting success on a realm
+    # that has no organisation in it.
+    FIRST=1
+    while IFS='|' read -r ORG_NAME ORG_ALIAS; do
+      [ -n "$ORG_ALIAS" ] || continue
+      echo "-- organisation $ORG_ALIAS ($ORG_NAME)"
+      # Keycloak refuses an organization with no domain and answers 400 without explaining.
+      # One domain per organisation, under this deployment's own host, so three of them do
+      # not collide.
+      BODY=$(printf '{"name":"%s","alias":"%s","enabled":true,"domains":[{"name":"%s.%s","verified":true}]}' \
+        "$ORG_NAME" "$ORG_ALIAS" "$ORG_ALIAS" "$APP_HOST")
+      CODE=$(api -X POST "$SRV/admin/realms/$REALM/organizations" -d "$BODY" -o /tmp/org.json -w "%{http_code}")
+      echo "   create: $CODE"
+      if [ "$CODE" != "201" ] && [ "$CODE" != "409" ]; then
+        echo "   organisation was not created:"; cat /tmp/org.json; echo; exit 1
+      fi
+      ORG_ID=$(api "$SRV/admin/realms/$REALM/organizations?search=$ORG_ALIAS" \
+        | tr '{' '\n' | sed -n "/\"alias\":\"$ORG_ALIAS\"/s/.*\"id\":\"\([^\"]*\)\".*/\1/p" | head -1)
+      if [ -z "$ORG_ID" ]; then
+        ORG_ID=$(api "$SRV/admin/realms/$REALM/organizations" \
+          | tr '{' '\n' | sed -n "/\"alias\":\"$ORG_ALIAS\"/s/.*\"id\":\"\([^\"]*\)\".*/\1/p" | head -1)
+      fi
+      if [ -z "$ORG_ID" ]; then echo "   could not resolve the organisation id"; exit 1; fi
+
+      # `/org/{orgId}/admins` IS `org-admin` for that organisation and
+      # `/org/{orgId}/members` IS `org-member`; no role object is bound to either. Both
+      # groups exist from the start so that adding somebody to an organisation is one drag
+      # in Keycloak rather than a group tree to build first.
+      ORG_NODE_ID=$(api "$SRV/admin/realms/$REALM/groups/$ORG_ROOT_ID/children?search=$ORG_ID" | org_group_id "$ORG_ID")
+      if [ -z "$ORG_NODE_ID" ]; then
+        api -X POST "$SRV/admin/realms/$REALM/groups/$ORG_ROOT_ID/children" \
+          -d "{\"name\":\"$ORG_ID\"}" -o /dev/null -w "   /org/$ORG_ID: %{http_code}\n"
+        ORG_NODE_ID=$(api "$SRV/admin/realms/$REALM/groups/$ORG_ROOT_ID/children?search=$ORG_ID" | org_group_id "$ORG_ID")
+      fi
+      if [ -z "$ORG_NODE_ID" ]; then echo "   could not create the /org/$ORG_ID group"; exit 1; fi
+      for LEAF in admins members; do
+        api -X POST "$SRV/admin/realms/$REALM/groups/$ORG_NODE_ID/children" \
+          -d "{\"name\":\"$LEAF\"}" -o /dev/null -w "   /org/$ORG_ID/$LEAF: %{http_code}\n"
+      done
+
+      if [ "$FIRST" = "1" ]; then
+        CODE=$(api -X POST "$SRV/admin/realms/$REALM/organizations/$ORG_ID/members" \
+          -d "\"$ADMIN_UID\"" -o /tmp/member.json -w "%{http_code}")
+        echo "   administrator as member: $CODE"
+        if [ "$CODE" != "201" ] && [ "$CODE" != "409" ]; then
+          echo "   the administrator is not a member of their own organisation:"; cat /tmp/member.json; echo; exit 1
+        fi
+        ADMINS_GID=$(api "$SRV/admin/realms/$REALM/groups/$ORG_NODE_ID/children?search=admins" | org_group_id admins)
+        if [ -z "$ADMINS_GID" ]; then echo "   could not resolve /org/$ORG_ID/admins"; exit 1; fi
+        api -X PUT "$SRV/admin/realms/$REALM/users/$ADMIN_UID/groups/$ADMINS_GID" \
+          -o /dev/null -w "   administrator as org-admin: %{http_code}\n"
+      fi
+      echo "   ORG_ID = $ORG_ID"
+      FIRST=0
+    done <<< "$ORGANIZATIONS"
+
+    echo "== done =="
+---
+# Source: conversational-analyst-identity/templates/bootstrap-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # A Job's pod template is immutable, so a changed script cannot be applied over the Job
+  # that ran the old one — the name has to follow the content. Reconfiguring prunes what the
+  # previous bundle had and this one does not, so the superseded Job goes with it.
+  name: analyst-keycloak-bootstrap-3b00f825
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: bootstrap
+          image: "docker.io/bitnamilegacy/keycloak:26.1.2-debian-12-r0"
+          command: ["bash", "/scripts/bootstrap.sh"]
+          # Everything per-deployment, from the Secret. Nothing is a literal here: a pod spec
+          # travels in the bundle in clear and is attested, and `env` is not a safe place.
+          envFrom:
+            - secretRef:
+                name: analyst-keycloak-bootstrap-env
+          resources:
+            limits:
+              cpu: 100m
+              memory: 256Mi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: 100m
+              memory: 256Mi
+              nvidia.com/gpu: "0"
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: scripts
+          configMap:
+            name: analyst-keycloak-bootstrap

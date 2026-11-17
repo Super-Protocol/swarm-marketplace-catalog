@@ -1,9 +1,26 @@
 apiVersion: v2
 name: conversational-analyst-identity
-description: Keycloak for the analyst, with the realm bootstrap that creates its clients, demo user and tenant organization.
+description: Keycloak for the analyst, with the realm bootstrap that creates its clients, its organisations and the first administrator.
 type: application
-version: 0.5.3
-appVersion: "1.0.0"
+# 0.6.0 carries three changes, two of which are 1.17's doing and one of which is
+# this repository's own rule catching up with it.
+#
+#   * THREE organisations instead of one. The product's enforced boundary is the
+#     tenant — there are only `org-admin` and `org-member`, and a data-source
+#     connection is stored as an (organisation, source) pair — so a deployment
+#     that has to show one party unable to reach another's data needs more than
+#     one organisation to show it with.
+#   * The org-scoped ROLE GROUPS. Agent 1.17 derives `org-admin` / `org-member`
+#     from membership of `/org/{orgId}/admins` and `/org/{orgId}/members`, and
+#     installation administration from the client role `admin` in the role
+#     namespace of the `identity` client. Realm roles are deliberately not read.
+#     The 0.5.x bootstrap granted the realm role and created neither group, so on
+#     1.17 its administrator would sign in holding nothing.
+#   * The bootstrap script is no longer rendered with the credential and the
+#     deploying person's name inside it. The script is a ConfigMap and is attested
+#     in full; everything per-deployment reaches it from a Secret as environment.
+version: 0.6.0
+appVersion: "1.17.0"
 dependencies:
   - name: keycloak
     version: 24.4.10

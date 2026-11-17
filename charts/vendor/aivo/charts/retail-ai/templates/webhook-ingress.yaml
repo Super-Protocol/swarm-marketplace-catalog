@@ -1,0 +1,53 @@
+{{- if .Values.webhookIngress.enabled -}}
+# Public, token-gated autopilot webhook ingress (AIV-530 / AIV-536).
+#
+# The autopilot webhook (POST /tenants/:tenantId/autopilot/webhook/:webhookId/trigger)
+# is designed to be called by external systems WITHOUT user authentication: it is
+# excluded from the Context/DevAuth middleware and gated solely by the in-app
+# AutopilotTokenGuard (constant-time X-Autopilot-Token check).
+#
+# The main app ingress routes every request through oauth2-proxy, which 302s
+# unauthenticated callers to Keycloak login — so an external webhook call never
+# reaches the token guard. This dedicated ingress exposes ONLY the webhook-trigger
+# path straight to the backend, bypassing oauth2-proxy. Every other path stays
+# behind oauth2-proxy via the proxy's own ingress.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "app.fullname" . }}-webhook
+  labels:
+    {{- include "app.labelsCommon" . | nindent 4 }}
+  annotations:
+    # Treat spec.rules[].http.paths[].path as a regex so the two dynamic id
+    # segments (tenantId, webhookId) are matched without widening the exposure.
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    {{- if .Values.webhookIngress.clusterIssuer }}
+    cert-manager.io/cluster-issuer: {{ .Values.webhookIngress.clusterIssuer | quote }}
+    {{- end }}
+    {{- with .Values.webhookIngress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- with .Values.webhookIngress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.webhookIngress.tls }}
+  tls:
+  - hosts:
+    - {{ .Values.webhookIngress.host }}
+    secretName: {{ include "app.fullname" . }}-webhook-tls
+  {{- end }}
+  rules:
+  - host: {{ .Values.webhookIngress.host }}
+    http:
+      paths:
+      # Scoped strictly to the token-gated trigger endpoint — NOT the whole
+      # /tenants/... tree — so no other route is exposed past oauth2-proxy.
+      - path: {{ .Values.webhookIngress.path | quote }}
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: {{ include "app.fullname" . }}-back
+            port:
+              name: http
+{{- end }}

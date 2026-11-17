@@ -1,0 +1,26 @@
+{{- /*
+The one Keycloak setting that is this deployment's public hostname.
+
+`KC_HOSTNAME` has to match the public URL down to the /auth path or the gateway rejects every
+token the realm mints — and it is different in every deployment. Left in `extraEnvVars` it
+becomes a literal in the StatefulSet's pod spec, which travels in the bundle in clear and is
+attested, so the only way to keep the digest the version's rather than the consumer's is a
+`/spec/template/spec/containers/0/env/N/value` exclusion. That pointer is an INDEX: it is
+silently wrong the day somebody adds a variable above it, and it excludes whatever is at
+position N by then. Listing 3.0.9 carried exactly that exclusion.
+
+A Secret reached through `envFrom` has no such pointer. The pod spec names this object and
+nothing else, the platform lifts the Secret out of the bundle and seals it, and the
+StatefulSet is attested in full.
+*/ -}}
+{{- $host := required "appHostname must be set" .Values.appHostname }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: analyst-keycloak-env
+  labels:
+    app.kubernetes.io/name: conversational-analyst-identity
+    app.kubernetes.io/instance: {{ .Release.Name }}
+type: Opaque
+stringData:
+  KC_HOSTNAME: {{ printf "https://%s/auth" $host | quote }}

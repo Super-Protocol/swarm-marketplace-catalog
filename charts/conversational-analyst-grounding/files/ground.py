@@ -1,18 +1,28 @@
 #!/usr/bin/env python3
-"""Ground the agent in the datasets that were bound to it.
+"""Make the agent able to answer questions about the datasets bound to this deployment.
 
-The agent answers questions by finding relevant tables in a Neo4j knowledge graph, generating
-SQL against them, and running that SQL through a registered data source. Both of those have to
-exist before the first question, and both describe the *same* datasets — so both are built here,
-from one input: the bindings the marketplace resolved for the agent's data slot.
+Four things have to be true before the assistant can answer anything, and none of them is
+in a chart:
 
-Each binding carries the connection (how to reach the data) and the schema its publisher
-declared (what the data means). That second half is why this can be automatic: the description
-the knowledge graph needs is the description the dataset already publishes. Nobody re-types it,
-and it cannot drift from the card the consumer chose.
+1. the installation has a model in its registry, and it is the default. Agent 1.x takes no
+   model from its configuration at all — `llmSmart` is not in the api's schema any more —
+   so a deployment with an empty registry answers every question with "an admin must
+   enable at least one model";
+2. every bound dataset is a registered data source of the tenant;
+3. the schema catalogue has been read from each of those sources and carries the table and
+   column descriptions the dataset's publisher wrote. This is the only knowledge the agent
+   gets about the data: there is nothing else to fill in;
+4. the system prompt tells it how to behave, and the opening suggestions give a first-time
+   user something true to click.
 
-Everything here is idempotent. A reconfigure that adds or removes a dataset re-runs it, and the
-result is the graph and the registrations that match the current bindings — no more, no less.
+All of it goes through the api's own admin API rather than into its tables. That is not
+tidiness. Registering a source ENQUEUES the catalogue read; annotating a table re-projects
+the knowledge index that schema search actually queries. The same rows written straight
+into PostgreSQL leave an agent that cannot find a table it can see — which is exactly what
+the 0.3.x version of this job would now do, since the knowledge-base tables it wrote to
+were deleted along with the graph.
+
+stdlib only: no package is fetched at boot, and nothing here needs one.
 """
 
 import json
@@ -20,26 +30,31 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
-import psycopg
-from neo4j import GraphDatabase
-from openai import OpenAI
-
-BINDINGS = json.loads(os.environ["BINDINGS"] or "[]")
-NEO4J_URI = os.environ["NEO4J_URI"]
-NEO4J_USER = os.environ["NEO4J_USER"]
-NEO4J_PASSWORD = os.environ["NEO4J_PASSWORD"]
-NEO4J_DB = os.environ.get("NEO4J_DB", "neo4j")
-EMBED_MODEL = os.environ["EMBED_MODEL"]
-EMBED_DIM = int(os.environ["EMBED_DIM"])
+API_URL = os.environ["API_URL"].rstrip("/")
 KEYCLOAK_URL = os.environ["KEYCLOAK_URL"].rstrip("/")
 KEYCLOAK_REALM = os.environ["KEYCLOAK_REALM"]
 KEYCLOAK_CLIENT_ID = os.environ["KEYCLOAK_CLIENT_ID"]
 KEYCLOAK_CLIENT_SECRET = os.environ["KEYCLOAK_CLIENT_SECRET"]
 
-openai = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+MODEL_NAME = os.environ["MODEL_NAME"]
+MODEL_ID = os.environ["MODEL_ID"]
+MODEL_BASE_URL = os.environ["MODEL_BASE_URL"]
+MODEL_API_KEY = os.environ["MODEL_API_KEY"]
+MODEL_TEMPERATURE = float(os.environ.get("MODEL_TEMPERATURE", "0.7"))
+THRESHOLDS = {
+    "largeDataRowThreshold": int(os.environ["LARGE_DATA_ROW_THRESHOLD"]),
+    "largeDataSizeThreshold": int(os.environ["LARGE_DATA_SIZE_THRESHOLD"]),
+    "previewRowCount": int(os.environ["PREVIEW_ROW_COUNT"]),
+    "contextWindowSize": int(os.environ["CONTEXT_WINDOW_SIZE"]),
+    "memoryTokenBudget": int(os.environ["MEMORY_TOKEN_BUDGET"]),
+    "summarizeTokenThreshold": int(os.environ["SUMMARIZE_TOKEN_THRESHOLD"]),
+}
+
+BINDINGS = json.loads(os.environ.get("BINDINGS") or "[]")
 
 
 def log(message):
@@ -47,60 +62,101 @@ def log(message):
 
 
 # ---------------------------------------------------------------------------
-# The tenant
+# Keycloak: who this job is, and which tenant it is working in
 # ---------------------------------------------------------------------------
 
 
-def post_form(url, fields):
-    data = urllib.parse.urlencode(fields).encode()
-    with urllib.request.urlopen(urllib.request.Request(url, data=data)) as response:
-        return json.load(response)
-
-
-def get_json(url, token):
-    request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(request) as response:
-        return json.load(response)
-
-
-def resolve_tenant(attempts=120, delay=5):
-    """The agent's tenant is a Keycloak organization, and its id is generated at bootstrap.
-
-    Asking Keycloak for it here, rather than threading it out of the bootstrap Job, means the two
-    Jobs share no state and either can be re-run alone. It also means waiting: this runs while the
-    rest of the deployment is still starting, and an identity provider that is not up yet is the
-    normal first answer, not a failure.
-    """
-    for attempt in range(attempts):
-        try:
-            return ask_for_tenant()
-        except Exception as error:  # noqa: BLE001 — anything here means "not ready yet"
-            if attempt == attempts - 1:
-                raise
-            if attempt % 6 == 0:
-                log(f"waiting for the identity provider ({error.__class__.__name__})")
-            time.sleep(delay)
-
-
-def ask_for_tenant():
-    token = post_form(
-        f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/token",
+def kc_token():
+    data = urllib.parse.urlencode(
         {
             "grant_type": "client_credentials",
             "client_id": KEYCLOAK_CLIENT_ID,
             "client_secret": KEYCLOAK_CLIENT_SECRET,
-        },
-    )["access_token"]
+        }
+    ).encode()
+    url = f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/token"
+    with urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=30) as response:
+        return json.load(response)["access_token"]
 
-    organizations = get_json(f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}/organizations", token)
+
+def kc_get(path, token):
+    request = urllib.request.Request(
+        f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}/{path}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.load(response)
+
+
+def identity():
+    """The tenant to work in, and the subject to act as.
+
+    The tenant is the FIRST organization, which is the one the realm bootstrap put the
+    deploying administrator in; the others exist so that one party's data can be shown to be
+    out of another's reach, and they have no datasets of their own to ground.
+
+    Asked of Keycloak here rather than threaded out of the bootstrap Job, so the two Jobs
+    share no state and either can be re-run on its own.
+    """
+    token = kc_token()
+    organizations = kc_get("organizations", token)
     if not organizations:
         raise RuntimeError("Keycloak has no organization yet; the identity bootstrap has not finished")
-    return organizations[0]["id"]
+    tenant = organizations[0]["id"]
+
+    members = kc_get(f"organizations/{tenant}/members", token)
+    if not members:
+        raise RuntimeError(f"organization {tenant} has no member yet; the identity bootstrap has not finished")
+    # The administrator the bootstrap created is its only member at this point. `sub` in a
+    # Keycloak token is the user's id, which is what the api matches `x-auth-subject` on.
+    return tenant, members[0]["id"], members[0].get("username", "")
+
+
+def wait_for(what, attempt_fn, attempts=180, delay=5):
+    """Everything here runs while the rest of the deployment is still starting, so "not ready
+    yet" is the normal first answer rather than a failure. Reports what it is waiting for
+    once a minute, because a Job that prints nothing for ten minutes looks hung."""
+    last = None
+    for attempt in range(attempts):
+        try:
+            return attempt_fn()
+        except Exception as error:  # noqa: BLE001 — anything here means "not ready yet"
+            last = error
+            if attempt % 12 == 0:
+                log(f"  waiting for {what}: {error.__class__.__name__}: {error}")
+            time.sleep(delay)
+    raise RuntimeError(f"gave up waiting for {what}: {last}")
 
 
 # ---------------------------------------------------------------------------
-# Bindings -> the shapes the agent stores
+# The api's admin GraphQL
 # ---------------------------------------------------------------------------
+
+
+class Api:
+    def __init__(self, subject, tenant):
+        self.subject = subject
+        self.tenant = tenant
+
+    def call(self, document, variables=None):
+        body = json.dumps({"query": document, "variables": variables or {}}).encode()
+        request = urllib.request.Request(
+            f"{API_URL}/graphql",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                # How the api learns who is calling. Outside the namespace this header is
+                # stamped by the authenticating proxy and cannot be set by a client; in here
+                # the job presents the administrator the realm bootstrap created.
+                "x-auth-subject": self.subject,
+                "x-rai-tenant": self.tenant,
+            },
+        )
+        with urllib.request.urlopen(request, timeout=300) as response:
+            payload = json.load(response)
+        if payload.get("errors"):
+            raise RuntimeError(json.dumps(payload["errors"])[:2000])
+        return payload["data"]
 
 
 def identifier(name):
@@ -108,418 +164,402 @@ def identifier(name):
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
 
 
-def source_config(connection):
+def connection_config(connection):
     """The agent's ClickHouse client speaks HTTP and wants the protocol spelled out."""
-    return {
+    config = {
         "host": connection["host"],
         "port": connection.get("port", 8123),
         "protocol": "https:" if connection.get("tls") else "http:",
         "username": connection.get("username", "default"),
         "password": connection.get("password", ""),
     }
+    if connection.get("database"):
+        config["database"] = connection["database"]
+    return config
 
 
-def numeric(column):
-    return column.get("type") in ("integer", "number")
+def column_role(column):
+    """`role` is what the publisher declared; the type is only a fallback for older cards.
 
-
-def role_of(column):
-    """`role` is what the publisher declared; the type is only a fallback for older cards."""
-    declared = column.get("role")
-    if declared in ("measure", "dimension"):
-        return declared
-    return "measure" if numeric(column) else "dimension"
-
-
-# ---------------------------------------------------------------------------
-# PostgreSQL: what the agent must have registered
-# ---------------------------------------------------------------------------
-
-
-def dsn():
-    return (
-        f"host={os.environ['PG_HOST']} port={os.environ['PG_PORT']} "
-        f"user={os.environ['PG_USER']} password={os.environ['PG_PASSWORD']} "
-        f"dbname={os.environ['PG_DATABASE']}"
-    )
-
-
-def wait_for_schema(attempts=120, delay=5):
-    """The agent creates its own tables on first boot; this Job has none of its own to create.
-
-    Waiting here rather than ordering the deployment means a slow first start delays grounding
-    instead of failing it.
+    The catalogue's vocabulary is wider than a dataset card's — it distinguishes a key, a
+    date and a plain category where a card says only "dimension" — so a declared dimension
+    is mapped to the narrowest thing that is certainly true of it.
     """
-    for attempt in range(attempts):
-        try:
-            with psycopg.connect(dsn(), autocommit=True) as connection:
-                connection.execute("SELECT 1 FROM llm_models LIMIT 1")
-                connection.execute("SELECT 1 FROM tenant_data_sources LIMIT 1")
-                return
-        except Exception as error:  # noqa: BLE001 — any failure here means "not ready yet"
-            if attempt == attempts - 1:
-                raise
-            if attempt % 6 == 0:
-                log(f"waiting for the agent's schema ({error.__class__.__name__})")
-            time.sleep(delay)
+    declared = column.get("role")
+    if declared == "measure":
+        return "measure"
+    if column.get("references"):
+        return "key"
+    if column.get("type") in ("date", "datetime", "timestamp"):
+        return "date"
+    if declared == "dimension":
+        return "category"
+    return "measure" if column.get("type") in ("integer", "number") else "category"
 
 
-def seed_postgres(tenant, bindings):
-    with psycopg.connect(dsn(), autocommit=True) as connection:
-        cursor = connection.cursor()
+# ---------------------------------------------------------------------------
+# 1. The model registry
+# ---------------------------------------------------------------------------
 
-        log("== default model ==")
-        cursor.execute("DELETE FROM llm_models WHERE provider = %s", (os.environ["LLM_PROVIDER"],))
-        cursor.execute(
-            """
-            INSERT INTO llm_models
-              (id, provider, name, config, "graphType", "largeDataRowThreshold",
-               "largeDataSizeThreshold", "previewRowCount", "contextWindowSize",
-               "memoryTokenBudget", "summarizeTokenThreshold", enabled, "isDefault")
-            VALUES (gen_random_uuid(), %s, %s, %s, 'default', 100, 102400, 20, 1000000, 32000, 40000, true, true)
-            """,
-            (
-                os.environ["LLM_PROVIDER"],
-                os.environ["LLM_MODEL"],
-                json.dumps(
+LIST_MODELS = """
+query { adminLlmModels(pagination: { page: 1, pageSize: 100 }) { items { id name isDefault } } }
+"""
+
+CREATE_MODEL = """
+mutation ($input: AdminCreateLlmModelInput!) {
+  adminCreateLlmModel(input: $input) { id name }
+}
+"""
+
+UPDATE_MODEL = """
+mutation ($input: AdminUpdateLlmModelInput!) {
+  adminUpdateLlmModel(input: $input) { id name }
+}
+"""
+
+SET_DEFAULT_MODEL = """
+mutation ($id: ID!) { adminSetDefaultLlmModel(id: $id) { id name isDefault } }
+"""
+
+
+def ensure_model(api):
+    """The one row without which the deployment answers nothing.
+
+    `provider: openai` is the dialect, not the company: with `baseURL` set, the client talks
+    to whatever OpenAI-compatible endpoint it names — which is the whole point of this
+    deployment, where that endpoint is inside the operator's own perimeter.
+    """
+    config = {
+        "model": MODEL_ID,
+        "baseURL": MODEL_BASE_URL,
+        "apiKey": MODEL_API_KEY,
+        "temperature": MODEL_TEMPERATURE,
+    }
+    existing = {m["name"]: m for m in api.call(LIST_MODELS)["adminLlmModels"]["items"]}
+    if MODEL_NAME in existing:
+        model = existing[MODEL_NAME]
+        # `name` carries a UNIQUE constraint, so a re-run updates rather than inserts — and
+        # it has to update: a reconfigure that moved the endpoint or the key would otherwise
+        # leave the registry pointing at the old one.
+        api.call(UPDATE_MODEL, {"input": {"id": model["id"], "provider": "openai", "config": config, **THRESHOLDS}})
+        log(f"  updated model {MODEL_NAME}")
+    else:
+        model = api.call(
+            CREATE_MODEL,
+            {
+                "input": {
+                    "provider": "openai",
+                    "name": MODEL_NAME,
+                    "config": config,
+                    "enabled": True,
+                    "visibleInChat": True,
+                    **THRESHOLDS,
+                }
+            },
+        )["adminCreateLlmModel"]
+        log(f"  created model {MODEL_NAME}")
+    if not existing.get(MODEL_NAME, {}).get("isDefault"):
+        api.call(SET_DEFAULT_MODEL, {"id": model["id"]})
+        log("  and made it the installation default")
+
+
+# ---------------------------------------------------------------------------
+# 2. Data sources
+# ---------------------------------------------------------------------------
+
+# No `tenantId` argument, deliberately: this query is scoped by the caller's tenant, which
+# arrives in the `x-rai-tenant` header. The schema-catalogue queries below DO take one, which
+# is a difference worth not guessing at.
+LIST_SOURCES = """
+query {
+  adminDataSources(pagination: { page: 1, pageSize: 200 }) {
+    items { id datasourceId }
+  }
+}
+"""
+
+REGISTER_SOURCE = """
+mutation ($input: AdminRegisterDataSourceInput!) {
+  adminRegisterDataSource(input: $input) { id datasourceId }
+}
+"""
+
+UPDATE_SOURCE_CONNECTION = """
+mutation ($input: AdminUpdateDataSourceConnectionInput!) {
+  adminUpdateDataSourceConnection(input: $input) { id datasourceId }
+}
+"""
+
+UNREGISTER_SOURCE = """
+mutation ($id: ID!) { adminUnregisterDataSource(id: $id) }
+"""
+
+
+def ensure_sources(api):
+    existing = {
+        source["datasourceId"]: source["id"]
+        for source in api.call(LIST_SOURCES)["adminDataSources"]["items"]
+    }
+    wanted = {}
+    for binding in BINDINGS:
+        source_id = identifier(binding["dataset"])
+        wanted[source_id] = binding
+        payload = {
+            "tenantId": api.tenant,
+            "datasourceId": source_id,
+            "name": source_id,
+            "type": "clickhouse",
+            "config": json.dumps(connection_config(binding["connection"])),
+            "description": binding.get("title", binding["dataset"]),
+            "isActive": True,
+        }
+        if source_id in existing:
+            api.call(
+                UPDATE_SOURCE_CONNECTION,
+                {"input": {"id": existing[source_id], "config": payload["config"]}},
+            )
+            log(f"  updated source {source_id}")
+        else:
+            api.call(REGISTER_SOURCE, {"input": payload})
+            log(f"  registered source {source_id}")
+
+    # Unbinding a dataset has to revoke the agent's access to it, not merely stop mentioning
+    # it: a source left behind is working credentials for data the consumer no longer holds.
+    # Unregistering also deletes that source's catalogue and its index entries, in that
+    # order, which is the other half of the same thing.
+    for source_id, link_id in existing.items():
+        if source_id not in wanted:
+            api.call(UNREGISTER_SOURCE, {"id": link_id})
+            log(f"  unregistered source {source_id}, which is no longer bound")
+    return wanted
+
+
+# ---------------------------------------------------------------------------
+# 3. The schema catalogue, and the descriptions the publisher wrote
+# ---------------------------------------------------------------------------
+
+REFRESH = """
+mutation ($datasourceId: String!, $tenantId: String) {
+  adminSchemaRefresh(datasourceId: $datasourceId, tenantId: $tenantId) { jobId }
+}
+"""
+
+REFRESH_STATUS = """
+query ($jobId: ID!, $tenantId: String) {
+  adminSchemaRefreshStatus(jobId: $jobId, tenantId: $tenantId) { state }
+}
+"""
+
+TABLES = """
+query ($datasourceId: String, $tenantId: String) {
+  adminSchemaTables(datasourceId: $datasourceId, tenantId: $tenantId) { id schemaName tableName }
+}
+"""
+
+TABLE_DETAIL = """
+query ($id: ID!, $tenantId: String) {
+  adminSchemaTable(id: $id, tenantId: $tenantId) { columns { id name } }
+}
+"""
+
+ANNOTATE = """
+mutation ($input: AdminSchemaAnnotateInput!) { adminSchemaAnnotate(input: $input) }
+"""
+
+
+def ground_sources(api, wanted):
+    for source_id, binding in wanted.items():
+        declared = {table["name"]: table for table in binding.get("schema", {}).get("tables", [])}
+        if not declared:
+            log(f"  {source_id}: the dataset card declares no tables, nothing to annotate")
+            continue
+
+        # Registration enqueues a read already; this one is for the re-run case, where the
+        # source was there and the warehouse may have changed under it.
+        job = api.call(REFRESH, {"datasourceId": source_id, "tenantId": api.tenant})["adminSchemaRefresh"]["jobId"]
+
+        def read_catalogue():
+            state = api.call(REFRESH_STATUS, {"jobId": job, "tenantId": api.tenant})
+            state = state["adminSchemaRefreshStatus"]["state"]
+            if state not in ("completed", "failed"):
+                raise RuntimeError(f"the catalogue read is {state}")
+            if state == "failed":
+                raise RuntimeError("the catalogue read failed — the source is probably unreachable")
+            tables = api.call(TABLES, {"datasourceId": source_id, "tenantId": api.tenant})["adminSchemaTables"]
+            if not tables:
+                raise RuntimeError("the catalogue holds no table yet")
+            return tables
+
+        # A warehouse's dictionary is minutes, not a request, and the worker that reads it
+        # may still be starting.
+        tables = wait_for(f"the schema catalogue of {source_id}", read_catalogue)
+
+        annotated = 0
+        for table in tables:
+            spec = declared.get(table["tableName"])
+            if not spec:
+                continue
+            if spec.get("description"):
+                api.call(
+                    ANNOTATE,
                     {
-                        "provider": os.environ["LLM_PROVIDER"],
-                        "apiKey": os.environ["LLM_API_KEY"],
-                        "model": os.environ["LLM_MODEL"],
-                        "temperature": 1,
-                        "topP": 1,
-                    }
-                ),
-            ),
-        )
-
-        log("== knowledge base provider ==")
-        cursor.execute(
-            """
-            INSERT INTO knowledge_base_providers
-              (id, name, uri, username, password, database, "maxConnectionPoolSize",
-               "connectionAcquisitionTimeout", "maxTransactionRetryTime", "logLevel",
-               "isActive", "createdAt", "updatedAt")
-            VALUES (gen_random_uuid(), 'marketplace_kb', %s, %s, %s, %s, 50, 60000, 30000, 'info', true, now(), now())
-            ON CONFLICT (name) DO UPDATE SET uri = EXCLUDED.uri, password = EXCLUDED.password, "updatedAt" = now()
-            RETURNING id
-            """,
-            (NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, NEO4J_DB),
-        )
-        kb_id = cursor.fetchone()[0]
-        cursor.execute(
-            """
-            INSERT INTO tenant_knowledge_bases (id, "tenantId", "knowledgeBaseProviderId", "createdAt", "updatedAt")
-            VALUES (gen_random_uuid(), %s, %s, now(), now())
-            ON CONFLICT ("tenantId") DO UPDATE
-              SET "knowledgeBaseProviderId" = EXCLUDED."knowledgeBaseProviderId", "updatedAt" = now()
-            """,
-            (tenant, kb_id),
-        )
-
-        log("== data sources ==")
-        wanted = []
-        for binding in bindings:
-            source_id = identifier(binding["dataset"])
-            wanted.append(source_id)
-            cursor.execute(
-                """
-                INSERT INTO data_source_providers
-                  (id, name, type, config, description, "isActive", "createdAt", "updatedAt")
-                VALUES (gen_random_uuid(), %s, 'clickhouse', %s, %s, true, now(), now())
-                ON CONFLICT (name) DO UPDATE
-                  SET config = EXCLUDED.config, description = EXCLUDED.description, "updatedAt" = now()
-                RETURNING id
-                """,
-                (
-                    source_id,
-                    json.dumps(source_config(binding["connection"])),
-                    binding.get("title", binding["dataset"]),
-                ),
-            )
-            provider_id = cursor.fetchone()[0]
-            cursor.execute(
-                """
-                INSERT INTO tenant_data_sources
-                  (id, "tenantId", "datasourceId", "dataSourceProviderId", "createdAt", "updatedAt")
-                VALUES (gen_random_uuid(), %s, %s, %s, now(), now())
-                ON CONFLICT ("tenantId", "datasourceId") DO UPDATE
-                  SET "dataSourceProviderId" = EXCLUDED."dataSourceProviderId", "updatedAt" = now()
-                """,
-                (tenant, source_id, provider_id),
-            )
-            log(f"  {source_id} -> {binding['connection']['host']}/{binding['connection']['database']}")
-
-        # Unbinding a dataset has to revoke the agent's access to it, not merely stop mentioning
-        # it: a stale row would leave working credentials for data the consumer no longer holds.
-        cursor.execute(
-            'DELETE FROM tenant_data_sources WHERE "tenantId" = %s AND NOT ("datasourceId" = ANY(%s))',
-            (tenant, wanted),
-        )
-
-        log("== suggestions ==")
-        cursor.execute('DELETE FROM initial_suggestions WHERE "knowledgeBaseProviderId" = %s', (kb_id,))
-        for index, text in enumerate(suggestions(bindings)):
-            cursor.execute(
-                """
-                INSERT INTO initial_suggestions
-                  (id, "knowledgeBaseProviderId", text, "orderIndex", "isActive", "createdAt", "updatedAt")
-                VALUES (gen_random_uuid(), %s, %s, %s, true, now(), now())
-                """,
-                (kb_id, text, index),
-            )
-
-        log("== system messages ==")
-        cursor.execute("DELETE FROM system_messages WHERE name = 'Technical part' AND \"tenantId\" IS NULL")
-        cursor.execute(
-            'INSERT INTO system_messages (id, name, index, "tenantId", "modelRegex", text)'
-            " VALUES (gen_random_uuid(), 'Technical part', 0, NULL, NULL, %s)",
-            (open("/scripts/technical-brief.md").read(),),
-        )
-        cursor.execute("DELETE FROM system_messages WHERE name = 'Domain part' AND \"tenantId\" = %s", (tenant,))
-        cursor.execute(
-            'INSERT INTO system_messages (id, name, index, "tenantId", "modelRegex", text)'
-            " VALUES (gen_random_uuid(), 'Domain part', 10, %s, NULL, %s)",
-            (tenant, domain_brief(bindings)),
-        )
+                        "input": {
+                            "target": "table",
+                            "id": table["id"],
+                            "tenantId": api.tenant,
+                            "description": spec["description"],
+                        }
+                    },
+                )
+                annotated += 1
+            columns = {c["name"]: c["id"] for c in api.call(TABLE_DETAIL, {"id": table["id"], "tenantId": api.tenant})["adminSchemaTable"]["columns"]}
+            for column in spec.get("columns", []):
+                column_id = columns.get(column["name"])
+                if not column_id:
+                    continue
+                patch = {
+                    "target": "column",
+                    "id": column_id,
+                    "tenantId": api.tenant,
+                    "role": column_role(column),
+                }
+                if column.get("description"):
+                    patch["description"] = column["description"]
+                api.call(ANNOTATE, {"input": patch})
+                annotated += 1
+        log(f"  {source_id}: {len(tables)} table(s) in the catalogue, {annotated} annotation(s) applied")
 
 
-def suggestions(bindings):
-    """Opening questions, drawn from what the bound datasets actually contain.
+# ---------------------------------------------------------------------------
+# 4. How it behaves, and what to ask it first
+# ---------------------------------------------------------------------------
+
+LIST_SYSTEM_MESSAGES = """
+query { adminSystemMessages(pagination: { page: 1, pageSize: 100 }) { items { id name tenantId } } }
+"""
+
+CREATE_SYSTEM_MESSAGE = """
+mutation ($input: AdminCreateSystemMessageInput!) {
+  adminCreateSystemMessage(input: $input) { id name }
+}
+"""
+
+UPDATE_SYSTEM_MESSAGE = """
+mutation ($input: AdminUpdateSystemMessageInput!) {
+  adminUpdateSystemMessage(input: $input) { id name }
+}
+"""
+
+LIST_SUGGESTIONS = """
+query { adminInitialSuggestions(pagination: { page: 1, pageSize: 100 }) { items { id text } } }
+"""
+
+CREATE_SUGGESTION = """
+mutation ($input: AdminCreateInitialSuggestionInput!) {
+  adminCreateInitialSuggestion(input: $input) { id }
+}
+"""
+
+DELETE_SUGGESTION = """
+mutation ($id: ID!) { adminDeleteInitialSuggestion(id: $id) }
+"""
+
+
+def ensure_prompt(api, wanted):
+    technical = open("/scripts/technical-brief.md", encoding="utf-8").read()
+    domain = domain_brief(wanted)
+    existing = {m["name"]: m for m in api.call(LIST_SYSTEM_MESSAGES)["adminSystemMessages"]["items"]}
+    for name, index, text, tenant in (
+        ("Technical part", 0, technical, None),
+        ("Domain part", 10, domain, api.tenant),
+    ):
+        payload = {"name": name, "index": index, "text": text}
+        if tenant:
+            payload["tenantId"] = tenant
+        if name in existing:
+            api.call(UPDATE_SYSTEM_MESSAGE, {"input": {"id": existing[name]["id"], **payload}})
+            log(f"  updated system message {name!r}")
+        else:
+            api.call(CREATE_SYSTEM_MESSAGE, {"input": payload})
+            log(f"  created system message {name!r}")
+
+
+def ensure_suggestions(api, wanted):
+    """Opening questions drawn from what the bound datasets actually contain.
 
     Generic prompts ("what can you do?") teach a user nothing about their own data; naming a
     real table from a real card shows them the shape of a question that will work.
     """
-    lines = []
-    for binding in bindings:
-        title = binding.get("title", binding["dataset"])
+    texts = suggestions(wanted)
+    for suggestion in api.call(LIST_SUGGESTIONS)["adminInitialSuggestions"]["items"]:
+        api.call(DELETE_SUGGESTION, {"id": suggestion["id"]})
+    for index, text in enumerate(texts):
+        api.call(
+            CREATE_SUGGESTION,
+            {"input": {"tenantId": api.tenant, "text": text, "orderIndex": index, "isActive": True}},
+        )
+    log(f"  {len(texts)} opening suggestion(s)")
+
+
+def suggestions(wanted):
+    out = []
+    for source_id, binding in wanted.items():
         tables = binding.get("schema", {}).get("tables", [])
         if not tables:
             continue
-        lines.append(f"What does the {title} dataset contain, and how many records are in it?")
-        largest = max(tables, key=lambda table: len(table["columns"]))
-        measures = [column["name"] for column in largest["columns"] if role_of(column) == "measure"]
-        if measures:
-            lines.append(f"In {title}, show the distribution of {measures[0].replace('_', ' ')}.")
-    return lines[:6] or ["What data do I have access to?"]
+        widest = max(tables, key=lambda table: len(table.get("columns", [])))
+        title = binding.get("title", binding["dataset"])
+        out.append(f"What does {title} hold, and over what period?")
+        out.append(f"Summarise {widest['name']} by its main categories.")
+    return out[:6]
 
 
-def domain_brief(bindings):
-    """The per-tenant half of the system prompt, written from the cards.
+def domain_brief(wanted):
+    """What the agent is told about the data before it starts looking.
 
-    The agent needs to know which data sources exist, what each is about, and which tables it
-    holds — the same facts the publisher wrote on the listing. Generating it means a newly
-    connected dataset is described to the model the moment it is bound.
+    Deliberately short: the catalogue carries the descriptions, and repeating them here would
+    be a second copy to keep true. This says which sources exist and what each is for, which
+    is the part the catalogue cannot answer because it is per-source.
     """
     parts = [
-        "### Domain: the datasets connected to this workspace",
-        "",
-        "You answer questions about the data sources below. Each is a separate data source; "
-        "`datasourceId` is the source id given here and equals the knowledge base "
-        "`system.systemId`. Always ground table and column names in the knowledge base — never "
-        "invent them.",
+        "You answer questions about the data sources registered in this workspace. "
+        "Discover tables and columns through the knowledge tools — never invent a name.",
         "",
     ]
-    for binding in bindings:
-        source_id = identifier(binding["dataset"])
+    for source_id, binding in wanted.items():
         title = binding.get("title", binding["dataset"])
-        database = binding["connection"]["database"]
-        parts.append(f"**{title}** — data source `{source_id}`, database (namespace) `{database}`.")
-        if binding.get("description"):
-            parts.append("")
-            parts.append(binding["description"])
+        parts.append(f"### {title}")
+        parts.append(f"Data source id `{source_id}`. {binding.get('description', '')}".rstrip())
         tables = binding.get("schema", {}).get("tables", [])
         if tables:
             parts.append("")
-            parts.append("Tables:")
             for table in tables:
                 description = table.get("description", "")
                 parts.append(f"- `{table['name']}` — {description}" if description else f"- `{table['name']}`")
         parts.append("")
-
-    parts.append(
-        "Answer at cohort level: counts, averages, distributions and trends. Do not return or "
-        "reconstruct individual records."
-    )
-    return "\n".join(parts)
-
-
-# ---------------------------------------------------------------------------
-# Neo4j: the graph the agent searches
-# ---------------------------------------------------------------------------
-
-# Marks every node this job owns, so pruning can tell them from a semantic layer someone else
-# curated in the same graph.
-MANAGED_BY = "swarm-marketplace"
-
-CONSTRAINTS = [
-    "CREATE CONSTRAINT IF NOT EXISTS FOR (s:System)    REQUIRE s.systemId    IS UNIQUE",
-    "CREATE CONSTRAINT IF NOT EXISTS FOR (n:Namespace) REQUIRE n.namespaceId IS UNIQUE",
-    "CREATE CONSTRAINT IF NOT EXISTS FOR (d:Dataset)   REQUIRE d.datasetId   IS UNIQUE",
-    "CREATE CONSTRAINT IF NOT EXISTS FOR (f:Field)     REQUIRE f.fieldId     IS UNIQUE",
-]
-
-# The agent's search probes all of these labels; the indexes must exist even for the labels
-# this loader never writes, or a search against them fails instead of returning nothing.
-VECTOR_INDEXES = [
-    ("kb_field_embedding_idx", "Field"),
-    ("kb_dataset_embedding_idx", "Dataset"),
-    ("kb_searchable_embedding_idx", "Searchable"),
-    ("kb_measure_embedding_idx", "Measure"),
-    ("kb_dimension_embedding_idx", "Dimension"),
-    ("kb_concept_embedding_idx", "Concept"),
-]
-
-
-def embed(texts):
-    vectors = []
-    for start in range(0, len(texts), 128):
-        chunk = texts[start : start + 128]
-        response = openai.embeddings.create(model=EMBED_MODEL, input=chunk)
-        vectors.extend(item.embedding for item in response.data)
-    return vectors
-
-
-def build_graph(bindings):
-    driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-    to_embed = []
-
-    with driver.session(database=NEO4J_DB) as session:
-        for statement in CONSTRAINTS:
-            session.run(statement)
-        for name, label in VECTOR_INDEXES:
-            session.run(
-                f"CREATE VECTOR INDEX {name} IF NOT EXISTS FOR (n:{label}) ON n.embedding "
-                "OPTIONS {indexConfig: {`vector.dimensions`: $dim, `vector.similarity_function`: 'cosine'}}",
-                dim=EMBED_DIM,
-            )
-
-        # A dataset that is no longer bound must stop being findable; leaving it in the graph
-        # would have the agent generate SQL against data it can no longer reach.
-        #
-        # Scoped to nodes this job wrote. The agent's graph can also hold a semantic layer —
-        # concepts, terms, curated measures — that nobody here created, and a graph belonging to
-        # more than one source is exactly the case where "delete what I did not just write" is
-        # the difference between pruning and wiping.
-        keep = [identifier(binding["dataset"]) for binding in bindings]
-        session.run(
-            "MATCH (s:System {managedBy:$owner}) WHERE NOT s.systemId IN $keep "
-            "OPTIONAL MATCH (n:Namespace {managedBy:$owner})-[:BELONGS_TO]->(s) "
-            "OPTIONAL MATCH (d:Dataset {managedBy:$owner})-[:BELONGS_TO]->(n) "
-            "OPTIONAL MATCH (f:Field {managedBy:$owner})-[:BELONGS_TO]->(d) "
-            "DETACH DELETE f, d, n, s",
-            keep=keep,
-            owner=MANAGED_BY,
-        )
-
-        for binding in bindings:
-            system_id = identifier(binding["dataset"])
-            namespace = binding["connection"]["database"]
-            title = binding.get("title", binding["dataset"])
-
-            session.run(
-                "MERGE (s:System {systemId:$id}) SET s.displayName=$name, s.engine='clickhouse', s.managedBy=$owner",
-                id=system_id,
-                name=title,
-                owner=MANAGED_BY,
-            )
-            session.run(
-                "MERGE (n:Namespace {namespaceId:$ns}) SET n.name=$ns, n.managedBy=$owner "
-                "WITH n MATCH (s:System {systemId:$id}) MERGE (n)-[:BELONGS_TO]->(s)",
-                ns=namespace,
-                id=system_id,
-                owner=MANAGED_BY,
-            )
-
-            for table in binding.get("schema", {}).get("tables", []):
-                dataset_id = f"{namespace}.{table['name']}"
-                description = table.get("description", table["name"])
-                search_text = f"table: {dataset_id} | description: {description}"
-                session.run(
-                    "MERGE (d:Dataset {datasetId:$id}) SET d:Searchable, d.name=$name, "
-                    "d.description=$description, d.searchText=$text, d.managedBy=$owner "
-                    "WITH d MATCH (n:Namespace {namespaceId:$ns}) MERGE (d)-[:BELONGS_TO]->(n)",
-                    id=dataset_id,
-                    name=table["name"],
-                    description=description,
-                    text=search_text,
-                    ns=namespace,
-                    owner=MANAGED_BY,
-                )
-                to_embed.append(("Dataset", "datasetId", dataset_id, search_text))
-
-                for column in table["columns"]:
-                    field_id = f"{dataset_id}.{column['name']}"
-                    role = role_of(column)
-                    comment = column.get("description", "")
-                    field_text = (
-                        f"field: {column['name']} | table: {dataset_id} | role: {role} | description: {comment}"
-                    )
-                    session.run(
-                        "MERGE (f:Field {fieldId:$id}) SET f:Searchable, f.name=$name, f.role=$role, "
-                        "f.type=$type, f.comment=$comment, f.searchText=$text, f.managedBy=$owner "
-                        "WITH f MATCH (d:Dataset {datasetId:$dataset}) MERGE (f)-[:BELONGS_TO]->(d)",
-                        id=field_id,
-                        name=column["name"],
-                        role=role,
-                        type=column.get("type", "string"),
-                        comment=comment,
-                        text=field_text,
-                        dataset=dataset_id,
-                        owner=MANAGED_BY,
-                    )
-                    to_embed.append(("Field", "fieldId", field_id, field_text))
-
-            # Joins, declared by the publisher rather than guessed from column names.
-            for table in binding.get("schema", {}).get("tables", []):
-                for column in table["columns"]:
-                    if not column.get("references"):
-                        continue
-                    target_table, target_column = column["references"].split(".", 1)
-                    session.run(
-                        "MATCH (source:Field {fieldId:$source}) MATCH (target:Field {fieldId:$target}) "
-                        "MERGE (source)-[:REFERENCES]->(target)",
-                        source=f"{namespace}.{table['name']}.{column['name']}",
-                        target=f"{namespace}.{target_table}.{target_column}",
-                    )
-
-        if to_embed:
-            log(f"== embedding {len(to_embed)} nodes ==")
-            for (label, key, node_id, _), vector in zip(to_embed, embed([item[3] for item in to_embed])):
-                session.run(
-                    f"MATCH (n:{label} {{{key}:$id}}) "
-                    "CALL db.create.setNodeVectorProperty(n, 'embedding', $vector) "
-                    "SET n.embeddingUpdatedAt = datetime()",
-                    id=node_id,
-                    vector=vector,
-                )
-
-        counts = session.run(
-            "MATCH (s:System) WITH count(s) AS systems "
-            "MATCH (n:Namespace) WITH systems, count(n) AS namespaces "
-            "MATCH (d:Dataset) WITH systems, namespaces, count(d) AS datasets "
-            "MATCH (f:Field) RETURN systems, namespaces, datasets, count(f) AS fields"
-        ).single()
-        log(
-            f"graph: systems={counts['systems']} namespaces={counts['namespaces']} "
-            f"datasets={counts['datasets']} fields={counts['fields']}"
-        )
-
-    driver.close()
+    return "\n".join(parts).strip()
 
 
 def main():
-    if not BINDINGS:
-        log("no datasets are bound to this deployment; nothing to ground")
-        return
+    log(f"== grounding {len(BINDINGS)} dataset(s) ==")
+    tenant, subject, username = wait_for("the identity provider", identity)
+    log(f"  tenant {tenant}, acting as {username or subject}")
+    api = Api(subject, tenant)
 
-    log(f"grounding {len(BINDINGS)} dataset(s)")
-    wait_for_schema()
-    tenant = resolve_tenant()
-    log(f"tenant = {tenant}")
-    build_graph(BINDINGS)
-    seed_postgres(tenant, BINDINGS)
-    log("done")
+    wait_for("the api", lambda: api.call("query { __typename }"))
+
+    log("== model registry ==")
+    ensure_model(api)
+    log("== data sources ==")
+    wanted = ensure_sources(api)
+    log("== schema catalogue ==")
+    ground_sources(api, wanted)
+    log("== system prompt ==")
+    ensure_prompt(api, wanted)
+    log("== opening suggestions ==")
+    ensure_suggestions(api, wanted)
+    log("== done ==")
+    return 0
 
 
 if __name__ == "__main__":

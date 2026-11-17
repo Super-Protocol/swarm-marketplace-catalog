@@ -13,3 +13,18 @@ The application is accessible via internal services:
 Note: Ingress is disabled. Access is expected through oauth2-proxy.
 
 {{- end }}
+
+{{- $backReplicas := ternary .Values.autoscaling.maxReplicas .Values.back.replicaCount .Values.autoscaling.enabled }}
+{{- if or (gt (int $backReplicas) 1) (and .Values.worker.enabled (gt (int .Values.worker.replicaCount) 1)) }}
+
+The api runs in more than one replica. Two things to check before load arrives
+(chart README, section «Несколько реплик»):
+
+- PostgreSQL connections. Every api process opens its own pools — application,
+  LangGraph checkpointer, LangGraph store — so the ceiling is roughly
+  (back + worker pods) × 3 × `pool.max` (10 by default), i.e. ~30 connections
+  per pod. Compare that with the server's `max_connections` before adding pods.
+- Requests on the pods. Without `back.resources` / `worker.resources` the
+  scheduler may place every replica on one node, and an HPA on CPU utilisation
+  has nothing to compute against.
+{{- end }}

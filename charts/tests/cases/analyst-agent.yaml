@@ -1,0 +1,24 @@
+aivo:
+  config:
+    configOverlay:
+      ANALYST_IDENTITY_CLIENT_SECRET: "SECRET-AAAAAAAAAAAA"
+      ANALYST_DB_PASSWORD: "SECRET-AAAAAAAAAAAA"
+      ANALYST_IDENTITY_DB_PASSWORD: "SECRET-AAAAAAAAAAAA"
+      ANALYST_REDIS_PASSWORD: "SECRET-AAAAAAAAAAAA"
+      ANALYST_S3_ACCESS_KEY_ID: analyst-s3
+      ANALYST_S3_SECRET_KEY: "SECRET-AAAAAAAAAAAA"
+      ANALYST_CHECKPOINTER_URI: "postgresql://checkpointer_user:SECRET-AAAAAAAAAAAA@analyst-postgresql:5432/retail_ai_checkpointer"
+      ANALYST_MODEL_API_KEY: "SECRET-AAAAAAAAAAAA"
+      ANALYST_EMBEDDINGS_API_KEY: "SECRET-AAAAAAAAAAAA"
+      ANALYST_GRAPHQL_HTTP_URL: "https://alpha.conf-apps.superprotocol.dev/graphql"
+      ANALYST_GRAPHQL_WS_URL: "wss://alpha.conf-apps.superprotocol.dev/graphql"
+      ANALYST_LOGOUT_URL: "/oauth2/sign_out?rd=https%3A%2F%2Falpha.conf-apps.superprotocol.dev%2Fauth%2Frealms%2Fmaster%2Fprotocol%2Fopenid-connect%2Flogout"
+    config:
+      services:
+        api:
+          embeddings: { baseUrl: "http://analyst-embeddings/v1", model: bge-large-en-v1.5, dimensions: 1024 }
+          llmSmart: { model: medgemma-27b, baseURL: "https://model.internal/v1" }
+          mcp: { enabled: true }
+          signals: { enabled: true }
+        instance:
+          brand: { name: AI Analyst, title: AI Analyst }

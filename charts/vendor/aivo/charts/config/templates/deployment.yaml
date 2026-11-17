@@ -13,10 +13,29 @@ spec:
       {{- include "app.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
       annotations:
+        # The service reads conf/ once, at boot. Without this a values change
+        # reaches the ConfigMap, ArgoCD reports Synced, and the pod keeps
+        # serving the config it started with (AIV-1541).
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.configOverlay }}
+        # LOCAL DEVIATION (see charts/vendor/aivo/VENDORED.md): the credentials half of the
+        # configuration lives in a Secret, and a Secret volume the init container has
+        # already consumed does not restart anything by being updated. Without this, a
+        # reconfigure that changes only a password reaches the Secret and the service keeps
+        # serving the old one. The value is derived from a generated credential, so it
+        # differs per deployment — declare it in the listing's `evidence.exclude`, next to
+        # the other checksum annotations charts put on their pods.
+        checksum/config-overlay: {{ .Values.configOverlay | toJson | sha256sum }}
+        {{- end }}
+        {{- if .Values.global.caCert.enabled }}
+        # The CA bundle is a ConfigMap too, and NODE_EXTRA_CA_CERTS is read once
+        # when node starts — a rotated chain has to roll the pods to take effect.
+        checksum/ca-cert: {{ .Values.global.caCert.content | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
       labels:
         {{- include "app.labels" . | nindent 8 }}
         {{- with .Values.podLabels }}
@@ -26,6 +45,83 @@ spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.configOverlay }}
+      initContainers:
+      # LOCAL DEVIATION (see charts/vendor/aivo/VENDORED.md). Writes the configuration the
+      # service will read: the attested document from the ConfigMap with every `${NAME}`
+      # replaced by the value the Secret carries for it.
+      #
+      # Runs the service's own image, so this adds no image to trust and no digest to keep
+      # true, and the script is stdlib node. It is spelled out here rather than mounted
+      # from a ConfigMap of its own because a Deployment IS attested: a verifier reading the
+      # evidence sees the substitution rule itself, not a reference to it.
+      #
+      # Fails closed. A `${NAME}` the Secret does not carry stops the pod with that name in
+      # the message — the alternative is a service that boots with the literal string
+      # `${ANALYST_DB_PASSWORD}` as its database password and reports an authentication
+      # failure against a healthy database.
+      - name: resolve-config
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+        - node
+        - -e
+        - |
+          const fs = require('fs');
+          const src = '/etc/aivo/config', dst = '/app/conf';
+          const overlay = JSON.parse(fs.readFileSync('/etc/aivo/config-overlay/overlay.json', 'utf8'));
+          // JSON.stringify, not the bare value: YAML 1.2's double-quoted style uses JSON
+          // escaping, so this is the one encoding that survives a credential containing a
+          // quote or a backslash — in the outer document and in the per-service block
+          // scalar inside it alike. A plain textual paste produced valid-looking YAML that
+          // stopped parsing at the first `"` in a password.
+          const take = (name, key) => {
+            if (!Object.prototype.hasOwnProperty.call(overlay, key)) {
+              throw new Error(`${name} refers to \${${key}} and the configuration overlay does not carry it`);
+            }
+            return JSON.stringify(overlay[key]);
+          };
+          for (const name of fs.readdirSync(src)) {
+            const text = fs.readFileSync(`${src}/${name}`, 'utf8').replace(
+              /^([^\S\n]*(?:- )?[\w.-]+:[^\S\n]+)(["']?)\$\{([A-Za-z0-9_]+)\}\2[^\S\n]*$/gm,
+              (_match, head, _quote, key) => head + take(name, key),
+            );
+            // The pattern takes a reference that is the whole value of its key, quoted or
+            // not — both forms occur, because the chart quotes some values and not others.
+            // Anything left is a reference inside a larger string, and substituting a
+            // quoted scalar into the middle of one would corrupt the document rather than
+            // fill it in. Refuse, and say so.
+            const leftover = text.match(/\$\{[A-Za-z0-9_]+\}/);
+            if (leftover) {
+              throw new Error(
+                `${name}: ${leftover[0]} is not the whole value of its key. Write ` +
+                `\`uri: \${NAME}\` and put the entire connection string in the Secret, not ` +
+                `\`uri: "postgres://u:\${NAME}@host"\`.`,
+              );
+            }
+            // 0600 and not 0400: an init container that is retried in the same pod would
+            // otherwise fail to overwrite the file it wrote on its first attempt.
+            fs.writeFileSync(`${dst}/${name}`, text, { mode: 0o600 });
+          }
+          console.log(`resolved ${fs.readdirSync(dst).join(', ')}`);
+        {{- with .Values.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        volumeMounts:
+        - name: config-source
+          mountPath: /etc/aivo/config
+          readOnly: true
+        - name: config-overlay
+          mountPath: /etc/aivo/config-overlay
+          readOnly: true
+        - name: config
+          mountPath: /app/conf
       {{- end }}
       {{- with .Values.podSecurityContext }}
       securityContext:
@@ -74,9 +170,22 @@ spec:
           readOnly: true
         {{- end }}
       volumes:
+      {{- if .Values.configOverlay }}
+      # LOCAL DEVIATION (see charts/vendor/aivo/VENDORED.md): what the service reads is the
+      # resolved copy the init container wrote, not the ConfigMap itself.
+      - name: config
+        emptyDir: {}
+      - name: config-source
+        configMap:
+          name: {{ include "app.fullname" . }}-config
+      - name: config-overlay
+        secret:
+          secretName: {{ include "app.fullname" . }}-config-overlay
+      {{- else }}
       - name: config
         configMap:
           name: {{ include "app.fullname" . }}-config
+      {{- end }}
       {{- if .Values.global.caCert.enabled }}
       - name: ca-cert
         configMap:
@@ -86,9 +195,9 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- with (include "app.roleAffinity" (dict "explicit" .Values.affinity "podAntiAffinity" .Values.podAntiAffinity "selector" (include "app.selectorLabels" .))) }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+        {{- . | nindent 8 }}
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:

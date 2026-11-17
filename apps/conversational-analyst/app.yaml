@@ -5,11 +5,14 @@ metadata:
   name: conversational-analyst
   title: Conversational Analyst
   description: >-
-    A conversational analyst for your own data. Connect one or more datasets and ask questions in
-    plain language: the agent finds the relevant tables, writes the SQL, runs it inside the
-    confidential cluster space and answers with figures and charts. Raw records never leave the
-    space and never reach the model — only aggregates do.
-  version: "3.0.9"
+    A conversational analyst for your own data, with the language model inside the deployment.
+    Connect one or more datasets and ask questions in plain language: the agent finds the
+    relevant tables, writes the SQL, runs it inside the confidential cluster space and answers
+    with figures and charts. The model you point it at is yours — any OpenAI-compatible
+    endpoint, including one in your own perimeter — and the embeddings that index your schema
+    and documents are served from inside the deployment, so neither your data nor its
+    description reaches a third party.
+  version: "4.0.0"
   category: ai-agents
   license: Proprietary
   tags:
@@ -19,11 +22,32 @@ metadata:
     - text-to-sql
     - confidential
 
+# ---------------------------------------------------------------------------
+# 4.0.0 is the agent 1.17 listing. A major, because it changes what the
+# operator is asked and what the deployment contains, not only its versions:
+#
+#   * The model is the operator's. 3.0.9 offered four Gemini options and the
+#     publisher's own Google key; this asks for an OpenAI-compatible endpoint,
+#     a model id and an access key, which may be an address inside the
+#     operator's own perimeter. Both external-provider secrets are gone.
+#   * Embeddings are served inside the deployment. They are mandatory in this
+#     product — the knowledge index and schema search are built from them — so
+#     sending them to a hosted provider sends every table name, every column
+#     description and the contents of every document with them.
+#   * Three organisations instead of one, because the boundary this product
+#     enforces is the tenant and nothing else.
+#   * Speech to text is off and nothing is masked. Both deliberate; see below.
+#   * No Neo4j. Agent 1.17 has no graph backend: the schema catalogue, the
+#     semantic model and the knowledge index are in PostgreSQL, which now has
+#     to carry pgvector.
+#   * Object storage is Garage. MinIO's images stopped being pullable.
+# ---------------------------------------------------------------------------
+
 ui:
   sections:
     - id: access
       title: Access
-      description: Where the agent is reachable and who may sign in.
+      description: Where the agent is reachable, and who administers it.
       fields:
         - parameterId: appHostname
           widget: hostname
@@ -31,10 +55,95 @@ ui:
 
     - id: model
       title: Model
-      description: The language model that reads your questions and writes the SQL.
+      description: >-
+        The language model that reads the questions and writes the SQL. Any OpenAI-compatible
+        endpoint — a model server in your own perimeter, a gateway, or a hosted provider. The
+        agent talks to this address and to nothing else about your data.
       fields:
-        - parameterId: llmModel
-          widget: select
+        - parameterId: modelLabel
+          widget: text
+        - parameterId: modelBaseUrl
+          widget: text
+        - parameterId: modelId
+          widget: text
+        - parameterId: modelApiKey
+          widget: password
+
+    - id: embeddings
+      title: Embeddings
+      description: >-
+        How the agent indexes your schema and documents so it can find the right table. This
+        is a second model, it is not optional, and whatever serves it sees your column
+        descriptions and your documents — which is why the default is to run it here.
+      fields:
+        - parameterId: embeddingsInPerimeter
+          widget: switch
+        - parameterId: embeddingsModel
+          widget: text
+          visible: "params.embeddingsInPerimeter == false"
+        - parameterId: embeddingsDimensions
+          widget: number
+        - parameterId: embeddingsBaseUrl
+          widget: text
+          visible: "params.embeddingsInPerimeter == false"
+        - parameterId: embeddingsApiKey
+          widget: password
+          visible: "params.embeddingsInPerimeter == false"
+
+    - id: organizations
+      title: Organisations
+      description: >-
+        Who the agent's tenants are. The first is yours and you administer it; the other two
+        are created empty, for parties whose data must stay out of each other's reach. Leave
+        them blank for a single-tenant deployment.
+      fields:
+        - parameterId: primaryOrgName
+          widget: text
+        - parameterId: primaryOrgAlias
+          widget: text
+        - parameterId: secondOrgName
+          widget: text
+        - parameterId: secondOrgAlias
+          widget: text
+          visible: "params.secondOrgName != ''"
+        - parameterId: thirdOrgName
+          widget: text
+        - parameterId: thirdOrgAlias
+          widget: text
+          visible: "params.thirdOrgName != ''"
+
+    - id: automation
+      title: Automation
+      description: >-
+        What the agent may do on its own, and what it may reach while doing it.
+      fields:
+        - parameterId: signalsEnabled
+          widget: switch
+        - parameterId: mcpServerName
+          widget: text
+        - parameterId: mcpServerUrl
+          widget: text
+          visible: "params.mcpServerName != ''"
+        - parameterId: mcpServerToken
+          widget: password
+          visible: "params.mcpServerName != ''"
+
+    - id: limits
+      title: Result handling
+      description: >-
+        What the agent does with a result too large to put in front of the model. With the
+        model inside your perimeter these stop being a confidentiality control and become a
+        context budget: a large result stays in the deployment's own object storage either
+        way, and the model is given a preview and a summary of it.
+      fields:
+        - parameterId: largeResultRows
+          widget: number
+        - parameterId: largeResultBytes
+          widget: number
+        - parameterId: previewRows
+          widget: number
+        - parameterId: modelContextWindow
+          widget: number
 
     - id: appearance
       title: Appearance
@@ -56,33 +165,240 @@ parameters:
     type: string
     title: Internal credential
     description: >-
-      Protects every service inside this deployment — the databases, the graph, the identity
-      provider and the demo login. Leave it blank and one is generated for you; nothing outside
-      the cluster space can reach these services either way.
+      Protects every service inside this deployment — the databases, the object store, the
+      identity provider — and is the password of the administrator account below. Leave it
+      blank and one is generated for you; it is shown afterwards under the deployment's
+      credentials, because it is how you sign in.
     required: true
     sensitive: true
     generated: true
     validation:
       minLength: 16
 
-  - id: llmModel
+  - id: modelLabel
+    type: string
+    title: Model name
+    description: >-
+      What this model is called in the administration screens and in the dialog's model picker.
+      A label, not an address: the endpoint and the model id are the next two fields.
+    required: true
+    default: In-perimeter model
+
+  - id: modelBaseUrl
+    type: string
+    title: Model endpoint
+    description: >-
+      The OpenAI-compatible base URL, ending in /v1. A model server inside your own perimeter
+      is the point of this deployment; a gateway or a hosted provider works the same way. Tool
+      calling is required — the agent cannot work without it.
+    required: true
+    validation:
+      pattern: "^https?://[^\\s]+$"
+
+  - id: modelId
     type: string
     title: Model
-    description: Used both for understanding the question and for generating SQL.
+    description: The model id that endpoint serves, exactly as it reports it.
     required: true
-    default: gemini-3.1-pro-preview
-    options:
-      source:
-        type: static
-        values:
-          - value: gemini-3.1-pro-preview
-            label: Gemini 3.1 Pro (preview)
-          - value: gemini-3-flash-preview
-            label: Gemini 3 Flash (preview)
-          - value: gemini-2.5-pro
-            label: Gemini 2.5 Pro
-          - value: gemini-2.5-flash
-            label: Gemini 2.5 Flash
+
+  - id: modelApiKey
+    type: string
+    title: Model access key
+    description: >-
+      The key the endpoint authenticates with. Held in a Secret, sealed for this deployment, and
+      never written into anything the deployment publishes. An endpoint that needs no key still
+      needs a value here — the agent's client requires one and the endpoint will ignore it.
+    required: true
+    sensitive: true
+    generated: true
+
+  - id: embeddingsInPerimeter
+    type: boolean
+    title: Serve embeddings inside this deployment
+    description: >-
+      On: a small embedding model runs here, on CPU, reachable only from inside the deployment,
+      from weights pinned by sha256. Off: you supply your own OpenAI-compatible embedding
+      endpoint. There is no third option — embeddings are mandatory in this product, and
+      whatever serves them sees your schema descriptions and your documents.
+    default: true
+
+  - id: embeddingsModel
+    type: string
+    title: Embedding model
+    description: The model id your embedding endpoint serves.
+    required: true
+    default: bge-large-en-v1.5
+
+  - id: embeddingsDimensions
+    type: integer
+    title: Embedding width
+    description: >-
+      How many numbers the embedding model returns. It has to be the model's real width: the
+      knowledge index's column is created from it and cannot be re-sized once the index holds
+      anything, which is why this cannot be changed on a reconfigure. 1024 is the width of the
+      model served here.
+    required: true
+    default: 1024
+    immutable: true
+    validation:
+      min: 64
+      max: 4096
+
+  - id: embeddingsBaseUrl
+    type: string
+    title: Embedding endpoint
+    description: >-
+      Your own OpenAI-compatible embedding endpoint, ending in /v1. The default is the one
+      served inside this deployment; it is hidden while that is what you are using.
+    required: true
+    default: "http://analyst-embeddings/v1"
+    validation:
+      pattern: "^https?://[^\\s]+$"
+
+  - id: embeddingsApiKey
+    type: string
+    title: Embedding access key
+    description: >-
+      The key the embedding endpoint authenticates with. Generated when the endpoint is the one
+      served here — it authenticates even though nothing outside the deployment can reach it.
+    required: true
+    sensitive: true
+    generated: true
+
+  - id: primaryOrgName
+    type: string
+    title: Your organisation
+    description: >-
+      The tenant you land in and administer. Left blank it is the organisation deploying this,
+      so the agent's idea of who you are is the same as the marketplace's; fill it in to call
+      the tenant something else.
+    required: false
+    default: ""
+
+  - id: primaryOrgAlias
+    type: string
+    title: Your organisation's short name
+    description: >-
+      Lowercase letters, digits and hyphens — it is the tenant's key and a DNS label. Left
+      blank it is your organisation's own short name in the marketplace.
+    required: false
+    default: ""
+    validation:
+      pattern: "^$|^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+
+  - id: secondOrgName
+    type: string
+    title: Second organisation
+    description: >-
+      Created empty. There is no invitation anywhere in this product by design — membership is
+      maintained in the sign-in system, which is what makes "who gets in" this organisation's
+      own decision rather than this deployment's.
+    required: false
+    default: ""
+
+  - id: secondOrgAlias
+    type: string
+    title: Second organisation's short name
+    required: false
+    default: ""
+    validation:
+      pattern: "^$|^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+
+  - id: thirdOrgName
+    type: string
+    title: Third organisation
+    description: Also created empty.
+    required: false
+    default: ""
+
+  - id: thirdOrgAlias
+    type: string
+    title: Third organisation's short name
+    required: false
+    default: ""
+    validation:
+      pattern: "^$|^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+
+  - id: signalsEnabled
+    type: boolean
+    title: Business signals
+    description: >-
+      Lets an autopilot publish a finding as a signal, which another autopilot can subscribe to
+      and act on. Off is a kill switch: no tool to publish one, and no webhook leaves the
+      deployment.
+    default: true
+
+  - id: mcpServerName
+    type: string
+    title: Tool server
+    description: >-
+      An MCP server the agent may call — a system it can write back to, not read data from.
+      Leave blank for none. It must be reachable over https from this cloud; a private address
+      is refused unless the installation administrator has allowed it.
+    required: false
+    default: ""
+
+  - id: mcpServerUrl
+    type: string
+    title: Tool server address
+    description: The server's /mcp endpoint, over https.
+    required: false
+    default: ""
+    validation:
+      pattern: "^$|^https://[^\\s]+$"
+
+  - id: mcpServerToken
+    type: string
+    title: Tool server token
+    description: >-
+      Sent as `Authorization: Bearer …` on every call. Held in a Secret; blank if the server
+      needs no token.
+    required: false
+    sensitive: true
+
+  - id: largeResultRows
+    type: integer
+    title: Rows before a result is set aside
+    description: >-
+      A result with more rows than this is kept in the deployment's own object storage and the
+      model is given a preview and a summary of it instead of the rows.
+    required: true
+    default: 100
+    validation:
+      min: 1
+      max: 100000
+
+  - id: largeResultBytes
+    type: integer
+    title: Bytes before a result is set aside
+    description: The same ceiling by size. 102400 is 100 KB.
+    required: true
+    default: 102400
+    validation:
+      min: 1024
+      max: 104857600
+
+  - id: previewRows
+    type: integer
+    title: Preview rows
+    description: How many rows of a set-aside result the model does see.
+    required: true
+    default: 20
+    validation:
+      min: 1
+      max: 1000
+
+  - id: modelContextWindow
+    type: integer
+    title: Context window
+    description: >-
+      The model's context window in tokens. The agent budgets the conversation against it; a
+      value larger than the model really has is a request the endpoint refuses mid-answer.
+    required: true
+    default: 128000
+    validation:
+      min: 8000
+      max: 2000000
 
   - id: brandTitle
     type: string
@@ -92,16 +408,10 @@ parameters:
     default: AI Analyst
 
 secrets:
-  - name: googleApiKey
-    title: Google AI API key
-    description: >-
-      Calls the selected Gemini model. Held by the publisher, so the same account answers for every
-      deployment and nobody deploying has to bring one.
-  - name: openaiApiKey
-    title: OpenAI API key
-    description: >-
-      Embeds the table and column descriptions of the connected datasets, which is how the agent
-      finds the right tables for a question. Also used for voice input.
+  # The two external-provider keys this listing used to hold — a Google AI key for the model
+  # and an OpenAI key for embeddings and voice — are GONE, not merely unused. There is no
+  # parameter that can point this deployment at either company, and no credential in the
+  # publisher's store that a future version could quietly start using again.
   - name: registryUsername
     title: Container registry username
     description: An account with read access to the agent's images.
@@ -110,20 +420,37 @@ secrets:
     description: A read-only token for that account.
 
 resources:
+  # The cluster space's quota, which has to cover every container's limit AT ONCE — including
+  # the one-shot Jobs, which run while everything else is already up, and the surge pod a
+  # rolling update adds. Measured from the rendered manifests of all six components, by pod
+  # (a pod's demand is its containers' limits summed, or its heaviest init container,
+  # whichever is larger):
+  #
+  #   PostgreSQL 1/4Gi   agent back 1/4Gi    worker 1/4Gi     embeddings 2/4Gi
+  #   Keycloak 0.5/1Gi   Garage 0.25/1Gi     front 0.25/0.5Gi identity 0.25/0.5Gi
+  #   NATS 0.2/0.375Gi   config, instance, service-discovery 0.1/0.25Gi each
+  #   Redis 0.1/0.25Gi   proxy 0.1/0.125Gi   four Jobs 0.55/1Gi together
+  #   and the marketplace's own egress sidecar, 0.25/0.125Gi, when gated data is mounted
+  #
+  # which is 7.75 CPU and 21.6Gi; one surge pod of the heaviest Deployment is another 1/4Gi.
+  #
+  # Storage is the five volumes — PostgreSQL 20Gi, Garage 20Gi, NATS 10Gi, Redis 8Gi, the
+  # embedding weights 4Gi — and the margin is not politeness: a storage quota equal to the sum
+  # fails at the last volume rather than the first, which reads as one broken service rather
+  # than as a quota.
   min:
-    cpu: "6"
-    memory: "16Gi"
-    # PostgreSQL 8, Redis 8, NATS 10, MinIO 20 and Neo4j 10 come to 56 before the platform
-    # rounds anything, and a quota that tight fails at the last volume rather than the first.
+    cpu: "10"
+    memory: "28Gi"
     storage: "80Gi"
   recommended:
-    cpu: "12"
-    memory: "32Gi"
-    storage: "120Gi"
+    cpu: "16"
+    memory: "48Gi"
+    storage: "160Gi"
   gpu:
+    # Nothing here needs one. The embedding model runs on CPU on purpose — it must not compete
+    # for a card with whatever serves the primary model — and the primary model is somewhere
+    # else by definition.
     required: false
-    types:
-      - NVIDIA H100 NVL
 
 data:
   slots:
@@ -131,7 +458,8 @@ data:
       title: Datasets
       description: >-
         The data the agent answers questions about. Each dataset's published table and column
-        descriptions become the agent's knowledge of it — there is nothing else to fill in.
+        descriptions become the agent's knowledge of it — they are written into the schema
+        catalogue, which is the only thing it knows about your data.
       required: true
       multiple: true
       accepts:
@@ -148,31 +476,58 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-platform
-      version: "0.3.2"
+      version: "0.4.0"
+    images:
+      - name: pgvector/pgvector
+        digest: sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd
+      - name: docker.io/bitnamilegacy/redis
+        digest: sha256:e79fb409a7d2ccafb278d1cd762b4944072c7b99f73ce11d9068ef2efb9abe13
+      - name: nats
+        digest: sha256:88fe8e0e09d6084a06b3d4dbbffbca70fa632b1ad981af8473da23c446630957
+      - name: natsio/nats-server-config-reloader
+        digest: sha256:10ff229eaf52f42de80107c02d38f3b3ec1ef6084d444431938778f4bd00d3dd
+      - name: dxflrs/garage
+        digest: sha256:866bd13ed2038ba7e7190e840482bc27234c4afaf77be8cfa439ae088c1e4690
+      - name: busybox
+        digest: sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4
     deployment:
       values:
         base:
-          internalSecret: ""
           imagePullSecret:
             registry: registry.aggregion.com
             username: ""
             password: ""
           postgresql:
             auth:
-              postgresPassword: ""
-              username: retail_ai_user
               password: ""
-              database: retail_ai
+            databases:
+              - name: retail_ai
+                owner: retail_ai_user
+                password: ""
+                extensions: [vector, pg_trgm]
+              - name: retail_ai_identity
+                owner: identity_user
+                password: ""
+              - name: retail_ai_checkpointer
+                owner: checkpointer_user
+                password: ""
+              - name: keycloak
+                owner: keycloak_user
+                password: ""
           redis:
             global:
               redis:
                 password: ""
-          minio:
-            rootPassword: ""
+          garage:
+            credentials:
+              # Garage refuses an access key id shorter than 8 characters and a secret shorter
+              # than 16, and does not start at all on a pair it rejects. The id is fixed —
+              # it names the key, it is not a credential — and the secret is the deployment's.
+              accessKeyId: analyst-s3
+              secretAccessKey: ""
+            rpcSecret: ""
+            adminToken: ""
         patches:
-          - op: replace
-            path: internalSecret
-            value: "{{ params.internalSecret }}"
           - op: replace
             path: imagePullSecret.username
             value: "{{ secrets.registryUsername }}"
@@ -180,20 +535,74 @@ components:
             path: imagePullSecret.password
             value: "{{ secrets.registryToken }}"
           - op: replace
-            path: postgresql.auth.postgresPassword
+            path: postgresql.auth.password
             value: "{{ params.internalSecret }}"
           - op: replace
-            path: postgresql.auth.password
+            path: postgresql.databases.0.password
+            value: "{{ params.internalSecret }}"
+          - op: replace
+            path: postgresql.databases.1.password
+            value: "{{ params.internalSecret }}"
+          - op: replace
+            path: postgresql.databases.2.password
+            value: "{{ params.internalSecret }}"
+          - op: replace
+            path: postgresql.databases.3.password
             value: "{{ params.internalSecret }}"
           - op: replace
             path: redis.global.redis.password
             value: "{{ params.internalSecret }}"
           - op: replace
-            path: minio.rootPassword
+            path: garage.credentials.secretAccessKey
+            value: "{{ params.internalSecret }}"
+          - op: replace
+            path: garage.rpcSecret
+            value: "{{ params.internalSecret }}"
+          - op: replace
+            path: garage.adminToken
             value: "{{ params.internalSecret }}"
 
   # ---------------------------------------------------------------------------
-  # Who may sign in, and which tenant they land in.
+  # The embedding model, inside the deployment.
+  #
+  # Always a component, because a definition cannot have a conditional one; the
+  # chart's own `enabled` is what the switch turns off, and an operator who
+  # brings their own endpoint gets no objects from this at all.
+  # ---------------------------------------------------------------------------
+  - name: embeddings
+    dependsOn:
+      - platform
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: conversational-analyst-embeddings
+      version: "0.1.0"
+    # The names are exactly the strings the rendered manifests carry, registry prefix and
+    # all: the render path matches on them, and `library/python` and `docker.io/library/python`
+    # are not the same allow-list entry. `charts/tests/declared_images.py` is what keeps the
+    # two in step.
+    images:
+      - name: ghcr.io/huggingface/text-embeddings-inference
+        digest: sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c
+      - name: docker.io/library/python
+        digest: sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
+    deployment:
+      values:
+        base:
+          enabled: true
+          apiKey: ""
+        patches:
+          - op: replace
+            path: apiKey
+            value: "{{ params.embeddingsApiKey }}"
+          - op: replace
+            path: enabled
+            value: false
+            when: "params.embeddingsInPerimeter == false"
+
+  # ---------------------------------------------------------------------------
+  # Who may sign in, which tenant they land in, and the group tree agent 1.17
+  # reads org-scoped roles out of.
   # ---------------------------------------------------------------------------
   - name: identity
     dependsOn:
@@ -202,15 +611,27 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-identity
-      version: "0.5.3"
+      version: "0.6.0"
+    images:
+      - name: docker.io/bitnamilegacy/keycloak
+        digest: sha256:5a480d090639bbb09b25dbdb70819dab3302118fd824c2bad03d12a93f46c82b
     deployment:
       values:
         base:
           internalSecret: ""
           appHostname: ""
-          tenant:
-            name: ""
-            alias: workspace
+          # Three entries, always. A definition cannot append to a list — the
+          # specification's patch paths are dot-notation with numeric indices — so the
+          # second and third are left blank when the operator does not fill them in, and
+          # the chart treats a blank entry as an organisation this deployment does not
+          # want rather than as a mistake.
+          organizations:
+            - name: ""
+              alias: ""
+            - name: ""
+              alias: ""
+            - name: ""
+              alias: ""
           demoUser:
             username: ""
             email: ""
@@ -221,11 +642,11 @@ components:
               adminPassword: ""
             externalDatabase:
               password: ""
+            # Every one of these is the same in every deployment, so every one of them is
+            # attested. `KC_HOSTNAME` is not here: it is the public hostname, and the chart
+            # delivers it from a Secret through `envFrom` rather than as a literal in the pod
+            # spec — which is what retires the `env/N/value` index exclusion 3.0.9 needed.
             extraEnvVars:
-              # The issuer must match the public URL down to the /auth path, or the gateway
-              # rejects every token this realm mints.
-              - name: KC_HOSTNAME
-                value: ""
               - name: KC_HOSTNAME_STRICT
                 value: "false"
               - name: KC_HTTP_ENABLED
@@ -243,15 +664,39 @@ components:
           - op: replace
             path: appHostname
             value: "{{ params.appHostname }}"
-          # The workspace, its first administrator and their address are what the marketplace
-          # already knows about who is deploying. Reading them keeps the agent's idea of the
-          # organization the same as the marketplace's, rather than a second one typed by hand.
+          # The organisations, in order; the first is the one the administrator lands in.
+          # Everything here reaches a Secret rather than the attested ConfigMap, which is
+          # what lets the deploying person's own name and address stay out of a snapshot
+          # that is published.
+          # The deploying organisation by default — `consumer.*` is how an application names
+          # its first tenant without asking somebody to retype what the marketplace already
+          # knows — and whatever the operator typed if they typed something.
           - op: replace
-            path: tenant.name
+            path: organizations.0.name
             value: "{{ consumer.organization.name }}"
           - op: replace
-            path: tenant.alias
+            path: organizations.0.alias
             value: "{{ consumer.organization.slug }}"
+          - op: replace
+            path: organizations.0.name
+            value: "{{ params.primaryOrgName }}"
+            when: "params.primaryOrgName != ''"
+          - op: replace
+            path: organizations.0.alias
+            value: "{{ params.primaryOrgAlias }}"
+            when: "params.primaryOrgAlias != ''"
+          - op: replace
+            path: organizations.1.name
+            value: "{{ params.secondOrgName }}"
+          - op: replace
+            path: organizations.1.alias
+            value: "{{ params.secondOrgAlias }}"
+          - op: replace
+            path: organizations.2.name
+            value: "{{ params.thirdOrgName }}"
+          - op: replace
+            path: organizations.2.alias
+            value: "{{ params.thirdOrgAlias }}"
           - op: replace
             path: demoUser.username
             value: "{{ consumer.user.email }}"
@@ -271,14 +716,12 @@ components:
             path: keycloak.externalDatabase.password
             value: "{{ params.internalSecret }}"
           - op: replace
-            path: keycloak.extraEnvVars.0.value
-            value: "https://{{ params.appHostname }}/auth"
-          - op: replace
-            path: keycloak.extraEnvVars.4.value
+            path: keycloak.extraEnvVars.3.value
             value: "http://{{ components.agent.release }}-service-discovery"
 
   # ---------------------------------------------------------------------------
-  # The agent itself.
+  # The agent itself: the configuration service, the backend, the background
+  # worker that runs autopilots and reads schemas, and the UI.
   # ---------------------------------------------------------------------------
   - name: agent
     dependsOn:
@@ -287,88 +730,154 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-agent
-      version: "0.4.2"
+      version: "0.5.0"
+    images:
+      - name: registry.aggregion.com/gh/aivoagent/agent/backend
+        digest: sha256:ead6c3816c5a492e3ebc657276a224e5db15374d8e0d491c08f1bda6987d41a8
+      - name: registry.aggregion.com/gh/aivoagent/agent/frontend
+        digest: sha256:6e2920d5cf5b3eb85576871795f838de17b2605574335d85c5cc8f7129f77515
     deployment:
       values:
         base:
           aivo:
             config:
+              # Every credential the platform configuration refers to. These reach a Secret;
+              # the configuration document itself keeps the `${NAME}` references and is
+              # attested in full, so a verifier reads every endpoint, threshold and egress
+              # rule out of the signed snapshot and sees exactly which values were withheld.
+              configOverlay:
+                ANALYST_IDENTITY_CLIENT_SECRET: ""
+                ANALYST_DB_PASSWORD: ""
+                ANALYST_IDENTITY_DB_PASSWORD: ""
+                ANALYST_REDIS_PASSWORD: ""
+                ANALYST_S3_ACCESS_KEY_ID: ""
+                ANALYST_S3_SECRET_KEY: ""
+                ANALYST_CHECKPOINTER_URI: ""
+                ANALYST_MODEL_API_KEY: ""
+                ANALYST_EMBEDDINGS_API_KEY: ""
+                ANALYST_GRAPHQL_HTTP_URL: ""
+                ANALYST_GRAPHQL_WS_URL: ""
+                ANALYST_LOGOUT_URL: ""
               config:
                 services:
-                  identityService:
-                    clientSecret: ""
                   api:
-                    db:
-                      config:
-                        password: ""
-                    redis:
-                      password: ""
-                    fileStorage:
-                      config:
-                        secretAccessKey: ""
                     embeddings:
-                      apiKey: ""
+                      baseUrl: ""
+                      model: ""
+                      dimensions: 1024
                     llmSmart:
-                      apiKey: ""
                       model: ""
-                    llmFast:
-                      apiKey: ""
-                      model: ""
-                    checkpointer:
-                      uri: ""
-                    stt:
-                      apiKey: ""
-                  ui:
-                    logoutUrl: ""
+                      baseURL: ""
+                    mcp:
+                      enabled: true
+                    signals:
+                      enabled: true
                   instance:
-                    endpoints:
-                      graphqlHttp: ""
-                      graphqlWs: ""
                     brand:
                       name: ""
                       title: ""
         patches:
+          # --- credentials, all of them into the Secret -----------------------------
           - op: replace
-            path: aivo.config.config.services.identityService.clientSecret
+            path: aivo.config.configOverlay.ANALYST_IDENTITY_CLIENT_SECRET
             value: "{{ params.internalSecret }}"
           - op: replace
-            path: aivo.config.config.services.api.db.config.password
+            path: aivo.config.configOverlay.ANALYST_DB_PASSWORD
             value: "{{ params.internalSecret }}"
           - op: replace
-            path: aivo.config.config.services.api.redis.password
+            path: aivo.config.configOverlay.ANALYST_IDENTITY_DB_PASSWORD
             value: "{{ params.internalSecret }}"
           - op: replace
-            path: aivo.config.config.services.api.fileStorage.config.secretAccessKey
+            path: aivo.config.configOverlay.ANALYST_REDIS_PASSWORD
             value: "{{ params.internalSecret }}"
           - op: replace
-            path: aivo.config.config.services.api.embeddings.apiKey
-            value: "{{ secrets.openaiApiKey }}"
+            path: aivo.config.configOverlay.ANALYST_S3_ACCESS_KEY_ID
+            value: "analyst-s3"
           - op: replace
-            path: aivo.config.config.services.api.stt.apiKey
-            value: "{{ secrets.openaiApiKey }}"
+            path: aivo.config.configOverlay.ANALYST_S3_SECRET_KEY
+            value: "{{ params.internalSecret }}"
+          # The whole connection string, not the password inside it: a reference has to be
+          # the entire value of its key, because a credential is substituted as a quoted
+          # scalar and pasting one into the middle of a URI would corrupt the document.
           - op: replace
-            path: aivo.config.config.services.api.llmSmart.apiKey
-            value: "{{ secrets.googleApiKey }}"
-          - op: replace
-            path: aivo.config.config.services.api.llmSmart.model
-            value: "{{ params.llmModel }}"
-          - op: replace
-            path: aivo.config.config.services.api.llmFast.apiKey
-            value: "{{ secrets.googleApiKey }}"
-          - op: replace
-            path: aivo.config.config.services.api.llmFast.model
-            value: "{{ params.llmModel }}"
-          - op: replace
-            path: aivo.config.config.services.api.checkpointer.uri
+            path: aivo.config.configOverlay.ANALYST_CHECKPOINTER_URI
             value: "postgresql://checkpointer_user:{{ params.internalSecret }}@analyst-postgresql:5432/retail_ai_checkpointer"
           - op: replace
-            path: aivo.config.config.services.ui.logoutUrl
+            path: aivo.config.configOverlay.ANALYST_MODEL_API_KEY
+            value: "{{ params.modelApiKey }}"
+          - op: replace
+            path: aivo.config.configOverlay.ANALYST_EMBEDDINGS_API_KEY
+            value: "{{ params.embeddingsApiKey }}"
+
+          # --- the model, as the attested configuration records it -------------------
+          - op: replace
+            path: aivo.config.config.services.api.llmSmart.model
+            value: "{{ params.modelId }}"
+          - op: replace
+            path: aivo.config.config.services.api.llmSmart.baseURL
+            value: "{{ params.modelBaseUrl }}"
+
+          # --- embeddings ------------------------------------------------------------
+          # Unconditional, and that is the point. Both values default to the endpoint served
+          # inside this deployment, so the switch above decides whether that endpoint EXISTS
+          # and never what the agent is pointed at. The alternative — a conditional patch
+          # with an empty value on one branch — fails the wrong way: the agent's OpenAI
+          # client with no `baseUrl` goes to OpenAI, so an operator who turned the in-
+          # perimeter server off without supplying a replacement would have their schema
+          # descriptions and documents embedded by a hosted provider and nothing would say
+          # so. Pointed at an address that is no longer there, it fails loudly instead.
+          - op: replace
+            path: aivo.config.config.services.api.embeddings.baseUrl
+            value: "{{ params.embeddingsBaseUrl }}"
+          - op: replace
+            path: aivo.config.config.services.api.embeddings.model
+            value: "{{ params.embeddingsModel }}"
+          - op: replace
+            path: aivo.config.config.services.api.embeddings.dimensions
+            value: "{{ params.embeddingsDimensions }}"
+
+          # --- automation ------------------------------------------------------------
+          - op: replace
+            path: aivo.config.config.services.api.signals.enabled
+            value: false
+            when: "params.signalsEnabled == false"
+          # The tool server, when there is one. `globalServers` is a list the api reads
+          # entry for entry; an empty one renders no key at all, which is what an operator
+          # who named no server gets.
+          - op: add
+            path: aivo.config.config.services.api.mcp.globalServers
+            value:
+              - slug: tools
+                name: "{{ params.mcpServerName }}"
+                url: "{{ params.mcpServerUrl }}"
+                description: "{{ params.mcpServerName }}"
+            when: "params.mcpServerName != ''"
+          # Both conditions, not just the token's: this patch addresses `globalServers.0`,
+          # which only exists if the patch above applied. A token typed without a server name
+          # would otherwise be a patch against a list that is not there.
+          - op: add
+            path: aivo.config.config.services.api.mcp.globalServers.0.authHeaders
+            value:
+              Authorization: "${ANALYST_MCP_TOOLS_AUTH}"
+            when: "params.mcpServerName != '' && params.mcpServerToken != ''"
+          - op: add
+            path: aivo.config.configOverlay.ANALYST_MCP_TOOLS_AUTH
+            value: "Bearer {{ params.mcpServerToken }}"
+            when: "params.mcpServerName != '' && params.mcpServerToken != ''"
+
+          # --- where the browser talks to it -----------------------------------------
+          # Into the overlay, not into the configuration document. These three are the only
+          # per-deployment values the agent's configuration has, and leaving them in it would
+          # make `/data/services.yaml` differ for every consumer — which costs either a stable
+          # digest or, if the whole document is then excluded, everything the digest was for.
+          - op: replace
+            path: aivo.config.configOverlay.ANALYST_LOGOUT_URL
             value: "/oauth2/sign_out?rd=https%3A%2F%2F{{ params.appHostname }}%2Fauth%2Frealms%2Fmaster%2Fprotocol%2Fopenid-connect%2Flogout"
           - op: replace
-            path: aivo.config.config.services.instance.endpoints.graphqlHttp
+            path: aivo.config.configOverlay.ANALYST_GRAPHQL_HTTP_URL
             value: "https://{{ params.appHostname }}/graphql"
           - op: replace
-            path: aivo.config.config.services.instance.endpoints.graphqlWs
+            path: aivo.config.configOverlay.ANALYST_GRAPHQL_WS_URL
             value: "wss://{{ params.appHostname }}/graphql"
           - op: replace
             path: aivo.config.config.services.instance.brand.name
@@ -388,16 +897,44 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-gateway
-      version: "0.3.2"
+      version: "0.4.0"
+    images:
+      - name: quay.io/oauth2-proxy/oauth2-proxy
+        digest: sha256:47b1db28264a646c5c07e1fb690e3deef7edbbb487030ad7c1f0b22f942d6837
     deployment:
       values:
         base:
           appHostname: ""
-          oauth2-proxy:
+          oauth2proxy:
             config:
               clientID: analyst
               clientSecret: ""
-              configFile: ""
+              # Everything that is neither a credential nor the hostname. The two settings
+              # that ARE the hostname reach the pod as environment from a ConfigMap of their
+              # own, so this document can be attested whole instead of being excluded from
+              # the digest because an address is inside it.
+              configFile: |
+                email_domains = ["*"]
+                skip_provider_button = true
+                reverse_proxy = true
+
+                cookie_secure = true
+                cookie_refresh = "1h"
+                cookie_expire = "168h"
+
+                standard_logging = true
+                auth_logging = true
+            # Sessions in the platform's Redis, with the password taken from its Secret into
+            # an environment variable by the chart. A `redis_connection_url` carrying the
+            # password would have put it in the ConfigMap above.
+            sessionStorage:
+              type: redis
+              redis:
+                clientType: standalone
+                existingSecret: analyst-redis
+                passwordKey: redis-password
+                standalone:
+                  connectionUrl: redis://analyst-redis-master:6379/3
             alphaConfig:
               configData:
                 providers:
@@ -441,48 +978,34 @@ components:
             path: appHostname
             value: "{{ params.appHostname }}"
           - op: replace
-            path: oauth2-proxy.config.clientSecret
+            path: "oauth2proxy.config.clientSecret"
             value: "{{ params.internalSecret }}"
           - op: replace
-            path: "oauth2-proxy.alphaConfig.configData.providers.0.clientSecret"
+            path: "oauth2proxy.alphaConfig.configData.providers.0.clientSecret"
             value: "{{ params.internalSecret }}"
           # Split horizon: the browser is sent to the public identity provider to log in, while
           # the token exchange and key fetch happen over the in-cluster service. The issuer the
-          # token carries stays the public one either way.
+          # token carries stays the public one either way. Both of these are rendered into the
+          # chart's alpha-config SECRET, which the platform lifts out of the bundle — so the
+          # hostname in them is not in the evidence snapshot and needs no exclusion.
           - op: replace
-            path: "oauth2-proxy.alphaConfig.configData.providers.0.loginURL"
+            path: "oauth2proxy.alphaConfig.configData.providers.0.loginURL"
             value: "https://{{ params.appHostname }}/auth/realms/master/protocol/openid-connect/auth"
           - op: replace
-            path: "oauth2-proxy.alphaConfig.configData.providers.0.oidcConfig.issuerURL"
+            path: "oauth2proxy.alphaConfig.configData.providers.0.oidcConfig.issuerURL"
             value: "https://{{ params.appHostname }}/auth/realms/master"
           - op: replace
-            path: "oauth2-proxy.alphaConfig.configData.upstreamConfig.upstreams.0.uri"
+            path: "oauth2proxy.alphaConfig.configData.upstreamConfig.upstreams.0.uri"
             value: "http://{{ components.agent.release }}-retail-ai-back"
           - op: replace
-            path: "oauth2-proxy.alphaConfig.configData.upstreamConfig.upstreams.1.uri"
+            path: "oauth2proxy.alphaConfig.configData.upstreamConfig.upstreams.1.uri"
             value: "http://{{ components.agent.release }}-retail-ai-front"
-          - op: replace
-            path: oauth2-proxy.config.configFile
-            value: |
-              email_domains = ["*"]
-              redirect_url = "https://{{ params.appHostname }}/oauth2/callback"
-              whitelist_domains = ["{{ params.appHostname }}"]
-              skip_provider_button = true
-              reverse_proxy = true
-
-              session_store_type = "redis"
-              redis_connection_url = "redis://default:{{ params.internalSecret }}@analyst-redis-master:6379/3"
-              cookie_secure = true
-              cookie_refresh = "1h"
-              cookie_expire = "168h"
-
-              standard_logging = true
-              auth_logging = true
 
   # ---------------------------------------------------------------------------
   # What turns "a dataset is attached" into "the agent can answer questions
-  # about it": data-source registration and the knowledge graph, both built from
-  # the descriptions the dataset publisher already wrote.
+  # about it": the model in the registry, the data sources, the schema
+  # catalogue built from the descriptions the dataset publisher wrote, and the
+  # system prompt.
   # ---------------------------------------------------------------------------
   - name: grounding
     dependsOn:
@@ -491,36 +1014,65 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-grounding
-      version: "0.3.2"
+      version: "0.4.0"
+    images:
+      - name: docker.io/library/python
+        digest: sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
     deployment:
       values:
         base:
-          internalSecret: ""
           bindings: "[]"
-          llm:
-            provider: google
-            model: ""
+          api:
+            url: ""
+          keycloak:
+            clientSecret: ""
+          model:
+            name: ""
+            baseUrl: ""
+            id: ""
             apiKey: ""
-          embeddings:
-            model: text-embedding-3-small
-            dimensions: 1536
-            apiKey: ""
+            thresholds:
+              largeDataRowThreshold: 100
+              largeDataSizeThreshold: 102400
+              previewRowCount: 20
+            contextWindowSize: 128000
         patches:
-          - op: replace
-            path: internalSecret
-            value: "{{ params.internalSecret }}"
           - op: replace
             path: bindings
             value: "{{ data.datasets | json }}"
           - op: replace
-            path: llm.model
-            value: "{{ params.llmModel }}"
+            path: api.url
+            value: "http://{{ components.agent.release }}-retail-ai-back"
           - op: replace
-            path: llm.apiKey
-            value: "{{ secrets.googleApiKey }}"
+            path: keycloak.clientSecret
+            value: "{{ params.internalSecret }}"
+          # The model row the deployment actually answers on. The same four values are in the
+          # agent's attested configuration, from the same parameters, so the registry and the
+          # signed snapshot cannot describe different models.
           - op: replace
-            path: embeddings.apiKey
-            value: "{{ secrets.openaiApiKey }}"
+            path: model.name
+            value: "{{ params.modelLabel }}"
+          - op: replace
+            path: model.baseUrl
+            value: "{{ params.modelBaseUrl }}"
+          - op: replace
+            path: model.id
+            value: "{{ params.modelId }}"
+          - op: replace
+            path: model.apiKey
+            value: "{{ params.modelApiKey }}"
+          - op: replace
+            path: model.thresholds.largeDataRowThreshold
+            value: "{{ params.largeResultRows }}"
+          - op: replace
+            path: model.thresholds.largeDataSizeThreshold
+            value: "{{ params.largeResultBytes }}"
+          - op: replace
+            path: model.thresholds.previewRowCount
+            value: "{{ params.previewRows }}"
+          - op: replace
+            path: model.contextWindowSize
+            value: "{{ params.modelContextWindow }}"
 
 outputs:
   - id: appUrl
@@ -531,71 +1083,126 @@ outputs:
   - id: signIn
     title: Sign-in
     type: string
-    value: "Sign in as {{ consumer.user.email }} with the internal credential. That account administers the realm."
+    value: "Sign in as {{ consumer.user.email }}. That account administers the realm, its own organisation and the installation."
+
+  # Without this the deployment is unusable when the credential was generated, which is the
+  # default: it is the administrator's password and nobody would ever see it. `type: secret`
+  # puts it behind the key icon on the deployment row, for people who may deploy for the
+  # organisation, and nowhere else.
+  - id: administratorPassword
+    title: Administrator password
+    type: secret
+    value: "{{ params.internalSecret }}"
 
 # What a deployment of this version attests to.
 #
-# The digest is over the namespace as the cluster returns it, so anything a consumer chooses would
-# otherwise make it their digest rather than this version's. The exclusions below name exactly what
-# varies, found by rendering the application as two different consumers and diffing
-# (`cli/evidence-preview.js`), and the resulting set is itself part of what gets digested — a running
-# deployment cannot widen it.
+# The digest is over the namespace as the cluster returns it, so anything a consumer chooses
+# would otherwise make it their digest rather than this version's. The set below was not
+# carried over from 3.0.9: it was re-derived by rendering all six components twice — two
+# hostnames, two consumer identities, two organisation names, two generated credentials, two
+# namespaces — canonicalising both the way the cloud does and diffing. Twelve fields differed
+# and all twelve are here. Nothing else did, including every object's name.
 #
-# What stays attested is the software and how it is wired: every image, the replica counts, the
-# commands, the ports, the volumes, the service topology, and the egress configuration through which
-# this application reaches gated data. What is not attested is the value of the credential the
-# platform generated for this deployment, anything derived from it (the checksum annotations charts
-# put on their pods), and the hostname the operator chose — the gate binds evidence to the host it
-# fetched it from, so the hostname is established by the channel rather than by the digest.
+# Four exclusions 3.0.9 needed are GONE, because the thing that varied was moved rather than
+# hidden:
 #
-# The value below was measured, not carried over: 3.0.6 was deployed once and this is the digest
-# that deployment published in its own signed bundle. It cannot be derived from the charts, because
-# a cluster defaults fields no template writes.
+#   /data/services.yaml of the agent's configuration — the whole of it, every endpoint,
+#       threshold and egress rule, was excluded because the credentials and the hostname were
+#       inside it. They are now `${NAME}` references into a Secret, and the document is
+#       attested in full. This is the one that matters: a deployment claiming its model is
+#       inside the operator's perimeter has to let a verifier read *where the model is* out of
+#       the signed snapshot, and until now it did not.
+#   /data/bootstrap.sh of the realm bootstrap — the script was rendered with the credential
+#       and the deploying person's own name and address in it. Both now arrive as environment
+#       from a Secret.
+#   /data/oauth2_proxy.cfg — the session store's Redis password was interpolated into it.
+#       The proxy takes that password from the platform's own Secret instead.
+#   /spec/template/spec/containers/0/env/6/value of the Keycloak StatefulSet — KC_HOSTNAME.
+#       An `env/N` pointer is silently wrong the day a variable is added above it; the chart
+#       delivers that one setting from a Secret through `envFrom`, so there is no index to
+#       name.
+#
+# What stays attested is the software and how it is wired: every image, the replica counts,
+# the commands and arguments, the ports, the volumes, the probes, the service topology, the
+# model and embedding endpoints, the result thresholds, both egress allowlists, the absence of
+# a speech-to-text provider, and the substitution rule the configuration's credentials are
+# filled in by. What is not attested is the value of the credential the platform generated,
+# anything derived from it, and the hostname the operator chose — the gate binds evidence to
+# the host it fetched it from, so the hostname is established by the channel rather than by the
+# digest.
+#
+# One thing in that list not to over-read. The model endpoint in the configuration is the one
+# this deployment was CREATED with, and it is what the grounding component writes into the
+# installation's model registry — which is where the api actually reads a model from, so the
+# two agree at deploy time by construction. They are not bound together afterwards: an
+# installation administrator may add a second registry row pointing somewhere else, and no
+# manifest changes, so the digest does not move. The two egress allowlists are different in
+# kind — they ARE configuration, so what this deployment may reach cannot be widened without
+# the digest saying so.
 evidence:
-  expectedDigest: "386723dd783160c04a2c6d332ce269bbe413a1b0ad8c8566e885eb1d5e9c3764"
+  # NOT DECLARED YET, and deliberately left absent rather than carried over.
+  #
+  # `expectedDigest` cannot be derived from charts — a cluster defaults fields no template
+  # writes — so it takes two deployments: deploy this version, read
+  # `GET <cloud baseUrl>/api/v1/deployments/<cloudDeploymentId>/evidence`, declare the digest it
+  # published, deploy again and confirm `matchesExpected`. Adding the value later changes no
+  # rendered manifest, so the digest measured on this version is valid for the version that
+  # declares it.
+  #
+  # 3.0.9 shipped the digest 3.0.6 had measured. A declared digest that is wrong is worse than
+  # none: the gate refuses a deployment that is doing exactly what the listing says, and the
+  # refusal reads as tampering.
+  #
+  # expectedDigest: "<measured on a real deployment of 4.0.0>"
   exclude:
-    # Every deployment lives in a namespace of its own.
+    # Every deployment lives in a namespace of its own. The platform strips this itself; it is
+    # declared because the listing page shows the exclusions from the definition only, and a
+    # reader comparing two snapshots should not have to wonder about the one difference they
+    # will certainly see.
     - fields:
         - "/metadata/namespace"
 
-    # Derived from the generated internal credential, so different for every deployment.
-    - match: { kind: ConfigMap, name: analyst-keycloak-bootstrap }
-      fields:
-        - "/data/bootstrap.sh"
+    # The namespace again, this time inside a value: the bitnami Keycloak chart builds its
+    # JGroups DNS query from the headless Service's fully-qualified name. Not ours to
+    # restructure, and `/metadata/namespace` does not reach inside a string.
     - match: { kind: ConfigMap, name: analyst-keycloak-env-vars }
       fields:
         - "/data/JAVA_OPTS_APPEND"
-    - match: { kind: ConfigMap, name: analyst-oauth2-proxy }
+
+    # The hostname, in the only two proxy settings that are it. This ConfigMap exists so that
+    # excluding them costs two values rather than the proxy's whole configuration; it carries
+    # the same exclusion as an annotation of its own, and is named here because the listing
+    # page reads the definition.
+    - match: { kind: ConfigMap, name: analyst-oauth2-proxy-public }
       fields:
-        - "/data/oauth2_proxy.cfg"
-    - match: { kind: ConfigMap, name: analyst-postgres-initdb }
+        - "/data"
+
+    # Checksums of objects the platform lifts out of the bundle, so each one is a hash of a
+    # value that is different in every deployment by design. Charts put them on their pods to
+    # roll them when a credential changes, which is the right behaviour and not something to
+    # turn off.
+    - match: { kind: Deployment, name: analyst-config }
       fields:
-        - "/data/create_databases.sql"
-    - match: { kind: ConfigMap, name: conversational-analyst-agent-config-config }
-      fields:
-        - "/data/services.yaml"
-    - match: { kind: Deployment, name: analyst-minio }
-      fields:
-        - "/spec/template/metadata/annotations/checksum~1secrets"
+        - "/spec/template/metadata/annotations/checksum~1config-overlay"
     - match: { kind: Deployment, name: analyst-oauth2-proxy }
       fields:
         - "/spec/template/metadata/annotations/checksum~1alpha-config"
-        - "/spec/template/metadata/annotations/checksum~1config"
         - "/spec/template/metadata/annotations/checksum~1secret"
+    - match: { kind: StatefulSet, name: analyst-garage }
+      fields:
+        - "/spec/template/metadata/annotations/checksum~1config"
     - match: { kind: StatefulSet, name: analyst-keycloak }
       fields:
         - "/spec/template/metadata/annotations/checksum~1configmap-env-vars"
         - "/spec/template/metadata/annotations/checksum~1secrets"
-        - "/spec/template/spec/containers/0/env/6/value"
+    - match: { kind: StatefulSet, name: analyst-postgresql }
+      fields:
+        - "/spec/template/metadata/annotations/checksum~1init"
     - match: { kind: StatefulSet, name: analyst-redis-master }
       fields:
         - "/spec/template/metadata/annotations/checksum~1secret"
-    - match: { kind: StatefulSet, name: neo4j }
-      fields:
-        - "/spec/template/spec/containers/0/env/0/value"
 
     # The hostname the operator chose.
     - match: { kind: Ingress, name: conversational-analyst }
       fields:
         - "/spec/rules/0/host"
-

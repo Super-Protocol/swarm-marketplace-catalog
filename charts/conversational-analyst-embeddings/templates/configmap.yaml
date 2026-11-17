@@ -1,0 +1,26 @@
+{{- if .Values.enabled }}
+{{- include "analyst-embeddings.validate" . -}}
+{{- /*
+The two documents a verifier needs to believe anything about what this endpoint serves.
+
+`manifest.json` names every file the deployment may load, by sha256. `fetch-weights.py` is
+the code that enforces it. Both are rendered into the manifests the cloud digests and
+signs, so the published evidence carries both the bytes that were admitted and the rule
+that admitted them — which is the entire reason the weights are not simply pulled by model
+name at boot.
+
+Deterministic: nothing here is derived from the consumer, the hostname or a generated
+credential, so this document is identical in every deployment of this listing version.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: analyst-embeddings-weights
+  labels:
+    {{- include "analyst-embeddings.labels" . | nindent 4 }}
+data:
+  manifest.json: |
+    {{- toPrettyJson (dict "repo" .Values.model.weights.repo "revision" .Values.model.weights.revision "totalBytes" (int64 .Values.model.weights.totalBytes) "files" .Values.model.weights.files) | nindent 4 }}
+  fetch-weights.py: |
+    {{- .Files.Get "files/fetch-weights.py" | nindent 4 }}
+{{- end }}
