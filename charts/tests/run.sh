@@ -212,7 +212,13 @@ analyst_drift() {
 analyst_drift platform
 analyst_drift embeddings
 analyst_drift identity 'appHostname={t}.conf-apps.superprotocol.dev'
-analyst_drift agent
+# The generated credentials vary too, not only the hostname. The agent's overlay Secret holds
+# three of them (`modelApiKey`, `embeddingsApiKey`, `internalSecret`), the marketplace generates
+# each one per deployment, and the chart hashes the Secret into `checksum/config-overlay` to roll
+# the pods when it changes. Holding them constant here is what let 4.0.1 ship with that field
+# unexcluded and no check complaining: the value the listing says varies in every deployment was
+# the one value this case kept the same (SUP-823).
+analyst_drift agent 'aivo.config.configOverlay.ANALYST_MODEL_API_KEY=SECRET-{t}'
 analyst_drift gateway 'appHostname={t}.conf-apps.superprotocol.dev'
 analyst_drift grounding
 

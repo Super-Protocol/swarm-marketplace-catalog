@@ -42,10 +42,13 @@ others it cannot annotate, and each of those is a question for whoever renders t
         apiHostname=api.{t}.example consoleHostname=console.{t}.example
 """
 
+import pathlib
 import subprocess
 import sys
 
 import yaml
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 ANNOTATION = "swarm.io/exclude-evidence-fields"
 
@@ -89,8 +92,18 @@ def escape(token: str) -> str:
 
 
 def render(chart: str, values: str, tag: str, namespace: str, overrides: list[str]) -> dict:
+    # The release name is the chart name, because that is the release the marketplace uses: it
+    # renders each component as `<listing name>-<component name>` (`releaseNameFor`, with
+    # `releasePrefix = shortName(listing.name)`), and every chart here is named for the component
+    # it carries. It matters for any chart that does not pin a `fullnameOverride`, because then
+    # its object names come from the release — and an `evidence.exclude` entry is matched against
+    # the rendered name by an exact string compare. Rendering under some other release was how
+    # 4.0.1 of the analyst shipped an exclusion naming an object no deployment produces: the
+    # entry said `analyst-config`, the deployment rendered `conversational-analyst-agent-config`,
+    # and this check could see neither (SUP-823). It is also the convention `owns()` below
+    # already assumes.
     manifests = subprocess.run(
-        ["helm", "template", "cr", f"charts/{chart}", "--namespace", namespace, "--values", values]
+        ["helm", "template", chart, f"charts/{chart}", "--namespace", namespace, "--values", values]
         + [arg for override in overrides for arg in ("--set", override.replace("{t}", tag))],
         capture_output=True, text=True, check=True,
     ).stdout
@@ -152,8 +165,20 @@ def listing_exclusions(app: str) -> set[tuple[str, str, str]]:
 
 
 def owns(chart: str, name: str) -> bool:
-    """Whether an object of this name is one this chart renders, by naming convention."""
-    return name == chart or name.startswith(f"{chart}-")
+    """
+    Whether this chart renders an object of this name from a template of its own.
+
+    Two conditions, and the second is not redundant. The name has to look like this chart's,
+    which is the convention every chart here follows. But a chart with no `templates/` directory
+    renders nothing itself — it is a wrapper whose objects all come from a dependency — and
+    those objects take their names from the Helm release, so they look exactly like the
+    wrapper's own. `conversational-analyst-agent` is that chart: Chart.yaml, values.yaml, a
+    Chart.lock, and every object from the vendored aivo chart. Asking such a chart to carry an
+    annotation it has no template to put it on is asking for the impossible, and the authoring
+    guide's answer for exactly this case is to declare the exclusion in the definition instead.
+    """
+    looks_like_ours = name == chart or name.startswith(f"{chart}-")
+    return looks_like_ours and (ROOT / "charts" / chart / "templates").is_dir()
 
 
 def main(chart: str, values: str, app: str, overrides: list[str]) -> int:
