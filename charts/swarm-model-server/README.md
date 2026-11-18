@@ -3,22 +3,33 @@
 One authenticated, OpenAI-compatible model endpoint — or several on one GPU — served by vLLM from
 weights pinned by sha256.
 
-Three listings deploy this chart — [Llama 3.2 3B Instruct](../../apps/llama-3-2-3b-instruct/),
-[Gemma 2 2B IT](../../apps/gemma-2-2b-it/) and
-[Qwen3-Coder 30B A3B (FP8)](../../apps/qwen3-coder-30b-a3b-instruct-fp8/) — and differ only in
-values.
+Four listings deploy this chart — [Llama 3.2 3B Instruct](../../apps/llama-3-2-3b-instruct/),
+[Gemma 2 2B IT](../../apps/gemma-2-2b-it/),
+[Qwen3-Coder 30B A3B (FP8)](../../apps/qwen3-coder-30b-a3b-instruct-fp8/) and
+[Qwen3-Coder-Next (FP8)](../../apps/qwen3-coder-next-fp8/) — and differ only in values.
 
-## One chart, three listings
+It is also a **component**: cluster-internal, no public name of its own, for a listing that needs an
+LLM underneath something else. That use has its own document —
+[`docs/open-inference-component.md`](../../docs/open-inference-component.md) — covering how a listing
+composes it, how "which model" becomes a question put to a person, the `resources.min` arithmetic
+with a worked example, and the measured performance.
 
-The alternative was a chart per model. The three deployments differ in an image tag's worth of
+## One chart, four listings
+
+The alternative was a chart per model. The four deployments differ in an image tag's worth of
 values: the weights manifest, four engine flags, and three resource numbers. Everything with any
 behaviour in it is shared — the ingress class, the `/v1`-only path list, the explicit
 `nvidia.com/gpu: "0"` on the init container, the refusal to publish without a key, the startup
-probe's patience. A chart per model would mean finding each of those bugs three times and bumping
-three append-only chart versions to fix it once.
+probe's patience. A chart per model would mean finding each of those bugs four times and bumping
+four append-only chart versions to fix it once.
 
-Three *listings* either way: the marketplace card is the product, and "Llama 3.2 3B" and
+Four *listings* either way: the marketplace card is the product, and "Llama 3.2 3B" and
 "Qwen3-Coder" are not one product with a dropdown.
+
+The presets below are not a retraction of that last sentence. A listing whose product *is* a model
+gets a card per model; a listing whose product is something else — a RAG pipeline, a vulnerability
+analyser — needs an LLM underneath and has to ask which one. Those are different questions, and the
+dropdown belongs to the second.
 
 ## What it does that a plain `helm install vllm` does not
 
@@ -56,11 +67,51 @@ unpinned image, a model id with characters that would break the connection link,
 outside `/v1`, and — for a shared card — fractions of its memory that add up to more than it has,
 an engine with no share or no context length of its own, two engines on one port, under one name
 or serving one model id, and tensor parallelism across cards that engines are supposed to be
-sharing.
+sharing. With a preset: a slug the chart carries no model for, a preset whose licence does not
+record that commercial self-hosting is permitted, and any of the five fields a preset owns set
+beside it.
+
+## The component shape
+
+`ingress.enabled: false` and no hostname: a `ClusterIP` Service and nothing published. The key is
+still demanded on every `/v1` request — a namespace is not a trust boundary once a second workload is
+in it — and `persistence.size` left empty is derived from the weights manifest, which is what a
+listing whose model is a *parameter* needs, since the right volume for a 2B model is not the right
+volume for a 30B one.
+
+The shape has one property the published one cannot have: with no hostname in any object, two
+deployments of a version differ in the namespace alone, and the platform excludes that by default.
+There is nothing for the composing listing to declare in `evidence.exclude` on this component's
+behalf.
+
+## Which model is a preset, not a value
+
+`model.preset: <slug>` names a file in [`files/models/`](files/models/), and with it come the model
+id, the weights manifest, the tool-call parser, the chat template, the quantisation — and the licence
+the weights are served under, which is checked to permit commercial self-hosting and is rendered into
+the attested ConfigMap as `model-licence.json`.
+
+It exists for the shape a composing listing needs. "Which model" is a question put to a person, so
+the answer arrives as a parameter's value; without presets a listing offering three models would
+carry three 200-line weights manifests inside its `patches`, and nothing but a reviewer's attention
+would stop a fourth option naming weights nobody had read the licence of. With presets the mapping is
+one `op: replace` on `model.preset`, and an answer this chart has no preset for is a render error
+listing the ones it has.
+
+A preset is not a partial default: setting `id`, `weights`, `quantization`, `toolCalling` or
+`chatTemplateFile` beside one is refused, because which side won would otherwise be a property of
+Helm's merge semantics. What the listing still chooses is the context length, the share of the card,
+the container's resources and the volume — properties of the deployment, not of the model. Each
+preset's `sizing` block is the measured answer for that model.
+
+[`files/models/README.md`](files/models/README.md) is how one is added, and what has to be measured
+first. The four single-model listings predate this and pin their weights themselves;
+`charts/tests/model_presets.py` checks that a preset and the listing for the same model still pin the
+same bytes.
 
 ## Several models on one card
 
-`model:` serves one model with the card to itself, which is what the three listings above deploy.
+`model:` serves one model with the card to itself, which is what the four listings above deploy.
 `engines:` serves several from the one `nvidia.com/gpu: 1` the pod holds. Setting both is refused;
 the single-model render is unchanged by the existence of the other shape, down to the object it
 produces.
@@ -154,7 +205,20 @@ in the attested snapshot, and the fetcher fails closed — without the cost, and
 What baking would additionally buy is no network egress from the enclave at first boot, and an
 instant start after the image pull. Both are real; neither is worth a build pipeline that does not
 exist. If a self-hosted builder appears, revisit — the chart would need a `model.weights.baked`
-branch and nothing else.
+branch and nothing else. The full trade-off is tabulated in
+[`docs/open-inference-component.md`](../../docs/open-inference-component.md).
+
+### The fetcher's memory request is measured, and the obvious number was wrong
+
+`fetcher.resources.memory` is 512Mi. It streams in 8 MiB chunks and its own resident set never
+passes 40 MiB — and before SUP-839 it was OOMKilled under a 512Mi limit *and* under a 1Gi one. A
+container's page cache is charged to its cgroup, the cache of a file being written stays dirty until
+writeback completes, and at a few hundred MiB/s the kernel kills the writer rather than waiting. So
+`release()` now hands each 64 MiB back to the kernel as it goes, and the peak is bounded by that
+window rather than by the size of the file: 197 MiB for the 6 GiB Llama manifest, 100 MiB on the
+restart path where the same bytes are re-hashed from the volume. `values.yaml` carries the whole
+table, and `charts/tests/fetcher_guard.py` asserts the release happens — a fetcher that stopped
+releasing would pass every other test here and fail in the cluster after a multi-minute download.
 
 ## The engine version is pinned for a measured reason
 
@@ -168,9 +232,11 @@ render and a readiness probe both pass on a build that computes garbage.
 
 ```bash
 charts/tests/run.sh                 # lint, golden renders, and the refusals above
+charts/tests/model_presets.py       # every preset's licence, pins, sizing and measurement
 charts/tests/engine_routing.py model-server-two-engines   # one engine, one prefix, one port
 charts/tests/supervisor_guard.py    # the supervisor's promises, with fake engines
 charts/tests/root_path_guard.py     # a prefixed path is authenticated, not merely routed
+charts/tests/fetcher_guard.py       # the refusals, and that a written file is not left in cache
 charts/tests/smoke/model-server.py  # against a deployed endpoint: auth, system message,
                                     # streaming, tool choice, evidence
 charts/tests/smoke/model-throughput.py

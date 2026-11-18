@@ -101,6 +101,16 @@ else
   printf '%s\n' "$output" | sed 's/^/        /'
 fi
 
+# And the component shape — a preset instead of a hand-written model block, and
+# no ingress at all — which is a third set of values and therefore a third lint.
+if output=$(helm lint charts/swarm-model-server \
+      --values charts/tests/cases/model-server-component.yaml 2>&1); then
+  pass "swarm-model-server (component)"
+else
+  fail "swarm-model-server (component)"
+  printf '%s\n' "$output" | sed 's/^/        /'
+fi
+
 note "helm template goldens"
 while IFS=$'\t' read -r name chart repo version; do
   case "$name" in ''|\#*) continue ;; esac
@@ -1459,6 +1469,151 @@ PYTHON
   fi
 done
 
+# ---------------------------------------------------------------------------
+# The component shape (SUP-839). The same chart with no public name of its own,
+# for a listing that composes an OpenAI-compatible endpoint behind its own front
+# end — and with the model named by preset, because "which model" is a question
+# put to a person and the answer has to reach the chart as one value.
+# ---------------------------------------------------------------------------
+note "the vetted model presets are what they claim to be"
+if output=$(python3 charts/tests/model_presets.py 2>&1); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/model_presets.py"
+fi
+
+# Published nothing, authenticated anyway. A cluster-internal endpoint is behind
+# no gateway, so the key is the only thing between it and whatever else lands in
+# the namespace — and the licence of the weights has to be in the evidence, which
+# is the artefact a tenant can read what they agreed to out of.
+note "the component shape publishes no hostname and still authenticates"
+for case in model-server-component model-server-component-two-presets; do
+  rendered=$(helm template ms charts/swarm-model-server --namespace model-server \
+    --values "charts/tests/cases/$case.yaml" 2>&1) || { fail "$case (render)"; continue; }
+  problems=""
+  printf '%s\n' "$rendered" | grep -q '^kind: Ingress' && problems="$problems published-an-ingress"
+  # No hostname in any object, which is what makes this shape's digest a
+  # property of the version rather than of the deployment.
+  printf '%s\n' "$rendered" | grep -qE '^\s+host:' && problems="$problems a-hostname-in-an-object"
+  printf '%s\n' "$rendered" | grep -q 'ClusterIP' || problems="$problems not-a-cluster-service"
+  printf '%s\n' "$rendered" | grep -q 'VLLM_API_KEY' || problems="$problems no-key-demanded"
+  printf '%s\n' "$rendered" | grep -q 'secretKeyRef' || problems="$problems key-not-by-reference"
+  printf '%s\n' "$rendered" | grep -qE '^\s+- "?--api-key' && problems="$problems key-on-the-command-line"
+  printf '%s\n' "$rendered" | grep -qE '"--api-key' && problems="$problems key-in-engines-json"
+  printf '%s\n' "$rendered" | grep -q 'nvidia.com/gpu: "0"' || problems="$problems fetcher-wants-a-gpu"
+  printf '%s\n' "$rendered" | grep -q 'commercialSelfHosting' || problems="$problems licence-not-attested"
+  if [ -z "$problems" ]; then pass "$case"; else fail "$case:$problems"; fi
+done
+
+# `expectedDigest` is a promise that two deployments of one version attest the
+# same snapshot. The published shape earns it by excluding the hostname; this one
+# has nothing to exclude, and that is a property worth asserting rather than
+# inferring — the namespace is the only thing left that differs, and the platform
+# drops it by default.
+note "two deployments of the component shape render the same bytes"
+for case in model-server-component model-server-component-two-presets; do
+  render_component() {
+    helm template ms-fixed charts/swarm-model-server --namespace "$1" \
+      --values "charts/tests/cases/$case.yaml" --set "apiKey=$2" 2>&1 | grep -v '^  namespace:'
+  }
+  a=$(render_component space-a KEYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA)
+  b=$(render_component space-b KEYBBBBBBBBBBBBBBBBBBBBBBBBBBBBB)
+  # The key is in a Secret, whose contents the platform lifts out of the bundle
+  # before the snapshot is taken.
+  undeclared=$(diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") | grep -E '^[<>]' \
+    | grep -vE 'KEYAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|KEYBBBBBBBBBBBBBBBBBBBBBBBBBBBBB' || true)
+  if [ -z "$undeclared" ]; then
+    pass "$case"
+  else
+    fail "$case: a field differs between two deployments and nothing excludes it:"
+    printf '%s\n' "$undeclared" | sed 's/^/        /'
+  fi
+done
+
+# Determinism in the other direction: the same parameters twice. A golden diff
+# proves a render matches a file committed weeks ago, which covers this — but it
+# covers it as a side effect, and the acceptance criterion is about this.
+note "a second render of identical parameters is byte-identical"
+for case in model-server-llama model-server-gemma model-server-qwen-fp8 model-server-qwen-next-fp8 \
+            model-server-two-engines model-server-component model-server-component-two-presets; do
+  once=$(helm template ms charts/swarm-model-server --namespace model-server \
+    --values "charts/tests/cases/$case.yaml" 2>&1)
+  twice=$(helm template ms charts/swarm-model-server --namespace model-server \
+    --values "charts/tests/cases/$case.yaml" 2>&1)
+  if [ "$once" = "$twice" ]; then pass "$case"; else fail "$case: two renders of one input differ"; fi
+done
+
+# Each of these is a listing that would deploy a model nobody chose, or attest a
+# model other than the one it serves.
+note "a preset and a hand-written model block are not mixed"
+preset_ms=(helm template ms charts/swarm-model-server --namespace model-server --values charts/tests/cases/model-server-component.yaml)
+
+# The one that makes "constrained to weights whose licence permits commercial
+# self-hosting" a property of the chart rather than of a reviewer's attention: an
+# answer to "which model" that this chart has no vetted preset for is a render
+# error naming the ones it has.
+refuses "a model the chart carries no vetted preset for" "is not a model this chart carries" \
+  "${preset_ms[@]}" --set model.preset=some-model-we-never-read-the-licence-of
+
+refuses "a preset and a model id beside it" "the preset names the model" \
+  "${preset_ms[@]}" --set model.id=something-else
+
+refuses "a preset and a weights manifest beside it" "the preset is the pin" \
+  "${preset_ms[@]}" --set model.weights.repo=someone/else
+
+refuses "a preset and a quantisation beside it" "property of the bytes the preset pinned" \
+  "${preset_ms[@]}" --set model.quantization=fp8
+
+refuses "a preset and a chat template beside it" "property of the model" \
+  "${preset_ms[@]}" --set model.chatTemplateFile=gemma-2.jinja
+
+refuses "a preset and a tool-call parser beside it" "belongs to the model" \
+  "${preset_ms[@]}" --set model.toolCalling.enabled=true
+
+# The component shape has no hostname to protect, and still cannot render without
+# a key: the engine's `secretKeyRef` is not optional, so a keyless render does not
+# produce an unauthenticated endpoint — it produces a pod the kubelet refuses to
+# start, which is a worse way to find out.
+refuses "a cluster-internal endpoint with no key" "a namespace is not a trust boundary" \
+  "${preset_ms[@]}" --set apiKey= --set existingSecret=
+
+refuses "a render that names no model at all" "model.id is empty and no preset is named" \
+  helm template ms charts/swarm-model-server --namespace model-server \
+  --set apiKey=TESTKEYtestkey0123456789abcdefAB --set ingress.enabled=false
+
+refuses "a preset in both value shapes at once" "never by both" \
+  "${preset_ms[@]}" --set 'engines[0].name=llama' \
+  --set 'engines[0].model.preset=gemma-2-2b-it' \
+  --set 'engines[0].model.maxModelLen=8192' \
+  --set 'engines[0].model.gpuMemoryUtilization=0.3'
+
+# The admission criterion itself, tested on a chart copy carrying a preset that
+# fails it — there is deliberately no such preset in the repository, and a
+# refusal nobody exercises is a refusal that stops working.
+note "a preset whose licence does not permit commercial self-hosting is refused"
+preset_probe="$(mktemp -d)"
+cp -r charts/swarm-model-server "$preset_probe/chart"
+python3 - "$preset_probe/chart/files/models" <<'PYTHON'
+import pathlib, sys
+models = pathlib.Path(sys.argv[1])
+text = (models / "llama-3.2-3b-instruct.yaml").read_text()
+text = text.replace("id: llama-3.2-3b-instruct", "id: research-only", 1)
+text = text.replace("commercialSelfHosting: true", "commercialSelfHosting: false", 1)
+(models / "research-only.yaml").write_text(text)
+PYTHON
+if output=$(helm template ms "$preset_probe/chart" --namespace model-server \
+      --values charts/tests/cases/model-server-component.yaml \
+      --set model.preset=research-only 2>&1); then
+  fail "a research-only preset rendered instead of failing"
+elif printf '%s' "$output" | grep -q "not marked as permitting commercial self-hosting"; then
+  pass "research-only weights are refused at render time"
+else
+  fail "a research-only preset failed for the wrong reason"
+  printf '%s\n' "$output" | sed 's/^/        /'
+fi
+rm -rf "$preset_probe"
+
 # TLS is off in every listing because the platform terminates it, but if anyone
 # turns it on the hostname appears a second time under /spec/tls/0/hosts/0 — and
 # one unexcluded copy is enough to make the digest a property of the deployment.
@@ -1491,16 +1646,19 @@ rm -f "$tls_render"
 # renders its ConfigMap from the other branch of the same template, which is
 # where a lost `---` glues two objects into one document and leaves a golden diff
 # with nothing to say.
-note "the model server renders every object of each of its three shapes"
+note "the model server renders every object of each of its shapes"
 inventory_shape swarm-model-server model-server-llama swarm-model-server
 inventory_shape swarm-model-server model-server-gemma swarm-model-server:template
 inventory_shape swarm-model-server model-server-two-engines swarm-model-server:shared
+inventory_shape swarm-model-server model-server-component swarm-model-server:component
+inventory_shape swarm-model-server model-server-component-two-presets swarm-model-server:component-shared
 
 # Three agreements between the Ingress, the Service and the engines' own command
 # lines, each of which renders perfectly from one side and serves nothing from
 # the other (SUP-332).
 note "every engine in the pod is published, authenticated and alone on its port"
-for case in model-server-llama model-server-gemma model-server-qwen-fp8 model-server-qwen-next-fp8 model-server-two-engines; do
+for case in model-server-llama model-server-gemma model-server-qwen-fp8 model-server-qwen-next-fp8 model-server-two-engines \
+            model-server-component model-server-component-two-presets; do
   if output=$(python3 charts/tests/engine_routing.py "$case" 2>&1); then
     printf '%s\n' "$output"
   else
@@ -1534,7 +1692,9 @@ fi
 
 # The fetcher is what stands between the manifest and the GPU, so its refusals
 # are tested rather than read. It is loaded from the chart's files/ directory —
-# the same bytes the ConfigMap carries — and handed manifests it must reject.
+# the same bytes the ConfigMap carries — and handed manifests it must reject,
+# then one it must satisfy: a write that leaves its bytes in the page cache is
+# what gets the init container OOMKilled on a limit sized from its resident set.
 note "the weights fetcher refuses what the manifest should not be able to say"
 if output=$(python3 charts/tests/fetcher_guard.py 2>&1); then
   pass "$(printf '%s' "$output" | tail -1)"

@@ -5,6 +5,10 @@
   Model      {{ $engine.model.id }}
   Weights    {{ $engine.model.weights.repo }}@{{ substr 0 12 $engine.model.weights.revision }}
              {{ len $engine.model.weights.files }} files, {{ include "swarm-model-server.humanBytes" (dict "n" $engine.model.weights.totalBytes) }}, each verified by sha256 before the engine starts
+{{- if $engine.preset }}
+  Licence    {{ $engine.licence.licence.name }} ({{ $engine.licence.licence.spdx }}) — commercial self-hosting permitted
+             {{ $engine.licence.licence.url }}, and in this deployment's own evidence
+{{- end }}
   Context    {{ $engine.model.maxModelLen | default "the model's own maximum" }} tokens{{ if $engine.model.gpuMemoryUtilization }}, on {{ $engine.model.gpuMemoryUtilization }} of the card{{ end }}
   Inside     http://{{ include "swarm-model-server.fullname" $ }}.{{ $.Release.Namespace }}.svc.cluster.local:{{ $engine.servicePort }}{{ $engine.prefix }}/v1
 {{- if $.Values.ingress.enabled }}

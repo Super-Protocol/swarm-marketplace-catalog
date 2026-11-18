@@ -12,6 +12,10 @@ stdlib only, so the image that runs this can stay a plain python base.
 import hashlib, json, os, sys, time, urllib.error, urllib.request
 
 CHUNK = 8 << 20
+# How much of a file this process keeps in the page cache before handing it back
+# to the kernel. See release() for why a fetcher that streams in 8 MiB chunks is
+# still OOMKilled without it.
+RELEASE = 64 << 20
 RETRIES = 5
 UA = "swarm-marketplace-weights-fetcher/1"
 
@@ -20,11 +24,43 @@ def log(msg: str) -> None:
     print(f"[weights] {msg}", flush=True)
 
 
+def release(fd: int, offset: int, length: int, dirty: bool) -> None:
+    """Hand a range of a file back to the kernel, out of the page cache.
+
+    This is what makes the container's memory request a small number instead of
+    a gamble. A container's page cache is charged to its cgroup, and the cache
+    of a file being *written* is dirty until writeback completes — so a fetcher
+    whose own resident set never exceeds 40 MiB still drives its cgroup to the
+    limit while it writes a 4.7 GiB shard at a few hundred MiB/s, and the kernel
+    OOMKills it rather than waiting for writeback. Measured on this manifest
+    (Llama 3.2 3B, 6.00 GiB, 9 files) in a container with the limit named:
+
+        512Mi   OOMKilled, cgroup peak 515 MiB   (the SUP-1 experience)
+        1Gi     OOMKilled, cgroup peak 1048 MiB
+        2Gi     survived, cgroup peak 2078 MiB   — i.e. the whole limit
+
+    `POSIX_FADV_DONTNEED` drops clean pages only, so a written range is synced
+    first; a range being read is already clean and is dropped as it is hashed.
+    """
+    if not hasattr(os, "posix_fadvise"):
+        return
+    if dirty:
+        os.fsync(fd)
+    os.posix_fadvise(fd, offset, length, os.POSIX_FADV_DONTNEED)
+
+
 def digest(path: str) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as fh:
+        pending = 0
+        read = 0
         while chunk := fh.read(CHUNK):
             h.update(chunk)
+            read += len(chunk)
+            pending += len(chunk)
+            if pending >= RELEASE:
+                release(fh.fileno(), read - pending, pending, dirty=False)
+                pending = 0
     return h.hexdigest()
 
 
@@ -32,12 +68,18 @@ def fetch(url: str, dest: str, expect_sha: str, expect_size: int) -> None:
     tmp = dest + ".part"
     h = hashlib.sha256()
     written = 0
+    pending = 0
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=120) as resp, open(tmp, "wb") as out:
         while chunk := resp.read(CHUNK):
             out.write(chunk)
             h.update(chunk)
             written += len(chunk)
+            pending += len(chunk)
+            if pending >= RELEASE:
+                out.flush()
+                release(out.fileno(), written - pending, pending, dirty=True)
+                pending = 0
     if written != expect_size:
         os.unlink(tmp)
         raise ValueError(f"size {written} != manifest {expect_size}")

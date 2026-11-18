@@ -52,10 +52,50 @@ nameOverride: ""
 fullnameOverride: ""
 
 model:
+  # ---------------------------------------------------------------------------
+  # Which model, as one word.
+  #
+  # A slug from `files/models/`, and the only thing a listing that *composes*
+  # this component has to say about the model it serves: the id, the weights
+  # manifest, the tool-call parser, the chat template and the quantisation all
+  # come from that file, which also records the licence the weights are served
+  # under — checked, for every preset here, to permit commercial self-hosting.
+  #
+  # It exists because of the shape a listing needs. "Which model" is a question
+  # put to a person, and the answer has to reach the chart as values: a listing
+  # offering three models would otherwise carry three 200-line weights manifests
+  # in its `patches` — and a listing that carried them would be choosing models
+  # whose licence nobody had checked. With a preset the listing's whole mapping
+  # is `op: replace, path: model.preset, value: "{{ params.model }}"`, and an
+  # answer the chart has no preset for is refused at render time rather than
+  # deployed.
+  #
+  # A preset is not a default to be partly overridden: setting `id`, `weights`,
+  # `quantization`, `toolCalling` or `chatTemplateFile` beside one is refused.
+  # What the listing still chooses — `maxModelLen`, `gpuMemoryUtilization`,
+  # `resources`, `persistence.size` — is a property of the deployment, and each
+  # preset's `sizing` block is the measured answer for that model.
+  #
+  # The four listings that deploy one model each predate this and pin their
+  # weights themselves, which is why `id` and `weights` below still exist and
+  # why a render that sets neither a preset nor an id is refused.
+  #
+  # A listing that offers the model as a *parameter* should mark that parameter
+  # `immutable: true`. Two reasons, and the second is the hard one: the weights
+  # volume is sized from the manifest, and Kubernetes refuses a PersistentVolumeClaim
+  # whose request changes — so a reconfigure from a 30B model to a 3B one would be
+  # rejected by the API server; and serving different weights under one deployment
+  # changes what its evidence says, which is exactly the event a data owner's
+  # gatekeeper approval is pinned to. A listing that genuinely needs the model
+  # changeable states `persistence.size` explicitly, sized for the largest option.
+  # ---------------------------------------------------------------------------
+  preset: ""
+
   # The name this endpoint advertises in `/v1/models`, and therefore the name a
   # client — or the Confidential Router registering this as an external
   # endpoint — asks for. Independent of the directory the weights land in, so
-  # changing the source repository does not rename the model.
+  # changing the source repository does not rename the model. Comes from the
+  # preset when one is named.
   id: ""
 
   # Where the verified weights are mounted and what vLLM is pointed at. Not a
@@ -204,6 +244,13 @@ existingSecretKey: api-key
 # The public name this endpoint answers on. Required when the ingress is on.
 hostname: ""
 
+# Off is the component shape: a cluster-internal Service and no public name at
+# all, for a listing that composes this chart behind its own front end. Nothing
+# else changes — the key is still demanded on every `/v1` request, because a
+# namespace is not a trust boundary once a second workload is in it — and the
+# render gains a property it cannot have with an ingress: with no hostname in
+# any object, two deployments of the same version differ in nothing but the
+# namespace, which the platform excludes from the evidence snapshot by default.
 ingress:
   enabled: true
   # Without a class the object is created, the cloud registers the hostname and
@@ -237,9 +284,16 @@ service:
 
 # The weights volume. It survives a restart, which is the difference between a
 # pod that comes back in a minute and one that re-downloads 29 GiB first.
+#
+# `size` left empty is sized from the manifests: every engine's bytes plus a
+# tenth for the `.part` file being written, rounded up to whole GiB. That is for
+# the listing whose model is a parameter — there is no one right number when the
+# answer may be a 2B model or a 30B one, and the largest written for all of them
+# would give the small one a volume four times its weights for ever. A listing
+# serving one model states the number.
 persistence:
   enabled: true
-  size: 20Gi
+  size: ""
   storageClass: ""
   accessMode: ReadWriteOnce
 
@@ -271,10 +325,36 @@ resources:
 # defaults a missing `nvidia.com/gpu` to the reserved count, so this container
 # would otherwise ask for the card the engine needs and the pod would never
 # schedule.
+#
+# ---------------------------------------------------------------------------
+# 512Mi is measured, and it is measured because the obvious number is wrong.
+#
+# `files/fetch-weights.py` streams in 8 MiB chunks and its own resident set
+# never passes 40 MiB — and before SUP-839 it was still OOMKilled under a 512Mi
+# limit, and under a 1Gi one. A container's page cache is charged to its cgroup,
+# the cache of a file being written stays dirty until writeback completes, and
+# at a few hundred MiB/s the kernel kills the writer rather than waiting. The
+# numbers, taken in a container with the limit named, fetching the Llama 3.2 3B
+# manifest (6.00 GiB, 9 files, largest shard 4.7 GiB):
+#
+#   before: 512Mi  OOMKilled at cgroup peak 515 MiB   (the SUP-1 experience)
+#           1Gi    OOMKilled at cgroup peak 1048 MiB
+#           2Gi    survived at cgroup peak 2078 MiB — the whole limit
+#    after: 128Mi  survived, cgroup peak 156 MiB
+#           512Mi  survived, cgroup peak 197 MiB
+#           512Mi  survived, cgroup peak 100 MiB on the restart path, where the
+#                  6 GiB are re-hashed from the volume rather than downloaded
+#
+# The fetcher now hands each 64 MiB back to the kernel as it goes
+# (`release()` in that file), so the peak is bounded by that window rather than
+# by the size of the file — which is why one number serves a 6 GiB manifest and
+# a 31 GiB one. 512Mi is 2.6x the measured peak; the 128Mi row is there to say
+# what the margin actually is rather than to invite spending it.
+# ---------------------------------------------------------------------------
 fetcher:
   resources:
     cpu: "2"
-    memory: 2Gi
+    memory: 512Mi
 
 # The engine writes a torch.compile cache, a Triton cache and an HF cache. The
 # weights volume is not the place for them — it is the thing whose contents are

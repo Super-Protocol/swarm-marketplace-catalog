@@ -3,6 +3,8 @@
 {{- include "swarm-model-server.engines" (dict "ctx" . "out" $e) -}}
 {{- $engines := $e.engines -}}
 {{- $name := include "swarm-model-server.fullname" . -}}
+{{- $single := first $engines -}}
+{{- $resolved := $single.model -}}
 {{- if not $e.multi -}}
 {{- /*
 Two documents the deployment's evidence is supposed to contain.
@@ -21,10 +23,24 @@ metadata:
     {{- include "swarm-model-server.labels" . | nindent 4 }}
 data:
   manifest.json: |
-    {{- toPrettyJson (dict "repo" .Values.model.weights.repo "revision" .Values.model.weights.revision "totalBytes" (int64 .Values.model.weights.totalBytes) "files" .Values.model.weights.files) | nindent 4 }}
+    {{- toPrettyJson (dict "repo" $resolved.weights.repo "revision" $resolved.weights.revision "totalBytes" (int64 $resolved.weights.totalBytes) "files" $resolved.weights.files) | nindent 4 }}
   fetch-weights.py: |
     {{- .Files.Get "files/fetch-weights.py" | nindent 4 }}
-{{- if .Values.model.chatTemplateFile }}
+{{- if $single.preset }}
+  {{- /*
+  The licence the weights above are served under, in the same signed document as
+  the hashes of the weights themselves.
+
+  A tenant deploying this component is self-hosting somebody else's model, and
+  which licence permits that is the first question their counsel asks. Rendered
+  here rather than written on the listing page alone, it is a fact about the
+  deployment that a verifier can read out of the published evidence — beside the
+  sha256 of every file it applies to.
+  */}}
+  model-licence.json: |
+    {{- toPrettyJson $single.licence | nindent 4 }}
+{{- end }}
+{{- if $resolved.chatTemplateFile }}
 ---
 {{- /*
 A chat-template override, read from the chart's own files/ directory rather than
@@ -40,7 +56,7 @@ metadata:
     {{- include "swarm-model-server.labels" . | nindent 4 }}
 data:
   chat-template.jinja: |
-    {{- .Files.Get (printf "files/chat-templates/%s" .Values.model.chatTemplateFile) | nindent 4 }}
+    {{- .Files.Get (printf "files/chat-templates/%s" $resolved.chatTemplateFile) | nindent 4 }}
 {{- end }}
 {{- else -}}
 {{- /*
@@ -73,6 +89,12 @@ data:
   {{- range $engine := $engines }}
   manifest-{{ $engine.name }}.json: |
     {{- toPrettyJson (dict "repo" $engine.model.weights.repo "revision" $engine.model.weights.revision "totalBytes" (int64 $engine.model.weights.totalBytes) "files" $engine.model.weights.files) | nindent 4 }}
+  {{- end }}
+  {{- range $engine := $engines }}
+  {{- if $engine.preset }}
+  licence-{{ $engine.name }}.json: |
+    {{- toPrettyJson $engine.licence | nindent 4 }}
+  {{- end }}
   {{- end }}
   {{- range $engine := $engines }}
   {{- if $engine.model.chatTemplateFile }}
