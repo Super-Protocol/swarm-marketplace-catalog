@@ -1,0 +1,28 @@
+# Two vetted models on one card, both named by preset, both cluster-internal
+# (SUP-839). The licence of each one's weights is rendered beside its manifest,
+# so a deployment serving two models publishes evidence naming the terms both
+# sets of bytes are served under.
+#
+# The fractions are a budget that has to add up — 0.6 + 0.3, with the last 0.05
+# left to the driver — and the volume holds both manifests, derived here rather
+# than written down.
+engines:
+  - name: llama
+    model:
+      preset: llama-3.2-3b-instruct
+      maxModelLen: 32768
+      gpuMemoryUtilization: 0.6
+  - name: gemma
+    model:
+      preset: gemma-2-2b-it
+      maxModelLen: 8192
+      gpuMemoryUtilization: 0.3
+
+apiKey: TESTKEYtestkey0123456789abcdefAB
+
+ingress:
+  enabled: false
+
+resources:
+  cpu: '8'
+  memory: 24Gi

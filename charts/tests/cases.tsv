@@ -33,6 +33,8 @@ model-server-gemma	swarm-model-server
 model-server-qwen-fp8	swarm-model-server		
 model-server-qwen-next-fp8	swarm-model-server		
 model-server-two-engines	swarm-model-server		
+model-server-component	swarm-model-server		
+model-server-component-two-presets	swarm-model-server		
 ollama-one-model	confidential-router-ollama		
 ollama-gpu	confidential-router-ollama		
 ollama-no-models	confidential-router-ollama		

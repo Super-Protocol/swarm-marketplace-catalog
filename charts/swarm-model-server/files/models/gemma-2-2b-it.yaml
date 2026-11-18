@@ -1,0 +1,77 @@
+# Gemma 2 2B IT — a vetted model this chart will serve.
+#
+# `model.preset: gemma-2-2b-it` in a listing's values is the whole of what
+# a composing listing says about which model it runs: the id, the tool-call
+# parser, the chat template, the quantisation and the weights manifest below all
+# come from here, and the chart refuses a listing that sets any of them beside a
+# preset. What the listing still chooses is the context length, the share of the
+# card and the container's resources — `sizing` below is the measured answer for
+# each.
+#
+# Nothing in this file is fetched at render time and nothing in it varies between
+# deployments, so a listing that names a preset renders byte-identically to one
+# that spelled the same values out.
+#
+# Regenerate the weights block with:
+#   scripts/model-weights-manifest.py unsloth/gemma-2-2b-it
+id: gemma-2-2b-it
+title: Gemma 2 2B IT
+source: https://huggingface.co/google/gemma-2-2b-it
+status: measured
+licence:
+  spdx: LicenseRef-Gemma-Terms-of-Use
+  name: Gemma Terms of Use
+  url: https://ai.google.dev/gemma/terms
+  commercialSelfHosting: true
+  conditions:
+  - Commercial use and self-hosting are granted, with no user-count ceiling.
+  - Google's Gemma Prohibited Use Policy applies to what the endpoint is used for, and binds downstream
+    users too.
+  - The terms, the use policy and a notice of any modification travel with any redistribution of the weights.
+quantization: ''
+chatTemplateFile: gemma-2.jinja
+toolCalling:
+  enabled: false
+  parser: ''
+sizing:
+  maxModelLen: 8192
+  gpuMemoryUtilization: 0.85
+  minVram: 16Gi
+  resources:
+    cpu: '4'
+    memory: 12Gi
+measured:
+  engine: vLLM 0.22.0
+  card: NVIDIA H200 NVL
+  args: --max-model-len 8192 --gpu-memory-utilization 0.85
+  readySeconds: 102
+  singleStreamTokensPerSecond: 214
+  sixteenStreamsAggregateTokensPerSecond: 2672
+  sixteenStreamsEachTokensPerSecond: 169
+  hostMemoryPeak: 3.7Gi
+weights:
+  repo: unsloth/gemma-2-2b-it
+  revision: 457f2e15bf550c227ce6ad86e2ec108d3e42c106
+  totalBytes: 5250532652
+  files:
+  - path: config.json
+    sha256: e3885c56a32ca83566f849283b402006bbb100a02c43aca3fe0c90dc62808893
+    size: 913
+  - path: generation_config.json
+    sha256: ebcbf26935f7b454678f1bfb7fa9142dc04f5210e73be8fccba44a9d59f5a986
+    size: 209
+  - path: model.safetensors
+    sha256: bf06a1e6cfe1610beb98a2975e5602e7fc108d902b3ff9dd62282d749c7a2394
+    size: 5228717512
+  - path: special_tokens_map.json
+    sha256: baec30ea10906f16adb8c18af7a34023002c1746542612b8b41c9f09e1351351
+    size: 636
+  - path: tokenizer.json
+    sha256: 3f289bc05132635a8bc7aca7aa21255efd5e18f3710f43e3cdb96bcd41be4922
+    size: 17525357
+  - path: tokenizer.model
+    sha256: 61a7b147390c64585d6c3543dd6fc636906c9af3865a5548f27f31aee1d4c8e2
+    size: 4241003
+  - path: tokenizer_config.json
+    sha256: e5ac0f1cfb5f450763d368edacbb2448a3c02c8d8f7f98d963a820751fb0ddc3
+    size: 47022

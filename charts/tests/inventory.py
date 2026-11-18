@@ -123,6 +123,24 @@ EXPECTED = {
         ("Secret", "swarm-model-server"),
         ("Service", "swarm-model-server"),
     },
+    # The component shape (SUP-839): no Ingress, because this one has no public
+    # name of its own. Named here rather than left to the golden because the
+    # object that must NOT exist is exactly the kind a golden stops mentioning
+    # without anyone noticing.
+    "swarm-model-server:component": {
+        ("ConfigMap", "swarm-model-server-weights"),
+        ("Deployment", "swarm-model-server"),
+        ("PersistentVolumeClaim", "swarm-model-server-weights"),
+        ("Secret", "swarm-model-server"),
+        ("Service", "swarm-model-server"),
+    },
+    "swarm-model-server:component-shared": {
+        ("ConfigMap", "swarm-model-server-engines"),
+        ("Deployment", "swarm-model-server"),
+        ("PersistentVolumeClaim", "swarm-model-server-weights"),
+        ("Secret", "swarm-model-server"),
+        ("Service", "swarm-model-server"),
+    },
     "confidential-s3": {
         ("ConfigMap", "confidential-s3-bootstrap"),
         ("ConfigMap", "confidential-s3-garage"),

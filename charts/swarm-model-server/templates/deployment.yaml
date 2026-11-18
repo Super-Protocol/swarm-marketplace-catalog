@@ -249,7 +249,7 @@ spec:
             - name: engines
               mountPath: /opt/engines
               readOnly: true
-            {{- else if .Values.model.chatTemplateFile }}
+            {{- else if (first $engines).model.chatTemplateFile }}
             - name: chat-template
               mountPath: /etc/model
               readOnly: true
@@ -270,7 +270,7 @@ spec:
             claimName: {{ $name }}-weights
           {{- else }}
           emptyDir:
-            sizeLimit: {{ .Values.persistence.size }}
+            sizeLimit: {{ include "swarm-model-server.persistenceSize" . }}
           {{- end }}
         {{- if $multi }}
         - name: engines
@@ -297,7 +297,7 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: {{ .Values.shm.size }}
-        {{- if and (not $multi) .Values.model.chatTemplateFile }}
+        {{- if and (not $multi) (first $engines).model.chatTemplateFile }}
         - name: chat-template
           configMap:
             name: {{ $name }}-chat-template

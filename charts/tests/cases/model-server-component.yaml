@@ -1,0 +1,27 @@
+# The component shape: an OpenAI-compatible endpoint a listing composes behind
+# its own front end, with the model named by preset and no public hostname of
+# its own (SUP-839).
+#
+# Three things about this render are the point of the case. There is no Ingress,
+# so there is no hostname in any object and two deployments of the same version
+# differ in nothing but the namespace — which the platform excludes from the
+# evidence snapshot anyway. The key is still demanded on every `/v1` request: a
+# namespace is not a trust boundary once a second workload is in it. And
+# `persistence.size` is absent, so the volume is sized from the manifest the
+# preset carries rather than from a number a listing with a model *parameter*
+# has no way to choose.
+model:
+  preset: llama-3.2-3b-instruct
+  # What the deployment chooses, not the model: how much context, and how much
+  # of the card. Every preset's `sizing` block carries the measured answer.
+  maxModelLen: 32768
+  gpuMemoryUtilization: 0.85
+
+apiKey: TESTKEYtestkey0123456789abcdefAB
+
+ingress:
+  enabled: false
+
+resources:
+  cpu: '4'
+  memory: 12Gi

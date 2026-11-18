@@ -49,6 +49,102 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/*
+The vetted models this chart carries, by slug — the names `model.preset` accepts.
+
+Read from the chart's own `files/models/` directory rather than from a list kept
+beside it, so adding a preset is adding one file. A template range over a map is
+in key order, so this list is the same on every render.
+*/}}
+{{- define "swarm-model-server.presetSlugs" -}}
+{{- $out := list -}}
+{{- range $path, $_ := .Files.Glob "files/models/*.yaml" -}}
+{{- $out = append $out (trimSuffix ".yaml" (base $path)) -}}
+{{- end -}}
+{{- toJson $out -}}
+{{- end -}}
+
+{{/*
+One engine's model block, with `preset` resolved.
+
+`model.preset: <slug>` is how a listing that composes this component says which
+model it serves: the id, the tool-call parser, the chat template, the
+quantisation and the weights manifest all come from
+`files/models/<slug>.yaml`, which also records the licence the weights are
+served under. That is the whole point of the mechanism — a listing offering
+"which model" as a question put to a person cannot carry three 200-line weights
+manifests in its `patches`, and a listing that could would be choosing models
+nobody checked the licence of.
+
+What the listing still chooses, because it is a property of the deployment
+rather than of the model: the context length, the share of the card, the
+container's resources and the volume. Each preset's `sizing` block is the
+measured answer for that model; `docs/open-inference-component.md` tabulates
+them.
+
+A preset and a hand-written model block are not mixed: setting a field the
+preset owns is refused rather than silently won by one side.
+
+Returned through the `out` dict the caller passes, like `engines` below and for
+the same reason.
+
+    {{- $r := dict -}}
+    {{- include "swarm-model-server.resolve" (dict "ctx" . "model" .Values.model "at" "model" "out" $r) -}}
+    {{- $model := $r.model -}}
+*/}}
+{{- define "swarm-model-server.resolve" -}}
+{{- $ctx := .ctx -}}
+{{- $model := .model | default dict -}}
+{{- $at := .at -}}
+{{- $slug := $model.preset | default "" | toString -}}
+{{- $licence := dict -}}
+{{- if $slug -}}
+{{- $available := include "swarm-model-server.presetSlugs" $ctx | fromJsonArray -}}
+{{- if not (has $slug $available) -}}
+{{- fail (printf "%s.preset %q is not a model this chart carries. The vetted presets are: %s. A preset pins its weights file by file and records a licence checked to permit commercial self-hosting — charts/swarm-model-server/files/models/README.md is how one is added" $at $slug (join ", " $available)) -}}
+{{- end -}}
+{{- $preset := $ctx.Files.Get (printf "files/models/%s.yaml" $slug) | fromYaml -}}
+{{- $lic := $preset.licence | default dict -}}
+{{- if not $lic.commercialSelfHosting -}}
+{{- fail (printf "the %q preset records licence %q, which is not marked as permitting commercial self-hosting. A deployment of this component is a tenant running those weights on their own hardware for their own purposes, so the licence question is not optional here" $slug ($lic.spdx | default "unrecorded")) -}}
+{{- end -}}
+
+{{/* A preset and a hand-written model block each answer the same question. Which
+     one won would otherwise be a property of sprig's merge semantics, visible
+     only in the render — and a listing that pinned its own weights beside a
+     preset's would attest a model nobody chose. */}}
+{{- if $model.id -}}
+{{- fail (printf "%s sets both preset %q and id %q: the preset names the model, so the id comes from it. Drop the id, or drop the preset and pin the weights here" $at $slug $model.id) -}}
+{{- end -}}
+{{- $w := $model.weights | default dict -}}
+{{- if or $w.repo $w.revision $w.files $w.totalBytes -}}
+{{- fail (printf "%s sets both preset %q and its own weights manifest: the preset is the pin. A model whose weights belong in the listing rather than in the chart is a model that has no preset yet — add one, or drop `preset` and pin the weights here" $at $slug) -}}
+{{- end -}}
+{{- if $model.quantization -}}
+{{- fail (printf "%s sets both preset %q and quantization %q: a checkpoint's quantisation is a property of the bytes the preset pinned, not of the deployment" $at $slug $model.quantization) -}}
+{{- end -}}
+{{- if $model.chatTemplateFile -}}
+{{- fail (printf "%s sets both preset %q and chatTemplateFile %q: whether a model's own chat template can answer an OpenAI-shaped request is a property of the model, and the preset records it" $at $slug $model.chatTemplateFile) -}}
+{{- end -}}
+{{- $tc := $model.toolCalling | default dict -}}
+{{- if or $tc.enabled $tc.parser -}}
+{{- fail (printf "%s sets both preset %q and its own toolCalling: a tool-call parser has to match the model's output format, so it belongs to the model. The preset records whether this one can call tools and with which parser" $at $slug) -}}
+{{- end -}}
+
+{{- $licence = dict "model" $preset.id "preset" $slug "licence" $lic -}}
+{{- $model = merge (dict
+      "id" $preset.id
+      "quantization" ($preset.quantization | default "")
+      "chatTemplateFile" ($preset.chatTemplateFile | default "")
+      "toolCalling" ($preset.toolCalling | default dict)
+      "weights" (merge (deepCopy ($preset.weights | default dict)) (pick $w "endpoint"))
+   ) (omit $model "preset" "id" "quantization" "chatTemplateFile" "toolCalling" "weights") -}}
+{{- end -}}
+{{- $_ := set .out "model" $model -}}
+{{- $_ := set .out "licence" $licence -}}
+{{- $_ := set .out "preset" $slug -}}
+{{- end -}}
+
+{{/*
 The engines this deployment runs, normalised into one list every template walks.
 
 Two value shapes reach this chart and both end here.
@@ -80,7 +176,9 @@ and the fetcher compares that field to a byte count.
 {{- if $declared -}}
 {{- range $i, $entry := $declared -}}
 {{- $name := $entry.name | default "" | toString -}}
-{{- $model := $entry.model | default dict -}}
+{{- $r := dict -}}
+{{- include "swarm-model-server.resolve" (dict "ctx" $ctx "model" ($entry.model | default dict) "at" (printf "engines[%d].model" $i) "out" $r) -}}
+{{- $model := $r.model -}}
 {{- $template := $model.chatTemplateFile | default "" -}}
 {{- $port := int ($entry.port | default (add (int $ctx.Values.service.targetPort) $i)) -}}
 {{- $engines = append $engines (dict
@@ -88,6 +186,8 @@ and the fetcher compares that field to a byte count.
       "index" $i
       "path" (printf "engines[%d]" $i)
       "model" $model
+      "licence" $r.licence
+      "preset" $r.preset
       "dir" (printf "/models/%s" $name)
       "port" $port
       "servicePort" $port
@@ -101,13 +201,17 @@ and the fetcher compares that field to a byte count.
    ) -}}
 {{- end -}}
 {{- else -}}
-{{- $model := $ctx.Values.model -}}
+{{- $r := dict -}}
+{{- include "swarm-model-server.resolve" (dict "ctx" $ctx "model" $ctx.Values.model "at" "model" "out" $r) -}}
+{{- $model := $r.model -}}
 {{- $template := $model.chatTemplateFile | default "" -}}
 {{- $engines = list (dict
       "name" ""
       "index" 0
       "path" "model"
       "model" $model
+      "licence" $r.licence
+      "preset" $r.preset
       "dir" $model.dir
       "port" (int $ctx.Values.service.targetPort)
       "servicePort" (int $ctx.Values.service.port)
@@ -134,8 +238,8 @@ render time, refused here while there is still a human looking.
 {{- include "swarm-model-server.engines" (dict "ctx" . "out" $e) -}}
 {{- $engines := $e.engines -}}
 
-{{- if and .Values.engines .Values.model.id -}}
-{{- fail "model.id and engines are both set: one card is served either by the single `model` block or by the `engines` list, never by both. Move the model into an `engines` entry, or empty the list" -}}
+{{- if and .Values.engines (or .Values.model.id .Values.model.preset) -}}
+{{- fail "the single `model` block and the `engines` list are both set: one card is served either by `model` or by `engines`, never by both. Move the model into an `engines` entry, or empty the list" -}}
 {{- end -}}
 
 {{- if not .Values.gpu.enabled -}}
@@ -200,7 +304,7 @@ render time, refused here while there is still a human looking.
 {{- $capacity := include "swarm-model-server.storageBytes" . | int64 -}}
 {{- $needed := add (int64 $sumBytes) (div (int64 $sumBytes) 10) | int64 -}}
 {{- if lt (int64 $capacity) (int64 $needed) -}}
-{{- fail (printf "persistence.size %s holds %d bytes but the weights need %d (%s plus a tenth for the file being written): the download would fail with the volume full" .Values.persistence.size (int64 $capacity) (int64 $needed) (include "swarm-model-server.humanBytes" (dict "n" $sumBytes))) -}}
+{{- fail (printf "persistence.size %s holds %d bytes but the weights need %d (%s plus a tenth for the file being written): the download would fail with the volume full. Leave it empty and the chart sizes the volume from the manifests" (include "swarm-model-server.persistenceSize" .) (int64 $capacity) (int64 $needed) (include "swarm-model-server.humanBytes" (dict "n" $sumBytes))) -}}
 {{- end -}}
 {{- end -}}
 
@@ -259,7 +363,7 @@ written; `engine.path` is what the message calls the place it was found.
 {{- end -}}
 
 {{- if not $m.id -}}
-{{- fail (printf "%s.id is empty: it is the name this endpoint advertises in /v1/models and the name a client asks for" $mp) -}}
+{{- fail (printf "%s.id is empty and no preset is named: one of the two says which model this serves. `preset` is a slug from charts/swarm-model-server/files/models/; `id` with a weights manifest beside it is the older shape the single-model listings use" $mp) -}}
 {{- end -}}
 {{- if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._-]*$" $m.id) -}}
 {{- fail (printf "%s.id %q: a model id travels in a URL fragment and in an OpenAI request body, so it is limited to letters, digits, dot, underscore and hyphen" $mp $m.id) -}}
@@ -333,12 +437,42 @@ written; `engine.path` is what the message calls the place it was found.
 {{- end -}}
 
 {{/*
-`persistence.size` as bytes. Helm has no quantity parser, so the suffixes this
-chart actually accepts are spelled out and anything else is refused rather than
-silently read as a byte count.
+The weights volume's size: what the listing asked for, or — left empty — what the
+manifests need.
+
+Derived rather than defaulted, because a listing whose model is a *question* has
+no one right number to write here: three presets want 7Gi, 6Gi and 32Gi, and a
+listing that wrote the largest would hand a 3B model a volume four times the size
+of its weights for ever. The derivation is the same arithmetic `validate` checks
+an explicit size against — every manifest's bytes plus a tenth for the `.part`
+file being written — rounded up to whole GiB, so it is deterministic and it
+cannot be the thing that makes a download fail with the volume full.
+*/}}
+{{- define "swarm-model-server.persistenceSize" -}}
+{{- if .Values.persistence.size -}}
+{{- .Values.persistence.size -}}
+{{- else -}}
+{{- $e := dict -}}
+{{- include "swarm-model-server.engines" (dict "ctx" . "out" $e) -}}
+{{- $sum := int64 0 -}}
+{{- range $engine := $e.engines -}}
+{{- $sum = add (int64 $sum) (int64 (($engine.model.weights | default dict).totalBytes | default 0)) -}}
+{{- end -}}
+{{- if lt (int64 $sum) (int64 1) -}}
+{{- fail "persistence.size is empty and the weights declare no totalBytes, so there is nothing to size the volume from" -}}
+{{- end -}}
+{{- $gib := int64 1073741824 -}}
+{{- printf "%dGi" (div (add (mul (int64 $sum) 11) (sub (mul $gib 10) 1)) (mul $gib 10)) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The weights volume's size as bytes. Helm has no quantity parser, so the suffixes
+this chart actually accepts are spelled out and anything else is refused rather
+than silently read as a byte count.
 */}}
 {{- define "swarm-model-server.storageBytes" -}}
-{{- $s := .Values.persistence.size | toString -}}
+{{- $s := include "swarm-model-server.persistenceSize" . | toString -}}
 {{- $units := dict "Ki" 1024 "Mi" 1048576 "Gi" 1073741824 "Ti" 1099511627776 -}}
 {{- $out := "" -}}
 {{- range $suffix, $factor := $units -}}
