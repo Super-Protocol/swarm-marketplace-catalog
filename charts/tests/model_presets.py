@@ -165,16 +165,20 @@ def main() -> int:
         if listing is None:
             continue
         theirs = listing_weights(listing)
+        # `ours` rather than `preset["weights"]`: a preset with no manifest at all
+        # has already been reported above, and a KeyError here would swallow that
+        # report along with every other preset's.
+        ours = preset.get("weights") or {}
         if theirs is None:
             print(f"  FAIL  {slug}: apps/{listing}/app.yaml pins no weights to compare against")
             failures += 1
         elif (theirs.get("repo"), theirs.get("revision")) != (
-                preset["weights"].get("repo"), preset["weights"].get("revision")):
-            print(f"  FAIL  {slug}: the preset pins {preset['weights'].get('repo')}@"
-                  f"{str(preset['weights'].get('revision'))[:12]} and apps/{listing} pins "
+                ours.get("repo"), ours.get("revision")):
+            print(f"  FAIL  {slug}: the preset pins {ours.get('repo')}@"
+                  f"{str(ours.get('revision'))[:12]} and apps/{listing} pins "
                   f"{theirs.get('repo')}@{str(theirs.get('revision'))[:12]} — one of them moved")
             failures += 1
-        elif theirs.get("files") != preset["weights"].get("files"):
+        elif theirs.get("files") != ours.get("files"):
             print(f"  FAIL  {slug}: the preset and apps/{listing} pin the same commit and "
                   f"different files")
             failures += 1

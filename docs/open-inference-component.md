@@ -70,6 +70,15 @@ outputs:
 
 Three things are deliberate.
 
+**The model parameter is `immutable: true`.** Two reasons, and the second is the one with teeth.
+A reconfigure that switched the model would change the weights volume's request, and Kubernetes
+refuses a `PersistentVolumeClaim` whose `requests.storage` changes — so the apply fails rather than
+the deployment changing. And serving different weights under one deployment changes what its
+evidence says, which is precisely the event a data owner's gatekeeper approval is pinned to: a
+tenant who approved a digest did not approve "whatever model the operator picks next". A listing
+that genuinely needs the model changeable has to declare `persistence.size` explicitly, sized for
+the largest option, and accept that a reconfigure invalidates every approval of the old digest.
+
 **`persistence.size` is absent.** Left empty, the chart sizes the weights volume from the manifest
 the preset carries — every file's bytes plus a tenth for the one being written, rounded up to whole
 GiB. A listing whose model is a *parameter* has no one right number to write there: the answer may
@@ -99,6 +108,9 @@ parameters:
       The model that writes the answers. Every option here is open-weights and licensed for
       commercial self-hosting; the licence is shown on the deployment's evidence as well as here.
     required: true
+    # See below: the volume is sized from the model, and a PVC request cannot
+    # change — and a tenant who approved a digest did not approve the next model.
+    immutable: true
     default: qwen3-coder-30b-a3b-instruct-fp8
     options:
       source:

@@ -14,17 +14,22 @@ LLM underneath something else. That use has its own document —
 composes it, how "which model" becomes a question put to a person, the `resources.min` arithmetic
 with a worked example, and the measured performance.
 
-## One chart, three listings
+## One chart, four listings
 
-The alternative was a chart per model. The three deployments differ in an image tag's worth of
+The alternative was a chart per model. The four deployments differ in an image tag's worth of
 values: the weights manifest, four engine flags, and three resource numbers. Everything with any
 behaviour in it is shared — the ingress class, the `/v1`-only path list, the explicit
 `nvidia.com/gpu: "0"` on the init container, the refusal to publish without a key, the startup
-probe's patience. A chart per model would mean finding each of those bugs three times and bumping
-three append-only chart versions to fix it once.
+probe's patience. A chart per model would mean finding each of those bugs four times and bumping
+four append-only chart versions to fix it once.
 
-Three *listings* either way: the marketplace card is the product, and "Llama 3.2 3B" and
+Four *listings* either way: the marketplace card is the product, and "Llama 3.2 3B" and
 "Qwen3-Coder" are not one product with a dropdown.
+
+The presets below are not a retraction of that last sentence. A listing whose product *is* a model
+gets a card per model; a listing whose product is something else — a RAG pipeline, a vulnerability
+analyser — needs an LLM underneath and has to ask which one. Those are different questions, and the
+dropdown belongs to the second.
 
 ## What it does that a plain `helm install vllm` does not
 
@@ -106,7 +111,7 @@ same bytes.
 
 ## Several models on one card
 
-`model:` serves one model with the card to itself, which is what the three listings above deploy.
+`model:` serves one model with the card to itself, which is what the four listings above deploy.
 `engines:` serves several from the one `nvidia.com/gpu: 1` the pod holds. Setting both is refused;
 the single-model render is unchanged by the existence of the other shape, down to the object it
 produces.

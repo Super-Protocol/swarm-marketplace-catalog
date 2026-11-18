@@ -308,12 +308,21 @@ render time, refused here while there is still a human looking.
 {{- end -}}
 {{- end -}}
 
+{{/* The key, demanded whether or not there is a hostname. The engine reads it
+     from a Secret through a `secretKeyRef` that is not optional, so a render
+     without one does not produce an unauthenticated endpoint — it produces a pod
+     the kubelet cannot start, which is a worse way to find out. */}}
+{{- if not (or .Values.apiKey .Values.existingSecret) -}}
+{{- if .Values.ingress.enabled -}}
+{{- fail "the ingress is on and no apiKey is set: this chart does not publish an unauthenticated inference endpoint on a public hostname, which would hand the deployment's GPU to whoever found the name (marketplace trap 13)" -}}
+{{- else -}}
+{{- fail "no apiKey is set: the engine demands one on every /v1 request and reads it from a Secret this render would not produce, so the pod would never start. A cluster-internal endpoint needs it too — a namespace is not a trust boundary once a second workload is in it. Set apiKey, or name an existingSecret" -}}
+{{- end -}}
+{{- end -}}
+
 {{- if .Values.ingress.enabled -}}
 {{- if not .Values.hostname -}}
 {{- fail "hostname is empty and the ingress is on: there is no name to serve on" -}}
-{{- end -}}
-{{- if not (or .Values.apiKey .Values.existingSecret) -}}
-{{- fail "the ingress is on and no apiKey is set: this chart does not publish an unauthenticated inference endpoint on a public hostname, which would hand the deployment's GPU to whoever found the name (marketplace trap 13)" -}}
 {{- end -}}
 {{- if and .Values.ingress.tls.enabled (not .Values.ingress.tls.secretName) -}}
 {{- fail "ingress.tls.enabled is true but ingress.tls.secretName is empty" -}}

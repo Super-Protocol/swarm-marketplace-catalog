@@ -76,9 +76,18 @@ model:
   # `resources`, `persistence.size` — is a property of the deployment, and each
   # preset's `sizing` block is the measured answer for that model.
   #
-  # The three listings that deploy one model each predate this and pin their
+  # The four listings that deploy one model each predate this and pin their
   # weights themselves, which is why `id` and `weights` below still exist and
   # why a render that sets neither a preset nor an id is refused.
+  #
+  # A listing that offers the model as a *parameter* should mark that parameter
+  # `immutable: true`. Two reasons, and the second is the hard one: the weights
+  # volume is sized from the manifest, and Kubernetes refuses a PersistentVolumeClaim
+  # whose request changes — so a reconfigure from a 30B model to a 3B one would be
+  # rejected by the API server; and serving different weights under one deployment
+  # changes what its evidence says, which is exactly the event a data owner's
+  # gatekeeper approval is pinned to. A listing that genuinely needs the model
+  # changeable states `persistence.size` explicitly, sized for the largest option.
   # ---------------------------------------------------------------------------
   preset: ""
 

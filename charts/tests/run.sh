@@ -1571,6 +1571,17 @@ refuses "a preset and a chat template beside it" "property of the model" \
 refuses "a preset and a tool-call parser beside it" "belongs to the model" \
   "${preset_ms[@]}" --set model.toolCalling.enabled=true
 
+# The component shape has no hostname to protect, and still cannot render without
+# a key: the engine's `secretKeyRef` is not optional, so a keyless render does not
+# produce an unauthenticated endpoint — it produces a pod the kubelet refuses to
+# start, which is a worse way to find out.
+refuses "a cluster-internal endpoint with no key" "a namespace is not a trust boundary" \
+  "${preset_ms[@]}" --set apiKey= --set existingSecret=
+
+refuses "a render that names no model at all" "model.id is empty and no preset is named" \
+  helm template ms charts/swarm-model-server --namespace model-server \
+  --set apiKey=TESTKEYtestkey0123456789abcdefAB --set ingress.enabled=false
+
 refuses "a preset in both value shapes at once" "never by both" \
   "${preset_ms[@]}" --set 'engines[0].name=llama' \
   --set 'engines[0].model.preset=gemma-2-2b-it' \
