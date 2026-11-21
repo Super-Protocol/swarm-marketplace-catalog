@@ -14,5 +14,18 @@ type: application
 # registering a source ENQUEUES the catalogue read, and an annotation re-projects the
 # knowledge index that schema search actually looks in. The same rows written by hand leave
 # an agent that cannot find a table it can see.
-version: 0.4.0
+# 0.5.0 is three things the stand found by running this Job instead of rendering it
+# (SUP-711), and the first two mean it had never finished on agent 1.17:
+#
+#   * `PaginationInput` on 1.17 is `limit`/`offset`. The Job asked for `page`/`pageSize`,
+#     the api answered 400 on the first query, and urllib hid the reason — so there was no
+#     model row, no data source, no schema catalogue and no system prompt in any deployment
+#     of 4.0.x. A refused query now says what the api said.
+#   * The tenant is chosen by ALIAS. It used to be `organizations[0]`, which is Keycloak's
+#     order and not the deployment's; a second organisation sorting above the first would
+#     have bound one party's data to another's tenant with nothing raised.
+#   * The result policy is in a ConfigMap, so it is in the evidence snapshot. A Job is not
+#     collected, so until now how large a result has to be before the model sees a preview
+#     instead of the rows was a fact no data owner could read out of the signed bundle.
+version: 0.5.0
 appVersion: "1.17.0"

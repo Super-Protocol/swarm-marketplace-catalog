@@ -244,10 +244,14 @@ fi
 
 # `consumer.*` reaches the analyst through the realm bootstrap — the deploying person's own
 # name and address, which until 4.0.0 were rendered into a ConfigMap and published with it.
-# The probe is the identity chart, because that is the only component any of it reaches.
+# Two components now take one: identity creates the tenant from the deploying organisation's
+# slug, and grounding is told the same slug so it works in that tenant rather than in
+# whichever one Keycloak lists first (SUP-711). Both are probed, because the question is not
+# where the value comes from but whether it lands in an object the cloud attests.
 note "no attested manifest of the analyst carries a literal naming the consumer"
 if output=$(python3 charts/tests/consumer_fields.py conversational-analyst \
-      conversational-analyst-identity=charts/tests/cases/analyst-identity.yaml); then
+      conversational-analyst-identity=charts/tests/cases/analyst-identity.yaml \
+      conversational-analyst-grounding=charts/tests/cases/analyst-grounding.yaml); then
   printf '%s\n' "$output"
 else
   printf '%s\n' "$output"

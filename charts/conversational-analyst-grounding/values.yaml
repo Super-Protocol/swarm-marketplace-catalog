@@ -19,6 +19,14 @@ api:
   # name their objects after the release.
   url: ""
 
+# The alias of the organisation whose tenant this deployment's data and model belong to —
+# `organizations[0].alias` as the identity chart was given it. The job looks the organisation
+# up by this alias rather than taking whichever one Keycloak lists first (SUP-711): the order
+# is Keycloak's, not the deployment's, and binding a clinic's data sources to an operator's
+# tenant because a name sorted differently is a silent failure of the only boundary this
+# product enforces.
+tenantAlias: ""
+
 # Who the job acts as. The agent takes the caller's identity from `x-auth-subject`, the
 # header the authenticating proxy stamps on every request that reaches it from outside; this
 # job is inside the namespace and presents the subject of the administrator the realm

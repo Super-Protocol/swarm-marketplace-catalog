@@ -12,7 +12,7 @@ metadata:
     endpoint, including one in your own perimeter — and the embeddings that index your schema
     and documents are served from inside the deployment, so neither your data nor its
     description reaches a third party.
-  version: "4.0.3"
+  version: "4.0.4"
   category: ai-agents
   license: Proprietary
   tags:
@@ -22,6 +22,26 @@ metadata:
     - text-to-sql
     - confidential
 
+# ---------------------------------------------------------------------------
+# 4.0.4 is the first version of this line that GROUNDS. 4.0.3 starts: every
+# workload runs. Its grounding Job still did nothing, because agent 1.17's
+# `PaginationInput` takes `limit`/`offset` and the Job asked for
+# `page`/`pageSize` — a 400 on its first query, with the reason inside an
+# exception nobody printed. So no deployment of 4.0.x had a model row, a
+# registered data source, a schema catalogue or a system prompt (SUP-711).
+#
+# Two more, from the same run:
+#
+#   * The tenant is chosen by the organisation's ALIAS and not by the order
+#     Keycloak lists organisations in. On the gastroenterology stand the clinic
+#     happened to sort first; a second organisation renamed above it would have
+#     bound the clinic's data sources and the model registry to the operator's
+#     tenant, silently, which is the opposite of what this listing claims.
+#   * The result policy — rows, bytes, preview rows and the context window —
+#     is rendered into a ConfigMap and is therefore in the attested snapshot.
+#     It used to reach the grounding Job's `env` and nowhere else, and a Job is
+#     not collected into evidence, so a data owner could not read out of the
+#     signed bundle how much of a large result the model is shown.
 # ---------------------------------------------------------------------------
 # 4.0.3 is the first version of this line that STARTS. Three containers of
 # 4.0.2 could not run, and each one was fatal on its own; all three were found
@@ -1057,7 +1077,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-grounding
-      version: "0.4.0"
+      version: "0.5.0"
     images:
       - name: docker.io/library/python
         digest: sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
@@ -1065,6 +1085,11 @@ components:
       values:
         base:
           bindings: "[]"
+          # Which organisation's tenant the data and the model row belong to. The same value
+          # the identity component gets as `organizations.0.alias`, resolved the same way and
+          # in the same order, because the two have to agree: that chart creates the tenant
+          # and this one grounds it.
+          tenantAlias: ""
           api:
             url: ""
           keycloak:
@@ -1083,6 +1108,13 @@ components:
           - op: replace
             path: bindings
             value: "{{ data.datasets | json }}"
+          - op: replace
+            path: tenantAlias
+            value: "{{ consumer.organization.slug }}"
+          - op: replace
+            path: tenantAlias
+            value: "{{ params.primaryOrgAlias }}"
+            when: "params.primaryOrgAlias != ''"
           - op: replace
             path: api.url
             value: "http://{{ components.agent.release }}-retail-ai-back"
