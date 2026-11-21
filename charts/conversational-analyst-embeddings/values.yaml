@@ -24,6 +24,18 @@ image:
 
 # The fetcher is stdlib Python and the serving image carries no interpreter, so the init
 # container runs a plain Python base. Two images, both pinned by digest in the listing.
+#
+# 2Gi, not the 512Mi this chart declared until SUP-830, where the init container was OOMKilled
+# (137) on every attempt and the pod never left `Init:CrashLoopBackOff`. The script holds no file
+# in memory — it streams 8 MiB at a time — and the destination is a real PVC rather than a
+# memory-backed emptyDir, so what the cgroup is charged for is the page cache of writing 1.25 GiB
+# faster than the kernel writes it back. That is a property of the machine, not of the download,
+# which is why the figure is the one `swarm-model-server` has been fetching tens of GiB on rather
+# than the smallest value that happened to pass somewhere.
+#
+# It costs the deployment nothing: a pod's demand is its containers' limits summed OR its heaviest
+# init container, whichever is larger (`charts/tests/max_pod.py`), and the serving container's 4Gi
+# is larger either way. The pod is 2 CPU / 4Gi before and after.
 fetcher:
   image:
     registry: docker.io
@@ -34,11 +46,11 @@ fetcher:
   resources:
     requests:
       cpu: "1"
-      memory: 512Mi
+      memory: 2Gi
       nvidia.com/gpu: "0"
     limits:
       cpu: "1"
-      memory: 512Mi
+      memory: 2Gi
       nvidia.com/gpu: "0"
 
 model:

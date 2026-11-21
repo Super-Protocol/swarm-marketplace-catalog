@@ -12,7 +12,7 @@ metadata:
     endpoint, including one in your own perimeter — and the embeddings that index your schema
     and documents are served from inside the deployment, so neither your data nor its
     description reaches a third party.
-  version: "4.0.2"
+  version: "4.1.0"
   category: ai-agents
   license: Proprietary
   tags:
@@ -22,6 +22,31 @@ metadata:
     - text-to-sql
     - confidential
 
+# ---------------------------------------------------------------------------
+# 4.1.0 is the first version of this listing that can reach ready. Two faults
+# stopped it, both deterministic and both in here (SUP-830).
+#
+#   * Garage was given a secret it refuses. `garage.rpcSecret` was patched from
+#     `internalSecret` — the credential a person is shown and signs in with —
+#     while the server specifies it as 32 bytes of hexadecimal and exits at
+#     boot on anything else. No value that parameter can hold is acceptable
+#     there, so EVERY deployment lost its object storage. It now has a
+#     generated parameter of its own, `storageRpcSecret`, which asks for the
+#     format: `generatedFormat: hex` over `minLength: 64`.
+#   * The embeddings weights fetcher was OOMKilled at the 512Mi its chart
+#     declared, on every start, so the embedding model — which is not optional
+#     in this product — never served. Chart 0.2.0 gives that init container
+#     2Gi, which changes no pod's demand: the serving container's 4Gi was
+#     always the larger half of the pair.
+#
+# A minor, not a patch: the definition asks for one more parameter than 4.0.2
+# did, and the embeddings Deployment it renders is not byte-identical.
+#
+# `evidence.expectedDigest` is therefore ABSENT again, deliberately. 4.0.2's
+# value was measured on a render this version changes, and a declared digest
+# that is wrong is worse than none — the gate refuses a deployment that is
+# doing exactly what the listing says, and the refusal reads as tampering. It
+# comes back when a deployment of THIS version has published one.
 # ---------------------------------------------------------------------------
 # 4.0.2 corrects the one `evidence.exclude` entry whose `match.name` named an
 # object no deployment renders, and declares the digest that correction makes
@@ -184,6 +209,28 @@ parameters:
     generated: true
     validation:
       minLength: 16
+
+  # Not `internalSecret`, and not a field anybody fills in. Garage specifies its RPC key as 32
+  # bytes of hexadecimal and refuses to start on anything else — `Invalid RPC secret key:
+  # expected 32 bytes of random hex` — while `internalSecret` is a credential a person is shown
+  # and types, so no value it can hold is acceptable here unless it happens to be 64 hex
+  # characters. Sharing the two cost this listing its object storage in every deployment
+  # (SUP-830). It is in no `ui` section: nothing asks for it, the platform always generates it,
+  # and `generatedFormat: hex` over `minLength: 64` is how the 32 bytes are asked for.
+  - id: storageRpcSecret
+    type: string
+    title: Object store cluster key
+    description: >-
+      Authenticates the object store's nodes to each other. Internal to the deployment and
+      generated for it; it is not a sign-in and is never shown.
+    required: true
+    sensitive: true
+    generated: true
+    generatedFormat: hex
+    validation:
+      pattern: "^[0-9a-f]{64}$"
+      minLength: 64
+      maxLength: 64
 
   - id: modelLabel
     type: string
@@ -576,7 +623,7 @@ components:
             value: "{{ params.internalSecret }}"
           - op: replace
             path: garage.rpcSecret
-            value: "{{ params.internalSecret }}"
+            value: "{{ params.storageRpcSecret }}"
           - op: replace
             path: garage.adminToken
             value: "{{ params.internalSecret }}"
@@ -595,7 +642,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-embeddings
-      version: "0.1.0"
+      version: "0.2.0"
     # The names are exactly the strings the rendered manifests carry, registry prefix and
     # all: the render path matches on them, and `library/python` and `docker.io/library/python`
     # are not the same allow-list entry. `charts/tests/declared_images.py` is what keeps the
@@ -1159,21 +1206,22 @@ outputs:
 # kind — they ARE configuration, so what this deployment may reach cannot be widened without
 # the digest saying so.
 evidence:
-  # Measured, not derived, on `sup823a` (build-448-release) on 2026-11-17.
+  # NOT DECLARED in this version, and the omission is deliberate.
   #
-  # Two deployments of 4.0.0, differing only in the hostname and the namespace, attested
-  # different snapshots — one field apart, the one the corrected exclusion above now covers.
-  # Excluding it makes those two snapshots byte-identical, and the value below is what they
-  # then digest to. A third deployment, of this definition with the value declared, attested
-  # exactly it and reported `matchesExpected: true`.
+  # 4.0.2 declared `a94af2a0502da61d59d9903c35b822cafb5e4d8548d08b6455fc701c162e68d8`, measured
+  # on `sup823a` (build-448-release) on 2026-11-17 and confirmed by a second deployment that
+  # reported `matchesExpected: true`. That value describes 4.0.2's render, and this version
+  # changes it: the embeddings init container asks for 2Gi rather than 512Mi, which is a field
+  # inside the snapshot. Carrying the old digest over is exactly what 3.0.9 did with 3.0.6's,
+  # and a wrong digest is worse than none — the gate refuses a deployment that is doing exactly
+  # what the listing says, and the refusal reads as tampering.
   #
-  # Declared rather than left absent because the gate holds a deployment to it: a wrong digest
-  # refuses a deployment that is doing exactly what the listing says, which is how 3.0.9's
-  # carried-over 3.0.6 digest failed. Adding this line changes no rendered manifest, so a
-  # deployment of the definition without it attests the same snapshot as one with it; the
-  # exclusion fix is the only thing in this version that moves the digest, and it moves it
-  # on purpose.
-  expectedDigest: "a94af2a0502da61d59d9903c35b822cafb5e4d8548d08b6455fc701c162e68d8"
+  # The exclusions below are unchanged and still correct, which is what makes the measurement
+  # cheap: deploy this version, read
+  # `GET <cloud baseUrl>/api/v1/deployments/<cloudDeploymentId>/evidence`, declare what it
+  # published, and confirm `matchesExpected` on a second deployment. Declaring it later changes
+  # no rendered manifest, so the digest measured on this definition is the digest of the
+  # version that declares it.
   exclude:
     # Every deployment lives in a namespace of its own. The platform strips this itself; it is
     # declared because the listing page shows the exclusions from the definition only, and a

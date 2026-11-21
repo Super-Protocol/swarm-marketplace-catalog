@@ -30,12 +30,14 @@ root="$(cd "$here/../.." && pwd)"
 cd "$root"
 
 # swarm-marketplace-spec, the revision these listings are written against:
+# `generatedFormat`, the alphabet a generated secret is drawn from, for a
+# consumer that will not accept any random string (SUP-830), on top of
 # `resources.maxPod`, the heaviest single pod an application schedules, declared
-# separately from the quota in `resources.min` (SUP-824), on top of mandatory
-# `gpu.types` when `gpu.required` is true (exact nvidia-smi Product Names), the
-# `evidence` block, `widget: hostname` (SUP-104), and `type: array` +
+# separately from the quota in `resources.min` (SUP-824), mandatory `gpu.types`
+# when `gpu.required` is true (exact nvidia-smi Product Names), the `evidence`
+# block, `widget: hostname` (SUP-104), and `type: array` +
 # `widget: multiselect` (SUP-98).
-SPEC_REF="${SPEC_REF:-5b345fcf2dc912a78aaeae24890e3a8126ccd259}"
+SPEC_REF="${SPEC_REF:-cb3f68be98ec8a13b1be94723891f8b522522f62}"
 SPEC_REPO="${SPEC_REPO:-Super-Protocol/swarm-marketplace-spec}"
 
 # Listings that predate strict validation and do not pass it (SUP-99). They are
