@@ -68,11 +68,14 @@ metadata:
   # to produce a different Job. Keying the name off the bindings and the model is what makes
   # rebinding data a normal operation rather than a redeploy; the superseded Job is pruned
   # with the old bundle.
-  # The policy and the tenant are in the key as well as the bindings and the model: a changed
-  # threshold has to produce a new Job, or the registry row keeps the superseded number and
-  # nothing says so. The model's own key is deliberately NOT in it — a regenerated credential
-  # is not a reason to re-ground, and the Secret's own checksum is not this object's business.
-  name: analyst-grounding-{{ printf "%s|%s|%s|%s|%s" (.Values.bindings | toString) .Values.model.name .Values.model.id (.Values.tenantAlias | toString) (.Values.model.thresholds | toYaml) | sha256sum | trunc 8 }}
+  # The WHOLE policy and the tenant are in the key as well as the bindings and the model: a
+  # changed number has to produce a new Job, or the registry row keeps the superseded one and
+  # nothing says so. `thresholds` alone was not the whole of it — `contextWindowSize`,
+  # `memoryTokenBudget` and `summarizeTokenThreshold` are policy too, and changing only those
+  # left the Job untouched (CTO review of #94). The model's own key is deliberately NOT in the
+  # key: a regenerated credential is not a reason to re-ground, and the Secret's own checksum
+  # is not this object's business.
+  name: analyst-grounding-{{ printf "%s|%s|%s|%s|%s" (.Values.bindings | toString) .Values.model.name .Values.model.id (.Values.tenantAlias | toString) (omit .Values.model "apiKey" | toYaml) | sha256sum | trunc 8 }}
 spec:
   # This waits on the rest of the deployment from inside, so a retry here means the wait
   # itself ran out — rare, and worth a few more attempts before the Job is called failed.

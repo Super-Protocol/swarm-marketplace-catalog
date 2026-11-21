@@ -240,12 +240,80 @@ def check_grounding_speaks_the_api_1_17_talks() -> list[str]:
     return failures
 
 
+def job_name(extra: list[str]) -> str:
+    """The grounding Job's name as the chart renders it for these values."""
+    manifests = subprocess.run(
+        ["helm", "template", "analyst", "charts/conversational-analyst-grounding",
+         "--namespace", "conversational-analyst", "--values", GROUNDING_CASE, *extra],
+        cwd=ROOT, capture_output=True, text=True, check=True,
+    ).stdout
+    for document in yaml.safe_load_all(manifests):
+        if document and document.get("kind") == "Job":
+            return document["metadata"]["name"]
+    raise AssertionError("the grounding chart rendered no Job")
+
+
+def check_grounding_job_reruns_when_its_policy_moves() -> list[str]:
+    """A Job's pod template is immutable, so the name is the only thing that can re-run it.
+
+    Every number the Job writes into the model registry therefore has to be in its name, or a
+    reconfigure that changes one leaves the superseded value in the registry and nothing says
+    so. `thresholds` alone was not the whole policy (CTO review of #94). The access key is the
+    one value that must NOT move it: a regenerated credential is not a reason to re-ground.
+    """
+    failures = []
+    baseline = job_name([])
+    for setting, description in [
+        ("model.thresholds.largeDataRowThreshold=7", "a row threshold"),
+        ("model.thresholds.largeDataSizeThreshold=7", "a size threshold"),
+        ("model.thresholds.previewRowCount=7", "the preview row count"),
+        ("model.contextWindowSize=131072", "the context window"),
+        ("model.memoryTokenBudget=7", "the memory budget"),
+        ("model.summarizeTokenThreshold=7", "the summarisation threshold"),
+    ]:
+        if job_name([f"--set={setting}"]) == baseline:
+            failures.append(f"grounding: changing {description} does not re-run the Job ({setting})")
+    if not failures:
+        print("  ok    grounding: every policy number moves the Job's name")
+
+    if job_name(["--set=model.apiKey=ANOTHER-CREDENTIAL"]) != baseline:
+        failures.append("grounding: a regenerated access key re-runs the Job, which is not a reason to re-ground")
+    else:
+        print("  ok    grounding: a regenerated access key does not")
+    return failures
+
+
+def check_grounding_sends_the_enum_as_the_api_spells_it() -> list[str]:
+    """`LlmProvider` is an enum and its values are upper case; `SchemaAnnotationTarget`'s are not.
+
+    The lower-case provider was refused with «Value "openai" does not exist in "LlmProvider"
+    enum», which is where the Job stopped once its pagination was right (SUP-711). Both
+    spellings are asserted, because the obvious tidy-up — one case for all of them — breaks
+    the other half.
+    """
+    script = (ROOT / "charts/conversational-analyst-grounding/files/ground.py").read_text()
+    failures = []
+    if re.search(r'"provider":\s*"openai"', script) or 'PROVIDER = "openai"' in script:
+        failures.append('grounding: the model provider is sent as "openai"; the LlmProvider enum takes "OPENAI"')
+    elif 'PROVIDER = "OPENAI"' not in script:
+        failures.append("grounding: the model provider is not the OPENAI enum value")
+    else:
+        print("  ok    grounding: the provider is sent as the OPENAI enum value")
+
+    for value in ('"target": "table"', '"target": "column"'):
+        if value not in script:
+            failures.append(f"grounding: {value} is gone; SchemaAnnotationTarget's values are lower case")
+    return failures
+
+
 def main() -> int:
     failures = []
     failures += check_garage_rpc_secret()
     failures += check_keycloak_memory()
     failures += check_config_init_reads_a_configmap_mount()
     failures += check_grounding_speaks_the_api_1_17_talks()
+    failures += check_grounding_job_reruns_when_its_policy_moves()
+    failures += check_grounding_sends_the_enum_as_the_api_spells_it()
     for failure in failures:
         print(f"  FAIL  {failure}")
     return 1 if failures else 0
