@@ -253,13 +253,19 @@ mutation ($id: ID!) { adminSetDefaultLlmModel(id: $id) { id name isDefault } }
 """
 
 
-def ensure_model(api):
-    """The one row without which the deployment answers nothing.
+# The dialect, not the company: with `baseURL` set, the client talks to whatever
+# OpenAI-compatible endpoint it names — which is the whole point of this deployment, where
+# that endpoint is the operator's own. UPPER CASE because `LlmProvider` is a GraphQL enum on
+# agent 1.17 and its values are upper case; the lower-case spelling is refused with
+# «Value "openai" does not exist in "LlmProvider" enum. Did you mean the enum value
+# "OPENAI"?», which is the second thing that stopped this Job from ever finishing (SUP-711).
+# Note the two annotation enums next to it are LOWER case (`SchemaAnnotationTarget` takes
+# `table` / `column`), so the api is not consistent and neither value should be "tidied".
+PROVIDER = "OPENAI"
 
-    `provider: openai` is the dialect, not the company: with `baseURL` set, the client talks
-    to whatever OpenAI-compatible endpoint it names — which is the whole point of this
-    deployment, where that endpoint is inside the operator's own perimeter.
-    """
+
+def ensure_model(api):
+    """The one row without which the deployment answers nothing."""
     config = {
         "model": MODEL_ID,
         "baseURL": MODEL_BASE_URL,
@@ -272,14 +278,14 @@ def ensure_model(api):
         # `name` carries a UNIQUE constraint, so a re-run updates rather than inserts — and
         # it has to update: a reconfigure that moved the endpoint or the key would otherwise
         # leave the registry pointing at the old one.
-        api.call(UPDATE_MODEL, {"input": {"id": model["id"], "provider": "openai", "config": config, **THRESHOLDS}})
+        api.call(UPDATE_MODEL, {"input": {"id": model["id"], "provider": PROVIDER, "config": config, **THRESHOLDS}})
         log(f"  updated model {MODEL_NAME}")
     else:
         model = api.call(
             CREATE_MODEL,
             {
                 "input": {
-                    "provider": "openai",
+                    "provider": PROVIDER,
                     "name": MODEL_NAME,
                     "config": config,
                     "enabled": True,

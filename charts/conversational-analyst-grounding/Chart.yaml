@@ -27,5 +27,11 @@ type: application
 #   * The result policy is in a ConfigMap, so it is in the evidence snapshot. A Job is not
 #     collected, so until now how large a result has to be before the model sees a preview
 #     instead of the rows was a fact no data owner could read out of the signed bundle.
-version: 0.5.0
+# 0.5.1 is where the Job gets past the model registry. `LlmProvider` is an enum on
+# 1.17 and its values are UPPER case, so `provider: openai` was refused — the next
+# layer under 0.5.0's pagination fix, and visible in one read because of 0.5.0's
+# other half. Its lower-case neighbour `SchemaAnnotationTarget` stays as it is.
+# The Job's name now keys off the whole policy rather than `thresholds` alone, so a
+# changed context window, memory budget or summarisation threshold re-runs it.
+version: 0.5.1
 appVersion: "1.17.0"

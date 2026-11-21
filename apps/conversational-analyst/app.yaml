@@ -12,7 +12,7 @@ metadata:
     endpoint, including one in your own perimeter — and the embeddings that index your schema
     and documents are served from inside the deployment, so neither your data nor its
     description reaches a third party.
-  version: "4.0.4"
+  version: "4.0.5"
   category: ai-agents
   license: Proprietary
   tags:
@@ -22,6 +22,23 @@ metadata:
     - text-to-sql
     - confidential
 
+# ---------------------------------------------------------------------------
+# 4.0.5 gets the grounding Job past the model registry, which is as far as 4.0.4
+# reached: `LlmProvider` is a GraphQL enum on agent 1.17 and its values are
+# UPPER case, so `provider: openai` was refused with «Value "openai" does not
+# exist in "LlmProvider" enum». That was one read rather than an afternoon,
+# because 4.0.4 made a refused query carry the api's own words — and the enum
+# beside it, `SchemaAnnotationTarget`, takes LOWER case `table` / `column`, so
+# neither spelling is to be tidied into the other.
+#
+# Also from the review of 4.0.4: the Job's name keys off the whole policy, not
+# `thresholds` alone, so changing only the context window, the memory budget or
+# the summarisation threshold re-runs it instead of leaving the superseded
+# number in the registry.
+#
+# Still no `expectedDigest`, and the next version is where that changes: the
+# 4.0.5 parameter set has to be measured twice first. It is not optional any
+# more — see the note on the evidence block.
 # ---------------------------------------------------------------------------
 # 4.0.4 is the first version of this line that GROUNDS. 4.0.3 starts: every
 # workload runs. Its grounding Job still did nothing, because agent 1.17's
@@ -1077,7 +1094,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-grounding
-      version: "0.5.0"
+      version: "0.5.1"
     images:
       - name: docker.io/library/python
         digest: sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
@@ -1215,7 +1232,20 @@ outputs:
 # kind — they ARE configuration, so what this deployment may reach cannot be widened without
 # the digest saying so.
 evidence:
-  # NO DIGEST IN THIS VERSION, deliberately, and it is not an oversight.
+  # NO DIGEST IN THIS VERSION, deliberately — and this is the last version it can be absent
+  # from, because an absent digest turns out to disable gated data altogether.
+  #
+  # The marketplace admits a deployment to the gate only when its version declares a digest:
+  # `clientsFor` skips any deployment with no declared digest, with "nothing to hold it to, or
+  # nowhere to check. Left out rather than admitted on the marketplace's word alone". Correct,
+  # and it means the clinic's gated ClickHouse card cannot be served to a deployment of 4.0.3
+  # or 4.0.4 whatever else is in place: the gate never hears about the client (SUP-711,
+  # 2026-11-21 — found after the egress sidecar was finally admissible and the schema read
+  # still failed).
+  #
+  # So the two-deployment rule is a prerequisite rather than hygiene here: measure this
+  # version's parameter set twice, declare it in the next, and the gate admits what the
+  # listing can be held to.
   #
   # 4.0.2 declared `a94af2a0…`, measured on `sup823a` (build-448-release) on 2026-11-17. That
   # cloud is gone, and the measurement does not carry: a deployment of the SAME definition on
