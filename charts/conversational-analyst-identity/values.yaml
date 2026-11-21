@@ -67,14 +67,26 @@ keycloak:
   proxyHeaders: xforwarded
   httpRelativePath: "/auth/"
   resourcesPreset: none
+  # 2Gi, measured rather than guessed (SUP-711). `production: false` above means the
+  # container runs `kc.sh start-dev`, which re-runs the Quarkus augmentation on every boot
+  # — a javac-and-index step that is the memory peak of this pod's life and happens before
+  # it serves anything. Under a 1Gi limit it is OOMKilled mid-build, every time: the pod
+  # CrashLoopBackOffs, nothing in the deployment has an identity provider, and all five
+  # agent services sit in a restart loop behind it. Reproduced off-cluster with this exact
+  # image digest and this exact environment — 1Gi: `Killed` during
+  # "Updating the configuration and installing your custom providers"; 2Gi: the build
+  # completes with a peak of ~880 MiB resident.
+  #
+  # requests == limits because a cluster space's LimitRange sets
+  # maxLimitRequestRatio: 1 and refuses any container that asks for less than it may use.
   resources:
     requests:
       cpu: 500m
-      memory: 1Gi
+      memory: 2Gi
       nvidia.com/gpu: "0"
     limits:
       cpu: 500m
-      memory: 1Gi
+      memory: 2Gi
       nvidia.com/gpu: "0"
   rbac:
     create: false

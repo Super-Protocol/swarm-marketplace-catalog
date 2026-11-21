@@ -58,7 +58,26 @@ replication_factor = 1
 rpc_bind_addr = "[::]:3901"
 rpc_public_addr = "127.0.0.1:3901"
 {{- end }}
-rpc_secret = {{ .Values.rpcSecret | quote }}
+{{/* LOCAL DEVIATION (SUP-711): rpc_secret must be 32 BYTES OF HEX — 64 hex
+     characters — and Garage refuses to start on anything else:
+     «Invalid RPC secret key: expected 32 bytes of random hex». The value this
+     listing supplies is the deployment's generated internal credential, which
+     is 32 printable characters and not hex, and the marketplace's expression
+     language has no hash function to convert it with — so the conversion has
+     to happen here or the server never boots (it did not: every 4.0.x
+     deployment had `analyst-garage` in CrashLoopBackOff and therefore no
+     object storage at all).
+
+     A value that is already 64 hex characters is used as given, so an operator
+     who supplies a proper key keeps it; anything else is hashed, which is
+     deterministic (the same deployment renders the same key on every
+     reconfigure) and keeps the entropy of what was supplied. The whole file is
+     a Secret, so neither form reaches the attested snapshot. */}}
+{{- $rpcSecret := .Values.rpcSecret | toString -}}
+{{- if not (regexMatch "^[0-9a-fA-F]{64}$" $rpcSecret) -}}
+{{- $rpcSecret = sha256sum $rpcSecret -}}
+{{- end -}}
+rpc_secret = {{ $rpcSecret | quote }}
 
 [s3_api]
 s3_region = {{ .Values.region | quote }}

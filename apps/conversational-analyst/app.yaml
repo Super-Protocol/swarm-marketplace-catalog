@@ -12,7 +12,7 @@ metadata:
     endpoint, including one in your own perimeter — and the embeddings that index your schema
     and documents are served from inside the deployment, so neither your data nor its
     description reaches a third party.
-  version: "4.0.2"
+  version: "4.0.3"
   category: ai-agents
   license: Proprietary
   tags:
@@ -22,6 +22,28 @@ metadata:
     - text-to-sql
     - confidential
 
+# ---------------------------------------------------------------------------
+# 4.0.3 is the first version of this line that STARTS. Three containers of
+# 4.0.2 could not run, and each one was fatal on its own; all three were found
+# by deploying it on `azure-test` and reading the namespace rather than the
+# render (SUP-711):
+#
+#   * `analyst-garage` refused every boot — «Invalid RPC secret key: expected
+#     32 bytes of random hex». Garage wants 64 hex characters and the chart
+#     handed it the deployment's generated credential, which is 32 printable
+#     ones. Fixed in the vendored chart (platform 0.4.1), because the
+#     definition language has no hash function to convert it with.
+#   * `analyst-keycloak` was OOMKilled in the Quarkus augmentation that
+#     `start-dev` runs at every boot. 1Gi was never enough; 2Gi is measured
+#     (identity 0.6.1).
+#   * `agent-config`'s init container read a ConfigMap mount as a flat
+#     directory of keys and died with EISDIR on the kubelet's own `..data`
+#     entry, taking the five services that wait for it with it (agent 0.5.1).
+#
+# `expectedDigest` is therefore absent here and is declared in the next
+# version, measured on the cloud the stand runs on: a digest is a function of
+# the collecting cloud's build as well as of this definition, and 4.0.2's was
+# measured on a cloud that no longer exists.
 # ---------------------------------------------------------------------------
 # 4.0.2 corrects the one `evidence.exclude` entry whose `match.name` named an
 # object no deployment renders, and declares the digest that correction makes
@@ -437,12 +459,14 @@ resources:
   # whichever is larger):
   #
   #   PostgreSQL 1/4Gi   agent back 1/4Gi    worker 1/4Gi     embeddings 2/4Gi
-  #   Keycloak 0.5/1Gi   Garage 0.25/1Gi     front 0.25/0.5Gi identity 0.25/0.5Gi
+  #   Keycloak 0.5/2Gi   Garage 0.25/1Gi     front 0.25/0.5Gi identity 0.25/0.5Gi
   #   NATS 0.2/0.375Gi   config, instance, service-discovery 0.1/0.25Gi each
   #   Redis 0.1/0.25Gi   proxy 0.1/0.125Gi   four Jobs 0.55/1Gi together
   #   and the marketplace's own egress sidecar, 0.25/0.125Gi, when gated data is mounted
   #
-  # which is 7.75 CPU and 21.6Gi; one surge pod of the heaviest Deployment is another 1/4Gi.
+  # which is 7.75 CPU and 22.6Gi; one surge pod of the heaviest Deployment is another 1/4Gi.
+  # (Keycloak is 2Gi from identity 0.6.1: at 1Gi it was OOMKilled in the Quarkus augmentation
+  # before it served anything, which left the whole deployment without an identity provider.)
   #
   # Storage is the five volumes — PostgreSQL 20Gi, Garage 20Gi, NATS 10Gi, Redis 8Gi, the
   # embedding weights 4Gi — and the margin is not politeness: a storage quota equal to the sum
@@ -495,7 +519,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-platform
-      version: "0.4.0"
+      version: "0.4.1"
     images:
       - name: pgvector/pgvector
         digest: sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd
@@ -630,7 +654,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-identity
-      version: "0.6.0"
+      version: "0.6.1"
     images:
       - name: docker.io/bitnamilegacy/keycloak
         digest: sha256:5a480d090639bbb09b25dbdb70819dab3302118fd824c2bad03d12a93f46c82b
@@ -749,7 +773,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-agent
-      version: "0.5.0"
+      version: "0.5.1"
     images:
       - name: registry.aggregion.com/gh/aivoagent/agent/backend
         digest: sha256:ead6c3816c5a492e3ebc657276a224e5db15374d8e0d491c08f1bda6987d41a8
@@ -1159,21 +1183,26 @@ outputs:
 # kind — they ARE configuration, so what this deployment may reach cannot be widened without
 # the digest saying so.
 evidence:
-  # Measured, not derived, on `sup823a` (build-448-release) on 2026-11-17.
+  # NO DIGEST IN THIS VERSION, deliberately, and it is not an oversight.
   #
-  # Two deployments of 4.0.0, differing only in the hostname and the namespace, attested
-  # different snapshots — one field apart, the one the corrected exclusion above now covers.
-  # Excluding it makes those two snapshots byte-identical, and the value below is what they
-  # then digest to. A third deployment, of this definition with the value declared, attested
-  # exactly it and reported `matchesExpected: true`.
+  # 4.0.2 declared `a94af2a0…`, measured on `sup823a` (build-448-release) on 2026-11-17. That
+  # cloud is gone, and the measurement does not carry: a deployment of the SAME definition on
+  # `azure-test` (build-477-release) attests a 62-resource snapshot where `sup823a` attested
+  # 71, because the two clouds' evidence collectors do not collect the same KINDS —
+  # ServiceAccount, Role, RoleBinding and PodDisruptionBudget entered the collector after the
+  # pinned release was built. So `expectedDigest` is a function of the collecting cloud's
+  # build as well as of this definition, and a digest declared against one build makes the
+  # gate refuse a correct deployment on another (SUP-711, 2026-11-21).
   #
-  # Declared rather than left absent because the gate holds a deployment to it: a wrong digest
-  # refuses a deployment that is doing exactly what the listing says, which is how 3.0.9's
-  # carried-over 3.0.6 digest failed. Adding this line changes no rendered manifest, so a
-  # deployment of the definition without it attests the same snapshot as one with it; the
-  # exclusion fix is the only thing in this version that moves the digest, and it moves it
-  # on purpose.
-  expectedDigest: "a94af2a0502da61d59d9903c35b822cafb5e4d8548d08b6455fc701c162e68d8"
+  # Leaving it absent is the lesser harm: the gate holds a deployment to a declared digest, so
+  # a wrong one refuses a deployment that is doing exactly what the listing says — which is
+  # how 3.0.9's carried-over 3.0.6 digest failed. The digest for this line is measured on the
+  # cloud the stand runs on and declared in the next version, by the repository's own rule
+  # that it takes two deployments: deploy, read the published evidence, declare, deploy again.
+  #
+  # The exclusion set below is unchanged from 4.0.2 and is known to be complete on both
+  # builds: two deployments of one parameter set, differing only in hostname and namespace,
+  # attested byte-identical snapshots on `azure-test` as well.
   exclude:
     # Every deployment lives in a namespace of its own. The platform strips this itself; it is
     # declared because the listing page shows the exclusions from the definition only, and a

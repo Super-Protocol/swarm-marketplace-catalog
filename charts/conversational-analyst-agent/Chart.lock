@@ -1,6 +1,6 @@
 dependencies:
 - name: aivo
   repository: file://../vendor/aivo
-  version: 0.1.0
-digest: sha256:80f1136f653e2ac19f574dec41fe4da17d10fa7230055d66d9649f29f03d80f3
-generated: "2026-11-17T13:35:24.316428621Z"
+  version: 0.1.1
+digest: sha256:4141491cc0c2a8733e901edc4a33e736630be0f0794bded47d4d5369b98bc2b6
+generated: "2026-11-21T15:53:31.542568055Z"

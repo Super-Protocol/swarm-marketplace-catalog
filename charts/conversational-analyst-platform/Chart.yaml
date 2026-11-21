@@ -17,7 +17,11 @@ type: application
 #     2026-11-17), so the two the 0.3.x chart pinned cannot be fetched — and the
 #     agent keeps every uploaded file and every export in that bucket. Garage is
 #     also what the vendor's own 1.x delivery profile ships.
-version: 0.4.0
+# 0.4.1 carries one fix, in the vendored garage subchart: the RPC secret is now
+# rendered as the 32 bytes of hex Garage demands. Before it, `analyst-garage`
+# CrashLoopBackOffed on every deployment of this chart with
+# «Invalid RPC secret key», so the agent had no object storage at all (SUP-711).
+version: 0.4.1
 appVersion: "1.17.0"
 dependencies:
   # Not the bitnami chart: its images do not ship the `vector` extension
@@ -36,5 +40,5 @@ dependencies:
     version: 2.12.3
     repository: "file://../vendor/nats"
   - name: garage
-    version: 0.2.0
+    version: 0.2.1
     repository: "file://../vendor/aivo-garage"

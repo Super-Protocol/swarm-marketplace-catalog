@@ -262,6 +262,17 @@ else
   fail "charts/tests/limitrange.py"
 fi
 
+# Admissible is not the same as able to start, and nothing here used to ask the second
+# question: 4.0.2 passed every check in this file and five of its fifteen workloads never ran.
+# Three containers, three facts, each one found on a cluster rather than in a render (SUP-711).
+note "the three containers that could not start are each guarded by the fact that broke them"
+if output=$(python3 charts/tests/analyst_boot.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/analyst_boot.py"
+fi
+
 # The two charts are installed separately and have to be given the same list.
 # Nothing enforces that at deploy time, so it is enforced here: the router's
 # `litellmModel` and the proxy's `model_name` are one string, and a golden pair

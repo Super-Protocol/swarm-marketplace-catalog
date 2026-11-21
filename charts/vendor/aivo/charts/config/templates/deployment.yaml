@@ -82,7 +82,23 @@ spec:
             }
             return JSON.stringify(overlay[key]);
           };
-          for (const name of fs.readdirSync(src)) {
+          // A ConfigMap volume is not a flat directory of its keys: the kubelet's atomic
+          // writer puts the data in a timestamped directory, points `..data` at it and
+          // makes every key a symlink into that. `readdirSync` returns all three kinds,
+          // so reading each entry blindly reads `..2026_11_21_15_04_00.1234` — a
+          // directory — and the init container dies with EISDIR on the first boot and
+          // every retry, which is how 4.0.2's `agent-config` pod stayed in
+          // Init:CrashLoopBackOff and took the five services that wait for it with it
+          // (SUP-711). Keys never begin with a dot, so the double-dot prefix is the
+          // whole of what has to go; `statSync` then follows the symlink and the file
+          // check is what keeps this true if the layout changes again.
+          const sources = fs.readdirSync(src)
+            .filter((name) => !name.startsWith('..'))
+            .filter((name) => fs.statSync(`${src}/${name}`).isFile());
+          if (sources.length === 0) {
+            throw new Error(`${src} carries no configuration document`);
+          }
+          for (const name of sources) {
             const text = fs.readFileSync(`${src}/${name}`, 'utf8').replace(
               /^([^\S\n]*(?:- )?[\w.-]+:[^\S\n]+)(["']?)\$\{([A-Za-z0-9_]+)\}\2[^\S\n]*$/gm,
               (_match, head, _quote, key) => head + take(name, key),
