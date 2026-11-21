@@ -20,6 +20,10 @@
 #                otherwise the change never reaches a marketplace that already
 #                seeded that version, silently (SUP-108). It compares against
 #                BASE_REF, or origin/main when that is unset.
+#   gated_digest.py  a definition that declares a data slot declares an
+#                `evidence.expectedDigest`, because the marketplace admits a
+#                deployment to the gatekeeper only when its version has one
+#                (SUP-711).
 #
 # Only apps/ is covered. datasets/ and interfaces/ have schemas of their own and
 # no check yet; adding them is the same shape of work.
@@ -167,6 +171,19 @@ for definition in apps/*/app.yaml; do
     printf '%s\n' "$output" | grep -v '^  FAIL' | sed 's/^/      /'
   fi
 done
+
+# A digest is not documentation: the marketplace admits a deployment to the
+# gatekeeper only when its version declares one, so a listing with a data slot
+# and no digest produces deployments that can never read a gated dataset — and
+# nothing in the render, the schema or the deployment says so. Three versions of
+# conversational-analyst shipped that way (SUP-711).
+note "a listing that mounts gated data declares a digest"
+if output=$(python3 "$here/gated_digest.py"); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "apps/tests/gated_digest.py"
+fi
 
 note "Result"
 if [ "$failures" -eq 0 ]; then

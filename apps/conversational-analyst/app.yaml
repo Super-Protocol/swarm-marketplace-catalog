@@ -12,7 +12,7 @@ metadata:
     endpoint, including one in your own perimeter — and the embeddings that index your schema
     and documents are served from inside the deployment, so neither your data nor its
     description reaches a third party.
-  version: "4.0.5"
+  version: "4.0.6"
   category: ai-agents
   license: Proprietary
   tags:
@@ -22,6 +22,23 @@ metadata:
     - text-to-sql
     - confidential
 
+# ---------------------------------------------------------------------------
+# 4.0.6 declares the reference configuration's digest, and nothing else moves:
+# `expectedDigest` reaches no manifest, so a deployment of 4.0.5 attests exactly
+# what one of this version does — which is what let the number be measured
+# before it could be declared.
+#
+# It is declared because it has to be. The marketplace admits a deployment to
+# the gatekeeper only when its version declares a digest, so while this was
+# absent the clinic's gated card could not be served to any deployment of this
+# listing, whatever else was in place (SUP-711). `apps/tests/run.sh` now refuses
+# a definition that has a data slot and no digest.
+#
+# The value is the REFERENCE configuration's, measured on a `build-477-release`
+# collector with the parameter set written beside it. A deployment with other
+# parameters, or on a cloud whose collector gathers other kinds, attests its own
+# digest — expected, not tampering. Presenting that honestly in the console is
+# SUP-871.
 # ---------------------------------------------------------------------------
 # 4.0.5 gets the grounding Job past the model registry, which is as far as 4.0.4
 # reached: `LlmProvider` is a GraphQL enum on agent 1.17 and its values are
@@ -1232,39 +1249,55 @@ outputs:
 # kind — they ARE configuration, so what this deployment may reach cannot be widened without
 # the digest saying so.
 evidence:
-  # NO DIGEST IN THIS VERSION, deliberately — and this is the last version it can be absent
-  # from, because an absent digest turns out to disable gated data altogether.
+  # THE REFERENCE CONFIGURATION'S DIGEST — not a value every deployment reproduces, and the
+  # listing page should say so (option 2, decided on SUP-711; the presentation change is
+  # SUP-871).
   #
-  # The marketplace admits a deployment to the gate only when its version declares a digest:
-  # `clientsFor` skips any deployment with no declared digest, with "nothing to hold it to, or
-  # nowhere to check. Left out rather than admitted on the marketplace's word alone". Correct,
-  # and it means the clinic's gated ClickHouse card cannot be served to a deployment of 4.0.3
-  # or 4.0.4 whatever else is in place: the gate never hears about the client (SUP-711,
-  # 2026-11-21 — found after the egress sidecar was finally admissible and the schema read
-  # still failed).
+  # Measured, not derived: two deployments of listing 4.0.5 — whose rendered manifests are
+  # byte-for-byte this version's, since the only change here is this block and
+  # `expectedDigest` reaches no manifest — on `azure-test`, 2026-11-21. They differed in
+  # hostname and namespace alone and attested BYTE-IDENTICAL 63-resource snapshots, which is
+  # what makes the exclusion set below complete and this number declarable.
   #
-  # So the two-deployment rule is a prerequisite rather than hygiene here: measure this
-  # version's parameter set twice, declare it in the next, and the gate admits what the
-  # listing can be held to.
+  # What the number is a function of, all three of which have to match for a deployment to
+  # reproduce it:
   #
-  # 4.0.2 declared `a94af2a0…`, measured on `sup823a` (build-448-release) on 2026-11-17. That
-  # cloud is gone, and the measurement does not carry: a deployment of the SAME definition on
-  # `azure-test` (build-477-release) attests a 62-resource snapshot where `sup823a` attested
-  # 71, because the two clouds' evidence collectors do not collect the same KINDS —
-  # ServiceAccount, Role, RoleBinding and PodDisruptionBudget entered the collector after the
-  # pinned release was built. So `expectedDigest` is a function of the collecting cloud's
-  # build as well as of this definition, and a digest declared against one build makes the
-  # gate refuse a correct deployment on another (SUP-711, 2026-11-21).
+  #   1. this definition and the chart versions it pins;
+  #   2. THE COLLECTING CLOUD'S BUILD. `azure-test` runs the signed `build-477-release`,
+  #      whose collector gathers six kinds and 63 resources here. The destroyed `sup823a`
+  #      (`build-448-release`) gathered 71 for the same definition: ServiceAccount, Role,
+  #      RoleBinding and PodDisruptionBudget entered the collector later. A cloud on another
+  #      build therefore attests a different digest, and that is expected — not tampering;
+  #   3. THE PARAMETER SET, because the operator's choices are attested on purpose. The model
+  #      endpoint, the model id, the embedding endpoint and model, the MCP and signal
+  #      settings, the result policy and the product name are all in the snapshot, and a
+  #      consumer who points the deployment at their own model gets their own digest. That is
+  #      the trade this listing makes deliberately: the fact a verifier most needs — where
+  #      this deployment sends data — is IN the signed bundle rather than excluded from it.
   #
-  # Leaving it absent is the lesser harm: the gate holds a deployment to a declared digest, so
-  # a wrong one refuses a deployment that is doing exactly what the listing says — which is
-  # how 3.0.9's carried-over 3.0.6 digest failed. The digest for this line is measured on the
-  # cloud the stand runs on and declared in the next version, by the repository's own rule
-  # that it takes two deployments: deploy, read the published evidence, declare, deploy again.
+  # The reference parameter set this value was measured with:
   #
-  # The exclusion set below is unchanged from 4.0.2 and is known to be complete on both
-  # builds: two deployments of one parameter set, differing only in hostname and namespace,
-  # attested byte-identical snapshots on `azure-test` as well.
+  #   modelBaseUrl          https://api.router.superprotocol.com/v1
+  #   modelId               qwen/qwen3-coder-next
+  #   brandTitle            AI Analyst
+  #   embeddingsInPerimeter true   embeddingsModel bge-large-en-v1.5   embeddingsDimensions 1024
+  #   embeddingsBaseUrl     http://analyst-embeddings/v1
+  #   signalsEnabled        true   mcpServerName (none)
+  #   largeResultRows 100   largeResultBytes 102400   previewRows 20
+  #   modelContextWindow    262144
+  #   data slot `datasets`  cypressbay-digestive-health
+  #
+  # Everything else was left at this definition's defaults, and the three generated
+  # credentials (`internalSecret`, `modelApiKey`, `embeddingsApiKey`) are in Secrets and reach
+  # no attested object. The organisation names are not in the snapshot either — they travel in
+  # a Secret and in a Job's name, and a Job is not collected.
+  #
+  # Declaring it is not optional for this listing: the marketplace admits a deployment to the
+  # gatekeeper only when its version declares a digest (`clientsFor` skips one with none —
+  # "nothing to hold it to, or nowhere to check"), so an absent value leaves every deployment
+  # of a listing with a data slot unable to receive gated data at all. `apps/tests/run.sh`
+  # now fails a definition that has a slot and no digest, so this cannot go missing again.
+  expectedDigest: "f6a4fb8d8d07aca5b1d12337a2e89260adc15a287b4910ee2b4c147e2cbb587d"
   exclude:
     # Every deployment lives in a namespace of its own. The platform strips this itself; it is
     # declared because the listing page shows the exclusions from the definition only, and a
