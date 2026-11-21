@@ -15,9 +15,14 @@ type: application
 #     the 0.4.x chart did not have.
 #   * The configuration document is split: endpoints and thresholds attested in a
 #     ConfigMap, credentials in a Secret (see charts/vendor/aivo/VENDORED.md).
-version: 0.5.0
+# 0.5.1 fixes the configuration init container, in the vendored aivo subchart: it
+# listed a ConfigMap mount as if it were a flat directory of keys and died with
+# EISDIR on the kubelet's own `..data` / timestamp entries, so `agent-config`
+# never started and the five services that wait for it restarted behind it
+# (SUP-711).
+version: 0.5.1
 appVersion: "1.17.0"
 dependencies:
   - name: aivo
-    version: 0.1.0
+    version: 0.1.1
     repository: "file://../vendor/aivo"

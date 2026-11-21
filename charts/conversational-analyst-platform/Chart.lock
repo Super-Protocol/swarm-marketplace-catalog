@@ -10,6 +10,6 @@ dependencies:
   version: 2.12.3
 - name: garage
   repository: file://../vendor/aivo-garage
-  version: 0.2.0
-digest: sha256:98f5799617d07fddcbea47140ad8c3fb8684fc2848ffd98cd06a517c19e777e2
-generated: "2026-11-17T13:35:23.691367988Z"
+  version: 0.2.1
+digest: sha256:17accb0d6541262e30dc97f72bef78412c5825a878f803dd73ca1508c8880e7c
+generated: "2026-11-21T15:53:30.700463298Z"

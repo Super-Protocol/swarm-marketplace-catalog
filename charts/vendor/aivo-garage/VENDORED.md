@@ -6,7 +6,26 @@
 | Commit | `8a6df6a513419b71ac8025c4e848a84624ae2686` (2026-11-06) |
 | Server | Garage 2.3.0, S3-compatible, one node and one PVC |
 
-Vendored unmodified, under `aivo-garage/` so the directory name says where it came from.
+Vendored under `aivo-garage/` so the directory name says where it came from, with one local
+deviation.
+
+## Local deviation: the RPC secret is converted to hex
+
+Marked `LOCAL DEVIATION` in `templates/_helpers.tpl`.
+
+Garage requires `rpc_secret` to be **32 bytes of hex** — 64 hex characters — and refuses to
+start on anything else: «Invalid RPC secret key: expected 32 bytes of random hex». The chart
+only checked that the value was non-empty, and the value a marketplace deployment supplies is
+the platform-generated internal credential: 32 printable characters, not hex. The marketplace's
+expression language has no hash function, so a listing cannot convert it either — which left
+`analyst-garage` in CrashLoopBackOff on every deployment of 4.0.x, and an agent with no object
+storage for uploads and exports (SUP-711, found on `azure-test` 2026-11-21).
+
+The helper now uses a value that is already 64 hex characters as given and hashes anything else
+with `sha256sum`: deterministic, so a reconfigure renders the same key, and the entropy of what
+was supplied is kept. `garage.toml` is a Secret, so neither form reaches the attested snapshot.
+
+**If this is ever fixed upstream, delete the deviation rather than merging it.**
 
 ## Why this replaced MinIO
 

@@ -19,7 +19,11 @@ type: application
 #   * The bootstrap script is no longer rendered with the credential and the
 #     deploying person's name inside it. The script is a ConfigMap and is attested
 #     in full; everything per-deployment reaches it from a Secret as environment.
-version: 0.6.0
+# 0.6.1 raises Keycloak's memory to 2Gi. At 1Gi it was OOMKilled during the
+# Quarkus augmentation `start-dev` runs at every boot — measured, not guessed —
+# and a deployment with no identity provider is a deployment with no agent
+# (SUP-711).
+version: 0.6.1
 appVersion: "1.17.0"
 dependencies:
   - name: keycloak

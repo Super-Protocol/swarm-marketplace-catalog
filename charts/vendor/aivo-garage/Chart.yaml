@@ -7,7 +7,7 @@ description: >-
   ставится релиз aivo-garage — вложения и выгрузки платформы (бакет aivo-files)
   и блобы Langfuse (бакет langfuse).
 type: application
-version: 0.2.0
+version: 0.2.1
 # Чарт свой, не upstream'ный, и сервер не MinIO. Причина смены — состав
 # поставки, который ИБ заказчика сканирует целиком (Trivy 0.74.0,
 # --severity CRITICAL,HIGH, AIV-1585):

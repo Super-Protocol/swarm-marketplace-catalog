@@ -65,4 +65,20 @@ not the whole value of its key (a credential is substituted as a JSON-encoded sc
 is what makes a password containing a quote survive; pasting one into the middle of a string
 would corrupt the document instead of filling it in).
 
+### `charts/config`: the init container reads the ConfigMap mount as a directory of keys
+
+`templates/deployment.yaml`, in the same init container as the deviation above.
+
+A ConfigMap volume is not a flat directory: the kubelet's atomic writer puts the data in a
+timestamped directory, points `..data` at it and makes every key a symlink into that.
+`fs.readdirSync` returns all three kinds of entry, and reading each one blindly read the
+timestamped directory — `EISDIR: illegal operation on a directory` — so the init container died
+on the first boot and on every retry, `agent-config` stayed in `Init:CrashLoopBackOff`, and the
+five services that wait for the configuration service restarted behind it. Found on the
+`azure-test` stand, 2026-11-21 (SUP-711); the upstream chart has the same code.
+
+Entries whose name begins with `..` are skipped and each remaining one is confirmed to be a
+file (`statSync` follows the key symlink), and an empty source directory is now an error rather
+than a pod that reports success with no configuration.
+
 **If this is ever upstreamed, delete the deviation rather than merging it.**
