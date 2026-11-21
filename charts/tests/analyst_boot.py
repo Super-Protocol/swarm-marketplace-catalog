@@ -24,7 +24,15 @@ on `azure-test` and reading the namespace (SUP-711, 2026-11-21):
    behind it. The check runs the container's own script, taken out of the rendered Deployment,
    against a directory laid out the way the kubelet lays one out.
 
-3. **Keycloak needs 2Gi.** `production: false` means `start-dev`, which re-runs the Quarkus
+3. **The grounding Job's queries have to be the api's.** `PaginationInput` on agent 1.17 is
+   `limit`/`offset`; the Job asked for `page`/`pageSize` and the api answered 400 on its
+   first query, so no deployment of 4.0.x ever had a model row, a data source, a schema
+   catalogue or a system prompt. The same run also showed the tenant being chosen by
+   `organizations[0]` — Keycloak's order, not the deployment's — and the four result-policy
+   numbers reaching the Job's `env` and nothing the cloud collects, so a data owner could
+   not read them out of the signed snapshot. All three are checked here.
+
+4. **Keycloak needs 2Gi.** `production: false` means `start-dev`, which re-runs the Quarkus
    augmentation at every boot; under a 1Gi limit it is OOMKilled mid-build, and a deployment
    whose identity provider never starts has no agent either. 2Gi is measured off-cluster with
    the pinned image digest (peak ~880 MiB resident); the floor is asserted so that a later
@@ -33,6 +41,7 @@ on `azure-test` and reading the namespace (SUP-711, 2026-11-21):
 
 from __future__ import annotations
 
+import ast
 import json
 import pathlib
 import re
@@ -50,6 +59,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 PLATFORM_CASE = "charts/tests/cases/analyst-platform.yaml"
 IDENTITY_CASE = "charts/tests/cases/analyst-identity.yaml"
 AGENT_CASE = "charts/tests/cases/analyst-agent.yaml"
+GROUNDING_CASE = "charts/tests/cases/analyst-grounding.yaml"
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 MEMORY_FLOOR_MIB = 2048
@@ -175,11 +185,67 @@ def check_config_init_reads_a_configmap_mount() -> list[str]:
     return []
 
 
+def check_grounding_speaks_the_api_1_17_talks() -> list[str]:
+    """The three facts the grounding Job needs in order to do anything at all."""
+    failures = []
+    script = (ROOT / "charts/conversational-analyst-grounding/files/ground.py").read_text()
+
+    # 1. The pagination shape. 1.17 answers 400 to the other one, on the first query.
+    if "pageSize" in script or re.search(r"pagination:\s*\{\s*page\b", script):
+        failures.append(
+            "grounding: a query still pages with page/pageSize; agent 1.17's PaginationInput "
+            "takes limit/offset and refuses the document with HTTP 400"
+        )
+    else:
+        print("  ok    grounding: every paged query uses limit/offset")
+
+    # 2. The tenant by alias. Taking the first organisation is Keycloak's order, not the
+    #    deployment's, and getting it wrong binds one party's data to another's tenant.
+    # Parsed, not grepped: the prose above the function names the old expression on purpose,
+    # and a check that cannot tell code from a comment teaches people to stop writing the
+    # comment.
+    indexes_the_list = any(
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "organizations"
+        for node in ast.walk(ast.parse(script))
+    )
+    if indexes_the_list:
+        failures.append("grounding: the tenant is still taken from organizations[N] rather than by alias")
+    elif "TENANT_ALIAS" not in script:
+        failures.append("grounding: the script does not read TENANT_ALIAS, so no tenant is named")
+    else:
+        print("  ok    grounding: the tenant is chosen by alias")
+
+    # 3. The result policy, in an object the cloud collects. A Job is not collected.
+    policy = None
+    for document in render("conversational-analyst-grounding", GROUNDING_CASE):
+        if document.get("kind") == "ConfigMap" and "model-policy" in (document.get("metadata") or {}).get("name", ""):
+            policy = document
+    if policy is None:
+        failures.append(
+            "grounding: no ConfigMap carries the result policy, so the thresholds are in the "
+            "Job's env only and a verifier cannot read them out of the evidence snapshot"
+        )
+    else:
+        missing = [
+            key
+            for key in ("LARGE_DATA_ROW_THRESHOLD", "LARGE_DATA_SIZE_THRESHOLD", "PREVIEW_ROW_COUNT", "CONTEXT_WINDOW_SIZE")
+            if key not in (policy.get("data") or {})
+        ]
+        if missing:
+            failures.append(f"grounding: the attested policy does not carry {', '.join(missing)}")
+        else:
+            print(f"  ok    grounding: the result policy is attested in ConfigMap/{policy['metadata']['name']}")
+    return failures
+
+
 def main() -> int:
     failures = []
     failures += check_garage_rpc_secret()
     failures += check_keycloak_memory()
     failures += check_config_init_reads_a_configmap_mount()
+    failures += check_grounding_speaks_the_api_1_17_talks()
     for failure in failures:
         print(f"  FAIL  {failure}")
     return 1 if failures else 0

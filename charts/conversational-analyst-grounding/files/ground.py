@@ -39,6 +39,8 @@ KEYCLOAK_URL = os.environ["KEYCLOAK_URL"].rstrip("/")
 KEYCLOAK_REALM = os.environ["KEYCLOAK_REALM"]
 KEYCLOAK_CLIENT_ID = os.environ["KEYCLOAK_CLIENT_ID"]
 KEYCLOAK_CLIENT_SECRET = os.environ["KEYCLOAK_CLIENT_SECRET"]
+# The alias of the organisation whose tenant this deployment's data and model belong to.
+TENANT_ALIAS = os.environ["TENANT_ALIAS"]
 
 MODEL_NAME = os.environ["MODEL_NAME"]
 MODEL_ID = os.environ["MODEL_ID"]
@@ -91,9 +93,18 @@ def kc_get(path, token):
 def identity():
     """The tenant to work in, and the subject to act as.
 
-    The tenant is the FIRST organization, which is the one the realm bootstrap put the
-    deploying administrator in; the others exist so that one party's data can be shown to be
-    out of another's reach, and they have no datasets of their own to ground.
+    The tenant is the organization whose ALIAS the deployment named — the one the data is
+    bound to and the one the realm bootstrap put the deploying administrator in. The others
+    exist so that one party's data can be shown to be out of another's reach, and they have
+    no datasets of their own to ground.
+
+    By alias and not by position (SUP-711). This used to take `organizations[0]`, which is
+    whatever order Keycloak returns and not the order the deployment declared; on the
+    gastroenterology stand the clinic happened to sort first, so it happened to work, and a
+    second organisation renamed to sort above it would have bound the clinic's data sources
+    and its model registry to the operator's tenant without any error being raised. That
+    failure is silent and it is the opposite of what this deployment claims, so the alias is
+    required and a mismatch is fatal.
 
     Asked of Keycloak here rather than threaded out of the bootstrap Job, so the two Jobs
     share no state and either can be re-run on its own.
@@ -102,11 +113,22 @@ def identity():
     organizations = kc_get("organizations", token)
     if not organizations:
         raise RuntimeError("Keycloak has no organization yet; the identity bootstrap has not finished")
-    tenant = organizations[0]["id"]
+
+    wanted = next((organization for organization in organizations if organization.get("alias") == TENANT_ALIAS), None)
+    if wanted is None:
+        known = ", ".join(sorted(str(organization.get("alias")) for organization in organizations))
+        raise RuntimeError(
+            f"no organization with alias {TENANT_ALIAS!r} in the realm (it has: {known}). "
+            "The data and the model registry belong to one named tenant, and guessing which "
+            "one would bind them to the wrong party."
+        )
+    tenant = wanted["id"]
 
     members = kc_get(f"organizations/{tenant}/members", token)
     if not members:
-        raise RuntimeError(f"organization {tenant} has no member yet; the identity bootstrap has not finished")
+        raise RuntimeError(
+            f"organization {TENANT_ALIAS} ({tenant}) has no member yet; the identity bootstrap has not finished"
+        )
     # The administrator the bootstrap created is its only member at this point. `sub` in a
     # Keycloak token is the user's id, which is what the api matches `x-auth-subject` on.
     return tenant, members[0]["id"], members[0].get("username", "")
@@ -152,8 +174,17 @@ class Api:
                 "x-rai-tenant": self.tenant,
             },
         )
-        with urllib.request.urlopen(request, timeout=300) as response:
-            payload = json.load(response)
+        try:
+            with urllib.request.urlopen(request, timeout=300) as response:
+                payload = json.load(response)
+        except urllib.error.HTTPError as error:
+            # GraphQL answers a malformed or invalid DOCUMENT with 400 and puts the reason in
+            # the body, which urllib hides inside the exception. Without this the Job died on
+            # `HTTP Error 400: Bad Request` and the reason — a `PaginationInput` whose fields
+            # this api does not have — took a hand-run query against the live deployment to
+            # find (SUP-711).
+            detail = error.read().decode("utf-8", "replace")[:2000]
+            raise RuntimeError(f"the api refused the query with HTTP {error.code}: {detail}") from error
         if payload.get("errors"):
             raise RuntimeError(json.dumps(payload["errors"])[:2000])
         return payload["data"]
@@ -202,7 +233,7 @@ def column_role(column):
 # ---------------------------------------------------------------------------
 
 LIST_MODELS = """
-query { adminLlmModels(pagination: { page: 1, pageSize: 100 }) { items { id name isDefault } } }
+query { adminLlmModels(pagination: { limit: 100, offset: 0 }) { items { id name isDefault } } }
 """
 
 CREATE_MODEL = """
@@ -272,7 +303,7 @@ def ensure_model(api):
 # is a difference worth not guessing at.
 LIST_SOURCES = """
 query {
-  adminDataSources(pagination: { page: 1, pageSize: 200 }) {
+  adminDataSources(pagination: { limit: 200, offset: 0 }) {
     items { id datasourceId }
   }
 }
@@ -435,7 +466,7 @@ def ground_sources(api, wanted):
 # ---------------------------------------------------------------------------
 
 LIST_SYSTEM_MESSAGES = """
-query { adminSystemMessages(pagination: { page: 1, pageSize: 100 }) { items { id name tenantId } } }
+query { adminSystemMessages(pagination: { limit: 100, offset: 0 }) { items { id name tenantId } } }
 """
 
 CREATE_SYSTEM_MESSAGE = """
@@ -451,7 +482,7 @@ mutation ($input: AdminUpdateSystemMessageInput!) {
 """
 
 LIST_SUGGESTIONS = """
-query { adminInitialSuggestions(pagination: { page: 1, pageSize: 100 }) { items { id text } } }
+query { adminInitialSuggestions(pagination: { limit: 100, offset: 0 }) { items { id text } } }
 """
 
 CREATE_SUGGESTION = """

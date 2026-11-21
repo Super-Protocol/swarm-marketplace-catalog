@@ -33,6 +33,34 @@ metadata:
 data:
 {{ (.Files.Glob "files/*").AsConfig | indent 2 }}
 ---
+{{/*
+The result policy, in a ConfigMap, because these four numbers have to be ATTESTED.
+
+A Job is applied like any other object and is deliberately NOT collected into the evidence
+snapshot (SUP-416), so while these values reached the Job's `env` and nowhere else, a data
+owner reading the signed snapshot could not see how large a result has to be before it is
+set aside, nor how much of it the model is shown. With the model inside the perimeter those
+numbers stop being a confidentiality control and become a context-budget one — which is
+exactly the kind of "what changes for you" fact the snapshot exists to carry, and the one
+SUP-711 found missing from it.
+
+So the policy lives here, the Job reads it with `envFrom`, and the two cannot disagree. The
+agent does not read this object; the registry row the Job writes from it is what the api
+reads. `memoryTokenBudget` and `summarizeTokenThreshold` ride along because they are the
+same kind of fact and the Job wants them from one place.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: analyst-grounding-model-policy
+data:
+  LARGE_DATA_ROW_THRESHOLD: {{ .Values.model.thresholds.largeDataRowThreshold | quote }}
+  LARGE_DATA_SIZE_THRESHOLD: {{ .Values.model.thresholds.largeDataSizeThreshold | quote }}
+  PREVIEW_ROW_COUNT: {{ .Values.model.thresholds.previewRowCount | quote }}
+  CONTEXT_WINDOW_SIZE: {{ .Values.model.contextWindowSize | quote }}
+  MEMORY_TOKEN_BUDGET: {{ .Values.model.memoryTokenBudget | quote }}
+  SUMMARIZE_TOKEN_THRESHOLD: {{ .Values.model.summarizeTokenThreshold | quote }}
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -40,7 +68,11 @@ metadata:
   # to produce a different Job. Keying the name off the bindings and the model is what makes
   # rebinding data a normal operation rather than a redeploy; the superseded Job is pruned
   # with the old bundle.
-  name: analyst-grounding-{{ printf "%s|%s|%s" (.Values.bindings | toString) .Values.model.name .Values.model.id | sha256sum | trunc 8 }}
+  # The policy and the tenant are in the key as well as the bindings and the model: a changed
+  # threshold has to produce a new Job, or the registry row keeps the superseded number and
+  # nothing says so. The model's own key is deliberately NOT in it — a regenerated credential
+  # is not a reason to re-ground, and the Secret's own checksum is not this object's business.
+  name: analyst-grounding-{{ printf "%s|%s|%s|%s|%s" (.Values.bindings | toString) .Values.model.name .Values.model.id (.Values.tenantAlias | toString) (.Values.model.thresholds | toYaml) | sha256sum | trunc 8 }}
 spec:
   # This waits on the rest of the deployment from inside, so a retry here means the wait
   # itself ran out — rare, and worth a few more attempts before the Job is called failed.
@@ -55,6 +87,10 @@ spec:
           envFrom:
             - secretRef:
                 name: analyst-grounding
+            # The attested policy above, rather than six literals in a pod spec that no
+            # verifier can read.
+            - configMapRef:
+                name: analyst-grounding-model-policy
           env:
             - name: API_URL
               value: {{ $api | quote }}
@@ -72,18 +108,10 @@ spec:
               value: {{ .Values.model.baseUrl | quote }}
             - name: MODEL_TEMPERATURE
               value: {{ .Values.model.temperature | quote }}
-            - name: LARGE_DATA_ROW_THRESHOLD
-              value: {{ .Values.model.thresholds.largeDataRowThreshold | quote }}
-            - name: LARGE_DATA_SIZE_THRESHOLD
-              value: {{ .Values.model.thresholds.largeDataSizeThreshold | quote }}
-            - name: PREVIEW_ROW_COUNT
-              value: {{ .Values.model.thresholds.previewRowCount | quote }}
-            - name: CONTEXT_WINDOW_SIZE
-              value: {{ .Values.model.contextWindowSize | quote }}
-            - name: MEMORY_TOKEN_BUDGET
-              value: {{ .Values.model.memoryTokenBudget | quote }}
-            - name: SUMMARIZE_TOKEN_THRESHOLD
-              value: {{ .Values.model.summarizeTokenThreshold | quote }}
+            # Which organisation's tenant the data and the model belong to. An alias, not a
+            # position: the Job used to take whichever organisation Keycloak listed first.
+            - name: TENANT_ALIAS
+              value: {{ required "tenantAlias must be set: the alias of the organisation whose tenant this deployment's data and model belong to" .Values.tenantAlias | quote }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
