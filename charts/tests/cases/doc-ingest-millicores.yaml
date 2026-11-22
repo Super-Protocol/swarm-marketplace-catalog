@@ -1,0 +1,21 @@
+# A fractional CPU quota, which is the shape `OMP_NUM_THREADS` was derived wrong
+# from: `resources.cpu` is a Kubernetes quantity, so `1500m` is a legal way to
+# write one and a half cores, and stripping the `m` turned it into 1500 threads
+# inside a cgroup that can run one and a half (SUP-882). Half a core running 500
+# OpenMP threads is the slowest extraction this chart can produce, which is the
+# opposite of what the value is for.
+#
+# What the golden holds is the derivation: 1500m -> 1.5 cores -> 2 threads, the
+# ceiling rather than the floor, because 1 is not a thread count a 1.5-core quota
+# wants and 0 is not a thread count at all.
+#
+# A listing would choose this shape to fit ingestion into a tighter quota than
+# the measured four cores — the 15-page scan takes 93.1 s on two cores against
+# 59.4 s on four, so it is wall time traded for quota, not a different
+# extraction. Memory stays at the measured peak: Docling works a page at a time,
+# so the 2.34 GiB does not move with the core count.
+apiKey: TESTKEYtestkey0123456789abcdefAB
+
+resources:
+  cpu: 1500m
+  memory: 4Gi

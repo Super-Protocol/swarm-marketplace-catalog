@@ -65,7 +65,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: swarm-doc-ingest
-      version: "0.1.0"
+      version: "0.2.0"
     images:
       - name: ghcr.io/super-protocol/swarm-doc-ingest/ingest
         digest: sha256:a114f3df285a9c0f30e96e3bf2b31b04184ba5d956b007e8df81cc4a4db704d1
@@ -139,11 +139,24 @@ replica.
 
 `extraction.layoutPreset`, `tableMode` and `ocrEngine` are in a ConfigMap the cloud
 digests and signs, so a tenant who approved a digest approved *these* presets. The chart
-refuses a preset the image does not bake, an OCR engine it does not carry, and a layout
-preset other than the measured one unless `acknowledgeUnmeasuredLayout` is set — because
-`egret_large`, which is better on every ruled table, scores **0.000** on a table drawn
-without ruling lines, where `heron` scores 0.968.
+refuses an OCR engine the image does not carry, and it refuses every layout preset but
+`layout_heron_default` — with no flag to override that, because there is nothing the
+override could reach. The image bakes `docling-layout-heron` alone and runs with
+`HF_HUB_OFFLINE=1`, so a pod asked for `egret_large` cannot fetch the weights and never
+starts. The measurement that chose `heron` stands behind the refusal: `egret_large`, which
+is better on every ruled table, scores **0.000** on a table drawn without ruling lines,
+where `heron` scores 0.968.
 
-Re-run `bakeoff/bench.py` in the source repository before moving any of them, and before
-moving the image digest. A render test and a readiness probe both pass on a build that
-extracts nothing.
+**Serving a different preset is therefore an image change, not a value**: a
+`swarm-doc-ingest` release that bakes those weights, fresh `bakeoff/bench.py` numbers, and
+a new `image.digest` and `appVersion` here.
+
+Re-run `bakeoff/bench.py` in the source repository before moving `tableMode` or
+`ocrEngine`, and before moving the image digest. A render test and a readiness probe both
+pass on a build that extracts nothing.
+
+`OMP_NUM_THREADS` is not configured, it is derived: the `resources.cpu` quota in whole
+cores, rounded up, never below 1. The quota is a Kubernetes quantity, so `1500m` is one
+and a half cores and renders as 2 threads — not 1500, which is what stripping the `m` once
+produced and which would be the slowest extraction this chart can run (SUP-882). Set
+`ompNumThreads` only to override the derivation.

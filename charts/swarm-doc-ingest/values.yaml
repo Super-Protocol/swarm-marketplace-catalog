@@ -64,10 +64,12 @@ extraction:
   # is Docling's own default and the only one of five tested that reads a table
   # drawn without ruling lines as a table (0.968) rather than as prose (0.000).
   # What it costs: 0.956 against egret_large's 0.988 on one wide numeric table.
+  #
+  # Naming any other preset is refused at render time, with no flag to override
+  # it: the weights are not in the image and `HF_HUB_OFFLINE=1` means they
+  # cannot arrive, so the pod would not start. Serving another preset is a new
+  # swarm-doc-ingest release and a new digest below, not a value here.
   layoutPreset: layout_heron_default
-  # Naming another preset is refused unless this is set, because the weights are
-  # not in the image and the numbers do not hold.
-  acknowledgeUnmeasuredLayout: false
 
   # TableFormer. `accurate` scores 0.956 against `fast`'s 0.491 on a 21-row
   # table; `fast` collapses a wide table almost completely. The counter-case is
@@ -120,9 +122,11 @@ resources:
   cpu: "4"
   memory: 4Gi
 
-# `OMP_NUM_THREADS` is set to the CPU limit in the image. It is here because a
-# thread count above the cgroup's quota makes a CPU-bound extraction slower, not
-# faster, and the pod's own limit is the only number that knows the answer.
+# `OMP_NUM_THREADS`. Empty derives it from `resources.cpu` above — the core
+# count rounded up, never below 1, so `1500m` is 2 threads and not 1500. It is
+# here because a thread count above the cgroup's quota makes a CPU-bound
+# extraction slower, not faster, and the pod's own limit is the only number that
+# knows the answer; set it only to override that.
 ompNumThreads: ""
 
 podAnnotations: {}

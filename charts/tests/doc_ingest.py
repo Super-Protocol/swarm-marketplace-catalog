@@ -24,6 +24,15 @@ component is built for are the ones a reviewer cannot verify by reading values:
     as a float: 268435456 came out as `"2.68435456e+08"`, which the service
     parses with `int()` and dies on at boot. A golden caught it once; this keeps
     it caught.
+  * **`OMP_NUM_THREADS` is the CPU quota in cores, not its digits.**
+    `resources.cpu` is a Kubernetes quantity, so `1500m` is one and a half
+    cores; stripping the `m` read it as 1500 threads inside a cgroup that can
+    run one and a half, which is the slowest extraction this chart can produce
+    (SUP-882). Derived as the core count rounded up, never below 1.
+  * **Only the baked layout preset renders.** The image carries
+    `docling-layout-heron` alone and `HF_HUB_OFFLINE=1`, so a pod asked for an
+    egret preset can never start. There is no acknowledgement flag, because
+    there was nothing an acknowledgement could reach (SUP-882).
 
     charts/tests/doc_ingest.py
 """
@@ -196,8 +205,14 @@ def main() -> int:
           "extraction.layoutPreset=layout_nonesuch"), "not a Docling preset",
          "a layout preset that does not exist"),
         ((f"image.digest={DIGEST}", "apiKey=x",
-          "extraction.layoutPreset=layout_egret_large"), "0.000 on a table",
+          "extraction.layoutPreset=layout_egret_large"), "would never start",
          "a layout preset the image does not bake"),
+        # The flag that used to let this through is gone. It could only ever
+        # reach a pod that cannot start, so there is no acknowledgement to make.
+        ((f"image.digest={DIGEST}", "apiKey=x",
+          "extraction.layoutPreset=layout_egret_large",
+          "extraction.acknowledgeUnmeasuredLayout=true"), "would never start",
+         "an unbaked preset with the old acknowledgement set"),
         ((f"image.digest={DIGEST}", "apiKey=x",
           "extraction.tableMode=fastest"), "one of fast, accurate",
          "an unknown table mode"),
@@ -213,14 +228,47 @@ def main() -> int:
         check(bool(message) and expected in message,
               f"refused: {description}")
 
-    print("\nthe measured preset is reachable with an acknowledgement")
+    print("\nthe baked preset is the only one that renders")
     try:
         render(f"image.digest={DIGEST}", "apiKey=x",
-               "extraction.layoutPreset=layout_egret_large",
-               "extraction.acknowledgeUnmeasuredLayout=true")
-        check(True, "an acknowledged unmeasured preset renders")
+               "extraction.layoutPreset=layout_heron_default")
+        check(True, "the baked preset renders")
     except AssertionError as exc:
-        check(False, f"an acknowledged unmeasured preset should render: {exc}")
+        check(False, f"the baked preset should render: {exc}")
+
+    print("\nthe thread count is the CPU quota in cores, not its digits")
+    # `resources.cpu` is a Kubernetes quantity, so `1500m`, `1.5` and `4` are
+    # three legal ways to write one. Stripping the `m` read `1500m` as 1500
+    # threads inside a one-and-a-half-core cgroup — the slowest extraction this
+    # chart can produce, and the opposite of what the value is for (SUP-882).
+    # Rounded up, because 0 is not a thread count.
+    for cpu, expected in [("4", "4"), ("8", "8"), ("1500m", "2"), ("1.5", "2"),
+                          ("500m", "1"), ("100m", "1"), ("2500m", "3"),
+                          ("0.25", "1")]:
+        rendered = render(f"image.digest={DIGEST}", "apiKey=x",
+                          f"resources.cpu={cpu}")
+        cm = next(d for d in by_kind(docs(rendered), "ConfigMap")
+                  if d["metadata"]["name"] == "swarm-doc-ingest")
+        got = cm["data"]["OMP_NUM_THREADS"]
+        check(got == expected,
+              f"cpu {cpu} gives OMP_NUM_THREADS {expected} — got {got}")
+    override = render(f"image.digest={DIGEST}", "apiKey=x",
+                      "resources.cpu=500m", "ompNumThreads=2")
+    cm = next(d for d in by_kind(docs(override), "ConfigMap")
+              if d["metadata"]["name"] == "swarm-doc-ingest")
+    check(cm["data"]["OMP_NUM_THREADS"] == "2",
+          "an explicit ompNumThreads still wins over the derivation")
+    # And through a values file rather than `--set`, which is how a listing
+    # patches it: Helm reads the YAML number itself and `1500m` stays a string
+    # while `1.5` arrives as a float.
+    fractional = docs(render(case="doc-ingest-millicores"))
+    cm = next(d for d in by_kind(fractional, "ConfigMap")
+              if d["metadata"]["name"] == "swarm-doc-ingest")
+    fractional_container = (by_kind(fractional, "Deployment")[0]["spec"]
+                            ["template"]["spec"]["containers"][0])
+    check(fractional_container["resources"]["limits"]["cpu"] == "1500m"
+          and cm["data"]["OMP_NUM_THREADS"] == "2",
+          "the millicore case renders a 1500m quota and 2 threads")
 
     print()
     if failures:

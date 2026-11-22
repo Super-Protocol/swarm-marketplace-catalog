@@ -53,6 +53,33 @@ manifests and published in the evidence snapshot in clear.
 {{- end -}}
 
 {{/*
+`OMP_NUM_THREADS`, from the pod's own CPU quota: the core count rounded up,
+never below 1.
+
+The quota is a Kubernetes quantity, so `4`, `1.5` and `500m` are three legal
+ways to write it, and stripping the `m` read `500m` as 500 threads — half a core
+running 500 OpenMP threads is the slowest extraction this chart can produce,
+which is the opposite of what the number is here for. Millicores are divided,
+not stripped. A fraction rounds up because 0 is not a thread count, and because
+the alternative — OpenMP's own default of every core the node has — is the
+oversubscription this value exists to prevent.
+*/}}
+{{- define "swarm-doc-ingest.ompNumThreads" -}}
+{{- if .Values.ompNumThreads -}}
+{{- .Values.ompNumThreads -}}
+{{- else -}}
+{{- $cpu := .Values.resources.cpu | toString -}}
+{{- $cores := 0.0 -}}
+{{- if hasSuffix "m" $cpu -}}
+{{- $cores = divf (float64 (trimSuffix "m" $cpu)) 1000.0 -}}
+{{- else -}}
+{{- $cores = float64 $cpu -}}
+{{- end -}}
+{{- max (ceil $cores) 1 -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Render-time refusals. Each of these is a configuration that would otherwise
 deploy and then fail at boot or, worse, quietly extract less than the numbers in
 the chart's README say it does.
@@ -62,10 +89,17 @@ the chart's README say it does.
 {{- if not (has .Values.extraction.layoutPreset $layouts) -}}
 {{- fail (printf "extraction.layoutPreset %q is not a Docling preset; one of: %s" .Values.extraction.layoutPreset (join ", " $layouts)) -}}
 {{- end -}}
+{{- /*
+One preset, no acknowledgement. `scripts/prefetch-models.py` in the source
+repository bakes `docling-layout-heron` and nothing else, and the ConfigMap sets
+`HF_HUB_OFFLINE=1`, so a pod asked for an egret preset cannot fetch the weights
+and cannot start: the only outcome the old `acknowledgeUnmeasuredLayout=true`
+escape hatch could reach was a CrashLoopBackOff. Serving another preset is an
+image change — new weights, new digest, new bake-off numbers — and a chart
+value cannot stand in for one.
+*/ -}}
 {{- if ne .Values.extraction.layoutPreset "layout_heron_default" -}}
-{{- if not .Values.extraction.acknowledgeUnmeasuredLayout -}}
-{{- fail (printf "extraction.layoutPreset is %q. Only layout_heron_default is baked into this image and measured for it: egret_large scores 0.000 on a table drawn without ruling lines, where heron scores 0.968. Set extraction.acknowledgeUnmeasuredLayout=true if you have re-run bakeoff/bench.py and mean it." .Values.extraction.layoutPreset) -}}
-{{- end -}}
+{{- fail (printf "extraction.layoutPreset is %q. This image bakes layout_heron_default alone and runs with HF_HUB_OFFLINE=1, so the weights cannot be fetched and the pod would never start. The measurement that chose it: egret_large scores 0.000 on a table drawn without ruling lines, where heron scores 0.968. Another preset needs a swarm-doc-ingest release that bakes its weights, fresh bakeoff/bench.py numbers, and a new image digest here." .Values.extraction.layoutPreset) -}}
 {{- end -}}
 {{- if not (has .Values.extraction.tableMode (list "fast" "accurate")) -}}
 {{- fail (printf "extraction.tableMode %q: one of fast, accurate" .Values.extraction.tableMode) -}}

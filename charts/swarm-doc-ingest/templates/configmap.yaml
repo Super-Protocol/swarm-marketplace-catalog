@@ -38,6 +38,8 @@ data:
   {{- /*
   Thread count from the pod's own CPU limit. Above the cgroup quota a CPU-bound
   extraction gets slower rather than faster, and the limit is the only number
-  that knows the right answer.
+  that knows the right answer. The quota is a Kubernetes quantity, not an
+  integer: see `swarm-doc-ingest.ompNumThreads` for why `500m` is half a core
+  and not 500 threads.
   */}}
-  OMP_NUM_THREADS: {{ .Values.ompNumThreads | default (.Values.resources.cpu | toString | replace "m" "") | quote }}
+  OMP_NUM_THREADS: {{ include "swarm-doc-ingest.ompNumThreads" . | quote }}

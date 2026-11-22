@@ -5,7 +5,7 @@ kind: ConfigMap
 metadata:
   name: swarm-doc-ingest-extraction-notes
   labels:
-    helm.sh/chart: swarm-doc-ingest-0.1.0
+    helm.sh/chart: swarm-doc-ingest-0.2.0
     app.kubernetes.io/name: swarm-doc-ingest
     app.kubernetes.io/instance: di
     app.kubernetes.io/version: "0.1.0"
@@ -38,7 +38,7 @@ kind: ConfigMap
 metadata:
   name: swarm-doc-ingest
   labels:
-    helm.sh/chart: swarm-doc-ingest-0.1.0
+    helm.sh/chart: swarm-doc-ingest-0.2.0
     app.kubernetes.io/name: swarm-doc-ingest
     app.kubernetes.io/instance: di
     app.kubernetes.io/version: "0.1.0"
@@ -60,7 +60,7 @@ kind: Service
 metadata:
   name: swarm-doc-ingest
   labels:
-    helm.sh/chart: swarm-doc-ingest-0.1.0
+    helm.sh/chart: swarm-doc-ingest-0.2.0
     app.kubernetes.io/name: swarm-doc-ingest
     app.kubernetes.io/instance: di
     app.kubernetes.io/version: "0.1.0"
@@ -83,7 +83,7 @@ kind: Deployment
 metadata:
   name: swarm-doc-ingest
   labels:
-    helm.sh/chart: swarm-doc-ingest-0.1.0
+    helm.sh/chart: swarm-doc-ingest-0.2.0
     app.kubernetes.io/name: swarm-doc-ingest
     app.kubernetes.io/instance: di
     app.kubernetes.io/version: "0.1.0"
@@ -103,14 +103,14 @@ spec:
   template:
     metadata:
       labels:
-        helm.sh/chart: swarm-doc-ingest-0.1.0
+        helm.sh/chart: swarm-doc-ingest-0.2.0
         app.kubernetes.io/name: swarm-doc-ingest
         app.kubernetes.io/instance: di
         app.kubernetes.io/version: "0.1.0"
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/component: doc-ingest
       annotations:
-        checksum/config: bf181e1763731adc7a2e291e13746ac2dbc9eccf1afb1625b8625f115fd78060
+        checksum/config: 48eab48a2b5b341db8492f1def27151f07c99a09240f1c156eb466ca70e9f826
     spec:
       securityContext:
         fsGroup: 10001
