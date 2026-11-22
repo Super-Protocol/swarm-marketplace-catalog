@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: swarm-doc-ingest
   labels:
-    helm.sh/chart: swarm-doc-ingest-0.1.0
+    helm.sh/chart: swarm-doc-ingest-0.2.0
     app.kubernetes.io/name: swarm-doc-ingest
     app.kubernetes.io/instance: di
     app.kubernetes.io/version: "0.1.0"
@@ -21,7 +21,7 @@ kind: ConfigMap
 metadata:
   name: swarm-doc-ingest-extraction-notes
   labels:
-    helm.sh/chart: swarm-doc-ingest-0.1.0
+    helm.sh/chart: swarm-doc-ingest-0.2.0
     app.kubernetes.io/name: swarm-doc-ingest
     app.kubernetes.io/instance: di
     app.kubernetes.io/version: "0.1.0"
@@ -54,7 +54,7 @@ kind: ConfigMap
 metadata:
   name: swarm-doc-ingest
   labels:
-    helm.sh/chart: swarm-doc-ingest-0.1.0
+    helm.sh/chart: swarm-doc-ingest-0.2.0
     app.kubernetes.io/name: swarm-doc-ingest
     app.kubernetes.io/instance: di
     app.kubernetes.io/version: "0.1.0"
@@ -76,7 +76,7 @@ kind: Service
 metadata:
   name: swarm-doc-ingest
   labels:
-    helm.sh/chart: swarm-doc-ingest-0.1.0
+    helm.sh/chart: swarm-doc-ingest-0.2.0
     app.kubernetes.io/name: swarm-doc-ingest
     app.kubernetes.io/instance: di
     app.kubernetes.io/version: "0.1.0"
@@ -99,7 +99,7 @@ kind: Deployment
 metadata:
   name: swarm-doc-ingest
   labels:
-    helm.sh/chart: swarm-doc-ingest-0.1.0
+    helm.sh/chart: swarm-doc-ingest-0.2.0
     app.kubernetes.io/name: swarm-doc-ingest
     app.kubernetes.io/instance: di
     app.kubernetes.io/version: "0.1.0"
@@ -119,14 +119,14 @@ spec:
   template:
     metadata:
       labels:
-        helm.sh/chart: swarm-doc-ingest-0.1.0
+        helm.sh/chart: swarm-doc-ingest-0.2.0
         app.kubernetes.io/name: swarm-doc-ingest
         app.kubernetes.io/instance: di
         app.kubernetes.io/version: "0.1.0"
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/component: doc-ingest
       annotations:
-        checksum/config: b6f80fa9f0eccb2bf32b728dde7c2a07bfc3e913825aaafbcf4488ac4aa71a7d
+        checksum/config: cb3265f6e3c2fd46f38da55809f97cfc4cff483a5537b55268a62ffaff5f7e71
     spec:
       securityContext:
         fsGroup: 10001

@@ -53,3 +53,4 @@ single-cell-unbound	rapids-singlecell-notebook
 single-cell-component	rapids-singlecell-notebook		
 doc-ingest-component	swarm-doc-ingest		
 doc-ingest-no-ocr	swarm-doc-ingest		
+doc-ingest-millicores	swarm-doc-ingest		
