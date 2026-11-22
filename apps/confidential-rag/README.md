@@ -35,6 +35,18 @@ this project has an NGC credential, so no NIM deployment has been run on this ha
 regression against NIM's TensorRT-LLM engine is an open number; what is measured is in
 [`docs/open-inference-component.md`](../../docs/open-inference-component.md).
 
+**What a NIM brought with it that a chart now has to supply.** A NIM ships its own serving
+configuration; an open server ships defaults meant for a machine, not for a container. Text
+Embeddings Inference sizes its thread pools from the host's core count, which a CPU limit does not
+change — so on a GPU node with 128 cores the reranker started 128 threads inside its two-core
+quota and spent 60 s on a question it does 12 passages of in 15 s. The retriever's adapter timed
+out, fell back to the retriever's own order, and every citation came back reading `0.0`: a
+component this listing advertises, attests and budgets for, doing nothing, with correct answers as
+the only visible output. `text-embeddings-server` 0.1.5 pins the pools to the cores the limit
+grants, and `charts/tests/rag_reranker_budget.py` holds the render to it. Worth saying plainly:
+this class of defect is invisible in a render, in a probe and in an answer — it is visible only in
+a number nobody looks at.
+
 ## The gatekeeper, and the one thing it cannot protect
 
 A dataset whose owner does not hand out credentials is served through the marketplace
@@ -144,14 +156,15 @@ the corpus is in the snapshot in full.
 `evidence.expectedDigest` describes the **gated configuration**: a deployment with a dataset
 attached to the `corpus` slot.
 
-`03db53bee699d2f4f4751e697a7a4403a08e5eb891d705e4631a40adf7f50df8`, measured on two deployments of
-0.1.5 on the `gpu-blueprints` cloud — two hostnames, two namespaces — which published
+`9cf45e56b96579c497f1b2cbc0ba059ca4ed84c9efe0dd9bbaefde855e0415ed`, measured on two deployments of
+0.1.7 on the `gpu-blueprints` cloud — two hostnames, two namespaces — which published
 byte-identical signed snapshots of 32 resources.
 
-It was measured once per version, four times: `69a1160a…` (0.1.2), `6fc8b2bf…` (0.1.3),
-`1370c19e…` (0.1.4) and this. Each of those versions changed a probe or a ConfigMap, both of which
-are fields of objects in the snapshot — so a digest is re-measured rather than carried forward, and
-each pair being byte-identical is the property actually being claimed.
+It was measured once per version, six times: `69a1160a…` (0.1.2), `6fc8b2bf…` (0.1.3),
+`1370c19e…` (0.1.4), `03db53be…` (0.1.5), `94f3ab09…` (0.1.6, one deployment and never declared)
+and this. Each of those versions changed a probe, a ConfigMap or an environment variable, all of
+which are fields of objects in the snapshot — so a digest is re-measured rather than carried
+forward, and each pair being byte-identical is the property actually being claimed.
 
 **Which configuration is a decision, not a default.** A deployment that mounts gated data gains
 four objects the marketplace adds itself — the egress sidecar's ConfigMap, Deployment and Service,

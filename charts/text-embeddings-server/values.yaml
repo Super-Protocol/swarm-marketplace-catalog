@@ -191,6 +191,14 @@ model:
       # `--max-batch-tokens 16384`, ready in 9 s at 2048 with a cgroup peak of
       # 4.67 GiB. Declared 6Gi rather than 5Gi: 5Gi survived with 330 MiB to
       # spare, which is not headroom.
+      #
+      # Two cores is enough for the listing's twelve-passage question — 7.6 s
+      # measured, with the thread pools pinned to the limit (`tes.threads`).
+      # Without that pinning the same two cores took over 60 s in a cluster
+      # whose nodes have far more cores than the pod may use, which is the
+      # reranker timeout: the scores were dropped and every citation read 0.0.
+      # Cores, not the batch ceiling, are what this preset's latency is made
+      # of — raise them here if a deployment needs more passages per question.
       sizing:
         maxBatchTokens: 2048
         maxClientBatchSize: 32

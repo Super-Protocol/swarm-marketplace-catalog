@@ -69,6 +69,41 @@ generation engine left Pending on a GPU quota of one.
 {{- end -}}
 
 {{/*
+How many threads the backend may start, which is NOT how many it starts by itself.
+
+The server sizes its pools from the HOST's core count — `std::thread::available_parallelism`
+for rayon, the OpenMP runtime for the GEMMs — and a container does not change that number. On
+a two-core limit on an eight-core laptop that oversubscription is survivable; on the same limit
+on a GPU node with a hundred and twenty-eight cores it is not: the pools start a thread per host
+core, the cgroup gives the pod two, and the result is throttling and context switching rather
+than work. Measured on 2026-11-22 with twelve 215-token passages through BGE Reranker v2 M3 at
+`cpu: 2`: 7.6 s with the pools pinned, 10.8 s unpinned on an eight-core host, and over 60 s
+unpinned in the cluster — past the retriever's rerank timeout, which silently dropped the scores
+and served citations reading 0.0.
+
+Pinned to the whole cores the limit really grants, never zero: a fractional limit gets one
+thread, which is slow and correct rather than fast and throttled.
+*/}}
+{{- define "tes.threads" -}}
+{{- $p := include "tes.preset" . | fromJson -}}
+{{- $cpu := $p.sizing.resources.cpu -}}
+{{- if and .Values.resources .Values.resources.limits .Values.resources.limits.cpu -}}
+{{- $cpu = .Values.resources.limits.cpu -}}
+{{- end -}}
+{{- $cpu = toString $cpu -}}
+{{- $cores := 0 -}}
+{{- if hasSuffix "m" $cpu -}}
+{{- $cores = div (trimSuffix "m" $cpu | int) 1000 -}}
+{{- else -}}
+{{- $cores = $cpu | int -}}
+{{- end -}}
+{{- if lt $cores 1 -}}
+{{- $cores = 1 -}}
+{{- end -}}
+{{- $cores -}}
+{{- end -}}
+
+{{/*
 Refuses the configurations that render cleanly and then fail in the cluster, each with a
 sentence that says what to do. Every one of these has an analogue in
 charts/swarm-model-server, and for the same reason: a render error costs a minute, a

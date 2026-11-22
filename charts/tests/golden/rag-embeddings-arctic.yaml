@@ -401,6 +401,15 @@ spec:
             # quietly re-downloaded unverified.
             - name: HF_HUB_OFFLINE
               value: "1"
+            # The thread pools, pinned to the cores the limit actually grants rather than the
+            # host's — see `tes.threads`. Env and not flags because the server has no flag for
+            # them: they are read by the runtimes underneath it.
+            - name: OMP_NUM_THREADS
+              value: "2"
+            - name: MKL_NUM_THREADS
+              value: "2"
+            - name: RAYON_NUM_THREADS
+              value: "2"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

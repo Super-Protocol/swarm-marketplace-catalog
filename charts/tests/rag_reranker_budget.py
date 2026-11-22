@@ -24,21 +24,62 @@ drifts puts the guard back to sleep.
 
 It also records the measured time budget, which is the second ceiling over `topK` and not one a
 render can check: on the two cores the reranker gets, for chunks of `corpus.chunkChars`, scoring
-8 passages took 24.4 s, 16 took 48.4 s and 24 took 73.3 s, against the adapter's 60 s timeout.
+8 passages took 19.5 s, 12 took 30.1 s and 16 took 40.2 s, against the adapter's 60 s timeout.
+
+That budget holds only while the server's thread pools are pinned to the cores the limit grants.
+Unpinned they are sized from the host, and on a 128-core GPU node the same two cores took over
+60 s for twelve passages — the timeout, so the scores were dropped and the citations read 0.0 on
+a live deployment (SUP-840, 2026-11-22). The pinning is therefore part of what makes the number
+below true, and this test holds the rendered environment to it rather than trusting the chart.
 """
 
 from __future__ import annotations
 
 import pathlib
+import subprocess
 import sys
 
 import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 RERANKER_PRESET = "bge-reranker-v2-m3"
-# Seconds per passage on two cores, from (48.4 - 24.4) / (16 - 8). Used to report the margin.
-SECONDS_PER_PASSAGE = 3.0
+# Seconds per passage on two PINNED cores, from (40.2 - 19.5) / (16 - 8). Reports the margin.
+SECONDS_PER_PASSAGE = 2.6
 ADAPTER_TIMEOUT_SECONDS = 60.0
+# The pools the server starts, which it sizes from the host unless these say otherwise.
+THREAD_VARIABLES = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "RAYON_NUM_THREADS")
+
+
+def pinning_problems(preset: dict) -> list[str]:
+    """Hold the rendered reranker to thread pools the size of its CPU limit."""
+    rendered = subprocess.run(
+        ["helm", "template", "rr", str(ROOT / "charts/text-embeddings-server"),
+         "--skip-tests", "--set", "apiKey=k", "--set", "name=rr",
+         "--set", f"model.preset={RERANKER_PRESET}"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    deployments = [doc for doc in yaml.safe_load_all(rendered)
+                   if doc and doc["kind"] == "Deployment"]
+    if len(deployments) != 1:
+        return [f"{len(deployments)} Deployments rendered; expected the server's one"]
+
+    servers = [container for container in deployments[0]["spec"]["template"]["spec"]["containers"]
+               if container["name"] == "server"]
+    if len(servers) != 1:
+        return ["no container named `server` in the rendered Deployment"]
+
+    cpu = str(preset["sizing"]["resources"]["cpu"])
+    environment = {entry["name"]: entry.get("value")
+                   for entry in servers[0].get("env", []) if "value" in entry}
+    problems = []
+    for variable in THREAD_VARIABLES:
+        if environment.get(variable) != cpu:
+            problems.append(
+                f"{variable} renders as {environment.get(variable)!r} and the limit is {cpu} "
+                "core(s) — unpinned pools are sized from the host, which is what made twelve "
+                "passages take over 60 s in the cluster and dropped every relevance score."
+            )
+    return problems
 
 
 def main() -> int:
@@ -70,9 +111,11 @@ def main() -> int:
     if budget > ADAPTER_TIMEOUT_SECONDS:
         problems.append(
             f"server.topK is {top_k}, which is about {budget:.0f}s of reranking on two cores "
-            f"against the adapter's {ADAPTER_TIMEOUT_SECONDS:.0f}s timeout. Measured: 8 -> 24.4s, "
-            "16 -> 48.4s, 24 -> 73.3s."
+            f"against the adapter's {ADAPTER_TIMEOUT_SECONDS:.0f}s timeout. Measured: 8 -> 19.5s, "
+            "12 -> 30.1s, 16 -> 40.2s."
         )
+
+    problems.extend(pinning_problems(preset))
 
     if problems:
         print("  FAIL  the retriever asks for more than the reranker will do")
