@@ -57,21 +57,23 @@ One slot, `matrices`, optional, and two interfaces behind it:
   deployment and the data stops being served. The matrix is assembled from
   long-form `sc_counts` (`cell_id`, `gene`, `count`) plus `sc_cells` and,
   optionally, `sc_genes`.
+
+- **`s3-h5ad/v1`** — the native one, and as of SUP-881 a registered contract
+  rather than a copy in this repository. One object is one annotated matrix, so
+  there is no sidecar to keep in step: `sc_workspace._read_h5ad_from_s3` reads
+  the objects the connection names, or every `.h5ad` under its prefix when it
+  names none. The dataset carries its own sealed credentials and the deployment
+  reads the bucket directly, which is why this interface is second in `accepts`
+  — preference order reads "gate it if the dataset can be gated".
+
+The slot's schema constraint applies to both, because a slot's schema is
+semantic rather than per-interface. One `.h5ad` object carries exactly the
+`cell_id` / `gene` / `count` triple the constraint asks for, but a dataset that
+never declares a schema is not bindable here on either interface.
+
 Attaching nothing is supported and useful: upload an `.h5ad` into
 `/workspace/data` through the browser and the data is never registered with a
-marketplace at all. That is also, today, the only way to work from an `.h5ad`.
-
-**Why there is no `.h5ad` slot yet.** `.h5ad` is the format a lab's matrices
-already exist in, the contract is written in `interfaces/s3-h5ad/v1.yaml`, and
-`sc_workspace` reads it (tested against object storage by prefix and by name) —
-but this repository is not the interface registry. A marketplace matches against
-`BUNDLED_INTERFACES` in the platform's `marketplace-spec` library, mirrored from
-the specification repository, and `AppPublishingService.submit()` refuses any
-definition naming a contract the registry does not hold. Naming it would make
-this listing unpublishable everywhere. Registering it is a change to the
-specification repository, then to swarm-cloud's mirror, then to this copy and
-this listing's `accepts` — and worth doing, because every S3-shaped dataset in
-this catalogue has the same problem one format along.
+marketplace at all.
 
 **The gatekeeper caveat, stated plainly.** The gate speaks ClickHouse over HTTP
 and only that — it injects `x-clickhouse-user` / `x-clickhouse-key` into every

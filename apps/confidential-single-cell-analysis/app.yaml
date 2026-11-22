@@ -35,7 +35,7 @@ metadata:
     reading the dataset you attach rather than a corpus off the public internet. The deployment
     publishes signed evidence of the exact environment it is running, down to the sha256 of every
     Python wheel.
-  version: "0.1.0"
+  version: "0.2.0"
   category: life-sciences
   # What an auditor should read: the workflow, its authors and its licence are
   # upstream's. What we changed is in the chart's
@@ -187,16 +187,15 @@ data:
     # reaches this deployment through a plain listener in its own namespace, and
     # every read is admitted against the evidence this deployment published.
     #
-    # `s3-h5ad/v1` is NOT in `accepts`, and the reason is worth recording.
-    # `.h5ad` is the format a lab's matrices already exist in, the contract is
-    # written (`interfaces/s3-h5ad/v1.yaml`) and the workspace reads it — but the
-    # interface registry is not this repository. It is `BUNDLED_INTERFACES` in
-    # the platform's own `marketplace-spec` library, mirrored from the
-    # specification repository, and `AppPublishingService.submit()` refuses any
-    # definition naming a contract the registry does not hold:
-    # "Unknown data interface(s) … Add the contract to the registry first."
-    # Naming it here would make this listing unpublishable on every marketplace
-    # until the platform ships the contract. It goes back in the moment it does.
+    # `s3-h5ad/v1` is the format a lab's matrices already exist in, registered
+    # in the specification and mirrored into the platform's `BUNDLED_INTERFACES`
+    # by SUP-881 — which is what made naming it here possible at all: a
+    # definition naming a contract the registry does not hold is refused at
+    # submission. It is second because it cannot be gated. The gatekeeper is an
+    # HTTP proxy in front of ClickHouse, so an `.h5ad` dataset is bound straight
+    # into the enclave with credentials of its own and read out of the bucket by
+    # `sc_workspace._read_h5ad_from_s3`. Preference order therefore reads "gate
+    # it if the dataset can be gated", which is the order below.
     #
     # Not required. A deployment with nothing attached is a supported and useful
     # one: the tenant drops an `.h5ad` into /workspace/data through the browser
@@ -207,14 +206,16 @@ data:
     - name: matrices
       title: Single-cell matrices
       description: >-
-        The expression matrices the notebooks work on, assembled from long-form `sc_counts`
-        (`cell_id`, `gene`, `count`) plus `sc_cells` and, optionally, `sc_genes`. Attach more than
-        one and the notebooks read the first — `00_dataset.ipynb` lists them all. Nothing attached
-        is also supported: upload an `.h5ad` into /workspace/data instead.
+        The expression matrices the notebooks work on: an `.h5ad` dataset in object storage, or
+        long-form `sc_counts` (`cell_id`, `gene`, `count`) plus `sc_cells` and, optionally,
+        `sc_genes` in ClickHouse. Attach more than one and the notebooks read the first —
+        `00_dataset.ipynb` lists them all. Nothing attached is also supported: upload an `.h5ad`
+        into /workspace/data instead.
       required: false
       multiple: true
       accepts:
         - interface: clickhouse-http/v1
+        - interface: s3-h5ad/v1
       schema:
         tables:
           - columns:
