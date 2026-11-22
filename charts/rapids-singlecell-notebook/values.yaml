@@ -1,0 +1,142 @@
+# The RAPIDS notebooks image, pinned by digest for the reason every image in
+# this repository is: the deployment's evidence names what is running, and only
+# a digest survives a moved tag (marketplace spec §2.7).
+#
+# docker.io, not nvcr.io. The blueprint's compose files name
+# `nvcr.io/nvidia/rapidsai/notebooks`, and the RAPIDS project publishes the same
+# image on Docker Hub as `rapidsai/notebooks` — one of its own compose files
+# uses that copy. The difference matters here and nowhere else: an NGC pull is
+# governed by NVIDIA's NGC terms and, for the images that need one, a per-tenant
+# credential a listing cannot carry. The Docker Hub copy needs no credential, so
+# the listing can pin it and any tenant can pull it.
+#
+# `tag` records which tag the digest was resolved from. It is not used to pull.
+image:
+  registry: docker.io
+  repository: rapidsai/notebooks
+  digest: sha256:bbe8a453ff7e3613829eb8ad723f78ae3df236acf86c3ad9166820235a32ffbf
+  tag: 26.02-cuda13-py3.12
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# The token JupyterLab demands before it serves anything. It reaches the
+# container through a Secret as `JUPYTER_TOKEN`, which jupyter_server reads by
+# itself — never as a command-line argument, because arguments are rendered into
+# the manifests and published in the evidence snapshot in clear (marketplace
+# trap 4).
+#
+# The chart refuses to render an ingress without one. The image's own default
+# command starts JupyterLab with `--NotebookApp.token=''`: unauthenticated, which
+# is right for a laptop and is a GPU plus somebody's patient data handed to
+# whoever finds the hostname.
+token: ""
+existingSecret: ""
+existingSecretKey: token
+
+# The public name the notebook answers on. Required when the ingress is on.
+hostname: ""
+
+ingress:
+  enabled: true
+  # Without a class the object is created, the cloud registers the hostname and
+  # writes its DNS, and nothing serves it: the controller only picks up what
+  # names it. Marketplace trap 1, and it reads as a DNS fault for an hour.
+  className: nginx
+  pathType: Prefix
+  path: /
+  annotations:
+    # A notebook kernel holds the websocket open for as long as the session
+    # lasts, and a cell that runs for twenty minutes is the normal case here —
+    # the default 60-second read timeout would drop it mid-computation.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # An `.h5ad` upload through the browser goes through this proxy.
+    nginx.ingress.kubernetes.io/proxy-body-size: 4096m
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  tls:
+    enabled: false
+    secretName: ""
+
+service:
+  type: ClusterIP
+  port: 8888
+  targetPort: 8888
+
+# The workspace: notebooks as the tenant edits them, derived `.h5ad` files, and
+# anything uploaded through the browser. It survives a restart, which is the
+# difference between a pod that comes back and a pod that comes back empty.
+#
+# Sized for the blueprint's own reference instance — its docs call for ~90 GB
+# usable for the published example data, and a tenant's own matrices plus the
+# derived files written between notebooks need the same order of room.
+persistence:
+  enabled: true
+  size: 100Gi
+  storageClass: ""
+  accessMode: ReadWriteOnce
+
+gpu:
+  # RAPIDS-singlecell is CUDA. Without a device the notebooks import and then
+  # fail on the first `rsc.get.anndata_to_GPU`, which is a deployment that looks
+  # healthy and cannot do the one thing it is for.
+  enabled: true
+  count: 1
+  # A device request without the runtime class leaves the pod Pending for ever
+  # rather than falling back to CPU, so the two move together.
+  runtimeClassName: nvidia
+
+# RAPIDS talks to its Dask workers over /dev/shm, and the 64Mi default is not
+# enough. Memory-backed, so this counts against the container's memory limit —
+# `resources.memory` below includes it, it is not free.
+shm:
+  size: 8Gi
+
+# requests and limits are one map on purpose: a tenant cluster space sets
+# `maxLimitRequestRatio: 1`, so a pod whose request differs from its limit is
+# refused outright.
+#
+# Memory is host memory, not VRAM. An out-of-core workflow streams through host
+# RAM by design, and `anndata`'s own read path holds a full copy of the matrix
+# there before it ever reaches the card.
+resources:
+  cpu: "8"
+  memory: 48Gi
+
+# Where the tenant's own data comes from.
+#
+# `bindingJson` is the marketplace's resolved `data.<slot>` document — which
+# carries the dataset's credentials — so the chart renders it into a Secret and
+# nowhere else. The notebooks read it through `sc_workspace.py`, which is the
+# only thing in this chart that knows the shape of a binding.
+#
+# Empty is a supported deployment: the workspace then reads whatever the tenant
+# uploads into /workspace/data through the browser, and the render is identical
+# either way, because the binding never leaves the Secret.
+data:
+  bindingJson: ""
+
+  # Which `obs` column is the batch, and which carries the cell-type annotation.
+  # The ported notebooks ask `sc_workspace` for these rather than naming the
+  # columns of the blueprint's own example corpus (`assay`, `cell_type`), which
+  # a tenant's matrix has no reason to carry. They are not secret and they are
+  # the same for every deployment that chooses the same pair, so they travel as
+  # ordinary environment values.
+  batchKey: batch
+  labelKey: cell_type
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+
+podSecurityContext: {}
+podAnnotations: {}
+podLabels: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,11 @@
+# No ingress: the notebook reachable inside the namespace only, which is the
+# shape a listing that puts its own front end in front of this one would use.
+# Linted separately because the validations that fire with an ingress on (a
+# hostname, a token) are exactly the ones this shape does not have.
+token: Vd81kQ2mRt6pYs0ZaBn4LcXwEjHu9Gf3
+ingress:
+  enabled: false
+data:
+  bindingJson: ""
+  batchKey: donor
+  labelKey: annotation

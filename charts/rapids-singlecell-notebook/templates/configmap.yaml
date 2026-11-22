@@ -1,0 +1,37 @@
+{{- /*
+Everything the container runs, in one attested object.
+Three things live here, and all three are here rather than in the image or in an
+env var for the same reason: the cloud digests this object and signs the result,
+so what the deployment actually executes is named inside its own evidence.
+
+  requirements.lock   every wheel of the Python environment, by sha256. pip is
+                      run with --require-hashes, so an environment that does not
+                      match this file does not install at all.
+  bootstrap.sh        what replaces the image's own command, which starts
+                      JupyterLab with no authentication.
+  sc_workspace.py     where the notebooks get their data from — the only code in
+                      the workspace that knows a dataset binding's shape.
+  notebooks/*         the ported blueprint, and PROVENANCE.md saying what was
+                      changed in it.
+
+Nothing in here varies between two deployments of this version. The dataset
+binding, which does, is in the Secret.
+*/ -}}
+{{- include "rapids-singlecell-notebook.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rapids-singlecell-notebook.fullname" . }}
+  labels:
+    {{- include "rapids-singlecell-notebook.labels" . | nindent 4 }}
+data:
+{{ (.Files.Glob "files/*.{lock,in,sh,py}").AsConfig | indent 2 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rapids-singlecell-notebook.fullname" . }}-notebooks
+  labels:
+    {{- include "rapids-singlecell-notebook.labels" . | nindent 4 }}
+data:
+{{ (.Files.Glob "files/notebooks/*").AsConfig | indent 2 }}

@@ -1,0 +1,55 @@
+{{- if .Values.ingress.enabled }}
+{{- include "rapids-singlecell-notebook.validate" . -}}
+{{- /*
+The whole of JupyterLab on one hostname, which is unusual in this repository and
+is right here: jupyter_server authenticates every route it serves except
+`/api/status`, and the websocket a kernel runs over is part of the same app. A
+narrower path would publish a notebook server that cannot open a kernel.
+
+Without `ingressClassName` the object is created, the cloud registers the
+hostname and writes its DNS, and nothing serves it: the controller only picks up
+what names it. Marketplace trap 1.
+*/ -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "rapids-singlecell-notebook.fullname" . }}
+  labels:
+    {{- include "rapids-singlecell-notebook.labels" . | nindent 4 }}
+  annotations:
+    {{- /*
+    The hostname is the one field that differs between two deployments of this
+    version, so excluding it is what makes the evidence digest a property of the
+    version rather than of the deployment. Declared here *and* in the listing's
+    `evidence.exclude`, because the listing page shows only what the definition
+    declares — a digest displayed beside "no exclusions" answers the only
+    question that matters about it wrongly.
+
+    With TLS on, the same hostname appears a second time under
+    `/spec/tls/0/hosts/0`, and one unexcluded copy is enough to make the digest a
+    property of the deployment again.
+    */}}
+    swarm.io/exclude-evidence-fields: {{ if .Values.ingress.tls.enabled }}"/spec/rules/0/host,/spec/tls/0/hosts/0"{{ else }}"/spec/rules/0/host"{{ end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.hostname | quote }}
+      secretName: {{ .Values.ingress.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.hostname | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.path | quote }}
+            pathType: {{ .Values.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "rapids-singlecell-notebook.fullname" . }}
+                port:
+                  number: {{ .Values.service.port }}
+{{- end }}

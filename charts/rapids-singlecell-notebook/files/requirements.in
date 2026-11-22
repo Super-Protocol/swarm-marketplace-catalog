@@ -1,0 +1,20 @@
+# What this environment adds to the RAPIDS notebooks image, as direct
+# requirements. `requirements.lock` beside this file is the resolved closure of
+# these ten lines with a sha256 for every wheel, and the lock is what the
+# container installs — this file exists so a reader can see what was asked for
+# and regenerate the lock (charts/rapids-singlecell-notebook/README.md).
+#
+# Versions follow the blueprint's own requirements.txt wherever it pins one, so
+# the environment a tenant gets is the environment the notebooks were written
+# against. clickhouse-connect is ours: it is how the gated path reads a dataset
+# the gatekeeper serves.
+rapids-singlecell==0.14.1
+scanpy==1.12
+anndata==0.12.10
+decoupler==2.1.4
+h5py==3.15.1
+scikit-misc==0.5.2
+umap-learn==0.5.11
+s3fs==2026.2.0
+adjustText==1.3.0
+clickhouse-connect==1.13.0
