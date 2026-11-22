@@ -229,6 +229,12 @@ model:
             size: 1173
             sha256: 7e4c1cc848840aeccdd763458c18dd525eb0f795c992e00ebe9c28554e7db2d4
 
+# The thread pools the server starts, which it otherwise sizes from the HOST's core count —
+# see `tes.threads`. Empty derives it from the CPU limit in whole cores, rounded up. Set it
+# only to hold a server below its limit on purpose; raising it above the limit is the
+# oversubscription the derivation exists to remove.
+threads: ""
+
 # Referenced by digest, not by tag. `cpu-1.8` is a release tag the publisher could rebuild, and
 # a rebuilt tag replaces the software while leaving the manifests — and so the digest the
 # deployment attests to — unchanged. The tag stays beside it so a human can see which release

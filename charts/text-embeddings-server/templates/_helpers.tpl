@@ -81,26 +81,30 @@ than work. Measured on 2026-11-22 with twelve 215-token passages through BGE Rer
 unpinned in the cluster — past the retriever's rerank timeout, which silently dropped the scores
 and served citations reading 0.0.
 
-Pinned to the whole cores the limit really grants, never zero: a fractional limit gets one
-thread, which is slow and correct rather than fast and throttled.
+Rounded UP from the limit and never zero, and millicores are divided rather than stripped —
+`500m` read as 500 threads is the oversubscription this value exists to remove. Same arithmetic
+and the same override as `swarm-doc-ingest.ompNumThreads`, which SUP-882 landed for the same
+reason in the ingestion chart beside this one; a reader comparing the two charts should find one
+convention, not two.
 */}}
 {{- define "tes.threads" -}}
+{{- if .Values.threads -}}
+{{- .Values.threads -}}
+{{- else -}}
 {{- $p := include "tes.preset" . | fromJson -}}
 {{- $cpu := $p.sizing.resources.cpu -}}
 {{- if and .Values.resources .Values.resources.limits .Values.resources.limits.cpu -}}
 {{- $cpu = .Values.resources.limits.cpu -}}
 {{- end -}}
 {{- $cpu = toString $cpu -}}
-{{- $cores := 0 -}}
+{{- $cores := 0.0 -}}
 {{- if hasSuffix "m" $cpu -}}
-{{- $cores = div (trimSuffix "m" $cpu | int) 1000 -}}
+{{- $cores = divf (float64 (trimSuffix "m" $cpu)) 1000.0 -}}
 {{- else -}}
-{{- $cores = $cpu | int -}}
+{{- $cores = float64 $cpu -}}
 {{- end -}}
-{{- if lt $cores 1 -}}
-{{- $cores = 1 -}}
+{{- max (ceil $cores) 1 -}}
 {{- end -}}
-{{- $cores -}}
 {{- end -}}
 
 {{/*
