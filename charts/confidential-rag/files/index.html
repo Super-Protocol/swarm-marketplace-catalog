@@ -121,7 +121,7 @@ function corpusPane(c) {
   if (!c || c.error) {
     return `<div class="err">${esc((c && c.error) || "no corpus service")}</div>`;
   }
-  const verdictPill = { admitted: "ok", refused: "bad", pending: "wait" }[c.verdict] || "wait";
+  const verdictPill = { admitted: "ok", refused: "bad", stalled: "bad", pending: "wait" }[c.verdict] || "wait";
   let html = row("Last read", `<span class="pill ${verdictPill}">${esc(c.verdict || "pending")}</span>`);
   if (c.message) html += row("", `<span class="lic">${esc(c.message)}</span>`);
   html += row("Indexed chunks", esc(c.chunks ?? "—"));

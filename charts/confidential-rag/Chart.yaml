@@ -22,7 +22,14 @@ type: application
 # 0.1.4 halves the indexer's embedding batch twice over, 16 chunks to 4: a batch that holds
 # the embedder's two cores for half a minute is a batch its health endpoint cannot answer
 # during, and the same total work in smaller pieces leaves it answerable.
-version: 0.1.4
+# 0.1.5 bounds the indexer. `add_documents` embeds and inserts, either half can hang — the
+# embedding client on a saturated endpoint, the insert on a flush — and both held the loop with
+# `/status` frozen at the attempt that started it, which is the one state an operator cannot act
+# on. Observed on the cloud as twelve minutes inside one rebuild with the embedder idle and
+# nothing published. Each batch now runs under a timeout, progress is published per batch, and a
+# stall is its own verdict rather than a refusal: the source served the documents, the index did
+# not take them, and those want different people looking.
+version: 0.1.5
 # The upstream release this is a port of. The image is built from
 # Super-Protocol/confidential-rag at branch confidential/2.6.2 — see MODIFICATIONS.md there for
 # what differs, which is the open embedding, reranking and generation engines and nothing about

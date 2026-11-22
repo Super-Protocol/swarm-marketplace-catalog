@@ -71,6 +71,13 @@ POLL_SECONDS = int(os.environ.get("CORPUS_POLL_SECONDS", 60))
 BATCH = int(os.environ.get("CORPUS_EMBED_BATCH", 16))
 STATUS_PORT = int(os.environ.get("CORPUS_STATUS_PORT", 8085))
 HTTP_TIMEOUT = float(os.environ.get("CORPUS_HTTP_TIMEOUT", 60))
+# How long one batch of chunks may take to embed and write before this gives up on it and
+# reports a stall. Not a performance knob: it is the difference between a slow reindex and a
+# loop that is wedged, and without it there is no way to tell them apart from outside.
+BATCH_TIMEOUT = float(os.environ.get("CORPUS_BATCH_TIMEOUT", 300))
+# Passed to the embedding client. The OpenAI client defaults to ten minutes with two retries,
+# so one unanswered call can hold this loop for half an hour with nothing to show for it.
+EMBED_TIMEOUT = float(os.environ.get("CORPUS_EMBED_TIMEOUT", 120))
 
 # Everything `/status` reports, replaced wholesale under the lock after each attempt.
 STATE: dict[str, Any] = {
@@ -258,6 +265,14 @@ def vector_store():
         url=config.embeddings.server_url,
         config=config,
     )
+    # The retriever's own factory does not take a timeout, and its default is the OpenAI
+    # client's: ten minutes, twice. Set it here rather than forking the factory — a longer
+    # wait than this is not patience, it is a loop nobody can see into.
+    for attribute, value in (("request_timeout", EMBED_TIMEOUT), ("max_retries", 1)):
+        try:
+            setattr(embedder, attribute, value)
+        except Exception:  # noqa: BLE001 — an older client may not carry the field
+            logger.warning("could not set %s on the embedding client", attribute)
     vdb = MilvusVDB(
         collection_name=COLLECTION,
         milvus_uri=config.vector_store.url,
@@ -296,6 +311,34 @@ def index(rows: list[dict[str, Any]], binding: dict[str, Any]) -> int:
         # re-creates the collection from the first batch.
         vdb, store = vector_store()
 
+    def write(batch: list[Document]) -> None:
+        """One batch, in a thread, so a wedged client is a reported stall and not a silence.
+
+        `add_documents` embeds and inserts. Either half can hang — the embedding client on a
+        saturated endpoint, the insert on a flush — and both held this loop with `/status`
+        frozen at the attempt that started it, which is the one state an operator cannot
+        act on. Observed on the gpu-blueprints cloud: twelve minutes inside one rebuild with
+        the embedder idle and nothing published.
+        """
+        error: list[BaseException] = []
+
+        def run() -> None:
+            try:
+                store.add_documents(batch)
+            except BaseException as problem:  # noqa: BLE001 — re-raised on the caller's thread
+                error.append(problem)
+
+        worker = threading.Thread(target=run, name="embed-batch", daemon=True)
+        worker.start()
+        worker.join(BATCH_TIMEOUT)
+        if worker.is_alive():
+            raise TimeoutError(
+                f"a batch of {len(batch)} chunks did not finish embedding and writing within "
+                f"{BATCH_TIMEOUT:.0f}s — the endpoint is saturated or the index is not accepting"
+            )
+        if error:
+            raise error[0]
+
     pending: list[Document] = []
     written = 0
     for row in rows:
@@ -323,11 +366,15 @@ def index(rows: list[dict[str, Any]], binding: dict[str, Any]) -> int:
                 )
             )
         if len(pending) >= BATCH:
-            store.add_documents(pending)
+            write(pending)
             written += len(pending)
             pending = []
+            # Published per batch, not at the end. A rebuild of a real corpus takes minutes,
+            # and a status that only moves when it finishes is a status that says nothing
+            # while the only interesting thing is happening.
+            publish(chunks=written, message=f"indexing: {written} chunks written")
     if pending:
-        store.add_documents(pending)
+        write(pending)
         written += len(pending)
     return written
 
@@ -413,6 +460,13 @@ def loop() -> None:
         try:
             rows = documents(binding)
             written = index(rows, binding)
+        except TimeoutError as error:
+            # Said apart from a refusal: the source served the documents and the index did not
+            # take them. An operator reading this needs to look at the embedder, not the gate.
+            logger.warning("indexing stalled: %s", error)
+            publish(verdict="stalled", message=str(error)[:400])
+            time.sleep(POLL_SECONDS)
+            continue
         except Exception as error:  # noqa: BLE001
             logger.exception("indexing failed")
             publish(verdict="refused" if "clickhouse" in str(error).lower() else "pending",
