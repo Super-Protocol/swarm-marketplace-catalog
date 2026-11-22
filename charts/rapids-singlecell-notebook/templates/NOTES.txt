@@ -1,0 +1,13 @@
+{{ .Chart.Name }} {{ .Chart.Version }} — RAPIDS {{ .Chart.AppVersion }}
+
+{{ if .Values.ingress.enabled -}}
+JupyterLab:  http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.hostname }}/lab
+Sign in with the token this deployment generated — it is in the deployment's
+secret outputs, and it is the only credential the server accepts.
+{{- else -}}
+No ingress. The notebook is reachable inside the namespace only:
+  http://{{ include "rapids-singlecell-notebook.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
+{{- end }}
+
+The GPU: {{ if .Values.gpu.enabled }}{{ .Values.gpu.count }} device, runtimeClass {{ .Values.gpu.runtimeClassName }}{{ else }}none — RAPIDS-singlecell will import and then fail on the first GPU call{{ end }}.
+Data:      {{ if .Values.data.bindingJson }}a dataset is bound; 00_dataset.ipynb names it{{ else }}nothing bound — upload an .h5ad into /workspace/data{{ end }}.

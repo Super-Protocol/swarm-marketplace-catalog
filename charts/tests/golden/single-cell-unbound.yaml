@@ -1,0 +1,3287 @@
+---
+# Source: rapids-singlecell-notebook/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rapids-singlecell-notebook
+  labels:
+    helm.sh/chart: rapids-singlecell-notebook-0.1.0
+    app.kubernetes.io/name: rapids-singlecell-notebook
+    app.kubernetes.io/instance: sc
+    app.kubernetes.io/version: "26.02"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: notebook
+type: Opaque
+stringData:
+  token: "Vd81kQ2mRt6pYs0ZaBn4LcXwEjHu9Gf3"
+  binding.json: "[]"
+---
+# Source: rapids-singlecell-notebook/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rapids-singlecell-notebook
+  labels:
+    helm.sh/chart: rapids-singlecell-notebook-0.1.0
+    app.kubernetes.io/name: rapids-singlecell-notebook
+    app.kubernetes.io/instance: sc
+    app.kubernetes.io/version: "26.02"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: notebook
+data:
+  bootstrap.sh: |
+    #!/usr/bin/env bash
+    #
+    # What runs instead of the image's own command, which starts JupyterLab with
+    # `--NotebookApp.token=''` — unauthenticated, correct for a laptop and wrong for
+    # a public hostname with a GPU behind it.
+    #
+    # Three steps, in this order and for these reasons:
+    #
+    #   1. install the attested environment. The lock names every wheel by sha256
+    #      and pip refuses anything else, so what the notebooks import is what the
+    #      deployment's evidence says it is. ~30 s on a warm link.
+    #   2. seed the workspace. The notebooks and `sc_workspace.py` are copied into
+    #      the volume only when they are not already there: the tenant edits these
+    #      files, and a restart that overwrote their work would be a data loss. The
+    #      pristine copies stay readable under /opt/sc for comparison.
+    #   3. exec JupyterLab. `exec`, so the server is PID 1's child and a SIGTERM
+    #      reaches it rather than this script.
+    set -euo pipefail
+  
+    echo "[bootstrap] installing the attested environment"
+    # --no-cache-dir: the cache would be written into the image layer and thrown
+    # away with the pod anyway, and a 1 GiB wheel cache is a GiB of the container's
+    # memory limit spent on page cache.
+    pip install --no-cache-dir --require-hashes --disable-pip-version-check \
+      -r /opt/sc/requirements.lock
+  
+    echo "[bootstrap] seeding /workspace"
+    mkdir -p /workspace/notebooks /workspace/data /workspace/derived
+    # `cp -n`: never clobber. Only files the tenant does not have yet are added, so
+    # a new notebook in a chart version arrives without taking anybody's edits with
+    # it.
+    cp -n /opt/sc-notebooks/*.ipynb /workspace/notebooks/ 2>/dev/null || true
+    cp -n /opt/sc-notebooks/*.md    /workspace/notebooks/ 2>/dev/null || true
+    cp -n /opt/sc-notebooks/LICENSE /workspace/notebooks/ 2>/dev/null || true
+    # `sc_workspace.py` is deliberately NOT copied. It is imported from /opt/sc,
+    # which the chart mounts and PYTHONPATH names first, so a fix to the loader
+    # reaches an existing deployment when the pod rolls. Copied here under `cp -n`
+    # it never would: the volume's stale copy would shadow the chart's for the life
+    # of the deployment, while this script's own log line read the fresh one.
+  
+    # What this deployment is bound to, in the log, where somebody debugging a
+    # deployment will look first. Deliberately NOT fatal: a workspace whose loader
+    # cannot read its binding is still a usable JupyterLab a tenant can fix from
+    # inside, and `set -e` turning this line into a CrashLoopBackOff is exactly what
+    # it did on the first real deployment of this chart (2026-11-22).
+    python3 - <<'PY' || echo "[bootstrap] could not read the dataset binding; the workspace starts anyway"
+    import sys
+    sys.path.insert(0, "/opt/sc")
+    import sc_workspace as scw
+    print("[bootstrap]", scw.describe_binding())
+    PY
+  
+    echo "[bootstrap] starting JupyterLab"
+    # No hostname and no token on this command line, deliberately. The token comes
+    # from the environment (`JUPYTER_TOKEN`, which jupyter_server reads by itself)
+    # and the hostname is not needed at all: with `ip` not a loopback address
+    # jupyter_server allows remote access, and its websocket origin check compares
+    # the browser's Origin against the Host the ingress passes through — both are
+    # the public name, so same-origin holds without naming it.
+    #
+    # Anything that named the hostname here would be a hostname in an attested
+    # object, and the evidence digest would stop being a property of the version.
+    exec jupyter lab \
+      --ServerApp.ip=0.0.0.0 \
+      --ServerApp.port=8888 \
+      --ServerApp.open_browser=False \
+      --ServerApp.root_dir=/workspace \
+      --ServerApp.default_url=/lab/tree/notebooks \
+      --ServerApp.trust_xheaders=True \
+      --ServerApp.terminado_settings="{'shell_command': ['/bin/bash']}"
+  requirements.in: |
+    # What this environment adds to the RAPIDS notebooks image, as direct
+    # requirements. `requirements.lock` beside this file is the resolved closure of
+    # these ten lines with a sha256 for every wheel, and the lock is what the
+    # container installs — this file exists so a reader can see what was asked for
+    # and regenerate the lock (charts/rapids-singlecell-notebook/README.md).
+    #
+    # Versions follow the blueprint's own requirements.txt wherever it pins one, so
+    # the environment a tenant gets is the environment the notebooks were written
+    # against. clickhouse-connect is ours: it is how the gated path reads a dataset
+    # the gatekeeper serves.
+    rapids-singlecell==0.14.1
+    scanpy==1.12
+    anndata==0.12.10
+    decoupler==2.1.4
+    h5py==3.15.1
+    scikit-misc==0.5.2
+    umap-learn==0.5.11
+    s3fs==2026.2.0
+    adjustText==1.3.0
+    clickhouse-connect==1.13.0
+  requirements.lock: |
+    # The Python environment this deployment runs, pinned wheel by wheel.
+    #
+    # Rendered into a ConfigMap, so it is part of what the cloud digests and signs:
+    # every package the notebooks import is named, by sha256, inside the
+    # deployment's published evidence, and pip refuses to install a byte the lock
+    # did not name (`--require-hashes`). Without this the environment would be
+    # whatever PyPI served at boot — an unattested install behind an attested
+    # manifest, which is the one failure the evidence exists to make impossible.
+    #
+    # It is the closure of `requirements.in` resolved INSIDE the notebook image
+    # against the conda packages already there, which is why numpy, pandas, scipy,
+    # scikit-learn, numba and cupy are absent: the image provides them, and a second
+    # copy here would shadow the CUDA builds the RAPIDS libraries are linked against.
+    #
+    # Regenerate (README.md has the rationale):
+    #   docker run --rm --user root -v "$PWD/files:/w" \
+    #     --entrypoint bash rapidsai/notebooks:26.02-cuda13-py3.12 -lc \
+    #     'pip list --format=freeze | grep -v "@ file" > /w/image-constraints.txt
+    #      pip install --dry-run --report /w/report.json \
+    #        -c /w/image-constraints.txt -r /w/requirements.in'
+    # and turn report.json into this file with name==version + the archive sha256.
+    adjusttext==1.3.0 \
+        --hash=sha256:bc6c118cd9d7caf6ae37f9355e51d840a2d7f64b4fb2956b8401de27c5af803b
+    aiobotocore==3.8.0 \
+        --hash=sha256:8bc605132cadfe844a3f334635a0a64fa5e360a4a206e915d99d53db5b6deeba
+    aioitertools==0.13.0 \
+        --hash=sha256:0be0292b856f08dfac90e31f4739432f4cb6d7520ab9eb73e143f4f2fa5259be
+    anndata==0.12.10 \
+        --hash=sha256:e3d940d8e34373dc250f998c1011c1da52721f980de9d83a0599daa2baa286e5
+    array-api-compat==1.16.0 \
+        --hash=sha256:0464934d7d5f1e9b728b2e248da52400630b1fcb46b70073eab3c7ae084290aa
+    botocore==1.43.46 \
+        --hash=sha256:cb673891e623ae6e6a1bf24d94ef169504f3eb02584adb5d5bee2f6aae819b60
+    clickhouse-connect==1.13.0 \
+        --hash=sha256:938a78962e3714f3a9667dbb03104e14e6b02821f0ed8836f85104abcf0ef5df
+    decoupler==2.1.4 \
+        --hash=sha256:69da76f0c44f29124407f4edecf74dc542adcea5c49bd72a5e1ef82638b41397
+    docrep==0.3.2 \
+        --hash=sha256:ed8a17e201abd829ef8da78a0b6f4d51fb99a4cbd0554adbed3309297f964314
+    donfig==0.8.1.post1 \
+        --hash=sha256:2a3175ce74a06109ff9307d90a230f81215cbac9a751f4d1c6194644b8204f9d
+    fast-array-utils==1.5.1 \
+        --hash=sha256:0ce2246f99a4f0755fbd978886be1b4206ccb2c2ad61518f74ebf1b9156856aa
+    google-crc32c==1.9.0 \
+        --hash=sha256:3abb18297d9ef0ab120531838be0e6d68c9fa876570e11c229c48f2edac23ce7
+    h5py==3.15.1 \
+        --hash=sha256:25c8843fec43b2cc368aa15afa1cdf83fc5e17b1c4e10cd3771ef6c39b72e5ce
+    jmespath==1.1.0 \
+        --hash=sha256:a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64
+    legacy-api-wrap==1.5 \
+        --hash=sha256:5a8ea50e3e3bcbcdec3447b77034fd0d32cb2cf4089db799238708e4d7e0098d
+    legendkit==0.5.2 \
+        --hash=sha256:b3c547a1b84256e26d054740eac2fdafe128a1c8dd6bbbf363dbe3c2c2ba2f89
+    marsilea==0.8.1 \
+        --hash=sha256:5a941b5d5fd293af664b7807f399b6b72db7a6fcd40eea315aadd6f6b5753a91
+    msgspec==0.22.0 \
+        --hash=sha256:99c401861c5bb3a57f7d6423ea7ed4352cd57aa3f04f4fbe9f3e3e4564a10f08
+    natsort==8.4.0 \
+        --hash=sha256:4732914fb471f56b5cce04d7bae6f164a592c7712e1c85f9ef585e197299521c
+    numcodecs==0.17.1 \
+        --hash=sha256:8e3c08f6f4074eb92b3312efbf293afbbae5697d6b9d009435671a3a18e22ba5
+    pynndescent==0.7.0 \
+        --hash=sha256:05592399f5fbf07d77590f532ed2a2e3b035ec066813eb5a097632b9ffb9e938
+    rapids-singlecell==0.14.1 \
+        --hash=sha256:c47114cee6ed9e456ecfe0c40e25fbd945af3b7e2271df3af5272e430be1e9a7
+    s3fs==2026.2.0 \
+        --hash=sha256:65198835b86b1d5771112b0085d1da52a6ede36508b1aaa6cae2aedc765dfe10
+    scanpy==1.12 \
+        --hash=sha256:0b89827f9ba9fea8fce5a49b311e9ce34a23f922b7d8506fa845a2dc92ef0bfe
+    scikit-misc==0.5.2 \
+        --hash=sha256:cd5a6e06864b07e9fe18c2bac756163e87f26615e5ddaa5f6129fd62535b7cfb
+    session-info2==0.4.2 \
+        --hash=sha256:dbf5f58769115651fad28e8ffc930b6a848a629a242ce2ecd730d12f5e3e9315
+    umap-learn==0.5.11 \
+        --hash=sha256:cb17adbde9d544ba79481b3ab4d81ac222e940f3d9219307bea6044f869af3cc
+    wrapt==2.5.2 \
+        --hash=sha256:092472b7b1494deef40dac5e9f6295013a9d51b112b5fbc4350f64dc2574e46a
+    zarr==3.4.2 \
+        --hash=sha256:a21530a931ac3123b4a4aa17146d11eb9ace227733650d5efbebbbfe38053428
+  sc_workspace.py: |
+    """The workspace's own module: where the data is, and what the columns are called.
+  
+    The blueprint's notebooks each begin by downloading a public example corpus from
+    `exampledata.scverse.org` and end by writing the result next to it. Neither is
+    what this listing is for: the data is the tenant's, it arrives through a
+    marketplace dataset slot, and the point of the deployment is that it never
+    leaves. This module is the whole of that difference — the ported notebooks call
+    `load_matrix()` where the original called `wget`, and nothing else about them
+    changes.
+  
+    Three sources, in the order `load_matrix` tries them:
+  
+    1. a dataset bound into the listing's `matrices` slot and served through the
+       gatekeeper or directly (`/etc/sc/binding.json`, from a Secret, so the
+       credentials in it are never part of the deployment's attested manifests);
+    2. an `.h5ad` file under /workspace/data, which is where a browser upload lands;
+    3. nothing, and then a message saying so rather than a NameError forty cells
+       later.
+  
+    `BATCH_KEY` and `LABEL_KEY` exist for the same reason. The upstream notebooks
+    name `assay` and `cell_type`, which are columns of the corpus they download; a
+    tenant's matrix carries its own, and a notebook that hard-coded them would fail
+    in the middle of a Harmony call. They are deployment parameters, resolved here,
+    and checked against what the matrix actually has.
+    """
+  
+    from __future__ import annotations
+  
+    import io
+    import json
+    import os
+    import pathlib
+  
+    BINDING_PATH = pathlib.Path(os.environ.get('SC_BINDING_FILE', '/etc/sc/binding.json'))
+    DATA_DIR = pathlib.Path(os.environ.get('SC_DATA_DIR', '/workspace/data'))
+    DERIVED_DIR = pathlib.Path(os.environ.get('SC_DERIVED_DIR', '/workspace/derived'))
+  
+    #: The `obs` column the ported notebooks treat as the batch, for QC plots and
+    #: for Harmony. Set by the deployment; `batch` by convention.
+    BATCH_KEY = os.environ.get('SC_BATCH_KEY', 'batch')
+  
+    #: The `obs` column carrying a cell-type annotation, where the matrix has one.
+    #: The notebooks compare their own clustering against it.
+    LABEL_KEY = os.environ.get('SC_LABEL_KEY', 'cell_type')
+  
+  
+    # ---------------------------------------------------------------------------
+    # The binding
+    # ---------------------------------------------------------------------------
+  
+    def binding():
+        """Whatever the marketplace wrote into the Secret, parsed, or None.
+  
+        The shape is not ours to choose. `{{ data.matrices | json }}` renders the
+        bound datasets as a JSON **array** — one object per dataset, which is also
+        how the Conversational Analyst listing consumes it — and an empty slot
+        renders as `[]`. It is read defensively anyway: an object carrying a
+        `datasets` key is the other plausible shape (the platform's own `SlotBinding`
+        type has one), and a workspace that crashed on the wrong guess is a
+        deployment that CrashLoopBackOffs with the environment already installed.
+        Verified against a real deployment on 2026-11-22, which is how the array
+        shape is known rather than assumed.
+        """
+        if not BINDING_PATH.exists():
+            return None
+        text = BINDING_PATH.read_text().strip()
+        if not text:
+            return None
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return None
+  
+  
+    def datasets() -> list[dict]:
+        """One entry per dataset the operator bound, in the order they chose."""
+        parsed = binding()
+        if isinstance(parsed, list):
+            entries = parsed
+        elif isinstance(parsed, dict):
+            entries = parsed.get('datasets') or []
+        else:
+            entries = []
+        return [entry for entry in entries if isinstance(entry, dict)]
+  
+  
+    def describe_binding() -> str:
+        """One line, for the bootstrap log and the first cell of 00_dataset."""
+        bound = datasets()
+        if not bound:
+            local = sorted(p.name for p in DATA_DIR.glob('*.h5ad')) if DATA_DIR.exists() else []
+            if local:
+                return f'no dataset bound; {len(local)} .h5ad file(s) in {DATA_DIR}: {", ".join(local)}'
+            return f'no dataset bound and no .h5ad file in {DATA_DIR}'
+        return 'bound: ' + '; '.join(
+            f'{entry.get("dataset")} ({entry.get("interface")})' for entry in bound
+        )
+  
+  
+    def derived(name: str) -> str:
+        """A path under /workspace/derived — where a notebook writes what the next one reads."""
+        DERIVED_DIR.mkdir(parents=True, exist_ok=True)
+        return str(DERIVED_DIR / name)
+  
+  
+    # ---------------------------------------------------------------------------
+    # Reading a matrix
+    # ---------------------------------------------------------------------------
+  
+    def load_matrix(index: int = 0, path: str | None = None):
+        """The AnnData the notebooks work on.
+  
+        `path` reads a file and ignores the binding — useful for a notebook picking
+        up what an earlier one wrote. Otherwise the dataset at `index` of the slot is
+        read, and with no binding the newest `.h5ad` under /workspace/data.
+        """
+        import anndata as ad
+  
+        if path is not None:
+            return ad.read_h5ad(path)
+  
+        bound = datasets()
+        if bound:
+            entry = bound[index]
+            name = str(entry.get('interface') or '')
+            if name.startswith('s3-h5ad/'):
+                return _read_h5ad_from_s3(entry)
+            if name.startswith('clickhouse-http/'):
+                return _read_matrix_from_clickhouse(entry)
+            raise RuntimeError(
+                f'{entry.get("dataset")} is bound over {name!r}, which this workspace cannot read. '
+                'The listing accepts s3-h5ad/v1 and clickhouse-http/v1.'
+            )
+  
+        local = sorted(DATA_DIR.glob('*.h5ad'), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not local:
+            raise RuntimeError(
+                f'No dataset is bound to this deployment and {DATA_DIR} holds no .h5ad file. '
+                'Attach a dataset to the "Single-cell matrices" slot, or upload a file into '
+                f'{DATA_DIR} with the file browser on the left.'
+            )
+        return ad.read_h5ad(local[0])
+  
+  
+    def _read_h5ad_from_s3(entry: dict):
+        """An `.h5ad` object read straight out of the bucket the dataset owner named."""
+        import anndata as ad
+        import s3fs
+  
+        connection = entry.get('connection') or {}
+        fs = s3fs.S3FileSystem(
+            key=connection.get('accessKeyId'),
+            secret=connection.get('secretAccessKey'),
+            client_kwargs={
+                'endpoint_url': connection.get('endpoint'),
+                'region_name': connection.get('region') or 'us-east-1',
+            },
+            config_kwargs={'s3': {'addressing_style': 'path' if connection.get('pathStyle', True) else 'virtual'}},
+        )
+  
+        bucket = connection['bucket']
+        prefix = (connection.get('prefix') or '').strip('/')
+        # `objects` is a comma-separated string, not a list: a connection property is a
+        # scalar — the interface schema allows string, integer, number and boolean.
+        objects = [name.strip() for name in str(connection.get('objects') or '').split(',') if name.strip()]
+        if objects:
+            keys = [f'{bucket}/{prefix}/{name}'.replace('//', '/') for name in objects]
+        else:
+            root = f'{bucket}/{prefix}' if prefix else bucket
+            keys = sorted(key for key in fs.find(root) if key.endswith('.h5ad'))
+        if not keys:
+            raise RuntimeError(f'{entry.get("dataset")}: no .h5ad object under s3://{bucket}/{prefix}')
+        if len(keys) > 1:
+            # Reading the first of several and calling it the dataset is how an
+            # analysis quietly runs on one shard. Which object, or which order, is
+            # the dataset owner's to say.
+            names = ', '.join(key.rsplit('/', 1)[-1] for key in keys)
+            raise RuntimeError(
+                f'{entry.get("dataset")} resolves to {len(keys)} .h5ad objects ({names}). '
+                "Name the one to read in the dataset's `objects` connection property, or pass "
+                'load_matrix(path=...) for a specific file.'
+            )
+  
+        # read_h5ad wants a file it can seek in, and h5py will not read a stream.
+        # One object into memory: these are the matrices the card is sized for, and
+        # the pod has host RAM for one of them.
+        with fs.open(keys[0], 'rb') as handle:
+            return ad.read_h5ad(io.BytesIO(handle.read()))
+  
+  
+    def _read_matrix_from_clickhouse(entry: dict, counts: str = 'sc_counts',
+                                     cells: str = 'sc_cells', genes: str = 'sc_genes'):
+        """A long-form count matrix assembled into AnnData.
+  
+        The gated path. The connection the deployment holds has no credentials in it
+        — it points at a plain listener inside this namespace, which re-originates
+        every request to the gatekeeper over mutual TLS with this deployment's own
+        certificate. The gate then decides, per request, against the evidence this
+        deployment published. Nothing here needs to know that; it is an ordinary
+        ClickHouse connection that stops working if the deployment changes.
+        """
+        import anndata as ad
+        import clickhouse_connect
+        import numpy as np
+        import pandas as pd
+        from scipy import sparse
+  
+        connection = entry.get('connection') or {}
+        client = clickhouse_connect.get_client(
+            host=connection.get('host'),
+            port=int(connection.get('port') or 8123),
+            database=connection.get('database'),
+            username=connection.get('username') or 'default',
+            password=connection.get('password') or '',
+            secure=bool(connection.get('tls')),
+        )
+  
+        obs = client.query_df(f'SELECT * FROM {cells} ORDER BY cell_id')
+        if obs.empty:
+            raise RuntimeError(f'{entry.get("dataset")}: {cells} is empty')
+        obs = obs.set_index('cell_id')
+  
+        try:
+            var = client.query_df(f'SELECT * FROM {genes} ORDER BY gene').set_index('gene')
+        except Exception:  # noqa: BLE001 — the table is optional, and its absence is not an error
+            var = None
+  
+        long = client.query_df(f'SELECT cell_id, gene, count FROM {counts}')
+        cell_index = {key: position for position, key in enumerate(obs.index)}
+        gene_names = sorted(long['gene'].unique()) if var is None else list(var.index)
+        gene_index = {key: position for position, key in enumerate(gene_names)}
+  
+        rows = long['cell_id'].map(cell_index).to_numpy()
+        columns = long['gene'].map(gene_index).to_numpy()
+        keep = ~(pd.isna(rows) | pd.isna(columns))
+        matrix = sparse.csr_matrix(
+            (long['count'].to_numpy()[keep], (rows[keep].astype(np.int64), columns[keep].astype(np.int64))),
+            shape=(len(obs), len(gene_names)),
+            dtype=np.float32,
+        )
+  
+        adata = ad.AnnData(X=matrix, obs=obs)
+        adata.var_names = pd.Index(gene_names)
+        if var is not None:
+            adata.var = var.reindex(adata.var_names)
+        return adata
+  
+  
+    # ---------------------------------------------------------------------------
+    # Column names
+    # ---------------------------------------------------------------------------
+  
+    def batch_key(adata, required: bool = True) -> str | None:
+        """`BATCH_KEY` if the matrix has it, with a message naming what it does have."""
+        return _key(adata, BATCH_KEY, 'batch', required)
+  
+  
+    def label_key(adata, required: bool = False) -> str | None:
+        """`LABEL_KEY` if the matrix has it — annotation is genuinely optional."""
+        return _key(adata, LABEL_KEY, 'cell-type annotation', required)
+  
+  
+    def _key(adata, name: str, role: str, required: bool) -> str | None:
+        if name in adata.obs:
+            return name
+        if not required:
+            return None
+        available = ', '.join(map(str, adata.obs.columns)) or '(none)'
+        raise KeyError(
+            f'This deployment names {name!r} as its {role} column and the matrix has no such '
+            f'column. Columns present: {available}. Reconfigure the deployment with one of those, '
+            'or set sc_workspace.BATCH_KEY / LABEL_KEY in this notebook to override it here.'
+        )
+---
+# Source: rapids-singlecell-notebook/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rapids-singlecell-notebook-notebooks
+  labels:
+    helm.sh/chart: rapids-singlecell-notebook-0.1.0
+    app.kubernetes.io/name: rapids-singlecell-notebook
+    app.kubernetes.io/instance: sc
+    app.kubernetes.io/version: "26.02"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: notebook
+data:
+  00_dataset.ipynb: |
+    {
+     "cells": [
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "# Start here — what this deployment is holding\n",
+        "\n",
+        "Four cells. They say which dataset is bound, what its matrix looks like, whether\n",
+        "the GPU is actually usable from inside this enclave, and which `obs` columns the\n",
+        "ported notebooks will use.\n",
+        "\n",
+        "Run them before anything else: every question that makes\n",
+        "`01_preprocessing.ipynb` fail halfway through is answered here in under a minute.\n"
+       ],
+       "id": "sc000"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "## 1. What is bound\n",
+        "\n",
+        "A deployment of this listing reads its data from one of two places and no\n",
+        "others: a dataset the operator attached to the **Single-cell matrices** slot, or\n",
+        "a file dropped into `/workspace/data` with the file browser on the left. Nothing\n",
+        "in this workspace downloads a corpus from the internet.\n",
+        "\n",
+        "`sc_workspace` is the chart's, not yours: it lives at `/opt/sc/sc_workspace.py`\n",
+        "and is first on `PYTHONPATH`, so a fix to it reaches this deployment when the pod\n",
+        "rolls. Read it there; override `scw.BATCH_KEY` or `scw.LABEL_KEY` in a notebook if\n",
+        "you need to.\n"
+       ],
+       "id": "sc001"
+      },
+      {
+       "cell_type": "code",
+       "metadata": {},
+       "execution_count": null,
+       "outputs": [],
+       "source": [
+        "import sc_workspace as scw\n",
+        "\n",
+        "print(scw.describe_binding())\n",
+        "for entry in scw.datasets():\n",
+        "    print(f\"  {entry.get('dataset')}  {entry.get('interface')}  {entry.get('title') or ''}\")\n"
+       ],
+       "id": "sc002"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "## 2. The matrix\n",
+        "\n",
+        "`load_matrix()` resolves whichever source is present. An `.h5ad` is read as it\n",
+        "is; a ClickHouse dataset served through the gatekeeper is assembled from its\n",
+        "long-form `sc_counts` / `sc_cells` / `sc_genes` tables.\n"
+       ],
+       "id": "sc003"
+      },
+      {
+       "cell_type": "code",
+       "metadata": {},
+       "execution_count": null,
+       "outputs": [],
+       "source": [
+        "adata = scw.load_matrix()\n",
+        "print(adata)\n"
+       ],
+       "id": "sc004"
+      },
+      {
+       "cell_type": "code",
+       "metadata": {},
+       "execution_count": null,
+       "outputs": [],
+       "source": [
+        "# The columns the ported notebooks will group by. `batch_key` raises here, with\n",
+        "# the list of columns the matrix actually has, rather than inside a Harmony call\n",
+        "# forty cells into 01_preprocessing.\n",
+        "print(\"obs columns:\", list(adata.obs.columns))\n",
+        "print(\"batch column:\", scw.batch_key(adata))\n",
+        "print(\"annotation column:\", scw.label_key(adata))\n"
+       ],
+       "id": "sc005"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "## 3. A copy that survives a restart\n",
+        "\n",
+        "`/workspace` is the volume. `/workspace/derived` is where the notebooks hand\n",
+        "files to one another, and it is the only place a result is safe — everything\n",
+        "else in this container is thrown away when the pod moves.\n",
+        "\n",
+        "Nothing written here leaves the deployment. There is no egress path out of this\n",
+        "workspace for the data: what you export, you export yourself, by downloading it\n",
+        "through the browser.\n"
+       ],
+       "id": "sc006"
+      },
+      {
+       "cell_type": "code",
+       "metadata": {},
+       "execution_count": null,
+       "outputs": [],
+       "source": [
+        "# Written here, BEFORE the GPU cell below, on purpose: that cell filters and\n",
+        "# log-normalises `adata` IN PLACE, and a copy saved afterwards would be a\n",
+        "# normalised matrix under a name that says otherwise — resumed from, it would\n",
+        "# be normalised twice and nothing would say so.\n",
+        "path = scw.derived(\"as_loaded.h5ad\")\n",
+        "adata.write(path)\n",
+        "print(\"wrote\", path, \"- the matrix exactly as it arrived\")\n"
+       ],
+       "id": "sc007"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "## 4. The GPU\n",
+        "\n",
+        "This is the cell worth running on a new deployment. RAPIDS-singlecell computes on\n",
+        "the card; if the card is not reachable from inside the enclave, everything below\n",
+        "is a CPU-only notebook server and the listing is not doing its job.\n"
+       ],
+       "id": "sc008"
+      },
+      {
+       "cell_type": "code",
+       "metadata": {},
+       "execution_count": null,
+       "outputs": [],
+       "source": [
+        "import cupy as cp\n",
+        "import rapids_singlecell as rsc\n",
+        "\n",
+        "device = cp.cuda.Device(0)\n",
+        "free, total = device.mem_info\n",
+        "properties = cp.cuda.runtime.getDeviceProperties(0)\n",
+        "print(f\"{properties['name'].decode()}  {total / 2**30:.1f} GiB total, {free / 2**30:.1f} GiB free\")\n",
+        "print(\"rapids_singlecell\", rsc.__version__)\n"
+       ],
+       "id": "sc009"
+      },
+      {
+       "cell_type": "code",
+       "metadata": {},
+       "execution_count": null,
+       "outputs": [],
+       "source": [
+        "# The matrix on the card, and one real computation on it. ~seconds for a few\n",
+        "# hundred thousand cells; if this raises a CUDA error, nothing further will work.\n",
+        "#\n",
+        "# This MUTATES `adata`: filtered, normalised and log1p, in place. The cell above\n",
+        "# already wrote the as-loaded copy, and the analysis notebooks start from their\n",
+        "# own `load_matrix()` rather than from this one, so the mutation stays here.\n",
+        "import time\n",
+        "\n",
+        "start = time.time()\n",
+        "rsc.get.anndata_to_GPU(adata)\n",
+        "rsc.pp.filter_genes(adata, min_cells=3)\n",
+        "rsc.pp.normalize_total(adata, target_sum=1e4)\n",
+        "rsc.pp.log1p(adata)\n",
+        "print(f\"normalised {adata.n_obs} x {adata.n_vars} on the GPU in {time.time() - start:.1f}s\")\n",
+        "rsc.get.anndata_to_CPU(adata)\n"
+       ],
+       "id": "sc010"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "## Where to go next\n",
+        "\n",
+        "| Notebook | What it does |\n",
+        "|---|---|\n",
+        "| `01_preprocessing.ipynb` | the blueprint's end-to-end workflow: QC, filtering, normalisation, PCA, neighbours, UMAP/t-SNE, Louvain and Leiden, Harmony batch correction, marker genes. Writes `derived/preprocessed.h5ad`. |\n",
+        "| `02_regulatory_activity.ipynb` | decoupler on the GPU over what 01 wrote — transcription-factor and pathway activity. |\n",
+        "| `03_pearson_residuals.ipynb` | the same workflow as 01 with Pearson residuals instead of log-normalisation. |\n",
+        "\n",
+        "`PROVENANCE.md` says exactly what was changed in each of them and why.\n"
+       ],
+       "id": "sc011"
+      }
+     ],
+     "metadata": {
+      "kernelspec": {
+       "display_name": "Python 3",
+       "language": "python",
+       "name": "python3"
+      },
+      "language_info": {
+       "name": "python",
+       "version": "3.12.12"
+      }
+     },
+     "nbformat": 4,
+     "nbformat_minor": 5
+    }
+  01_preprocessing.ipynb: |
+    {
+     "cells": [
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "> **Ported for confidential execution.** This is NVIDIA's [Single-Cell Analysis Blueprint](https://github.com/NVIDIA-AI-Blueprints/single-cell-analysis-blueprint) notebook, Apache-2.0, with its download step replaced by `sc_workspace.load_matrix()` and its hard-coded `obs` column names replaced by this deployment's own. Nothing else is changed. `PROVENANCE.md` lists every edit.\n"
+       ],
+       "id": "sc000"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "# GPU Demo Part 1 - Basic GPU E2E Workflow\n",
+        "\n",
+        "**Author:** [Severin Dicks](https://github.com/Intron7)\n",
+        "**Copyright** [scverse](https://scverse.org)\n",
+        "\n",
+        "This notebook is the a demo End-to-End workflow, using RAPIDS-singlecell to accelerate \n",
+        "1. Load and Preprocess the data\n",
+        "1. Preprocess the data by:\n",
+        "    1. QC cells visually to understand the data\n",
+        "    1. Filter unusual cells\n",
+        "    1. Remove unwanted sources of variation\n",
+        "1. Cluster and visualize the data by:\n",
+        "    1. Batch Correction and analysis\n",
+        "    1. Explore the biological information from the data\n",
+        "\n",
+        "We then take our output file to do further decoupling analysis in **[GPU Demo Part 2 - Decoupler-GPU: Accelerated Transcriptional Regulatory Analysis](02_scRNA_analysis_extended.ipynb)**\n",
+        "\n",
+        "**Let's begin!**"
+       ],
+       "id": "sc001"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {
+        "tags": []
+       },
+       "outputs": [],
+       "source": [
+        "import scanpy as sc\n",
+        "import cupy as cp\n",
+        "\n",
+        "import time\n",
+        "import rapids_singlecell as rsc\n",
+        "\n",
+        "import warnings\n",
+        "\n",
+        "warnings.filterwarnings(\"ignore\")"
+       ],
+       "id": "sc002"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "import rmm\n",
+        "from rmm.allocators.cupy import rmm_cupy_allocator\n",
+        "\n",
+        "rmm.reinitialize(\n",
+        "    managed_memory=False,  # Allows oversubscription\n",
+        "    pool_allocator=True,  # default is False\n",
+        "    devices=0,  # GPU device IDs to register. By default registers only GPU 0.\n",
+        ")\n",
+        "cp.cuda.set_allocator(rmm_cupy_allocator)"
+       ],
+       "id": "sc003"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "## Load and Prepare Data"
+       ],
+       "id": "sc004"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "Let's start by creating our dataset."
+       ],
+       "id": "sc005"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {
+        "scrolled": true
+       },
+       "outputs": [],
+       "source": [
+        "# Ported: upstream downloaded a public example corpus from\n",
+        "# exampledata.scverse.org here. This deployment reads the matrix the operator\n",
+        "# bound to it — a marketplace dataset, or a file uploaded into /workspace/data —\n",
+        "# and nothing in this notebook reaches the network.\n",
+        "import sc_workspace as scw\n",
+        "\n",
+        "print(scw.describe_binding())\n",
+        "adata = scw.load_matrix()\n",
+        "\n",
+        "# Which column is the batch, and which carries an annotation. Asked now, with\n",
+        "# the column list in the error, rather than forty cells later inside Harmony.\n",
+        "batch = scw.batch_key(adata)\n",
+        "label = scw.label_key(adata)\n",
+        "print(f\"batch column: {batch!r}; annotation column: {label!r}; {adata.n_obs} cells x {adata.n_vars} genes\")\n",
+        "\n",
+        "# The batch column is required and raised above if it was wrong. The annotation\n",
+        "# is not required by the workflow — but every cell that compares this notebook's\n",
+        "# own clustering against a known cell type needs it, and without it they fail on\n",
+        "# a bare KeyError from scanpy a long way below. Said here instead.\n",
+        "if label is None:\n",
+        "    print(\n",
+        "        f\"\n",
+        "NOTE: no annotation column. This deployment names {scw.LABEL_KEY!r} and the matrix\n",
+        "\"\n",
+        "        f\"      has none of it. Everything up to the clustering runs; the cells that colour or\n",
+        "\"\n",
+        "        f\"      group by the annotation will raise KeyError({scw.LABEL_KEY!r}).\n",
+        "\"\n",
+        "        f\"      Available: {', '.join(map(str, adata.obs.columns))}\n",
+        "\"\n",
+        "        f\"      Fix it by reconfiguring the deployment, or set scw.LABEL_KEY here.\"\n",
+        "    )\n"
+       ],
+       "id": "sc006"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "We load the sparse count matrix from an `h5ad` file using Scanpy. The sparse count matrix will then be placed on the GPU. "
+       ],
+       "id": "sc007"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "data_load_start = time.time()"
+       ],
+       "id": "sc008"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "# Ported: the matrix is already in memory — the cell above read it from the\n",
+        "# dataset this deployment is bound to. Upstream re-read the file it had just\n",
+        "# downloaded.\n",
+        "adata\n"
+       ],
+       "id": "sc009"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {
+        "tags": []
+       },
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.get.anndata_to_GPU(adata)"
+       ],
+       "id": "sc010"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "data_load_time = time.time()\n",
+        "print(\"Total data load and format time: %s\" % (data_load_time - data_load_start))"
+       ],
+       "id": "sc011"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "## Preprocessing"
+       ],
+       "id": "sc012"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "preprocess_start = time.time()"
+       ],
+       "id": "sc013"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "# Ported: guarded. `feature_name` is a column of the corpus upstream downloads;\n",
+        "# a tenant's own matrix is already indexed by gene name more often than not.\n",
+        "if \"feature_name\" in adata.var:\n",
+        "    adata.var_names = adata.var.feature_name.astype(str).to_numpy()\n"
+       ],
+       "id": "sc014"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Quality Control"
+       ],
+       "id": "sc015"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "We calculate quality control (QC) metrics to assess cell and gene quality. These include:  \n",
+        "\n",
+        "- **Per cell metrics**:  \n",
+        "  - Total counts per cell (library size)  \n",
+        "  - Number of detected genes per cell  \n",
+        "  - Percentage of counts from mitochondrial (`MT`) and ribosomal (`RIBO`) genes  \n",
+        "\n",
+        "- **Per gene metrics** (gene space):  \n",
+        "  - Total counts per gene  \n",
+        "  - Number of cells expressing each gene  \n",
+        "\n",
+        "These metrics help identify low-quality or stressed cells and ensure a meaningful feature set for downstream analysis."
+       ],
+       "id": "sc016"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.flag_gene_family(adata, gene_family_name=\"MT\", gene_family_prefix=\"MT\")"
+       ],
+       "id": "sc017"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.flag_gene_family(adata, gene_family_name=\"RIBO\", gene_family_prefix=\"RPS\")"
+       ],
+       "id": "sc018"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.calculate_qc_metrics(adata, qc_vars=[\"MT\", \"RIBO\"])"
+       ],
+       "id": "sc019"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "To visualize the quality control (QC) metrics, we generate the following plots:\n",
+        "\n",
+        "1. **Scatter plot: Total counts vs. Mitochondrial percentage**  \n",
+        "   - This plot shows the relationship between the total UMI counts per cell and the percentage of mitochondrial (`MT`) gene expression.  \n",
+        "   - Cells with high mitochondrial percentages may indicate stressed or dying cells.\n",
+        "\n",
+        "2. **Scatter plot: Total counts vs. Number of detected genes**  \n",
+        "   - This plot displays the correlation between the total UMI counts per cell and the number of detected genes.  \n",
+        "   - A strong correlation is expected, but outliers with low gene counts might indicate empty droplets or dead cells.\n",
+        "\n",
+        "3. **Violin plot: Number of detected genes per cell**  \n",
+        "   - This violin plot visualizes the distribution of the number of detected genes per cell.  \n",
+        "   - It helps identify cells with abnormally low or high gene counts, which could be filtered out.\n",
+        "\n",
+        "4. **Violin plot: Total counts per cell**  \n",
+        "   - This plot shows the distribution of total counts per cell, indicating library size variation.  \n",
+        "   - Extreme values may suggest low-quality or overly dominant cells.\n",
+        "\n",
+        "5. **Violin plot: Percentage of mitochondrial counts per cell**  \n",
+        "   - This plot illustrates the distribution of mitochondrial gene expression across all cells.  \n",
+        "   - High mitochondrial content could be a sign of cell stress or apoptosis.\n",
+        "\n",
+        "These visualizations help assess dataset quality and guide decisions on filtering low-quality cells."
+       ],
+       "id": "sc020"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {
+        "scrolled": true
+       },
+       "outputs": [],
+       "source": [
+        "sc.pl.scatter(adata, x=\"total_counts\", y=\"pct_counts_MT\")\n",
+        "sc.pl.scatter(adata, x=\"total_counts\", y=\"n_genes_by_counts\")"
+       ],
+       "id": "sc021"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "sc.pl.violin(adata, \"n_genes_by_counts\", jitter=0.4, groupby=scw.BATCH_KEY)\n",
+        "sc.pl.violin(adata, \"total_counts\", jitter=0.4, groupby=scw.BATCH_KEY)\n",
+        "sc.pl.violin(adata, \"pct_counts_MT\", jitter=0.4, groupby=scw.BATCH_KEY)"
+       ],
+       "id": "sc022"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Filter"
+       ],
+       "id": "sc023"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "We filter the count matrix to remove cells with an extreme number of genes expressed.\n",
+        "We also filter out cells with a mitchondrial content of more than 20%."
+       ],
+       "id": "sc024"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "adata = adata[adata.obs[\"n_genes_by_counts\"] < 5000]\n",
+        "adata = adata[adata.obs[\"pct_counts_MT\"] < 20]"
+       ],
+       "id": "sc025"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "We also filter out genes that are expressed in less than 3 cells."
+       ],
+       "id": "sc026"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {
+        "scrolled": true
+       },
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.filter_genes(adata, min_cells=3)"
+       ],
+       "id": "sc027"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "The size of our count matrix is now reduced."
+       ],
+       "id": "sc028"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "adata.shape"
+       ],
+       "id": "sc029"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Normalize"
+       ],
+       "id": "sc030"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "We normalize the count matrix so that the total counts in each cell sum to 1e4. This will help remove some technical variability due to sequencing depth."
+       ],
+       "id": "sc031"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.normalize_total(adata, target_sum=1e4)"
+       ],
+       "id": "sc032"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "Next, we data transform the count matrix."
+       ],
+       "id": "sc033"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.log1p(adata)"
+       ],
+       "id": "sc034"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Select Most Variable Genes"
+       ],
+       "id": "sc035"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "We now search for highly variable genes, which help focus our analysis on the most informative genes while improving computational efficiency. This function supports the flavors `cell_ranger`, `seurat`, `seurat_v3`, and `pearson_residuals`.  \n",
+        "As in Scanpy, you can either filter based on variance cutoffs or select the `n_top_genes`. Additionally, you can use a `batch_key` to correct for batch effects.  \n",
+        "\n",
+        "In this example, we use the `cell_ranger` method, which selects highly variable genes based on the log-normalized counts stored in `.X`.\n"
+       ],
+       "id": "sc036"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.highly_variable_genes(adata, n_top_genes=5000, flavor=\"cell_ranger\")"
+       ],
+       "id": "sc037"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "Now we save this version of the AnnData as adata.raw. "
+       ],
+       "id": "sc038"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "adata.raw = adata"
+       ],
+       "id": "sc039"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "We now restrict our AnnData object to only the highly variable genes.  \n",
+        "This step reduces the number of features, focusing the analysis on the most informative genes while improving computational efficiency."
+       ],
+       "id": "sc040"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.filter_highly_variable(adata)"
+       ],
+       "id": "sc041"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "Next, we regress out the effects of total counts per cell and mitochondrial content.  \n",
+        "This helps remove technical variation that could bias downstream analyses.  \n",
+        "\n",
+        "As in Scanpy, you can regress out any numerical column from `.obs`, allowing for the correction of batch effects, sequencing depth, or other confounding factors.\n",
+        "\n",
+        "For more complex data sets, these steps may overcorrect and remove potentially useful information and need to be carefully used."
+       ],
+       "id": "sc042"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.regress_out(adata, keys=[\"total_counts\", \"pct_counts_MT\"])"
+       ],
+       "id": "sc043"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Scale"
+       ],
+       "id": "sc044"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "Finally, we scale the count matrix to obtain a z-score transformation, standardizing gene expression across cells.  \n",
+        "To prevent extreme values from dominating the analysis, we apply a cutoff of 10 standard deviations.  \n",
+        "This ensures that highly expressed genes do not disproportionately influence downstream computations."
+       ],
+       "id": "sc045"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.scale(adata, max_value=10)"
+       ],
+       "id": "sc046"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Total Preprocessing Time\n",
+        "Now let's see how long the total preprocesssing time takes"
+       ],
+       "id": "sc047"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "preprocess_time = time.time()\n",
+        "print(\"Total Preprocessing time: %s\" % (preprocess_time - preprocess_start))"
+       ],
+       "id": "sc048"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "## Clustering and Visualization"
+       ],
+       "id": "sc049"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Principal component analysis"
+       ],
+       "id": "sc050"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "We use Principal Component Analysis (PCA) to reduce the dimensionality of the gene expression matrix to its top 100 principal components.  \n",
+        "This step captures the most important sources of variation in the data while reducing computational complexity.  \n",
+        "\n",
+        "We use the GPU-accelerated PCA implementation from cuML, which significantly speeds up computation compared to CPU-based methods."
+       ],
+       "id": "sc051"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.tl.pca(adata, n_comps=100)"
+       ],
+       "id": "sc052"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "We can use scanpy `pca_variance_ratio` plot to inspect the contribution of single PCs to the total variance in the data."
+       ],
+       "id": "sc053"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "sc.pl.pca_variance_ratio(adata, log=True, n_pcs=100)"
+       ],
+       "id": "sc054"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "Now, we transfer the `.X` matrix back to host (CPU) memory to free up GPU resources.  \n",
+        "\n",
+        "Since some downstream analyses or visualizations may not require GPU acceleration, this step helps optimize memory usage,  \n",
+        "preventing unnecessary GPU load while still keeping the processed data accessible for further analysis."
+       ],
+       "id": "sc055"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "rsc.get.anndata_to_CPU(adata)"
+       ],
+       "id": "sc056"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Computing the neighborhood graph and UMAP"
+       ],
+       "id": "sc057"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "Next, we compute the neighborhood graph using `rsc`.  \n",
+        "\n",
+        "Scanpy’s CPU-based implementation of nearest neighbor search uses an approximation, while the GPU-accelerated RAPIDS implementation computes the exact graph.  \n",
+        "Both methods are valid, but small differences in results can occur.  \n",
+        "\n",
+        "The following approximate nearest neighbor (ANN) algorithms are also supported:  \n",
+        "- **`ivfflat`**: Uses an inverted file index for fast approximate search, suitable for very large datasets.  \n",
+        "- **`ivfpq`**: A variant of `ivfflat` that compresses data for even more efficient memory usage, trading off some accuracy.  \n",
+        "- **`cagra`**: A graph-based ANN method optimized for fast, high-accuracy queries on GPUs.  \n",
+        "- **`nn_descent`**: A graph-based method that incrementally refines the nearest neighbor search and works well for large, high-dimensional datasets.  \n",
+        "\n",
+        "Since our dataset is relatively small, we will use the default **brute-force (`brute`)** search underneath neighbors to ensure exact results."
+       ],
+       "id": "sc058"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.neighbors(adata, n_neighbors=15, n_pcs=40)"
+       ],
+       "id": "sc059"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "Next, we calculate the UMAP embedding using RAPIDS.  \n",
+        "\n",
+        "UMAP (Uniform Manifold Approximation and Projection) is a dimensionality reduction technique that preserves local and global structure in the data.  \n",
+        "The RAPIDS implementation accelerates UMAP computation on GPUs, making it significantly faster than the standard CPU version."
+       ],
+       "id": "sc060"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.tl.umap(adata)"
+       ],
+       "id": "sc061"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Clustering"
+       ],
+       "id": "sc062"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "Next, we use the **Louvain** and **Leiden** algorithms for graph-based clustering with RAPIDS.  \n",
+        "\n",
+        "Both methods detect communities (clusters) in the neighborhood graph by optimizing modularity:  \n",
+        "- **Louvain**: A hierarchical clustering algorithm that iteratively refines clusters for optimal modularity.  \n",
+        "- **Leiden**: An improved version of Louvain that guarantees well-connected, more stable clusters.  \n",
+        "\n",
+        "Using RAPIDS accelerates the clustering process on GPUs, making it significantly faster than traditional CPU implementations."
+       ],
+       "id": "sc063"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.tl.louvain(adata, resolution=0.6)"
+       ],
+       "id": "sc064"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.tl.leiden(adata, resolution=0.6)"
+       ],
+       "id": "sc065"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "sc.pl.umap(adata, color=[\"louvain\", \"leiden\"], legend_loc=\"on data\")"
+       ],
+       "id": "sc066"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "fig = sc.pl.umap(adata, color=[scw.LABEL_KEY, scw.BATCH_KEY], return_fig=True)\n",
+        "ax = fig.axes[0]\n",
+        "ax.legend_.set_title(scw.LABEL_KEY)\n",
+        "ax.legend_.set_bbox_to_anchor((-0.2, -0.4))\n"
+       ],
+       "id": "sc067"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Batch Correction  \n",
+        "\n",
+        "In the previous UMAP, we observed strong batch effects between assay types.  \n",
+        "To correct for this, we apply **Harmony**, a method that aligns different batches while preserving biological variation.  \n",
+        "\n",
+        "After applying Harmony, we will redo:  \n",
+        "- **Neighborhood search** to recompute the k-nearest neighbor graph  \n",
+        "- **UMAP** to visualize the corrected embedding  \n",
+        "- **Graph-based clustering** to identify cell populations without batch-driven artifacts  \n",
+        "\n",
+        "This ensures that batch effects do not drive clustering results while retaining meaningful biological structure.\n"
+       ],
+       "id": "sc068"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.harmony_integrate(adata, key=scw.BATCH_KEY, dtype=cp.float32)"
+       ],
+       "id": "sc069"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.neighbors(\n",
+        "    adata, n_neighbors=15, n_pcs=40, use_rep=\"X_pca_harmony\", key_added=\"harmony\"\n",
+        ")\n",
+        "rsc.tl.umap(adata, neighbors_key=\"harmony\", key_added=\"X_umap_harmony\")\n",
+        "rsc.tl.louvain(\n",
+        "    adata, resolution=0.6, neighbors_key=\"harmony\", key_added=\"louvain_harmony\"\n",
+        ")\n",
+        "rsc.tl.leiden(\n",
+        "    adata, resolution=0.6, neighbors_key=\"harmony\", key_added=\"leiden_harmony\"\n",
+        ")"
+       ],
+       "id": "sc070"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "sc.pl.embedding(\n",
+        "    adata,\n",
+        "    basis=\"X_umap_harmony\",\n",
+        "    color=[\"louvain_harmony\", \"leiden_harmony\"],\n",
+        "    legend_loc=\"on data\",\n",
+        ")"
+       ],
+       "id": "sc071"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "fig = sc.pl.embedding(\n",
+        "    adata, basis=\"X_umap_harmony\", color=[scw.LABEL_KEY, scw.BATCH_KEY], return_fig=True\n",
+        ")\n",
+        "ax = fig.axes[0]\n",
+        "ax.legend_.set_title(scw.LABEL_KEY)\n",
+        "ax.legend_.set_bbox_to_anchor((-0.2, -0.4))"
+       ],
+       "id": "sc072"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### TSNE"
+       ],
+       "id": "sc073"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "Next, we use **t-distributed Stochastic Neighbor Embedding (t-SNE)** to visualize cells in two dimensions.  \n",
+        "t-SNE is a non-linear dimensionality reduction technique that preserves local structure and reveals complex patterns in the data.  \n",
+        "\n",
+        "We leverage the RAPIDS GPU implementation of t-SNE, which is significantly faster than CPU-based methods.  \n",
+        "This allows us to efficiently process large datasets while maintaining high-quality embeddings.  \n",
+        "\n"
+       ],
+       "id": "sc074"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.tl.tsne(\n",
+        "    adata,\n",
+        "    n_pcs=40,\n",
+        "    perplexity=30,\n",
+        "    early_exaggeration=12,\n",
+        "    learning_rate=200,\n",
+        "    use_rep=\"X_pca_harmony\",\n",
+        ")"
+       ],
+       "id": "sc075"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "fig = sc.pl.tsne(adata, color=[scw.LABEL_KEY, scw.BATCH_KEY], return_fig=True)\n",
+        "ax = fig.axes[0]\n",
+        "ax.legend_.set_title(scw.LABEL_KEY)\n",
+        "ax.legend_.set_bbox_to_anchor((-0.2, -0.4))"
+       ],
+       "id": "sc076"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "## Differential expression analysis"
+       ],
+       "id": "sc077"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "To identify key marker genes for each cell type, we use **logistic regression** to compute a ranking of highly differential genes.  \n",
+        "Unlike traditional statistical tests, logistic regression models the probability of a gene being highly expressed in a given cluster  \n",
+        "while accounting for all genes simultaneously, making it more robust for complex datasets.  \n",
+        "\n",
+        "We rank the top 50 genes that best distinguish each **cell type**, helping to characterize biological differences between clusters.  "
+       ],
+       "id": "sc078"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.tl.rank_genes_groups(adata, groupby=scw.LABEL_KEY, method  = \"wilcoxon_binned\", use_raw=False)"
+       ],
+       "id": "sc079"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "sc.pl.rank_genes_groups(adata)"
+       ],
+       "id": "sc080"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "post_time = time.time()"
+       ],
+       "id": "sc081"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "print(\"Total Postprocessing time: %s\" % (post_time - preprocess_time))"
+       ],
+       "id": "sc082"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Diffusion Map Embedding  \n",
+        "\n",
+        "Next, we compute **Diffusion Maps**, a nonlinear dimensionality reduction method that preserves the continuous structure of the data.  \n",
+        "Unlike UMAP and t-SNE, Diffusion Maps are well-suited for capturing **trajectory-like** relationships in single-cell data.  \n",
+        "\n",
+        "We use the batch-corrected neighborhood graph (`neighbors_key=\"harmony\"`) to ensure that the embedding is not influenced by batch effects.  "
+       ],
+       "id": "sc083"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.tl.diffmap(adata, neighbors_key=\"harmony\")\n",
+        "# Due to an issue with plotting in Scanpy, we need to shift the first component of the diffusion map by removing the first column:\n",
+        "adata.obsm[\"X_diffmap\"] = adata.obsm[\"X_diffmap\"][:, 1:]"
+       ],
+       "id": "sc084"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "sc.pl.diffmap(adata, color=scw.LABEL_KEY)"
+       ],
+       "id": "sc085"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "print(\"Total Processing time: %s\" % (time.time() - preprocess_start))"
+       ],
+       "id": "sc086"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "# Ported: upstream wrote h5/dli_decoupler.h5ad next to the downloaded corpus.\n",
+        "# /workspace/derived is the volume that survives a restart, and is where\n",
+        "# 02_regulatory_activity.ipynb reads this file from.\n",
+        "adata.write(scw.derived(\"preprocessed.h5ad\"))\n"
+       ],
+       "id": "sc087"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "## Next steps\n",
+        "\n",
+        "The preprocessed matrix is now at `/workspace/derived/preprocessed.h5ad`. **[02_regulatory_activity.ipynb](02_regulatory_activity.ipynb)** picks it up from there.\n"
+       ],
+       "id": "sc088"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "# These notebooks are very GPU memory intensive!\n",
+        "# In order to free up GPU memory, we'll kill this kernel prior to proceeding.  You will get a message.  This is expected.\n",
+        "# If you have a CUDA or an Out Of Memory (OOM) error, please kill all kernels to free up your GPU memory and try again!\n",
+        "# You can comment this out if you want to continue exploring the notebook.\n",
+        "# Please consult the README for more tips and tricks.\n",
+        "\n",
+        "import IPython\n",
+        "\n",
+        "IPython.Application.instance().kernel.do_shutdown(True)"
+       ],
+       "id": "sc089"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [],
+       "id": "sc090"
+      }
+     ],
+     "metadata": {
+      "kernelspec": {
+       "display_name": "Python 3 (ipykernel)",
+       "language": "python",
+       "name": "python3"
+      },
+      "language_info": {
+       "codemirror_mode": {
+        "name": "ipython",
+        "version": 3
+       },
+       "file_extension": ".py",
+       "mimetype": "text/x-python",
+       "name": "python",
+       "nbconvert_exporter": "python",
+       "pygments_lexer": "ipython3",
+       "version": "3.12.12"
+      }
+     },
+     "nbformat": 4,
+     "nbformat_minor": 5
+    }
+  02_regulatory_activity.ipynb: |
+    {
+     "cells": [
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "> **Ported for confidential execution.** This is NVIDIA's [Single-Cell Analysis Blueprint](https://github.com/NVIDIA-AI-Blueprints/single-cell-analysis-blueprint) notebook, Apache-2.0, with its download step replaced by `sc_workspace.load_matrix()` and its hard-coded `obs` column names replaced by this deployment's own. Nothing else is changed. `PROVENANCE.md` lists every edit.\n"
+       ],
+       "id": "sc000"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "# **GPU Demo Part 2 - Decoupler-GPU: Accelerated Transcriptional Regulatory Analysis**  \n",
+        "\n",
+        "**Author:** [Severin Dicks](https://github.com/Intron7)\n",
+        "**Copyright** [scverse](https://scverse.org)\n",
+        "\n",
+        "**Please run [GPU Demo Part 1 - Basic GPU E2E Workflow](01_demo_gpu_e2e.ipynb) before running this notebook as this notebook continues some analysis of that notebook's output.**\n",
+        "\n",
+        "In this notebook, we explore the updated [**Decoupler**](https://decoupler-py.readthedocs.io/en/latest/) functions for inferring transcriptional regulatory activity, leveraging the **GPU-accelerated** implementation from **rapids-singlecell**.  \n",
+        "\n",
+        "By running these analyses on GPUs, we achieve **faster computation** and **scalability** for large single-cell datasets. We will apply **Decoupler** methods to estimate **transcription factor (TF) activity** and **pathway activity**, utilizing curated regulatory networks such as **Dorothea** and **PROGENy**."
+       ],
+       "id": "sc001"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "import rapids_singlecell as rsc\n",
+        "import scanpy as sc\n",
+        "import rmm\n",
+        "import cupy as cp\n",
+        "import pandas as pd\n",
+        "import anndata as ad\n",
+        "import decoupler as dc\n",
+        "from rmm.allocators.cupy import rmm_cupy_allocator\n",
+        "rmm.reinitialize(\n",
+        "    managed_memory=False, # Allows oversubscription\n",
+        "    pool_allocator=True, # default is False\n",
+        ")\n",
+        "cp.cuda.set_allocator(rmm_cupy_allocator)"
+       ],
+       "id": "sc002"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "# Ported: upstream read ./h5/dli_decoupler.h5ad, written beside the corpus it\n",
+        "# had downloaded. 01_preprocessing.ipynb writes the same matrix to the\n",
+        "# workspace volume instead.\n",
+        "import sc_workspace as scw\n",
+        "\n",
+        "adata = scw.load_matrix(path=scw.derived(\"preprocessed.h5ad\"))\n",
+        "adata\n"
+       ],
+       "id": "sc003"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "adata = adata.raw.to_adata()"
+       ],
+       "id": "sc004"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "rsc.get.anndata_to_GPU(adata)"
+       ],
+       "id": "sc005"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Retrieving Transcription Factor (TF) Regulons with Dorothea  \n",
+        "\n",
+        "We start by retrieving the **Dorothea** gene regulatory network, which provides curated transcription factor (TF) target interactions.  \n",
+        "Dorothea assigns confidence levels (`A`, `B`, `C`, `D`, `E`), where `A` represents the highest confidence interactions.  \n",
+        "Here, we filter for **high-confidence** (`A`, `B`, `C`) interactions in human data:  "
+       ],
+       "id": "sc006"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "> **This notebook reaches the network, and it is the only one that does.**\n",
+        "> The next cell calls `decoupler.op.collectri()`, which downloads the CollecTRI\n",
+        "> regulon table from Zenodo (~6 MB of public reference data: transcription\n",
+        "> factors and their targets). **No data of yours leaves the deployment** — the\n",
+        "> request carries nothing but a GET — but it does mean this notebook needs\n",
+        "> outbound HTTPS, and that the table is not covered by the attested\n",
+        "> `requirements.lock`, so it is whatever Zenodo serves that day.\n",
+        ">\n",
+        "> In a deployment with no egress the call fails. Two ways round it: upload the\n",
+        "> CSV into `/workspace/data` yourself and read it with `pandas.read_csv`\n",
+        "> (`decoupler` takes any frame with `source`, `target` and `weight` columns), or\n",
+        "> leave this notebook for a deployment that is allowed out. `01_preprocessing`\n",
+        "> and `03_pearson_residuals` touch nothing outside the workspace.\n"
+       ],
+       "id": "sc007"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "collectri = dc.op.collectri(organism=\"human\",license=\"commercial\")"
+       ],
+       "id": "sc008"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Transcription Factor Activity Inference with ULM  \n",
+        "\n",
+        "To infer transcription factor (TF) activity, we use the **Univariate Linear Model (ULM)** from **Decoupler**.  \n",
+        "ULM estimates the regulatory influence of TFs on gene expression by fitting a linear model for each TF-gene interaction.  \n",
+        "\n",
+        "We apply **ULM** using the **Dorothea** regulatory network retrieved earlier. "
+       ],
+       "id": "sc009"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {
+        "tags": []
+       },
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.dcg.ulm(adata, collectri, verbose=True, raw = False, pre_load=True)"
+       ],
+       "id": "sc010"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "acts = dc.pp.get_obsm(adata=adata, key=\"score_ulm\")"
+       ],
+       "id": "sc011"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "sc.pl.embedding(acts,basis=\"X_umap_harmony\", color=[scw.LABEL_KEY, \"GATA3\"], cmap='RdBu_r',ncols=1)\n",
+        "sc.pl.violin(acts, keys=['GATA3'], groupby=scw.LABEL_KEY, rotation=90, size = 0)\n"
+       ],
+       "id": "sc012"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Transcription Factor Activity Inference with MLM  \n",
+        "\n",
+        "Next, we infer transcription factor (TF) activity using the **Multivariate Linear Model (MLM)** from **Decoupler**.  \n",
+        "Unlike **ULM**, which considers each TF independently, **MLM** accounts for multiple TFs simultaneously,  \n",
+        "providing a more comprehensive estimation of regulatory influences. "
+       ],
+       "id": "sc013"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {
+        "scrolled": true,
+        "tags": []
+       },
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.dcg.mlm(adata, collectri, verbose=True, raw = False, pre_load=True)"
+       ],
+       "id": "sc014"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Transcription Factor Activity Inference with AUCell  \n",
+        "\n",
+        "Next, we infer transcription factor (TF) activity using **AUCell** from **Decoupler**.  \n",
+        "AUCell estimates TF activity based on the **enrichment of TF target genes within the top-expressed genes** in each cell.  \n",
+        "Unlike regression-based methods (**ULM**, **MLM**), AUCell is a **rank-based approach** that does not assume linear relationships. "
+       ],
+       "id": "sc015"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {
+        "scrolled": true,
+        "tags": []
+       },
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.dcg.aucell(adata, collectri, verbose=True, raw = False, pre_load=True)"
+       ],
+       "id": "sc016"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "acts = dc.pp.get_obsm(adata=adata, key=\"score_aucell\")"
+       ],
+       "id": "sc017"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "sc.pl.embedding(acts,basis=\"X_umap_harmony\", color=[scw.LABEL_KEY, \"GATA3\"], cmap='RdBu_r',ncols=1)\n",
+        "sc.pl.violin(acts, keys=['GATA3'], groupby=scw.LABEL_KEY, rotation=90, size = 0)\n"
+       ],
+       "id": "sc018"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "# These notebooks are very GPU memory intensive!\n",
+        "# In order to free up GPU memory, we'll kill this kernel prior to proceeding.  You will get a message.  This is expected.\n",
+        "# If you have a CUDA or an Out Of Memory (OOM) error, please kill all kernels to free up your GPU memory and try again!\n",
+        "# You can comment this out if you want to continue exploring the notebook.\n",
+        "# Please consult the README for more tips and tricks.\n",
+        "\n",
+        "import IPython\n",
+        "\n",
+        "IPython.Application.instance().kernel.do_shutdown(True)"
+       ],
+       "id": "sc019"
+      }
+     ],
+     "metadata": {
+      "kernelspec": {
+       "display_name": "Python 3 (ipykernel)",
+       "language": "python",
+       "name": "python3"
+      },
+      "language_info": {
+       "codemirror_mode": {
+        "name": "ipython",
+        "version": 3
+       },
+       "file_extension": ".py",
+       "mimetype": "text/x-python",
+       "name": "python",
+       "nbconvert_exporter": "python",
+       "pygments_lexer": "ipython3",
+       "version": "3.12.12"
+      }
+     },
+     "nbformat": 4,
+     "nbformat_minor": 5
+    }
+  03_pearson_residuals.ipynb: |
+    {
+     "cells": [
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "> **Ported for confidential execution.** This is NVIDIA's [Single-Cell Analysis Blueprint](https://github.com/NVIDIA-AI-Blueprints/single-cell-analysis-blueprint) notebook, Apache-2.0, with its download step replaced by `sc_workspace.load_matrix()` and its hard-coded `obs` column names replaced by this deployment's own. Nothing else is changed. `PROVENANCE.md` lists every edit.\n"
+       ],
+       "id": "sc000"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "# Pearson Residuals Example  \n",
+        "**Author:** [Severin Dicks](https://github.com/Intron7)\n",
+        "**Copyright** [scverse](https://scverse.org)\n",
+        "\n",
+        "In this notebook, we redo the demonstration of the [GPU End to End Notebook Part 1](01_scRNA_analysis_preprocessing.ipynb), the GPU-acceleration capabilities of rapids-SingleCell for efficient single-cell analysis, except we'll use Pearson Residuals to compare observed data to expected data.\n",
+        "\n",
+        "As with the original End to End workflow notebooks, this tutorial showcases how to leverage GPU computing to significantly speed up your analysis workflow.\n",
+        "\n",
+        "This method makes high-performance single-cell analysis accessible through straightforward GPU integration, transforming traditionally time-consuming analyses into rapid workflows."
+       ],
+       "id": "sc001"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {
+        "tags": []
+       },
+       "outputs": [],
+       "source": [
+        "import scanpy as sc\n",
+        "import cupy as cp\n",
+        "\n",
+        "import time\n",
+        "import rapids_singlecell as rsc\n",
+        "\n",
+        "import warnings\n",
+        "\n",
+        "warnings.filterwarnings(\"ignore\")"
+       ],
+       "id": "sc002"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "import rmm\n",
+        "from rmm.allocators.cupy import rmm_cupy_allocator\n",
+        "\n",
+        "rmm.reinitialize(\n",
+        "    managed_memory=False,  # Allows oversubscription\n",
+        "    pool_allocator=True,  # default is False\n",
+        "    devices=0,  # GPU device IDs to register. By default registers only GPU 0.\n",
+        ")\n",
+        "cp.cuda.set_allocator(rmm_cupy_allocator)"
+       ],
+       "id": "sc003"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "## Load and Prepare Data"
+       ],
+       "id": "sc004"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "Let's start by creating our dataset."
+       ],
+       "id": "sc005"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "# Ported: upstream downloaded a public example corpus from\n",
+        "# exampledata.scverse.org here. This deployment reads the matrix the operator\n",
+        "# bound to it — a marketplace dataset, or a file uploaded into /workspace/data —\n",
+        "# and nothing in this notebook reaches the network.\n",
+        "import sc_workspace as scw\n",
+        "\n",
+        "print(scw.describe_binding())\n",
+        "adata = scw.load_matrix()\n",
+        "\n",
+        "# Which column is the batch, and which carries an annotation. Asked now, with\n",
+        "# the column list in the error, rather than forty cells later inside Harmony.\n",
+        "batch = scw.batch_key(adata)\n",
+        "label = scw.label_key(adata)\n",
+        "print(f\"batch column: {batch!r}; annotation column: {label!r}; {adata.n_obs} cells x {adata.n_vars} genes\")\n",
+        "\n",
+        "# The batch column is required and raised above if it was wrong. The annotation\n",
+        "# is not required by the workflow — but every cell that compares this notebook's\n",
+        "# own clustering against a known cell type needs it, and without it they fail on\n",
+        "# a bare KeyError from scanpy a long way below. Said here instead.\n",
+        "if label is None:\n",
+        "    print(\n",
+        "        f\"\n",
+        "NOTE: no annotation column. This deployment names {scw.LABEL_KEY!r} and the matrix\n",
+        "\"\n",
+        "        f\"      has none of it. Everything up to the clustering runs; the cells that colour or\n",
+        "\"\n",
+        "        f\"      group by the annotation will raise KeyError({scw.LABEL_KEY!r}).\n",
+        "\"\n",
+        "        f\"      Available: {', '.join(map(str, adata.obs.columns))}\n",
+        "\"\n",
+        "        f\"      Fix it by reconfiguring the deployment, or set scw.LABEL_KEY here.\"\n",
+        "    )\n"
+       ],
+       "id": "sc006"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "We load the sparse count matrix from an `h5ad` file using Scanpy. The sparse count matrix will then be placed on the GPU. "
+       ],
+       "id": "sc007"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "data_load_start = time.time()"
+       ],
+       "id": "sc008"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "# Ported: the matrix is already in memory — the cell above read it from the\n",
+        "# dataset this deployment is bound to. Upstream re-read the file it had just\n",
+        "# downloaded.\n",
+        "adata\n"
+       ],
+       "id": "sc009"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {
+        "tags": []
+       },
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.get.anndata_to_GPU(adata)"
+       ],
+       "id": "sc010"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "data_load_time = time.time()\n",
+        "print(\"Total data load and format time: %s\" % (data_load_time - data_load_start))"
+       ],
+       "id": "sc011"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "## Preprocessing"
+       ],
+       "id": "sc012"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "preprocess_start = time.time()"
+       ],
+       "id": "sc013"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "# Ported: guarded, as in 01_preprocessing.ipynb.\n",
+        "if \"feature_name\" in adata.var:\n",
+        "    adata.var_names = adata.var.feature_name\n"
+       ],
+       "id": "sc014"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Quality Control"
+       ],
+       "id": "sc015"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "We calculate quality control (QC) metrics to assess cell and gene quality. These include:  \n",
+        "\n",
+        "- **Per cell metrics**:  \n",
+        "  - Total counts per cell (library size)  \n",
+        "  - Number of detected genes per cell  \n",
+        "  - Percentage of counts from mitochondrial (`MT`) and ribosomal (`RIBO`) genes  \n",
+        "\n",
+        "- **Per gene metrics** (gene space):  \n",
+        "  - Total counts per gene  \n",
+        "  - Number of cells expressing each gene  \n",
+        "\n",
+        "These metrics help identify low-quality or stressed cells and ensure a meaningful feature set for downstream analysis."
+       ],
+       "id": "sc016"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.flag_gene_family(adata, gene_family_name=\"MT\", gene_family_prefix=\"MT\")"
+       ],
+       "id": "sc017"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.flag_gene_family(adata, gene_family_name=\"RIBO\", gene_family_prefix=\"RPS\")"
+       ],
+       "id": "sc018"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.calculate_qc_metrics(adata, qc_vars=[\"MT\", \"RIBO\"])"
+       ],
+       "id": "sc019"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "To visualize the quality control (QC) metrics, we generate the following plots:\n",
+        "\n",
+        "1. **Scatter plot: Total counts vs. Mitochondrial percentage**  \n",
+        "   - This plot shows the relationship between the total UMI counts per cell and the percentage of mitochondrial (`MT`) gene expression.  \n",
+        "   - Cells with high mitochondrial percentages may indicate stressed or dying cells.\n",
+        "\n",
+        "2. **Scatter plot: Total counts vs. Number of detected genes**  \n",
+        "   - This plot displays the correlation between the total UMI counts per cell and the number of detected genes.  \n",
+        "   - A strong correlation is expected, but outliers with low gene counts might indicate empty droplets or dead cells.\n",
+        "\n",
+        "3. **Violin plot: Number of detected genes per cell**  \n",
+        "   - This violin plot visualizes the distribution of the number of detected genes per cell.  \n",
+        "   - It helps identify cells with abnormally low or high gene counts, which could be filtered out.\n",
+        "\n",
+        "4. **Violin plot: Total counts per cell**  \n",
+        "   - This plot shows the distribution of total counts per cell, indicating library size variation.  \n",
+        "   - Extreme values may suggest low-quality or overly dominant cells.\n",
+        "\n",
+        "5. **Violin plot: Percentage of mitochondrial counts per cell**  \n",
+        "   - This plot illustrates the distribution of mitochondrial gene expression across all cells.  \n",
+        "   - High mitochondrial content could be a sign of cell stress or apoptosis.\n",
+        "\n",
+        "These visualizations help assess dataset quality and guide decisions on filtering low-quality cells."
+       ],
+       "id": "sc020"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {
+        "scrolled": true
+       },
+       "outputs": [],
+       "source": [
+        "sc.pl.scatter(adata, x=\"total_counts\", y=\"pct_counts_MT\")\n",
+        "sc.pl.scatter(adata, x=\"total_counts\", y=\"n_genes_by_counts\")"
+       ],
+       "id": "sc021"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "sc.pl.violin(adata, \"n_genes_by_counts\", jitter=0.4, groupby=scw.BATCH_KEY)\n",
+        "sc.pl.violin(adata, \"total_counts\", jitter=0.4, groupby=scw.BATCH_KEY)\n",
+        "sc.pl.violin(adata, \"pct_counts_MT\", jitter=0.4, groupby=scw.BATCH_KEY)"
+       ],
+       "id": "sc022"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Filter"
+       ],
+       "id": "sc023"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "We filter the count matrix to remove cells with an extreme number of genes expressed.\n",
+        "We also filter out cells with a mitchondrial countent of more than 20%."
+       ],
+       "id": "sc024"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "adata = adata[adata.obs[\"n_genes_by_counts\"] < 5000]\n",
+        "adata = adata[adata.obs[\"pct_counts_MT\"] < 20]"
+       ],
+       "id": "sc025"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "We also filter out genes that are expressed in less than 3 cells."
+       ],
+       "id": "sc026"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.filter_genes(adata, min_cells=3)"
+       ],
+       "id": "sc027"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "The size of our count matrix is now reduced."
+       ],
+       "id": "sc028"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "adata.shape"
+       ],
+       "id": "sc029"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Normalize"
+       ],
+       "id": "sc030"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "Before performing further transformations on the data, we store the **raw count matrix** in the `.layers` attribute.  \n",
+        "This ensures that the original unnormalized expression values remain accessible for later analyses.  \n"
+       ],
+       "id": "sc031"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "adata.layers[\"counts\"] = adata.X.copy()"
+       ],
+       "id": "sc032"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "We normalize the count matrix so that the total counts in each cell sum to 1e4."
+       ],
+       "id": "sc033"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.normalize_total(adata, target_sum=1e4)"
+       ],
+       "id": "sc034"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "Next, we data transform the count matrix."
+       ],
+       "id": "sc035"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.log1p(adata)"
+       ],
+       "id": "sc036"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "adata.raw = adata"
+       ],
+       "id": "sc037"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### **Identifying Highly Variable Genes**  \n",
+        "\n",
+        "Next, we identify **highly variable genes (HVGs)**, which capture the most biologically relevant variation in the dataset.  \n",
+        "These genes are selected based on their variance, helping to reduce noise and focus on meaningful signals.  \n",
+        "\n",
+        "We use the **Pearson residuals** method to detect HVGs while preserving statistical robustness\n"
+       ],
+       "id": "sc038"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.highly_variable_genes(\n",
+        "    adata, n_top_genes=5000, flavor=\"pearson_residuals\", layer=\"counts\"\n",
+        ")"
+       ],
+       "id": "sc039"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "Now we restrict our AnnData object to the highly variable genes."
+       ],
+       "id": "sc040"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.filter_highly_variable(adata)"
+       ],
+       "id": "sc041"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "adata.shape"
+       ],
+       "id": "sc042"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Normalize Pearson residuals\n",
+        "To correct for technical biases and overdispersion in single-cell data,  \n",
+        "we apply **Pearson residual normalization**, a method that stabilizes variance across genes.  \n",
+        "\n",
+        "This transformation enhances the detection of biological variation while reducing noise.  \n",
+        "We store the **Pearson residuals** in a separate layer to preserve the original data:  "
+       ],
+       "id": "sc043"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "adata.layers[\"pearson_residuals\"] = rsc.pp.normalize_pearson_residuals(\n",
+        "    adata, layer=\"counts\", inplace=False\n",
+        ")"
+       ],
+       "id": "sc044"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "### Performing PCA on Pearson Residuals  \n",
+        "\n",
+        "To reduce the dimensionality of the dataset while preserving meaningful variation,  \n",
+        "we perform **Principal Component Analysis (PCA)** using the **Pearson residuals**.  \n",
+        "This approach ensures that **technical noise is minimized**, allowing better downstream analysis.  \n",
+        "\n",
+        "We compute **100 principal components (PCs)** from the normalized data"
+       ],
+       "id": "sc045"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.pp.pca(adata, n_comps=100, layer=\"pearson_residuals\")"
+       ],
+       "id": "sc046"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "sc.pl.pca_variance_ratio(adata, log=True, n_pcs=100)"
+       ],
+       "id": "sc047"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "Now we move `.X` and `.layers` out of the GPU."
+       ],
+       "id": "sc048"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "%%time\n",
+        "rsc.get.anndata_to_CPU(adata, convert_all=True)"
+       ],
+       "id": "sc049"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "preprocess_time = time.time()\n",
+        "print(\"Total Preprocessing time: %s\" % (preprocess_time - preprocess_start))"
+       ],
+       "id": "sc050"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "We have now finished the preprocessing of the data."
+       ],
+       "id": "sc051"
+      },
+      {
+       "cell_type": "code",
+       "execution_count": null,
+       "metadata": {},
+       "outputs": [],
+       "source": [
+        "# These notebooks are very GPU memory intensive!\n",
+        "# In order to free up GPU memory, we'll kill this kernel prior to proceeding.  You will get a message.  This is expected.\n",
+        "# If you have a CUDA or an Out Of Memory (OOM) error, please kill all kernels to free up your GPU memory and try again!\n",
+        "# You can comment this out if you want to continue exploring the notebook.\n",
+        "# Please consult the README for more tips and tricks.\n",
+        "\n",
+        "import IPython\n",
+        "\n",
+        "IPython.Application.instance().kernel.do_shutdown(True)"
+       ],
+       "id": "sc052"
+      }
+     ],
+     "metadata": {
+      "kernelspec": {
+       "display_name": "Python 3 (ipykernel)",
+       "language": "python",
+       "name": "python3"
+      },
+      "language_info": {
+       "codemirror_mode": {
+        "name": "ipython",
+        "version": 3
+       },
+       "file_extension": ".py",
+       "mimetype": "text/x-python",
+       "name": "python",
+       "nbconvert_exporter": "python",
+       "pygments_lexer": "ipython3",
+       "version": "3.12.12"
+      }
+     },
+     "nbformat": 4,
+     "nbformat_minor": 5
+    }
+  LICENSE: |2
+                                     Apache License
+                               Version 2.0, January 2004
+                            http://www.apache.org/licenses/
+  
+       TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+  
+       1. Definitions.
+  
+          "License" shall mean the terms and conditions for use, reproduction,
+          and distribution as defined by Sections 1 through 9 of this document.
+  
+          "Licensor" shall mean the copyright owner or entity authorized by
+          the copyright owner that is granting the License.
+  
+          "Legal Entity" shall mean the union of the acting entity and all
+          other entities that control, are controlled by, or are under common
+          control with that entity. For the purposes of this definition,
+          "control" means (i) the power, direct or indirect, to cause the
+          direction or management of such entity, whether by contract or
+          otherwise, or (ii) ownership of fifty percent (50%) or more of the
+          outstanding shares, or (iii) beneficial ownership of such entity.
+  
+          "You" (or "Your") shall mean an individual or Legal Entity
+          exercising permissions granted by this License.
+  
+          "Source" form shall mean the preferred form for making modifications,
+          including but not limited to software source code, documentation
+          source, and configuration files.
+  
+          "Object" form shall mean any form resulting from mechanical
+          transformation or translation of a Source form, including but
+          not limited to compiled object code, generated documentation,
+          and conversions to other media types.
+  
+          "Work" shall mean the work of authorship, whether in Source or
+          Object form, made available under the License, as indicated by a
+          copyright notice that is included in or attached to the work
+          (an example is provided in the Appendix below).
+  
+          "Derivative Works" shall mean any work, whether in Source or Object
+          form, that is based on (or derived from) the Work and for which the
+          editorial revisions, annotations, elaborations, or other modifications
+          represent, as a whole, an original work of authorship. For the purposes
+          of this License, Derivative Works shall not include works that remain
+          separable from, or merely link (or bind by name) to the interfaces of,
+          the Work and Derivative Works thereof.
+  
+          "Contribution" shall mean any work of authorship, including
+          the original version of the Work and any modifications or additions
+          to that Work or Derivative Works thereof, that is intentionally
+          submitted to Licensor for inclusion in the Work by the copyright owner
+          or by an individual or Legal Entity authorized to submit on behalf of
+          the copyright owner. For the purposes of this definition, "submitted"
+          means any form of electronic, verbal, or written communication sent
+          to the Licensor or its representatives, including but not limited to
+          communication on electronic mailing lists, source code control systems,
+          and issue tracking systems that are managed by, or on behalf of, the
+          Licensor for the purpose of discussing and improving the Work, but
+          excluding communication that is conspicuously marked or otherwise
+          designated in writing by the copyright owner as "Not a Contribution."
+  
+          "Contributor" shall mean Licensor and any individual or Legal Entity
+          on behalf of whom a Contribution has been received by Licensor and
+          subsequently incorporated within the Work.
+  
+       2. Grant of Copyright License. Subject to the terms and conditions of
+          this License, each Contributor hereby grants to You a perpetual,
+          worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+          copyright license to reproduce, prepare Derivative Works of,
+          publicly display, publicly perform, sublicense, and distribute the
+          Work and such Derivative Works in Source or Object form.
+  
+       3. Grant of Patent License. Subject to the terms and conditions of
+          this License, each Contributor hereby grants to You a perpetual,
+          worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+          (except as stated in this section) patent license to make, have made,
+          use, offer to sell, sell, import, and otherwise transfer the Work,
+          where such license applies only to those patent claims licensable
+          by such Contributor that are necessarily infringed by their
+          Contribution(s) alone or by combination of their Contribution(s)
+          with the Work to which such Contribution(s) was submitted. If You
+          institute patent litigation against any entity (including a
+          cross-claim or counterclaim in a lawsuit) alleging that the Work
+          or a Contribution incorporated within the Work constitutes direct
+          or contributory patent infringement, then any patent licenses
+          granted to You under this License for that Work shall terminate
+          as of the date such litigation is filed.
+  
+       4. Redistribution. You may reproduce and distribute copies of the
+          Work or Derivative Works thereof in any medium, with or without
+          modifications, and in Source or Object form, provided that You
+          meet the following conditions:
+  
+          (a) You must give any other recipients of the Work or
+              Derivative Works a copy of this License; and
+  
+          (b) You must cause any modified files to carry prominent notices
+              stating that You changed the files; and
+  
+          (c) You must retain, in the Source form of any Derivative Works
+              that You distribute, all copyright, patent, trademark, and
+              attribution notices from the Source form of the Work,
+              excluding those notices that do not pertain to any part of
+              the Derivative Works; and
+  
+          (d) If the Work includes a "NOTICE" text file as part of its
+              distribution, then any Derivative Works that You distribute must
+              include a readable copy of the attribution notices contained
+              within such NOTICE file, excluding those notices that do not
+              pertain to any part of the Derivative Works, in at least one
+              of the following places: within a NOTICE text file distributed
+              as part of the Derivative Works; within the Source form or
+              documentation, if provided along with the Derivative Works; or,
+              within a display generated by the Derivative Works, if and
+              wherever such third-party notices normally appear. The contents
+              of the NOTICE file are for informational purposes only and
+              do not modify the License. You may add Your own attribution
+              notices within Derivative Works that You distribute, alongside
+              or as an addendum to the NOTICE text from the Work, provided
+              that such additional attribution notices cannot be construed
+              as modifying the License.
+  
+          You may add Your own copyright statement to Your modifications and
+          may provide additional or different license terms and conditions
+          for use, reproduction, or distribution of Your modifications, or
+          for any such Derivative Works as a whole, provided Your use,
+          reproduction, and distribution of the Work otherwise complies with
+          the conditions stated in this License.
+  
+       5. Submission of Contributions. Unless You explicitly state otherwise,
+          any Contribution intentionally submitted for inclusion in the Work
+          by You to the Licensor shall be under the terms and conditions of
+          this License, without any additional terms or conditions.
+          Notwithstanding the above, nothing herein shall supersede or modify
+          the terms of any separate license agreement you may have executed
+          with Licensor regarding such Contributions.
+  
+       6. Trademarks. This License does not grant permission to use the trade
+          names, trademarks, service marks, or product names of the Licensor,
+          except as required for reasonable and customary use in describing the
+          origin of the Work and reproducing the content of the NOTICE file.
+  
+       7. Disclaimer of Warranty. Unless required by applicable law or
+          agreed to in writing, Licensor provides the Work (and each
+          Contributor provides its Contributions) on an "AS IS" BASIS,
+          WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+          implied, including, without limitation, any warranties or conditions
+          of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+          PARTICULAR PURPOSE. You are solely responsible for determining the
+          appropriateness of using or redistributing the Work and assume any
+          risks associated with Your exercise of permissions under this License.
+  
+       8. Limitation of Liability. In no event and under no legal theory,
+          whether in tort (including negligence), contract, or otherwise,
+          unless required by applicable law (such as deliberate and grossly
+          negligent acts) or agreed to in writing, shall any Contributor be
+          liable to You for damages, including any direct, indirect, special,
+          incidental, or consequential damages of any character arising as a
+          result of this License or out of the use or inability to use the
+          Work (including but not limited to damages for loss of goodwill,
+          work stoppage, computer failure or malfunction, or any and all
+          other commercial damages or losses), even if such Contributor
+          has been advised of the possibility of such damages.
+  
+       9. Accepting Warranty or Additional Liability. While redistributing
+          the Work or Derivative Works thereof, You may choose to offer,
+          and charge a fee for, acceptance of support, warranty, indemnity,
+          or other liability obligations and/or rights consistent with this
+          License. However, in accepting such obligations, You may act only
+          on Your own behalf and on Your sole responsibility, not on behalf
+          of any other Contributor, and only if You agree to indemnify,
+          defend, and hold each Contributor harmless for any liability
+          incurred by, or claims asserted against, such Contributor by reason
+          of your accepting any such warranty or additional liability.
+  
+       END OF TERMS AND CONDITIONS
+  
+       APPENDIX: How to apply the Apache License to your work.
+  
+          To apply the Apache License to your work, attach the following
+          boilerplate notice, with the fields enclosed by brackets "[]"
+          replaced with your own identifying information. (Don't include
+          the brackets!)  The text should be enclosed in the appropriate
+          comment syntax for the file format. We also recommend that a
+          file or class name and description of purpose be included on the
+          same "printed page" as the copyright notice for easier
+          identification within third-party archives.
+  
+       Copyright [yyyy] [name of copyright owner]
+  
+       Licensed under the Apache License, Version 2.0 (the "License");
+       you may not use this file except in compliance with the License.
+       You may obtain a copy of the License at
+  
+           http://www.apache.org/licenses/LICENSE-2.0
+  
+       Unless required by applicable law or agreed to in writing, software
+       distributed under the License is distributed on an "AS IS" BASIS,
+       WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+       See the License for the specific language governing permissions and
+       limitations under the License.
+  PROVENANCE.md: |
+    # Where these notebooks come from, and what was changed
+  
+    `00_dataset.ipynb` is ours. The other three are NVIDIA's, modified. Apache-2.0
+    section 4(b) asks that modified files carry prominent notices stating that they
+    were changed; this file is that notice, and each notebook repeats it in its first
+    cell.
+  
+    ## Upstream
+  
+    - **Repository:** <https://github.com/NVIDIA-AI-Blueprints/single-cell-analysis-blueprint>
+    - **Commit:** `7c4148c59049563554708e01c378352586ab2f4a` (2026-04-27)
+    - **Licence:** Apache-2.0. Upstream's `LICENSE` is the stock Apache text with the
+      `Copyright [yyyy] [name of copyright owner]` appendix left unfilled; it is carried
+      into this directory verbatim as `LICENSE`. The copyright holders named anywhere in
+      the work are the ones in each notebook's own header, kept in place below.
+    - **Notebook authors:** Severin Dicks, © [scverse](https://scverse.org), per each
+      notebook's own header, which is left in place.
+    - Upstream ships no `NOTICE` file, so there is none to carry forward. Its
+      dependency licences are listed in
+      *RAPIDS-SingleCell Developer Blueprint OSS Licenses - SW Components.pdf* in
+      that repository; every entry is MIT, BSD, Apache-2.0 or MPL-2.0.
+  
+    | Ours | Upstream |
+    |---|---|
+    | `01_preprocessing.ipynb` | `notebooks/01_scRNA_analysis_preprocessing.ipynb` |
+    | `02_regulatory_activity.ipynb` | `notebooks/02_scRNA_analysis_extended.ipynb` |
+    | `03_pearson_residuals.ipynb` | `notebooks/03_scRNA_analysis_with_pearson_residuals.ipynb` |
+  
+    ## What was changed, and why
+  
+    Four edits, applied mechanically by `scripts/port-single-cell-notebooks.py` in
+    this repository — these three notebooks are generated by it and are not edited
+    by hand. Each is marked `# Ported:` in the cell it
+    touches, so the diff against upstream is readable from inside the notebook.
+  
+    1. **The download is gone.** Upstream's first data cell fetches
+       `dli_census.h5ad` from `exampledata.scverse.org` with `wget` and re-reads it
+       on the next cell. Both are replaced by `sc_workspace.load_matrix()`, which
+       reads the dataset this deployment is bound to. A workflow whose first act is
+       to pull a corpus off the public internet is the opposite of what this listing
+       is for, and in a cluster space with no egress it would simply fail.
+    2. **The `obs` column names are the deployment's.** Upstream groups by `assay`
+       and annotates with `cell_type` — columns of the corpus it downloads. They are
+       now `scw.BATCH_KEY` and `scw.LABEL_KEY`, resolved from deployment parameters,
+       and the loader cell checks both against the matrix and names the columns it
+       does have when one is missing.
+    3. **`adata.var_names = adata.var.feature_name` is guarded.** Also a property of
+       that corpus; a tenant's matrix is usually already indexed by gene name, and
+       the unguarded line is an `AttributeError` in cell 14.
+    4. **Derived files go to the volume.** Upstream writes
+       `h5/dli_decoupler.h5ad` into the working directory, which is thrown away with
+       the pod. 01 now writes `/workspace/derived/preprocessed.h5ad` and 02 reads it
+       from there.
+  
+    A fifth edit, in `02_regulatory_activity.ipynb` only: a note above
+    `decoupler.op.collectri()`, which downloads the CollecTRI regulon table from
+    Zenodo. Nothing of the tenant's leaves in that request, but it is the one
+    network call left in these notebooks and it is not covered by the attested
+    `requirements.lock`, so it is marked where it happens.
+  
+    Stored cell outputs were stripped. They are 11 MB of images and tables computed
+    from a corpus this deployment does not have, and they would be published inside
+    the deployment's evidence snapshot.
+  
+    ## What was not ported, and why
+  
+    Four of the blueprint's seven notebooks are not here.
+  
+    - **`04_scRNA_analysis_dask_out_of_core.ipynb`** — the 11-million-cell
+      out-of-core workflow. Upstream calls for "a large multi-GPU system"; whether
+      one H100 NVL with Dask carries it is unverified, and the stage-1 audit
+      (SUP-838) recorded it as unverified rather than guessing. A listing that
+      offered it would be promising something nobody has measured.
+    - **`05_spatial_demo.ipynb`** — needs `squidpy`, `spatialdata`, `ome-zarr` and
+      the imaging stack. That is a different dependency closure and a different data
+      interface (spatial transcriptomics, not a count matrix), so it belongs in a
+      listing of its own rather than in this one's lock file.
+    - **`06_scRNA_analysis_1.0M_brain_example.ipynb`** and
+      **`07_perturbation_analysis_invivo_brain_example.ipynb`** — both are built
+      around specific public datasets they download. The workflow in 06 is 01's; 07
+      is a perturbation analysis that would need a tenant's own design matrix to
+      mean anything.
+---
+# Source: rapids-singlecell-notebook/templates/pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rapids-singlecell-notebook-workspace
+  labels:
+    helm.sh/chart: rapids-singlecell-notebook-0.1.0
+    app.kubernetes.io/name: rapids-singlecell-notebook
+    app.kubernetes.io/instance: sc
+    app.kubernetes.io/version: "26.02"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: notebook
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: "100Gi"
+---
+# Source: rapids-singlecell-notebook/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rapids-singlecell-notebook
+  labels:
+    helm.sh/chart: rapids-singlecell-notebook-0.1.0
+    app.kubernetes.io/name: rapids-singlecell-notebook
+    app.kubernetes.io/instance: sc
+    app.kubernetes.io/version: "26.02"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: notebook
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8888
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: rapids-singlecell-notebook
+    app.kubernetes.io/instance: sc
+---
+# Source: rapids-singlecell-notebook/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rapids-singlecell-notebook
+  labels:
+    helm.sh/chart: rapids-singlecell-notebook-0.1.0
+    app.kubernetes.io/name: rapids-singlecell-notebook
+    app.kubernetes.io/instance: sc
+    app.kubernetes.io/version: "26.02"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: notebook
+spec:
+  # One. A second replica would want a second card, and the workspace volume is
+  # ReadWriteOnce.
+  replicas: 1
+  strategy:
+    # The card is held by the running pod until it exits, so a rolling update
+    # would leave the new pod Pending on a GPU quota of one for ever.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rapids-singlecell-notebook
+      app.kubernetes.io/instance: sc
+  template:
+    metadata:
+      annotations:
+        # The environment lock and the notebooks are mounted, not baked, so a
+        # change to either has to roll the pod for anything to notice.
+        checksum/workspace: b975feaf6adb66d8a60d320ded0ad0a9750f45bc6cd0a94322177cfe03f5b893
+      labels:
+        app.kubernetes.io/name: rapids-singlecell-notebook
+        app.kubernetes.io/instance: sc
+    spec:
+      runtimeClassName: nvidia
+      containers:
+        # ---------------------------------------------------------------------
+        # The notebook server, and the only container in this pod. The attested
+        # environment is installed by `bootstrap.sh` as this container's first
+        # act rather than by an init container, because an init container writes
+        # into its own filesystem: `--target` onto a shared volume would put the
+        # overlay ahead of the image's conda packages on sys.path and shadow the
+        # CUDA builds that cudf, cuml and cupy are linked against.
+        # ---------------------------------------------------------------------
+        - name: notebook
+          image: docker.io/rapidsai/notebooks@sha256:bbe8a453ff7e3613829eb8ad723f78ae3df236acf86c3ad9166820235a32ffbf
+          imagePullPolicy: IfNotPresent
+          # The image's own entrypoint puts the conda environment on PATH; its
+          # command is the part being replaced, and it is replaced because it
+          # starts JupyterLab with `--NotebookApp.token=''`.
+          command: [/home/rapids/entrypoint.sh]
+          args: [bash, /opt/sc/bootstrap.sh]
+          env:
+            # jupyter_server reads this by itself and demands it on the login
+            # form. By reference, never as an argument.
+            - name: JUPYTER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: rapids-singlecell-notebook
+                  key: token
+            # Which `obs` columns the ported notebooks group by. Not secret, and
+            # the same for every deployment that chooses the same pair.
+            - name: SC_BATCH_KEY
+              value: "batch"
+            - name: SC_LABEL_KEY
+              value: "cell_type"
+            - name: SC_BINDING_FILE
+              value: /etc/sc/binding.json
+            # The notebooks' own working directories, on the volume.
+            - name: SC_DATA_DIR
+              value: /workspace/data
+            - name: SC_DERIVED_DIR
+              value: /workspace/derived
+            # /opt/sc FIRST, deliberately. `sc_workspace` is the chart's and is
+            # imported from there, so a fix to it reaches an existing deployment
+            # when the pod rolls; /workspace/notebooks follows so a tenant's own
+            # modules beside their notebooks still import. Reverse the order and
+            # a copy of the loader left on the volume shadows the chart's for
+            # the life of the deployment.
+            - name: PYTHONPATH
+              value: /opt/sc:/workspace/notebooks
+            # Telemetry off. A deployment serving patient-derived matrices inside
+            # an enclave should not be reporting anything about itself.
+            - name: DO_NOT_TRACK
+              value: "1"
+            - name: JUPYTER_PLATFORM_DIRS
+              value: "1"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+          ports:
+            - name: http
+              containerPort: 8888
+              protocol: TCP
+          # `/login` — the one route jupyter_server serves without a credential,
+          # which is what makes it usable as a probe at all. `/api/status` looks
+          # like the obvious choice and is not: jupyter_server 2.17 answers it
+          # 403 to an unauthenticated caller, so a probe on it marks the pod
+          # unready for ever while the server behind it is serving perfectly
+          # (measured on the image this chart pins, 2026-11-22).
+          #
+          # The startup probe has room for the environment install: pip fetches
+          # 29 wheels and verifies every hash before the server starts, which is
+          # ~30 s on a warm link and minutes on a cold one. A liveness probe
+          # alone would restart the pod in the middle of it, for ever.
+          startupProbe:
+            httpGet:
+              path: /login
+              port: http
+            periodSeconds: 10
+            failureThreshold: 90
+          readinessProbe:
+            httpGet:
+              path: /login
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /login
+              port: http
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: sc
+              mountPath: /opt/sc
+              readOnly: true
+            - name: notebooks
+              mountPath: /opt/sc-notebooks
+              readOnly: true
+            - name: binding
+              mountPath: /etc/sc
+              readOnly: true
+            - name: shm
+              mountPath: /dev/shm
+          resources:
+            # requests and limits are one map: a tenant cluster space sets
+            # `maxLimitRequestRatio: 1`, so a pod whose request differs from its
+            # limit is refused at admission and never exists.
+            requests:
+              cpu: "8"
+              memory: "48Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: "48Gi"
+              nvidia.com/gpu: "1"
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: rapids-singlecell-notebook-workspace
+        - name: sc
+          configMap:
+            name: rapids-singlecell-notebook
+            defaultMode: 0555
+        - name: notebooks
+          configMap:
+            name: rapids-singlecell-notebook-notebooks
+        - name: binding
+          secret:
+            secretName: rapids-singlecell-notebook
+            items:
+              - key: binding.json
+                path: binding.json
+            # The slot may be empty — a deployment with no dataset bound reads
+            # what the tenant uploads instead — and a Secret key that is not
+            # there must not stop the pod from starting.
+            optional: true
+        # RAPIDS talks to its Dask workers over /dev/shm and the 64Mi default is
+        # not enough. Memory-backed, so this counts against the container's
+        # memory limit — `resources.memory` includes it.
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi
+---
+# Source: rapids-singlecell-notebook/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rapids-singlecell-notebook
+  labels:
+    helm.sh/chart: rapids-singlecell-notebook-0.1.0
+    app.kubernetes.io/name: rapids-singlecell-notebook
+    app.kubernetes.io/instance: sc
+    app.kubernetes.io/version: "26.02"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: notebook
+  annotations:
+    swarm.io/exclude-evidence-fields: "/spec/rules/0/host"
+    nginx.ingress.kubernetes.io/proxy-body-size: 4096m
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: "sc-7f2a.conf-apps.superprotocol.dev"
+      http:
+        paths:
+          - path: "/"
+            pathType: Prefix
+            backend:
+              service:
+                name: rapids-singlecell-notebook
+                port:
+                  number: 8888

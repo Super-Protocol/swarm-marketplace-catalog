@@ -1,0 +1,9 @@
+apiVersion: v2
+name: rapids-singlecell-notebook
+description: A GPU JupyterLab for single-cell analysis with RAPIDS-singlecell, serving notebooks ported from NVIDIA's Single-Cell Analysis Blueprint against data bound from a marketplace dataset.
+type: application
+version: 0.1.0
+# The RAPIDS release the notebook image is built from. Bumping it is a chart
+# change: the CUDA floor, the conda environment the lock is resolved against,
+# and therefore the lock itself all move with it.
+appVersion: "26.02"

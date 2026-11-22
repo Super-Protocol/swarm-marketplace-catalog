@@ -1,0 +1,370 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: AppDefinition
+
+# ---------------------------------------------------------------------------
+# Confidential Single Cell Analysis — the first listing in the blueprint-port
+# epic (SUP-837) whose upstream needed no licence substitution at all.
+#
+# What it is: NVIDIA's open Single-Cell Analysis Blueprint — RAPIDS-singlecell
+# on a GPU, Apache-2.0 — running inside a confidential cluster space, over a
+# matrix the tenant never has to export. What it is NOT is an NVIDIA product,
+# and the naming here follows the guardrails in SUP-841: a product name of ours
+# plus an honest provenance line, and no claim of endorsement (which the
+# container's own licence forbids in so many words, §4(d)).
+#
+# The one encumbrance the stage-1 audit did not find, recorded here because it
+# is the question anybody reading this listing will ask: the RAPIDS notebooks
+# image carries `/NGC-DL-CONTAINER-LICENSE` and its entrypoint prints that the
+# container is governed by the NVIDIA Deep Learning Container License. That is
+# NOT Apache-2.0 — but it is also not NVIDIA AI Enterprise: it needs no
+# entitlement, no NGC credential and no per-GPU fee, it permits deploying the
+# container to offer a service to third parties (§1(b)) given material
+# additional functionality (§2(a)), and the Docker Hub copy pinned below pulls
+# anonymously. Surfaced on the card through the `containerLicence` output
+# rather than buried here.
+# ---------------------------------------------------------------------------
+
+metadata:
+  name: confidential-single-cell-analysis
+  title: Confidential Single Cell Analysis
+  description: >-
+    GPU-accelerated single-cell RNA analysis — QC, normalisation, clustering, UMAP, Harmony batch
+    correction, marker genes and transcription-factor activity — on patient-derived expression
+    matrices that never leave the enclave. A JupyterLab workspace with RAPIDS-singlecell on the
+    card, serving notebooks ported from NVIDIA's open Single-Cell Analysis Blueprint (Apache-2.0),
+    reading the dataset you attach rather than a corpus off the public internet. The deployment
+    publishes signed evidence of the exact environment it is running, down to the sha256 of every
+    Python wheel.
+  version: "0.1.0"
+  category: life-sciences
+  # What an auditor should read: the workflow, its authors and its licence are
+  # upstream's. What we changed is in the chart's
+  # files/notebooks/PROVENANCE.md, which is also copied into every deployment's
+  # workspace.
+  sourceRepo: https://github.com/NVIDIA-AI-Blueprints/single-cell-analysis-blueprint
+  license: Apache-2.0
+  tags:
+    - single-cell
+    - genomics
+    - rapids
+    - gpu
+    - jupyter
+    - scverse
+    - healthcare
+    - attestation
+
+ui:
+  sections:
+    - id: access
+      title: Access
+      description: >-
+        Where the workspace is served, and the token that opens it. Take the hostname offered and
+        the DNS is written for you.
+      fields:
+        - parameterId: hostname
+          widget: hostname
+        - parameterId: token
+          widget: password
+
+    - id: data
+      title: Your data
+      description: >-
+        Which columns of your matrix the notebooks group by. Both are answered; open this only if
+        your `obs` uses different names. The first notebook prints the columns it actually found, so
+        a wrong answer here is a message in cell 3 rather than a failure forty cells in.
+      fields:
+        - parameterId: batchKey
+          widget: text
+        - parameterId: labelKey
+          widget: text
+
+parameters:
+  - id: hostname
+    type: string
+    title: Workspace hostname
+    description: >-
+      Where JupyterLab is served. Take the one offered and the DNS is written for you; bring your
+      own and point it at this cloud's gateway before publishing the deployment.
+    required: true
+    validation:
+      pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+
+  - id: token
+    type: string
+    title: Sign-in token
+    description: >-
+      The only credential the workspace accepts. Generated if left blank and shown below once this
+      is deployed — paste it into the sign-in form. It is the whole of the authentication in front
+      of a GPU and whatever data you attach, so it is not optional and it is not short.
+    sensitive: true
+    generated: true
+    validation:
+      minLength: 32
+
+  - id: batchKey
+    type: string
+    title: Batch column
+    description: >-
+      The `obs` column the notebooks treat as the batch — for the QC violins and for Harmony
+      integration. The blueprint's own notebooks used `assay`, which is a column of the public
+      corpus they downloaded; yours is whatever your matrix calls it.
+    required: true
+    default: batch
+    validation:
+      pattern: "^[A-Za-z_][A-Za-z0-9_.-]*$"
+
+  - id: labelKey
+    type: string
+    title: Cell-type column
+    description: >-
+      The `obs` column carrying an existing cell-type annotation, which the notebooks compare their
+      own clustering against. Genuinely optional in the data — a matrix without it still runs
+      everything up to that comparison.
+    required: true
+    default: cell_type
+    validation:
+      pattern: "^[A-Za-z_][A-Za-z0-9_.-]*$"
+
+resources:
+  # ---------------------------------------------------------------------------
+  # The cluster space quota, not a hint: it becomes the namespace's quota, and
+  # under-declared it evicts the heaviest pod and reads as "the app is broken".
+  #
+  # One pod, one container — 8 CPU / 48Gi, which includes the 8Gi of
+  # memory-backed /dev/shm RAPIDS uses to talk to its Dask workers. The extra
+  # 1 CPU and 2Gi above that are not margin: the marketplace adds its own
+  # egress sidecar to any deployment that mounts GATED data (limits 250m /
+  # 128Mi), and a quota sized for the application alone refuses it.
+  #
+  # Memory is host memory, not VRAM. anndata holds a full copy of the matrix
+  # there before it ever reaches the card, and an out-of-core workflow streams
+  # through it by design.
+  min:
+    cpu: "9"
+    memory: "50Gi"
+    storage: "100Gi"
+  # The heaviest single pod, which is the one the cloud requires ONE node to be
+  # able to hold — and the LimitRange max of the space. The sidecar is a pod of
+  # its own, and a far smaller one, so this is the notebook container's limits.
+  maxPod:
+    cpu: "8"
+    memory: "48Gi"
+  recommended:
+    cpu: "16"
+    memory: "96Gi"
+    storage: "200Gi"
+  gpu:
+    # RAPIDS-singlecell is CUDA. Without a card the notebooks import and then
+    # fail on the first `rsc.get.anndata_to_GPU` — a deployment that looks
+    # healthy and cannot do the one thing it is for.
+    required: true
+    minCount: 1
+    # The blueprint's own floor: ≥24 GB for the notebooks this listing ships,
+    # which is also what makes an L40S or an A10 a legitimate target for it
+    # rather than only a datacentre card.
+    minVram: "24Gi"
+    # nvidia-smi product names, which hw-measurement writes to
+    # device.swarm.io/gpu-product. Placement requires this exact string, so a
+    # different card of the same family needs its own entry — and a plausible
+    # guess is worse than no entry at all. These two are the cards this estate
+    # actually has: H100 NVL was measured inside a cluster space on the
+    # gpu-blueprints cloud (SUP-868), H200 NVL is the card the model-serving
+    # listings run on.
+    types:
+      - NVIDIA H100 NVL
+      - NVIDIA H200 NVL
+
+data:
+  slots:
+    # -------------------------------------------------------------------------
+    # One slot, two interfaces, and the difference between them is who holds the
+    # credentials.
+    #
+    # `clickhouse-http/v1` is the gateable one — today it is the ONLY interface
+    # the marketplace gatekeeper can serve, because the gate injects ClickHouse
+    # credentials into every request it forwards and rewrites the database it
+    # names. A dataset published `access.mode: gateway` over this interface
+    # reaches this deployment through a plain listener in its own namespace, and
+    # every read is admitted against the evidence this deployment published.
+    #
+    # `s3-h5ad/v1` is NOT in `accepts`, and the reason is worth recording.
+    # `.h5ad` is the format a lab's matrices already exist in, the contract is
+    # written (`interfaces/s3-h5ad/v1.yaml`) and the workspace reads it — but the
+    # interface registry is not this repository. It is `BUNDLED_INTERFACES` in
+    # the platform's own `marketplace-spec` library, mirrored from the
+    # specification repository, and `AppPublishingService.submit()` refuses any
+    # definition naming a contract the registry does not hold:
+    # "Unknown data interface(s) … Add the contract to the registry first."
+    # Naming it here would make this listing unpublishable on every marketplace
+    # until the platform ships the contract. It goes back in the moment it does.
+    #
+    # Not required. A deployment with nothing attached is a supported and useful
+    # one: the tenant drops an `.h5ad` into /workspace/data through the browser
+    # and never registers the data with a marketplace at all. The binding — and
+    # therefore everything that varies between two deployments of this version —
+    # lives in a Secret, so the attested render is the same either way.
+    # -------------------------------------------------------------------------
+    - name: matrices
+      title: Single-cell matrices
+      description: >-
+        The expression matrices the notebooks work on, assembled from long-form `sc_counts`
+        (`cell_id`, `gene`, `count`) plus `sc_cells` and, optionally, `sc_genes`. Attach more than
+        one and the notebooks read the first — `00_dataset.ipynb` lists them all. Nothing attached
+        is also supported: upload an `.h5ad` into /workspace/data instead.
+      required: false
+      multiple: true
+      accepts:
+        - interface: clickhouse-http/v1
+      schema:
+        tables:
+          - columns:
+              - name: cell_id
+                type: string
+              - name: gene
+                type: string
+              - name: count
+                type: number
+
+components:
+  - name: workspace
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: rapids-singlecell-notebook
+      version: "0.1.0"
+    # The RAPIDS notebooks image, and the only image this deployment runs. The
+    # Python environment the notebooks need is installed from a hash-pinned lock
+    # that the chart renders into an attested ConfigMap — so the environment is
+    # named by sha256 inside the evidence even though it is not in the image.
+    images:
+      - name: docker.io/rapidsai/notebooks
+        digest: sha256:bbe8a453ff7e3613829eb8ad723f78ae3df236acf86c3ad9166820235a32ffbf
+    deployment:
+      values:
+        base:
+          hostname: ""
+          token: ""
+          data:
+            bindingJson: ""
+            batchKey: ""
+            labelKey: ""
+        patches:
+          - op: replace
+            path: hostname
+            value: "{{ params.hostname }}"
+
+          - op: replace
+            path: token
+            value: "{{ params.token }}"
+
+          # The resolved binding, straight into the chart's Secret. It carries
+          # the dataset owner's credentials, and it is the one value that
+          # differs between two deployments of this version — both of which are
+          # reasons for it to be nowhere else.
+          - op: replace
+            path: data.bindingJson
+            value: "{{ data.matrices | json }}"
+
+          - op: replace
+            path: data.batchKey
+            value: "{{ params.batchKey }}"
+
+          - op: replace
+            path: data.labelKey
+            value: "{{ params.labelKey }}"
+
+outputs:
+  - id: workspaceUrl
+    title: Open the workspace
+    type: url
+    value: "https://{{ params.hostname }}/lab"
+
+  - id: token
+    title: Sign-in token
+    # `secret`, so it is surfaced only to people who may deploy for the
+    # organisation, masked, with one-click copy.
+    type: secret
+    value: "{{ params.token }}"
+
+  - id: signIn
+    title: How to sign in
+    # Deliberately NOT a `https://…/lab?token=…` link, which is how JupyterLab
+    # usually hands a token over. A query string is written to the ingress
+    # controller's access log, to any proxy in between, and to the browser's
+    # history; the sign-in form posts the same token in a body and sets a
+    # cookie. One copy-paste is worth that.
+    type: string
+    value: >-
+      Open the workspace above and paste the sign-in token into the form. Do not append it to the
+      URL as `?token=…` — a query string lands in the gateway's access log and in your browser
+      history, and the form does not.
+
+  - id: containerLicence
+    title: Licence of the container this runs
+    type: string
+    value: >-
+      The notebooks, the chart and the ported workflow are Apache-2.0. The image they run in —
+      `rapidsai/notebooks` 26.02, from Docker Hub — is governed by the NVIDIA Deep Learning
+      Container License (`/NGC-DL-CONTAINER-LICENSE` inside the image), with its components under
+      their own open licences. It needs no NVIDIA entitlement, no NGC credential and no per-GPU
+      fee, and it pulls anonymously. What it does require of you: material additional functionality
+      beyond the container (§2(a)), no claim that this is sponsored or endorsed by NVIDIA (§4(d)),
+      and NVIDIA's own notice that the container is not certified for medical or other life-critical
+      use (§4(h)).
+
+  - id: evidenceBundle
+    title: Published evidence
+    type: url
+    value: "https://{{ params.hostname }}/.well-known/swarm-evidence"
+
+  - id: dataBound
+    title: Data
+    type: string
+    value: >-
+      A dataset is attached to this deployment. `00_dataset.ipynb` names it, shows its `obs` columns
+      and proves the GPU is reachable before any analysis starts.
+    when: "data.matrices.count > 0"
+
+  - id: dataUnbound
+    title: Data
+    type: string
+    value: >-
+      No dataset is attached. Upload an `.h5ad` into /workspace/data with the file browser in
+      JupyterLab, or reconfigure the deployment with a dataset in the "Single-cell matrices" slot.
+    when: "data.matrices.count == 0"
+
+evidence:
+  # ---------------------------------------------------------------------------
+  # Measured, not derived. Two deployments of this version on the gpu-blueprints
+  # cloud, 2026-11-22 — `sc-842a` and `sc-842b`, two hostnames in two namespaces
+  # — published byte-identical signed snapshots and this digest. Six resources
+  # in each: two ConfigMaps, the Deployment, the Ingress, the Secret and the
+  # Service.
+  #
+  # Declaring it is not documentation. The marketplace admits a deployment to the
+  # gatekeeper only when its listing version carries one, so a listing with a
+  # data slot and no digest produces deployments the gate has never heard of
+  # (SUP-711, and `apps/tests/gated_digest.py`).
+  #
+  # One caveat the measurement cannot cover, and it belongs to the platform
+  # rather than to this listing: a deployment that mounts GATED data gains three
+  # objects the marketplace adds itself — the egress sidecar's ConfigMap,
+  # Deployment and Service (`gatekeeper/egress-sidecar.ts`) — which are part of
+  # what the cloud digests. Its snapshot is therefore not this one. The digest
+  # below is the no-gated-data configuration, which is what every deployment of
+  # this listing is today; the first gated deployment has to re-measure and
+  # re-declare.
+  expectedDigest: "3e03a7196d77d9e0b9f8340a976d372337fc2e5474f591530e6f84b41730979a"
+  # ---------------------------------------------------------------------------
+  # The hostname is the one field that differs between two deployments of this
+  # version, and excluding it is what makes the digest a property of the version
+  # rather than of the deployment. Declared here as well as in the chart's own
+  # annotation, because the listing page shows only what the definition declares
+  # — a digest displayed beside "no exclusions" answers the only question that
+  # matters about it wrongly.
+  exclude:
+    - match:
+        kind: Ingress
+        name: rapids-singlecell-notebook
+      fields:
+        - /spec/rules/0/host

@@ -62,6 +62,14 @@ apps:
     organization: platform-team
   - path: apps/confidential-claims-fraud
     organization: platform-team
+  # Ported from NVIDIA's open Single-Cell Analysis Blueprint (SUP-842). Published by
+  # the platform team for the same reason the model-serving family is: the workflow
+  # and its notebooks are scverse's and NVIDIA's, and what this listing stands behind
+  # is the port — the image pin, the hash-pinned environment, the dataset slot and the
+  # confidential execution. Naming it after NVIDIA would assert a relationship that
+  # does not exist, and the container's own licence forbids implying one (§4(d)).
+  - path: apps/confidential-single-cell-analysis
+    organization: platform-team
   - path: apps/conversational-analyst
     organization: aivo
     secrets:

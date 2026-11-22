@@ -21,12 +21,12 @@ cd "$root"
 # only for the label: those charts address one another by `<release>-<subchart>` and the
 # listing resolves the same names through `{{ components.agent.release }}`, so a golden taken
 # under a different release name would not be the deployment anybody gets.
-release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; patroni-postgresql) printf 'pg' ;; swarm-model-server) printf 'ms' ;; conversational-analyst-*) printf 'analyst' ;; *) printf 'cr' ;; esac; }
-namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; patroni-postgresql) printf 'patroni' ;; swarm-model-server) printf 'model-server' ;; conversational-analyst-*) printf 'conversational-analyst' ;; *) printf 'confidential-router' ;; esac; }
+release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; rapids-singlecell-notebook) printf 'sc' ;; patroni-postgresql) printf 'pg' ;; swarm-model-server) printf 'ms' ;; conversational-analyst-*) printf 'analyst' ;; *) printf 'cr' ;; esac; }
+namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; rapids-singlecell-notebook) printf 'single-cell' ;; patroni-postgresql) printf 'patroni' ;; swarm-model-server) printf 'model-server' ;; conversational-analyst-*) printf 'conversational-analyst' ;; *) printf 'confidential-router' ;; esac; }
 
 RELEASE=cr
 NAMESPACE=confidential-router
-CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ollama confidential-router-ui confidential-s3 patroni-postgresql swarm-model-server
+CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ollama confidential-router-ui confidential-s3 patroni-postgresql swarm-model-server rapids-singlecell-notebook
         conversational-analyst-platform conversational-analyst-embeddings conversational-analyst-identity conversational-analyst-agent conversational-analyst-gateway conversational-analyst-grounding)
 
 update="${UPDATE:-}"
@@ -75,6 +75,7 @@ for chart in "${CHARTS[@]}"; do
     confidential-s3) values="charts/tests/cases/s3-default.yaml" ;;
     patroni-postgresql) values="charts/tests/cases/patroni-default.yaml" ;;
     swarm-model-server) values="charts/tests/cases/model-server-llama.yaml" ;;
+    rapids-singlecell-notebook) values="charts/tests/cases/single-cell-default.yaml" ;;
     conversational-analyst-platform) values="charts/tests/cases/analyst-platform.yaml" ;;
     conversational-analyst-embeddings) values="charts/tests/cases/analyst-embeddings.yaml" ;;
     conversational-analyst-identity) values="charts/tests/cases/analyst-identity.yaml" ;;
@@ -110,6 +111,20 @@ else
   fail "swarm-model-server (component)"
   printf '%s\n' "$output" | sed 's/^/        /'
 fi
+
+# The notebook's two other shapes: no dataset attached, and no ingress at all.
+# Both are linted rather than only goldened, because the validations that fire
+# with an ingress on — a hostname, a token — are exactly the ones the component
+# shape does not have.
+for shape in unbound component; do
+  if output=$(helm lint charts/rapids-singlecell-notebook \
+        --values "charts/tests/cases/single-cell-$shape.yaml" 2>&1); then
+    pass "rapids-singlecell-notebook ($shape)"
+  else
+    fail "rapids-singlecell-notebook ($shape)"
+    printf '%s\n' "$output" | sed 's/^/        /'
+  fi
+done
 
 note "helm template goldens"
 while IFS=$'\t' read -r name chart repo version; do
@@ -258,6 +273,75 @@ else
   failures=$((failures + 1))
 fi
 
+note "every image the single-cell listing renders is declared by its listing"
+if output=$(python3 charts/tests/declared_images.py confidential-single-cell-analysis \
+      workspace rapids-singlecell-notebook charts/tests/cases/single-cell-default.yaml); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/declared_images.py confidential-single-cell-analysis"
+fi
+
+note "the heaviest pod the single-cell listing renders is within its declared maxPod"
+if output=$(python3 charts/tests/max_pod.py confidential-single-cell-analysis \
+      workspace:rapids-singlecell-notebook:single-cell-default); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/max_pod.py confidential-single-cell-analysis"
+fi
+
+note "two consumers of the single-cell listing attest the same snapshot"
+if output=$(python3 charts/tests/evidence_drift.py rapids-singlecell-notebook \
+      charts/tests/cases/single-cell-default.yaml confidential-single-cell-analysis \
+      'hostname={t}.conf-apps.superprotocol.dev' \
+      'token=SIGNIN-{t}'); then
+  # The binding is deliberately not varied here: `helm --set` cannot carry a JSON
+  # document, and a Secret's values are dropped from the snapshot before this
+  # check ever sees them. What attaching a dataset does to the render is asked
+  # directly, against the two goldens, below.
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/evidence_drift.py rapids-singlecell-notebook"
+fi
+
+# The property the listing's `expectedDigest` rests on, and the one no other check
+# here would notice: attaching a dataset must change nothing the cloud digests.
+# Everything the binding touches is in the Secret, whose values are lifted out
+# before the snapshot is taken — so a patch that ever put a connection into an
+# env value, a ConfigMap or an argument would make the declared digest a property
+# of whether somebody attached data, and the gate would then refuse exactly the
+# deployments that mounted gated data.
+# The defect that CrashLoopBackOff'd the first real deployment of this chart,
+# with its whole attested environment already installed. See the file.
+note "the workspace loader survives every binding shape the marketplace renders"
+if output=$(python3 charts/tests/single_cell_workspace.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/single_cell_workspace.py"
+fi
+
+note "attaching a dataset changes nothing outside the Secret"
+strip_secret() {
+  python3 - "$1" <<'PYEOF'
+import pathlib
+import sys
+
+documents = pathlib.Path(sys.argv[1]).read_text().split('\n---\n')
+print('\n---\n'.join(d for d in documents if 'kind: Secret' not in d))
+PYEOF
+}
+if diff -u <(strip_secret charts/tests/golden/single-cell-default.yaml) \
+            <(strip_secret charts/tests/golden/single-cell-unbound.yaml) >/tmp/sc-bind-diff.$$ 2>&1; then
+  pass "bound and unbound renders differ in the Secret alone"
+else
+  fail "bound and unbound renders differ outside the Secret"
+  sed 's/^/        /' /tmp/sc-bind-diff.$$
+fi
+rm -f /tmp/sc-bind-diff.$$
+
 note "every rendered container clears a cluster space's LimitRange"
 if output=$(python3 charts/tests/limitrange.py); then
   printf '%s\n' "$output"
@@ -397,6 +481,30 @@ refuses "a deployment with no mail, no OAuth app and no first-sign-in token" "no
 
 refuses "a session length outside a year" "auth.sessionDays must be between 1 and 365" \
   "${base_api[@]}" --set auth.sessionDays=400
+
+base_sc=(helm template sc charts/rapids-singlecell-notebook --namespace single-cell --values charts/tests/cases/single-cell-default.yaml)
+
+# The image's own command starts JupyterLab with --NotebookApp.token='', so a
+# published deployment with no token is a GPU and whatever data is attached to
+# it handed to whoever finds the hostname.
+refuses "a published notebook with no sign-in token" "token must be set" \
+  "${base_sc[@]}" --set token=
+
+refuses "an ingress with no hostname" "hostname must be set" \
+  "${base_sc[@]}" --set hostname=
+
+# A device request without the runtime class leaves the pod Pending for ever
+# rather than falling back to CPU.
+refuses "a GPU request with no runtime class" "gpu.runtimeClassName must be set" \
+  "${base_sc[@]}" --set gpu.runtimeClassName=
+
+# A published cluster space is frozen — no exec, no port-forward — so a
+# workspace lost on a restart is a tenant's work that cannot be recovered.
+refuses "a workspace on an emptyDir" "persistence.enabled must be true" \
+  "${base_sc[@]}" --set persistence.enabled=false
+
+refuses "an unpinned image" "pinned by digest" \
+  "${base_sc[@]}" --set image.digest= --set image.tag=
 
 # A URL where a hostname belongs renders `https://https://…` into the CORS list,
 # which no browser origin matches: the landing page loads and quietly does

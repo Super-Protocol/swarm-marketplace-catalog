@@ -1,0 +1,12 @@
+# The other supported shape: no dataset attached, the tenant uploads an .h5ad
+# into /workspace/data instead. The render must differ from
+# single-cell-default in nothing but the Secret, which the platform lifts out
+# before the snapshot is taken — otherwise `evidence.expectedDigest` would be a
+# property of whether somebody attached data rather than of the version.
+hostname: sc-7f2a.conf-apps.superprotocol.dev
+token: Vd81kQ2mRt6pYs0ZaBn4LcXwEjHu9Gf3
+data:
+  # An empty slot renders as `[]`, not as an empty string.
+  bindingJson: "[]"
+  batchKey: batch
+  labelKey: cell_type

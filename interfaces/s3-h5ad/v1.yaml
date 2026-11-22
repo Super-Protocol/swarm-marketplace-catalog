@@ -1,0 +1,75 @@
+# NOT YET IN THE PLATFORM REGISTRY, and therefore not yet nameable in a
+# listing's `accepts`. Written here because `apps/confidential-single-cell-analysis`
+# implements it and `.h5ad` is the format single-cell matrices actually exist in.
+#
+# This directory is a copy, not the registry. The registry a marketplace matches
+# against is `BUNDLED_INTERFACES` in the platform's `marketplace-spec` library,
+# mirrored from the specification repository — and a definition naming a contract
+# the registry does not hold is refused at submission with "Unknown data
+# interface(s) … Add the contract to the registry first."
+#
+# Registering it is three changes, in this order: the contract into
+# Super-Protocol/swarm-marketplace-spec, the mirror into swarm-cloud's
+# `libs/marketplace-spec/src/registry/interfaces/` plus `bundled-interfaces.ts`,
+# and then this copy and the listing's `accepts` entry. Until then the workspace
+# reads `.h5ad` from a file a tenant uploads, and `sc_workspace._read_h5ad_from_s3`
+# is tested and waiting.
+
+apiVersion: swarm.cloud/v1alpha1
+kind: DataInterface
+
+metadata:
+  name: s3-h5ad
+  version: v1
+  title: S3-Compatible Object Storage (AnnData / h5ad)
+  description: >-
+    Read access to AnnData files (`.h5ad`) stored in an S3-compatible bucket — the native format of
+    the scverse single-cell stack, and the form a lab's own expression matrices already exist in. One
+    object is one annotated matrix: the count matrix together with its per-cell (`obs`) and per-gene
+    (`var`) annotation, so unlike the tabular interfaces beside it there is no sidecar to keep in
+    step. A consumer reads the objects `objects` names, or every `.h5ad` under `prefix` when it names
+    none.
+
+spec:
+  connection:
+    properties:
+      endpoint:
+        type: string
+        description: S3-compatible endpoint URL.
+      region:
+        type: string
+        default: us-east-1
+        description: Bucket region.
+      bucket:
+        type: string
+        description: Bucket containing the dataset.
+      prefix:
+        type: string
+        default: ""
+        description: Key prefix under which the `.h5ad` objects are stored.
+      objects:
+        type: string
+        default: ""
+        description: >-
+          Comma-separated object names under `prefix`, in the order a consumer should read them.
+          Empty means every `.h5ad` under the prefix, which is right for a dataset whose contents
+          change without republishing and wrong for one where order matters. A list rather than a
+          repeated property because a connection property is a scalar: the interface schema allows
+          string, integer, number and boolean and nothing else.
+      accessKeyId:
+        type: string
+        secret: true
+        description: Access key provisioned for this binding. Sealed for the target TEE.
+      secretAccessKey:
+        type: string
+        secret: true
+        description: Secret key provisioned for this binding. Sealed for the target TEE.
+      pathStyle:
+        type: boolean
+        default: true
+        description: Whether to use path-style addressing (required by most S3-compatible services).
+    required:
+      - endpoint
+      - bucket
+      - accessKeyId
+      - secretAccessKey
