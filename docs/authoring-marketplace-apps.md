@@ -485,3 +485,5 @@ Before opening a pull request:
 - [ ] Rendered as two consumers — two hostnames *and* two consumer identities; the only
       differences are declared exclusions
 - [ ] README says what the listing deliberately does not do
+- [ ] A port of someone else's open-source architecture follows [ported-listings.md](ported-listings.md):
+      our name, a provenance line, our fork as `sourceRepo`, every weight licence on the page
