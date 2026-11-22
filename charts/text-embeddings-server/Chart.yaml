@@ -1,0 +1,32 @@
+apiVersion: v2
+name: text-embeddings-server
+description: >-
+  An open embedding or reranking checkpoint served inside the deployment's own namespace over
+  Text Embeddings Inference, from weights pinned by sha256. CPU only, no public hostname, and
+  authenticated even so.
+type: application
+# 0.1.1 corrected one measured number: the English embedder's memory, 4Gi -> 6Gi. The 4Gi came
+# from a sampled peak of 2320 MiB; the cgroup's own `memory.peak` for the same run is 3361 MiB.
+# 0.1.2 corrects the other one — that embedder's batch ceiling, 16384 -> 2048 — and gives every
+# preset a 20-minute startup budget instead of ten. The ceiling had been chosen from the
+# warm-up's MEMORY, which is small for a 512-token model, and ignored the warm-up's CPU cost:
+# 126 s on the two cores the container gets, against 9 s at 2048. On a node also pulling a 6 GiB
+# checkpoint for the engine it did not finish inside the probe's budget at all, so a healthy
+# server was killed and restarted from the beginning.
+# 0.1.3 is the probe, and it is the fix the two before it were reaching for. With a 5 s
+# liveness timeout the embedder came up, served the corpus indexer, and was killed mid-index
+# with exit 137 after `Liveness probe failed: context deadline exceeded`: a batch of chunks
+# holds both cores for longer than that, `/health` is served by the same runtime, and the
+# kubelet reads a busy inference server as a dead one. It restarted, the indexer retried, and
+# it died again. Liveness now tolerates three minutes of queueing; readiness tolerates a
+# minute, which is right — a saturated endpoint should leave the Service and its caller should
+# retry.
+# 0.1.4 extends the same reasoning to readiness, which 0.1.3 left tight on the textbook
+# argument that a saturated endpoint should leave its Service. That is wrong when the only
+# caller is the deployment's own indexer: de-registering the embedder because the indexer is
+# using it fails the batch, the indexer rebuilds the collection from the start, and the loop
+# never finishes.
+version: 0.1.5
+# Text Embeddings Inference. Bumping it is a chart change, not an image bump: the backend
+# selection, the flags and the pooling behaviour move with it.
+appVersion: "1.8"

@@ -1,0 +1,164 @@
+{{- $name := include "crag.name" . -}}
+{{- /*
+The ported pipeline. One container, from the image built out of our fork: retrieve from Milvus,
+rerank with the open cross-encoder, generate on the open-inference component, answer with
+citations.
+
+On no Ingress and with no authentication of its own, which is deliberate and is why the console
+exists: the only thing between the retriever and the internet is the console's session check.
+*/ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-server
+  labels:
+    {{- include "crag.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  # The object store is a directory on a ReadWriteOnce volume held open by the running pod, so a
+  # second pod cannot come up beside the first and a rolling update would leave the new one
+  # Pending for ever while the old one serves.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "crag.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        {{- include "crag.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: server
+    spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: server
+          image: {{ include "crag.imageRef" .Values.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8081"
+            - --workers
+            - {{ .Values.server.workers | quote }}
+          envFrom:
+            - configMapRef:
+                name: {{ $name }}-config
+          env:
+            # Every credential by reference. An env *value* is rendered into the manifests and
+            # published in the evidence snapshot; a `secretKeyRef` is a pointer to something the
+            # platform sealed.
+            - name: APP_LLM_APIKEY
+              valueFrom:
+                secretKeyRef: { name: {{ $name }}-secrets, key: inference-api-key }
+            - name: APP_EMBEDDINGS_APIKEY
+              valueFrom:
+                secretKeyRef: { name: {{ $name }}-secrets, key: embeddings-api-key }
+            - name: APP_RANKING_APIKEY
+              valueFrom:
+                secretKeyRef: { name: {{ $name }}-secrets, key: reranker-api-key }
+            - name: APP_VECTORSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ $name }}-secrets, key: vector-store-password }
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8081
+              protocol: TCP
+          # `/v1/health` without `check_dependencies` answers from the process alone, which is
+          # the right question for a probe: the pipeline's four endpoints come up in their own
+          # time and a readiness gate on all of them would hold this pod down for the slowest.
+          # The console's status panel is where the dependencies are reported.
+          startupProbe:
+            httpGet: { path: /v1/health, port: http }
+            periodSeconds: 10
+            failureThreshold: 60
+          # A question in flight holds a worker until the model answers, so these tolerate
+          # queueing: restarting a pipeline mid-answer makes the queue worse and loses the
+          # answer. Same reasoning as the embedder's probes, which killed it mid-index.
+          readinessProbe:
+            httpGet: { path: /v1/health, port: http }
+            periodSeconds: 15
+            timeoutSeconds: 15
+            failureThreshold: 4
+          livenessProbe:
+            httpGet: { path: /v1/health, port: http }
+            periodSeconds: 30
+            timeoutSeconds: 20
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          volumeMounts:
+            - name: objects
+              mountPath: /data/objects
+            # The text splitter and the HF cache write here, and the image's own /tmp-data is
+            # not on a volume.
+            - name: scratch
+              mountPath: /tmp-data
+      volumes:
+        - name: objects
+          {{- if .Values.server.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ $name }}-objects
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: scratch
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-server
+  labels:
+    {{- include "crag.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "crag.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+{{- if .Values.server.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-objects
+  labels:
+    {{- include "crag.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  accessModes:
+    - {{ .Values.server.persistence.accessMode }}
+  {{- with .Values.server.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.server.persistence.size | quote }}
+{{- end }}

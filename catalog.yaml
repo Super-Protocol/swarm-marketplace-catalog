@@ -70,6 +70,14 @@ apps:
   # does not exist, and the container's own licence forbids implying one (§4(d)).
   - path: apps/confidential-single-cell-analysis
     organization: platform-team
+  # Ported from NVIDIA's open RAG reference architecture (SUP-840), and the first
+  # listing in that epic that needed real licence substitution rather than a
+  # repackaging: the two NeMo Retriever NIMs, the generation NIM, Elasticsearch
+  # and Redis Stack are all replaced. Published by the platform team for the same
+  # reason as the rest of the ported family — what this listing stands behind is
+  # the port, the pins and the confidential execution, not somebody else's brand.
+  - path: apps/confidential-rag
+    organization: platform-team
   - path: apps/conversational-analyst
     organization: aivo
     secrets:
@@ -77,6 +85,31 @@ apps:
       registryToken: ${AIVO_REGISTRY_TOKEN}
 
 datasets:
+  # The one gated DOCUMENT corpus on this catalogue, and the reason it exists is a
+  # platform constraint: the gatekeeper carries ClickHouse over HTTP and nothing
+  # else, so a corpus whose owner wants to approve a build before it is read has
+  # to be a table. Confidential RAG is pointed at this one.
+  - path: datasets/acme-engineering-handbook
+    organization: acme-corp
+    sourceType: clickhouse
+    visibility: restricted
+    price: Internal
+    expectedUpdate: On demand (regenerated from the committed generator)
+    usageTerms: >-
+      Synthetic demonstration data. Every document was written for this repository; none is taken
+      from a real company's documentation or derived from one, so it may be loaded, queried and
+      shown freely.
+    secrets:
+      readUser: ${HANDBOOK_READ_USER}
+      readPassword: ${HANDBOOK_READ_PASSWORD}
+    statistics:
+      sizeBytes: "118784"
+      recordCount: "64"
+      format: ClickHouse MergeTree
+      usability: 9.5
+      provenanceScore: 100
+      provenanceAttested: true
+
   - path: datasets/acme-internal-knowledge-base
     organization: acme-corp
     sourceType: clickhouse
@@ -183,9 +216,15 @@ datasets:
       provenanceAttested: true
 
 grants:
+  # The corpus and the listing that reads it. Granted to the operator's own
+  # organisation as well as the owner's, because the deployment that mounts it is
+  # the operator's — which is the boundary the gate exists to hold.
+  - dataset: acme-engineering-handbook
+    organizations: [acme-corp, big-pharma]
+    apps: [confidential-rag]
   - dataset: acme-internal-knowledge-base
     organizations: [acme-corp]
-    apps: [rag-agent]
+    apps: [rag-agent, confidential-rag]
   - dataset: retail-transactions
     organizations: [acme-corp]
     apps: [rag-agent]

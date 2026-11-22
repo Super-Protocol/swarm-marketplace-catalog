@@ -1,0 +1,20 @@
+{{- include "milvus.validate" . -}}
+{{- /*
+The embedded etcd's configuration. Deterministic and credential-free, which is why it is here
+and `user.yaml` is in a Secret: this document is identical in every deployment of a listing
+version, so it costs the attested digest nothing, and a reader of the evidence can see that the
+metastore is in-process rather than a cluster this pod could be pointed at.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "milvus.name" . }}-etcd
+  labels:
+    {{- include "milvus.labels" . | nindent 4 }}
+data:
+  embedEtcd.yaml: |
+    listen-client-urls: http://127.0.0.1:2379
+    advertise-client-urls: http://127.0.0.1:2379
+    quota-backend-bytes: 4294967296
+    auto-compaction-mode: revision
+    auto-compaction-retention: '1000'

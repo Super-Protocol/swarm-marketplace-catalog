@@ -22,6 +22,21 @@ PLACEHOLDER = "sha256:" + "0" * 64
 
 # Keyed by chart: the values paths that hold an image this chart deploys.
 IMAGES = {
+    # Confidential RAG (SUP-840). Every image in these three is first-party or
+    # pinned from a public registry, and each chart is published to an
+    # append-only repository — so a default that is a tag, or a placeholder
+    # nobody replaced, is a chart version that can never be fixed in place.
+    "text-embeddings-server": [
+        "image",
+        "fetcher.image",
+    ],
+    "milvus-standalone": [
+        "image",
+    ],
+    "confidential-rag": [
+        "image",
+        "cache.image",
+    ],
     "patroni-postgresql": [
         "image",
         "etcd.image",

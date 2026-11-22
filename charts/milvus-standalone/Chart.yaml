@@ -1,0 +1,9 @@
+apiVersion: v2
+name: milvus-standalone
+description: >-
+  Milvus as one pod — embedded etcd, local segment storage, authentication on. The vector store a
+  confidential retrieval deployment keeps its index in, with nothing in the namespace it does not
+  need and no object storage to stand up beside it.
+type: application
+version: 0.1.0
+appVersion: "2.6.5"

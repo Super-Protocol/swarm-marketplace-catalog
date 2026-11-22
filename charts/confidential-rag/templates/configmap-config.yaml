@@ -1,0 +1,101 @@
+{{- /*
+The pipeline's configuration, in full, and not one credential in it.
+
+This is the document an auditor reads to know what the deployment does: which engines, which
+models, which vector store, which thresholds, what is switched off. All of it is attested.
+
+What is switched off and why:
+
+  * the query rewriter, the filter-expression generator, reflection, query decomposition and
+    the agentic loop each make one or more extra LLM calls per question against a model on one
+    card — latency, on a corpus this size, that nothing has measured a benefit from. They are
+    named explicitly rather than left to their defaults so that the attested document says what
+    this deployment does not do;
+  * the VLM inference and the VLM reranker need a vision model this listing does not deploy;
+  * guardrails are NeMo Guardrails, which is a NIM — exactly what this port removes;
+  * GPU indexing and GPU search would take the card from the generation engine.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "crag.name" . }}-config
+  labels:
+    {{- include "crag.labels" . | nindent 4 }}
+data:
+  # --- the vector store ---
+  APP_VECTORSTORE_NAME: milvus
+  APP_VECTORSTORE_URL: {{ .Values.vectorStore.url | quote }}
+  APP_VECTORSTORE_USERNAME: {{ .Values.vectorStore.username | quote }}
+  APP_VECTORSTORE_INDEXTYPE: {{ .Values.vectorStore.indexType | quote }}
+  APP_VECTORSTORE_SEARCHTYPE: dense
+  APP_VECTORSTORE_ENABLEGPUINDEX: "False"
+  APP_VECTORSTORE_ENABLEGPUSEARCH: "False"
+  APP_VECTORSTORE_EF: {{ .Values.server.ef | quote }}
+  COLLECTION_NAME: {{ .Values.server.collection | quote }}
+  VECTOR_DB_TOPK: {{ .Values.server.topK | quote }}
+  APP_RETRIEVER_SCORETHRESHOLD: {{ .Values.server.scoreThreshold | quote }}
+  APP_RETRIEVER_TOPK: {{ .Values.server.rerankerTopK | quote }}
+
+  # --- generation, on the open-inference component ---
+  APP_LLM_MODELENGINE: openai
+  APP_LLM_MODELNAME: {{ .Values.inference.model | quote }}
+  APP_LLM_SERVERURL: {{ .Values.inference.url | quote }}
+  LLM_MAX_TOKENS: {{ .Values.server.maxTokens | quote }}
+  LLM_TEMPERATURE: {{ .Values.server.temperature | quote }}
+  LLM_TOP_P: {{ .Values.server.topP | quote }}
+  # Nemotron's reasoning budget, written through `chat_template_kwargs` an open checkpoint does
+  # not read. Off, so no deployment of this listing sends it.
+  LLM_ENABLE_THINKING: "false"
+
+  # The three auxiliary LLM clients are built at start-up whether or not the features that use
+  # them are switched on — `NvidiaRAG.__init__` constructs the query rewriter's and the filter
+  # generator's unconditionally — so each one needs an endpoint or the process raises before it
+  # serves anything. It is the same endpoint: one engine, one card.
+  #
+  # Found by deploying, which is the only way it shows up: every one of these is absent from
+  # the compose file's "disabled" path, and the failure is a RuntimeError in the constructor,
+  # not a degraded feature.
+  APP_QUERYREWRITER_MODELNAME: {{ .Values.inference.model | quote }}
+  APP_QUERYREWRITER_SERVERURL: {{ .Values.inference.url | quote }}
+  APP_FILTEREXPRESSIONGENERATOR_MODELNAME: {{ .Values.inference.model | quote }}
+  APP_FILTEREXPRESSIONGENERATOR_SERVERURL: {{ .Values.inference.url | quote }}
+  SUMMARY_LLM: {{ .Values.inference.model | quote }}
+  SUMMARY_LLM_SERVERURL: {{ .Values.inference.url | quote }}
+
+  # --- embedding, on an open checkpoint ---
+  APP_EMBEDDINGS_MODELENGINE: openai
+  APP_EMBEDDINGS_MODELNAME: {{ .Values.embeddings.model | quote }}
+  APP_EMBEDDINGS_SERVERURL: {{ .Values.embeddings.url | quote }}
+  APP_EMBEDDINGS_DIMENSIONS: {{ .Values.embeddings.dimensions | quote }}
+
+  # --- reranking, on an open cross-encoder ---
+  ENABLE_RERANKER: {{ .Values.reranker.enabled | ternary "True" "False" | quote }}
+  APP_RANKING_MODELENGINE: tei
+  APP_RANKING_MODELNAME: {{ .Values.reranker.model | quote }}
+  APP_RANKING_SERVERURL: {{ .Values.reranker.url | quote }}
+  RERANKER_SCORE_THRESHOLD: {{ .Values.server.rerankerScoreThreshold | quote }}
+  ENABLE_VLM_RERANKER_IMAGE_INPUT: "False"
+
+  # --- what this deployment does not run ---
+  ENABLE_QUERYREWRITER: "False"
+  ENABLE_FILTER_GENERATOR: "False"
+  ENABLE_REFLECTION: "False"
+  ENABLE_QUERY_DECOMPOSITION: "False"
+  ENABLE_AGENTIC_RAG: "False"
+  ENABLE_VLM_INFERENCE: "False"
+  ENABLE_GUARDRAILS: "False"
+  ENABLE_CITATIONS: "True"
+
+  # --- the object store, which is a directory ---
+  # `filesystem`, so this listing does not stand up an S3-compatible store to hold the little a
+  # text corpus puts here.
+  OBJECTSTORE_BACKEND: filesystem
+  OBJECTSTORE_LOCAL_PATH: /data/objects
+
+  # --- the summary-status store ---
+  REDIS_HOST: {{ printf "%s-cache" (include "crag.name" .) | quote }}
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+
+  LOGLEVEL: {{ .Values.logLevel | quote }}
+  LOG_LEVEL: {{ .Values.logLevel | quote }}

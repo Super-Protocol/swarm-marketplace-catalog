@@ -1,0 +1,268 @@
+# Confidential RAG — the listing's own half of the deployment.
+#
+# What is NOT here, because it is a component of its own: the generation endpoint
+# (charts/swarm-model-server), the embedder and the reranker (charts/text-embeddings-server),
+# and the vector store (charts/milvus-standalone). This chart is the pipeline, the front door
+# and the corpus indexer, and it reaches those four by Service name.
+#
+# Service names, not namespaced FQDNs, on purpose: everything is in one cluster space, and a
+# name carrying the namespace is a value that differs between two deployments of one version —
+# which is a digest that is a property of the deployment rather than of the version.
+
+name: confidential-rag
+
+# The one public address. The only object it appears in is the Ingress, which is what makes a
+# single evidence exclusion enough.
+hostname: ""
+
+ingress:
+  # Without this the Ingress is created, its hostname registered, its DNS written — and nothing
+  # serves it. It looks like a DNS fault for an hour.
+  className: nginx
+
+image:
+  registry: ghcr.io
+  repository: super-protocol/confidential-rag/rag-server
+  digest: sha256:c68adc9c963a623256e4fe1db6be35ae6ac15fe95589504ff5b7b663ad2e06f9
+  tag: 2.6.2-sp.6ae0f54
+  pullPolicy: IfNotPresent
+
+# ---------------------------------------------------------------------------------------------
+# The front door
+# ---------------------------------------------------------------------------------------------
+console:
+  title: Confidential RAG
+  # Required. The console refuses to start without it rather than publish an open door.
+  password: ""
+  # Signs the session cookie. Generated per deployment, lives in a Secret, and therefore costs
+  # the attested digest nothing.
+  sessionKey: ""
+  sessionTtlSeconds: 43200
+  # What the console tells a user about the deployment they are using. Every value is rendered
+  # from the listing's own parameters, so the panel and the signed evidence describe the same
+  # thing.
+  about:
+    sourceRepo: https://github.com/Super-Protocol/confidential-rag
+  # Request equals limit, in both dimensions, and neither is below 100m / 128Mi. A cluster
+  # space's LimitRange sets `maxLimitRequestRatio: 1` and those floors, and a container
+  # breaking either is refused at admission — so the pod never exists, and nothing an
+  # operator looks at says why (SUP-238). The public door of the Conversational Analyst
+  # deployment was not admitted for exactly this reason.
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+      nvidia.com/gpu: "0"
+    limits:
+      cpu: 500m
+      memory: 512Mi
+      nvidia.com/gpu: "0"
+
+# ---------------------------------------------------------------------------------------------
+# The pipeline
+# ---------------------------------------------------------------------------------------------
+server:
+  # uvicorn workers. Each one holds its own clients to the four endpoints, so this is a memory
+  # multiplier as much as a concurrency one.
+  workers: 2
+  collection: documents
+  # ---------------------------------------------------------------------------------------------
+  # Candidates out of the vector store, which is what the reranker then orders.
+  #
+  # TWELVE, and the first number here was 40, which made the reranker do nothing at all on every
+  # single query. Measured, because the symptom pointed somewhere else entirely:
+  #
+  #   * Text Embeddings Inference refuses a client batch larger than
+  #     `--max-client-batch-size`, which the reranker preset sets to 32, with
+  #     `413 {"error":"batch size 40 > maximum allowed batch size 32"}`. Instantly — it is a
+  #     validation error, not a timeout. The adapter caught it, fell back to the retriever's
+  #     own order as it is designed to, and the only trace outside the log was citations whose
+  #     `relevance_score` was absent and therefore read 0.0. The answers stayed correct, which
+  #     is why this survived a review.
+  #   * And the time budget, on the two cores the reranker gets, for chunks this listing's size
+  #     (`corpus.chunkChars`): 8 passages 24.4 s, 16 passages 48.4 s, 24 passages 73.3 s. The
+  #     adapter waits 60 s. So 16 would have worked and spent 80% of the budget; 24 would not.
+  #
+  # Twelve is ~36 s of a 60 s budget and a third of the batch ceiling. `topK` is therefore
+  # bounded by BOTH numbers, and `crag.validate` refuses a render that breaks the first — the
+  # two live in different charts and nothing checked that they agreed.
+  topK: 12
+  # Milvus refuses a search whose top-k is larger than its candidate list, so `ef` is the other
+  # ceiling over `topK`.
+  ef: 100
+  # What survives reranking and reaches the prompt.
+  rerankerTopK: 6
+  # Vector-distance floor, before reranking.
+  scoreThreshold: 0.25
+  # A cross-encoder's score is a probability in [0, 1] here, not the unbounded logit a NeMo
+  # Retriever reranker returns — so a threshold carried over from a NIM deployment means
+  # something else. Zero: let the reranker order, and let `rerankerTopK` do the cutting.
+  rerankerScoreThreshold: 0.0
+  maxTokens: 1024
+  temperature: 0
+  topP: 1.0
+  resources:
+    requests:
+      cpu: "2"
+      memory: 4Gi
+      nvidia.com/gpu: "0"
+    limits:
+      cpu: "2"
+      memory: 4Gi
+      nvidia.com/gpu: "0"
+  persistence:
+    # The filesystem object store. Multimodal content would live here; a text corpus writes
+    # almost nothing, and the backend is `filesystem` precisely so that this listing does not
+    # have to stand up an S3-compatible store to hold nothing.
+    enabled: true
+    size: 5Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+
+# ---------------------------------------------------------------------------------------------
+# What this chart composes, by Service name
+# ---------------------------------------------------------------------------------------------
+inference:
+  # charts/swarm-model-server, ingress disabled, in this namespace.
+  url: http://swarm-model-server:8000/v1
+  model: ""
+  licence: ""
+  apiKey: ""
+
+embeddings:
+  url: http://confidential-rag-embeddings/v1
+  model: ""
+  licence: ""
+  # The width the embedder really returns. The collection's vector field is created from it.
+  dimensions: 1024
+  apiKey: ""
+
+reranker:
+  enabled: true
+  # No `/v1`: Text Embeddings Inference serves reranking at `/rerank`, at the root.
+  url: http://confidential-rag-reranker
+  model: ""
+  licence: ""
+  apiKey: ""
+  # Mirrors `--max-client-batch-size` from the reranker preset in charts/text-embeddings-server,
+  # because the server refuses a bigger batch with a 413 and the client falls back silently. It
+  # is duplicated here only so this chart can refuse the render instead; the two are held equal
+  # by `charts/tests/rag_reranker_budget.py`, which reads the preset.
+  maxClientBatchSize: 32
+
+vectorStore:
+  url: http://milvus:19530
+  username: root
+  password: ""
+  # HNSW, not GPU_CAGRA: the card belongs to the generation engine, and a vector store that
+  # claimed it would leave the engine Pending on a GPU quota of one for ever.
+  indexType: HNSW
+
+# ---------------------------------------------------------------------------------------------
+# The summary-status store
+# ---------------------------------------------------------------------------------------------
+cache:
+  # Valkey, BSD-3-Clause, in place of Redis Stack — which is under RSALv2/SSPL and is therefore
+  # not something this listing may deploy. It holds document-summarisation status keys with a
+  # 24-hour expiry and nothing else.
+  #
+  # It runs without a credential, and that is upstream's constraint rather than a choice: the
+  # client in `nvidia_rag.utils.summary_status_handler` constructs its connection pool from a
+  # host, a port and a database number, and takes no password. So it is ClusterIP, on no
+  # Ingress, in protected mode. Giving it `requirepass` would mean the rag-server could not
+  # reach it at all.
+  enabled: true
+
+  # ---------------------------------------------------------------------------------------------
+  # The pod runs AS the image's own user, rather than as root and letting the image get there.
+  #
+  # Measured, and it is the whole reason this block exists. The Valkey image's entrypoint starts
+  # as root, chowns its data directory and drops privileges with
+  # `setpriv --reuid=valkey --regid=valkey`. `setpriv` needs CAP_SETUID and CAP_SETGID, and this
+  # chart drops every capability — so the container exited on every start and the pod sat in
+  # CrashLoopBackOff. Reproduced locally: `setpriv: setresuid failed: Operation not permitted`;
+  # in the cluster it was ten restarts before it was understood.
+  #
+  # Naming the uid skips that path entirely: the entrypoint sees it is not root and execs the
+  # server. `fsGroup` is what then makes a fresh volume writable, since the chown the entrypoint
+  # would have done cannot happen either. 999 and 1000 are the image's own `valkey` user and
+  # group.
+  #
+  # Dropping every capability AND running as a non-root uid is the better posture; what was wrong
+  # was asking for both and expecting the image to bridge them.
+  securityContext:
+    runAsUser: 999
+    runAsGroup: 1000
+    runAsNonRoot: true
+  podSecurityContext:
+    fsGroup: 1000
+  image:
+    registry: docker.io
+    repository: valkey/valkey
+    digest: sha256:e706d1213aaba6896c162bb6a3a9e1894e1a435f28f8f856d14fab2e10aa098b
+    tag: 8.1.4-alpine
+    pullPolicy: IfNotPresent
+  # Request equals limit: `maxLimitRequestRatio: 1` in the space's LimitRange.
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+      nvidia.com/gpu: "0"
+    limits:
+      cpu: 500m
+      memory: 1Gi
+      nvidia.com/gpu: "0"
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+
+# ---------------------------------------------------------------------------------------------
+# The gated document source
+# ---------------------------------------------------------------------------------------------
+corpus:
+  # The resolved `corpus` data slot, as JSON. A Secret and nowhere else: for an ungated dataset
+  # it carries the owner's own credentials, and it is the one value that differs between two
+  # deployments of this version — both of which are reasons for it to be in the one place the
+  # platform lifts out before the snapshot is taken.
+  bindingJson: ""
+  table: documents
+  idColumn: doc_id
+  titleColumn: title
+  textColumn: text
+  updatedColumn: updated_at
+  # Characters, not tokens: the embedder truncates server-side and this container has no
+  # tokenizer that has to agree with whichever checkpoint is being served. Set from the
+  # embedder's own window by the listing.
+  chunkChars: 1800
+  chunkOverlapChars: 200
+  rowLimit: 20000
+  pollSeconds: 60
+  # Chunks per embedding call. Four rather than sixteen: the embedder has two cores, and a
+  # batch that holds them for half a minute is a batch its health endpoint cannot answer
+  # during — which is how a reindex became a loop that never finished. Smaller calls make the
+  # same total work, in pieces the endpoint stays answerable through.
+  embedBatch: 4
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+      nvidia.com/gpu: "0"
+    limits:
+      cpu: "1"
+      memory: 2Gi
+      nvidia.com/gpu: "0"
+
+logLevel: INFO
+
+podSecurityContext: {}
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  capabilities:
+    drop: [ALL]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,49 @@
+apiVersion: v2
+name: confidential-rag
+description: >-
+  The ported RAG pipeline — retrieval, reranking and grounded generation over a tenant's own
+  documents — with its own authenticating console, the indexer that reads the gated document
+  source, and the summary-status store. Composes an embedder, a reranker, a vector store and a
+  generation endpoint deployed beside it.
+type: application
+# 0.1.1 is one fix, found by deploying: the Valkey pod runs as the image's own uid.
+# Its entrypoint starts as root and drops privileges with `setpriv`, which needs CAP_SETUID —
+# and this chart drops every capability, so the container exited on every start and the pod sat
+# in CrashLoopBackOff. Naming the uid skips that path; `fsGroup` makes the fresh volume writable
+# in place of the chown the entrypoint can no longer do.
+# 0.1.2 removes the console's ABOUT_EXPECTED_DIGEST. It was an env value in the Deployment, the
+# Deployment is in the evidence snapshot, and the snapshot is what the digest is over — so a
+# console displaying the digest it should match changed that digest by displaying it. The
+# deployment's own digest is at the evidence URL the console already links.
+# 0.1.3 gives the indexer's and the pipeline's probes the same slack the embedder's needed.
+# Both spend their time on work that holds the cores their own health endpoint is served from,
+# and a five-second timeout reads a busy process as a dead one — observed on the cloud as
+# readiness flapping while the corpus indexed.
+# 0.1.4 halves the indexer's embedding batch twice over, 16 chunks to 4: a batch that holds
+# the embedder's two cores for half a minute is a batch its health endpoint cannot answer
+# during, and the same total work in smaller pieces leaves it answerable.
+# 0.1.5 bounds the indexer. `add_documents` embeds and inserts, either half can hang — the
+# embedding client on a saturated endpoint, the insert on a flush — and both held the loop with
+# `/status` frozen at the attempt that started it, which is the one state an operator cannot act
+# on. Observed on the cloud as twelve minutes inside one rebuild with the embedder idle and
+# nothing published. Each batch now runs under a timeout, progress is published per batch, and a
+# stall is its own verdict rather than a refusal: the source served the documents, the index did
+# not take them, and those want different people looking.
+# 0.1.6 is the reranker doing its job, and one blocking sleep removed.
+#
+# `server.topK` was 40 against the reranker's `--max-client-batch-size 32`, so Text Embeddings
+# Inference refused every rerank instantly with `413 batch size 40 > maximum allowed batch size
+# 32`. The adapter fell back to the retriever's order as designed, so answers stayed correct and
+# the only symptom was citations with no relevance score. Now 12 — a third of the ceiling and
+# ~36 s of the adapter's 60 s budget at the measured 3.0 s per passage on two cores — and
+# `crag.validate` refuses a render that breaks the ceiling, because the two numbers live in
+# different charts and nothing checked that they agreed.
+#
+# And `login()` called `time.sleep(0.5)` on the event loop: every wrong password froze the whole
+# console for half a second, streaming answers included. It awaits now.
+version: 0.1.6
+# The upstream release this is a port of. The image is built from
+# Super-Protocol/confidential-rag at branch confidential/2.6.2 — see MODIFICATIONS.md there for
+# what differs, which is the open embedding, reranking and generation engines and nothing about
+# the pipeline itself.
+appVersion: "2.6.2"

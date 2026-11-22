@@ -1,0 +1,159 @@
+{{- $name := include "crag.name" . -}}
+{{- /*
+The front door, and the only thing on the public hostname.
+
+It runs the pipeline's own image — fastapi, httpx and a python interpreter are already in it —
+with the entrypoint overridden and the application taken from the attested ConfigMap. So the
+code that decides who may read the corpus is in the evidence snapshot in full, rather than
+inside a second image digest a verifier would have to take on trust.
+*/ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-console
+  labels:
+    {{- include "crag.labels" . | nindent 4 }}
+    app.kubernetes.io/component: console
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "crag.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: console
+  template:
+    metadata:
+      labels:
+        {{- include "crag.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: console
+    spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: console
+          image: {{ include "crag.imageRef" .Values.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [uvicorn]
+          args:
+            - console:app
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8080"
+            # One worker: the session is a signed assertion rather than a stored row, so more
+            # would be free — and a console in front of one pipeline pod has nothing to gain.
+            - --workers
+            - "1"
+          env:
+            - name: PYTHONPATH
+              value: /opt/console
+            - name: CONSOLE_TITLE
+              value: {{ .Values.console.title | quote }}
+            - name: CONSOLE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ $name }}-secrets, key: console-password }
+            - name: CONSOLE_SESSION_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ $name }}-secrets, key: console-session-key }
+            - name: CONSOLE_SESSION_TTL_SECONDS
+              value: {{ .Values.console.sessionTtlSeconds | quote }}
+            - name: RAG_SERVER_URL
+              value: {{ printf "http://%s-server:8081" $name | quote }}
+            - name: CORPUS_SYNC_URL
+              value: {{ printf "http://%s-corpus:8085" $name | quote }}
+            - name: COLLECTION_NAME
+              value: {{ .Values.server.collection | quote }}
+            - name: UI_DIR
+              value: /opt/console
+            # What the console tells a user about the deployment they are using. Plain
+            # configuration, not a credential, and attested with everything else.
+            - name: ABOUT_GENERATION_MODEL
+              value: {{ .Values.inference.model | quote }}
+            - name: ABOUT_GENERATION_LICENCE
+              value: {{ .Values.inference.licence | quote }}
+            - name: ABOUT_EMBEDDING_MODEL
+              value: {{ .Values.embeddings.model | quote }}
+            - name: ABOUT_EMBEDDING_LICENCE
+              value: {{ .Values.embeddings.licence | quote }}
+            - name: ABOUT_RERANKER_MODEL
+              value: {{ .Values.reranker.enabled | ternary .Values.reranker.model "" | quote }}
+            - name: ABOUT_RERANKER_LICENCE
+              value: {{ .Values.reranker.enabled | ternary .Values.reranker.licence "" | quote }}
+            - name: ABOUT_SOURCE_REPO
+              value: {{ .Values.console.about.sourceRepo | quote }}
+            # There is deliberately no ABOUT_EXPECTED_DIGEST here, and the reason is worth
+            # keeping: this env value is rendered into the Deployment, the Deployment is in the
+            # evidence snapshot, and the snapshot is what the digest is OVER. So a console
+            # showing the digest it is expected to match changes that digest by displaying it —
+            # measure, write the number in, and it is no longer the number. It cost a deploy
+            # cycle to notice.
+            #
+            # The deployment's OWN digest is served at the evidence URL the console links, which
+            # is outside the snapshot by construction, and the version's declared digest is on
+            # the listing page.
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          # The one route outside the session, and it reports liveness and nothing about the
+          # corpus — it is reachable from the public hostname by anybody who finds the name.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 4
+          resources:
+            {{- toYaml .Values.console.resources | nindent 12 }}
+          volumeMounts:
+            - name: app
+              mountPath: /opt/console
+              readOnly: true
+      volumes:
+        - name: app
+          configMap:
+            name: {{ $name }}-app
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-console
+  labels:
+    {{- include "crag.labels" . | nindent 4 }}
+    app.kubernetes.io/component: console
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "crag.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: console

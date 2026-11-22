@@ -1,0 +1,29 @@
+{{- /*
+The code this deployment runs that is not in an image.
+
+`console.py` is the front door, `index.html` is the interface behind it, and `corpus_sync.py`
+is what reads the gated document source and reports what the gate decided. All three are
+rendered into the manifests the cloud digests and signs, so the published evidence covers the
+door, the interface and the indexer as well as the pinned image they run inside.
+
+Not a second image, deliberately. Building one would mean a tenant verifying this deployment had
+to take two digests on trust instead of reading the code in the snapshot — and the pattern is
+the same one SUP-842 settled on: whatever the image does not carry is named by hash inside the
+attested document rather than installed at boot from somewhere.
+
+Deterministic: nothing here is derived from the consumer, the hostname or a credential, so this
+document is byte-identical in every deployment of this chart version.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "crag.name" . }}-app
+  labels:
+    {{- include "crag.labels" . | nindent 4 }}
+data:
+  console.py: |
+    {{- .Files.Get "files/console.py" | nindent 4 }}
+  index.html: |
+    {{- .Files.Get "files/index.html" | nindent 4 }}
+  corpus_sync.py: |
+    {{- .Files.Get "files/corpus_sync.py" | nindent 4 }}

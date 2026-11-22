@@ -1,0 +1,1071 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: AppDefinition
+
+# ---------------------------------------------------------------------------
+# 0.1.7 is the rest of that reranker story, found by deploying 0.1.6 and reading
+# its citations: with `topK` at 12 and no 413 anywhere, the scores were still
+# 0.0 and `context_reranker_time_ms` came back as 60 058 — the adapter's
+# timeout, twice, warm. The same image, flags, chunk sizes and two-core limit
+# score twelve passages in 30 s on a laptop, so the cluster was five times
+# slower than the hardware it runs on.
+#
+# Text Embeddings Inference sizes its thread pools from the HOST's core count,
+# which a CPU limit does not change. On a GPU node with a hundred and
+# twenty-eight cores the pod starts a hundred and twenty-eight threads inside a
+# two-core quota and spends the question being throttled. `text-embeddings-server`
+# 0.1.5 pins `OMP_NUM_THREADS`, `MKL_NUM_THREADS` and `RAYON_NUM_THREADS` to the
+# cores the limit actually grants, which is also 1.4x faster than the unpinned
+# pools on the laptop they were measured on.
+#
+# This is the licence substitution's real cost showing up in one number: the NIM
+# this port removed shipped its own serving configuration, and a chart that
+# deploys an open server has to supply it. The budget test now holds the render
+# to the pinning, because the seconds-per-passage figure beside it is only true
+# while the pinning is there.
+#
+# ---------------------------------------------------------------------------
+# 0.1.6 answers the CTO's review of 0.1.5, and the blocking item is the reason
+# this listing exists: the reranker was doing nothing on every query. Not a
+# timeout, which is what I guessed in the hand-off — `server.topK` was 40
+# against the reranker's `--max-client-batch-size 32`, so Text Embeddings
+# Inference refused each batch in the first millisecond with
+# `413 batch size 40 > maximum allowed batch size 32`. The adapter fell back to
+# the retriever's own order, which is what it is for, so the answers stayed
+# correct and the only trace was citations with no relevance score. A component
+# this listing advertises, attests and budgets two cores and 6Gi for did no work
+# at all.
+#
+# Fixed by bringing `topK` under the ceiling (12), and by making the class of
+# mistake impossible: the ceiling lives in a different chart, so
+# `crag.validate` now refuses the render and
+# `charts/tests/rag_reranker_budget.py` holds the mirrored value equal to the
+# one the server is started with.
+#
+# Also: `login()` called `time.sleep(0.5)` on the event loop, which froze the
+# whole console — streaming answers included — on every wrong password.
+#
+# ---------------------------------------------------------------------------
+# 0.1.3 carries `text-embeddings-server` 0.1.3, which is one probe and the fix
+# the two versions before it were reaching for. The embedder came up, served the
+# corpus indexer, and was killed mid-index with exit 137 after
+# `Liveness probe failed: context deadline exceeded`: a batch of chunks holds
+# both its cores for longer than the five-second timeout, `/health` is served by
+# the same runtime, and the kubelet reads a busy inference server as a dead one.
+# It restarted, the indexer retried, and it died again — four restarts before
+# the cause was legible.
+#
+# Worth saying plainly, because it is the lesson of the port: the two earlier
+# corrections to that preset (memory 4Gi -> 6Gi, batch 16384 -> 2048) were each
+# right on their own measurement and neither was this. A number that was
+# measured wrong and a probe that is wrong look identical from outside — a pod
+# that will not become ready.
+#
+# ---------------------------------------------------------------------------
+# 0.1.2 removes one patch from this definition, and it is the most instructive
+# mistake of the port: the console was given the listing's own
+# `expectedDigest` to display. That value is an env entry in a Deployment, the
+# Deployment is in the evidence snapshot, and the snapshot is what the digest is
+# OVER — so measuring the digest and writing it in made it no longer the digest.
+# A deployment's own digest is at the evidence URL the console already links,
+# which is outside the snapshot by construction.
+#
+# 0.1.2 also carries `text-embeddings-server` 0.1.2, which lowers the English
+# embedder's batch ceiling to the reranker's 2048 and gives both a 20-minute
+# startup budget. Measured: the 16384-token warm-up is 126 s on the two cores
+# the container has, and on a node simultaneously pulling the engine's 6 GiB of
+# weights it did not finish inside the probe's ten minutes — so a healthy server
+# was killed and restarted from the beginning.
+#
+# 0.1.1 was two fixes, both found by deploying rather than by reading, and
+# neither of them in this definition:
+#
+#   * `confidential-rag` 0.1.1 runs the Valkey pod as the image's own uid. Its
+#     entrypoint starts as root and drops privileges with `setpriv`, which needs
+#     CAP_SETUID — and the chart drops every capability, so the container exited
+#     on every start.
+#   * `text-embeddings-server` 0.1.1 corrects the English embedder's measured
+#     memory, 4Gi -> 6Gi. The 4Gi came from a sampled peak of 2320 MiB; the
+#     cgroup's own `memory.peak` for the same run is 3361 MiB.
+#
+# The quota below already covered 6Gi for the embedder, because it is declared
+# for the worst option the parameters allow and the multilingual embedder was
+# always 6Gi. So `resources.min` does not move, and a deployment of 0.1.0 is
+# within the quota a deployment of 0.1.1 asks for.
+# ---------------------------------------------------------------------------
+# Confidential RAG — the pilot of the blueprint-port epic (SUP-837), and the
+# first listing in it that needed real licence substitution rather than a
+# repackaging.
+#
+# What it is: NVIDIA's open RAG reference architecture — semantic search and
+# question answering over an organisation's own documents — running inside a
+# confidential cluster space, over a corpus the tenant never has to export,
+# with every licence-encumbered component replaced:
+#
+#   NeMo Retriever embedding NIM  ->  an open checkpoint on Text Embeddings Inference
+#   NeMo Retriever reranking NIM  ->  an open cross-encoder on the same
+#   generation NIM                ->  vLLM, via the open-inference component (SUP-839)
+#   Elasticsearch                 ->  Milvus (Apache-2.0, and the blueprint's own option)
+#   Redis Stack                   ->  Valkey (BSD-3-Clause)
+#
+# No NVIDIA AI Enterprise entitlement, no NGC credential, no per-GPU fee, and
+# nothing in the deployment that a tenant cannot read in its own evidence.
+#
+# What it is NOT is an NVIDIA product. The naming here follows SUP-841: a
+# product name of ours, one honest provenance sentence, and no claim of a
+# relationship that does not exist.
+#
+# Where the code came from: github.com/Super-Protocol/confidential-rag, our fork
+# of the upstream repository at release v2.6.2, branch `confidential/2.6.2`. NVIDIA
+# archived upstream on 2026-11-05, so there is no upstream to track and the fork
+# is maintained by us. MODIFICATIONS.md there is the list of what differs.
+# ---------------------------------------------------------------------------
+
+metadata:
+  name: confidential-rag
+  title: Confidential RAG
+  description: >-
+    Ask questions over your own documents without them ever leaving confidential hardware. Every
+    deployment publishes cryptographic proof of which embedder and which model touch your data, and
+    the data owner can withdraw access the moment that changes. Based on the open-source NVIDIA RAG
+    reference architecture (Apache-2.0), rebuilt on open components.
+  version: "0.1.7"
+  category: ai-inference
+  # Our fork — the code the image is built from — and not the upstream repository.
+  sourceRepo: https://github.com/Super-Protocol/confidential-rag
+  # The licence of the software stack this listing deploys. The weights each carry their own,
+  # named in the option label that chooses them and rendered into the deployment's evidence.
+  license: Apache-2.0
+  tags:
+    - ai
+    - rag
+    - retrieval
+    - attestation
+    - confidential
+
+ui:
+  sections:
+    - id: access
+      title: Access
+      description: >-
+        Where the console is served, and the password that opens it. Take the hostname offered and
+        the DNS is written for you.
+      fields:
+        - parameterId: hostname
+          widget: hostname
+        - parameterId: accessPassword
+          widget: password
+
+    - id: models
+      title: Which models touch your data
+      description: >-
+        Both answers are shown on the deployment's own console and written into its signed
+        evidence, so whoever approves the corpus can see exactly what read it. Neither can be
+        changed afterwards: the index is built by the embedder, and a data owner who approved one
+        build did not approve the next.
+      fields:
+        - parameterId: generationModel
+          widget: select
+        - parameterId: embeddingModel
+          widget: select
+
+    - id: corpus
+      title: Your documents
+      description: >-
+        Which table the documents are in, and which columns hold them. The defaults match the
+        shape most document tables already have; the console says what it read and how many rows,
+        so a wrong answer here is a message on the status panel rather than silence.
+      fields:
+        - parameterId: documentTable
+          widget: text
+        - parameterId: documentIdColumn
+          widget: text
+        - parameterId: documentTitleColumn
+          widget: text
+        - parameterId: documentTextColumn
+          widget: text
+        - parameterId: documentUpdatedColumn
+          widget: text
+        - parameterId: refreshMinutes
+          widget: number
+
+    - id: answers
+      title: Answers
+      description: >-
+        How much of the corpus reaches the model, and how long an answer may be.
+      fields:
+        - parameterId: citationsPerAnswer
+          widget: number
+        - parameterId: answerMaxTokens
+          widget: number
+
+    - id: internal
+      title: Internal credentials
+      description: >-
+        Generated for you and kept in sealed storage. There is nothing to do here unless you are
+        rotating one — leave a field blank on a reconfigure and the existing value is kept.
+      fields:
+        - parameterId: inferenceKey
+          widget: password
+        - parameterId: sessionKey
+          widget: password
+        - parameterId: vectorStorePassword
+          widget: password
+
+parameters:
+  - id: hostname
+    type: string
+    title: Console hostname
+    description: >-
+      Where the console is served. Take the one offered and the DNS is written for you; bring your
+      own and point it at this cloud's gateway before publishing the deployment.
+    required: true
+    validation:
+      pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+
+  - id: accessPassword
+    type: string
+    title: Access password
+    description: >-
+      The only credential the console accepts. Generated if left blank and shown below once this is
+      deployed — paste it into the sign-in form. It is the whole of the authentication in front of
+      your documents, so it is not optional and it is not short.
+    sensitive: true
+    generated: true
+    validation:
+      minLength: 24
+
+  - id: generationModel
+    type: string
+    title: Which model writes the answers
+    description: >-
+      Every option is open-weights and licensed for commercial self-hosting. The licence is on the
+      deployment's console and in its signed evidence as well as here.
+    required: true
+    # The weights volume is sized from the model and a PersistentVolumeClaim's request cannot
+    # change, so a reconfigure that switched this would fail the apply rather than change the
+    # deployment. And serving different weights under one deployment changes what its evidence
+    # says — which is precisely the event a data owner's approval is pinned to.
+    immutable: true
+    default: llama-3.2-3b-instruct
+    options:
+      source:
+        type: static
+        values:
+          - value: llama-3.2-3b-instruct
+            label: "Llama 3.2 3B Instruct — fastest, 24 GiB of VRAM (Llama 3.2 Community Licence)"
+          - value: qwen3-coder-30b-a3b-instruct-fp8
+            label: "Qwen3-Coder 30B A3B FP8 — strongest of the measured set, needs 80 GiB of VRAM (Apache-2.0)"
+
+  - id: embeddingModel
+    type: string
+    title: Which embedder reads your documents
+    description: >-
+      The model that turns your documents into the vectors the retriever searches. It runs on CPU
+      inside this deployment, never at a hosted provider.
+    required: true
+    # The collection's vector field is created from this model's output width and cannot be
+    # re-sized once it holds anything — and switching the embedder under an existing index makes
+    # every query compare vectors from two different models, which returns plausible nonsense with
+    # nothing in any log to say so.
+    immutable: true
+    default: bge-large-en-v1.5
+    options:
+      source:
+        type: static
+        values:
+          - value: bge-large-en-v1.5
+            label: "BGE Large EN v1.5 — English, 512-token chunks, 1.3 GiB (MIT)"
+          - value: arctic-embed-l-v2.0
+            label: "Snowflake Arctic Embed L v2.0 — multilingual, 8192-token chunks, 2.1 GiB (Apache-2.0)"
+
+  - id: documentTable
+    type: string
+    title: Document table
+    description: >-
+      The table in the attached dataset holding one row per document. Its database is the dataset's
+      own and is not asked for here — the gatekeeper decides that, which is the point of it.
+    required: true
+    default: documents
+    validation:
+      pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+
+  - id: documentIdColumn
+    type: string
+    title: Identifier column
+    description: The column that identifies a document. It appears in every citation.
+    required: true
+    default: doc_id
+    validation:
+      pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+
+  - id: documentTitleColumn
+    type: string
+    title: Title column
+    description: The column holding a document's title.
+    required: true
+    default: title
+    validation:
+      pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+
+  - id: documentTextColumn
+    type: string
+    title: Text column
+    description: >-
+      The column holding the document body as plain text. This is the column that is chunked,
+      embedded and searched.
+    required: true
+    default: text
+    validation:
+      pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+
+  - id: documentUpdatedColumn
+    type: string
+    title: Last-changed column
+    description: >-
+      A timestamp column. The deployment re-reads the row count and the latest value here, and
+      rebuilds the index only when one of them moves — so a corpus that grows is picked up without
+      anybody triggering anything, and one that has not is not re-embedded.
+    required: true
+    default: updated_at
+    validation:
+      pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+
+  - id: refreshMinutes
+    type: number
+    title: How often to check for new documents
+    description: >-
+      Minutes between checks. The check is two numbers out of one query, so a short interval costs
+      almost nothing — and it is also how quickly the console notices that a data owner has
+      withdrawn access.
+    required: true
+    default: 1
+    validation:
+      min: 1
+      max: 1440
+
+  - id: citationsPerAnswer
+    type: number
+    title: How many documents an answer may draw on
+    description: >-
+      The reranker's best this many passages reach the model. More is more context and a slower
+      answer; fewer is a sharper answer that can miss something.
+    required: true
+    default: 6
+    validation:
+      min: 1
+      max: 20
+
+  - id: answerMaxTokens
+    type: number
+    title: How long an answer may be
+    description: Tokens. About 750 words to the thousand.
+    required: true
+    default: 1024
+    validation:
+      min: 128
+      max: 8192
+
+  - id: inferenceKey
+    type: string
+    title: Inference endpoint key
+    description: >-
+      Authenticates the pipeline to the three model endpoints inside this deployment. They are on
+      no public address, but an unauthenticated inference endpoint is an unauthenticated inference
+      endpoint, and the clients have to carry a key regardless.
+    sensitive: true
+    generated: true
+
+  - id: sessionKey
+    type: string
+    title: Session signing key
+    description: >-
+      Signs the console's session cookie. Rotating it signs everybody out; it is never sent to a
+      browser.
+    sensitive: true
+    generated: true
+    validation:
+      minLength: 32
+
+  - id: vectorStorePassword
+    type: string
+    title: Vector store password
+    description: >-
+      The index's own credential. Milvus ships with authorisation off and a documented default
+      password; this deployment turns it on and uses this instead.
+    sensitive: true
+    generated: true
+    validation:
+      minLength: 24
+
+resources:
+  # ---------------------------------------------------------------------------
+  # The cluster space quota, not a hint: it becomes the namespace's quota, and
+  # under-declared it evicts the heaviest pod and reads as "the app is broken".
+  #
+  # Every pod's limits, summed, with four things in it that are easy to leave out:
+  #
+  # Measured off the real renders of the worst option the parameters allow, with
+  # `charts/tests/max_pod.py` holding the per-pod half of it:
+  #
+  #   Pod                                      CPU     Memory   Volume
+  #   inference — vLLM engine, 1x GPU            8      32Gi     32Gi
+  #   inference — weights fetcher (init)        (2)    (512Mi)     —     not summed
+  #   embeddings — open embedder, CPU            2       6Gi      3Gi
+  #   embeddings — weights fetcher (init)       (1)    (512Mi)     —     not summed
+  #   reranker — open cross-encoder, CPU         2       6Gi      3Gi
+  #   reranker — weights fetcher (init)         (1)    (512Mi)     —     not summed
+  #   vectors — Milvus standalone                2       8Gi     20Gi
+  #   server — the ported pipeline               2       4Gi      5Gi
+  #   corpus — the gated-source indexer          1       2Gi       —
+  #   cache — Valkey                           0.5       1Gi      1Gi
+  #   console — the authenticating front door  0.5     512Mi       —
+  #   ---------------------------------------- ----    ------   ------
+  #   sum of rendered pods                      18     59.5Gi     64Gi
+  #   ingestion — reserved, see below            4       4Gi      1Gi
+  #   one surge pod of the console              0.5    512Mi       —
+  #   marketplace egress sidecar (gated data)  0.25    128Mi       —
+  #   ---------------------------------------- ----    ------   ------
+  #   total                                  22.75  64.125Gi     65Gi
+  #
+  # The four:
+  #
+  # 1. An init container is NOT summed — init containers run before the regular
+  #    ones — but a pod's demand is its containers' limits summed OR its heaviest
+  #    init container, whichever is larger. Here every engine dwarfs its fetcher.
+  # 2. The model is a PARAMETER, so the quota is declared for the worst option it
+  #    allows (Qwen3-Coder 30B: 8 CPU, 32Gi, 80 GiB of VRAM) and for the larger
+  #    embedder (6Gi). A tenant who picks the small model simply does not use the
+  #    room; a quota sized for the small one is a deployment refused the first
+  #    time somebody picks the big one.
+  # 3. Only ONE pod here surges, and it is the smallest. Every Deployment holding
+  #    a ReadWriteOnce volume — the engine, both model servers, Milvus, the
+  #    pipeline, Valkey — is `Recreate`, because a rolling update would leave the
+  #    replacement Pending on a volume the running pod holds, for ever. The
+  #    console holds nothing, so it is the only rolling one.
+  # 4. The marketplace adds its own egress sidecar to any deployment that mounts
+  #    GATED data (limits 250m / 128Mi), and a quota sized for the application
+  #    alone refuses it. This listing exists to mount gated data, so it is in.
+  #
+  # The 4 CPU / 4Gi for ingestion is RESERVED and nothing renders it yet.
+  # `charts/swarm-doc-ingest` — Docling, TableFormer and RapidOCR, CPU-only,
+  # measured on SUP-874 — landed on `main` while this listing's digest was being
+  # measured, so the component exists; composing it needs the `ingestor-server`
+  # that owns collection and document management, and a place in the console to
+  # submit a file. Until then this listing reads documents from a table.
+  #
+  # The room is held now because a cluster space's quota is fixed at creation and
+  # a reconfigure re-renders the version the deployment was created from: a
+  # deployment of this version can take the ingestion component when the listing
+  # composes it, and one whose quota was sized exactly cannot.
+  # 25 and 66Gi against a measured 22.75 and 64.125: a little over two cores and
+  # two gigabytes of headroom, which is deliberate rather than rounding. A quota
+  # is fixed when the cluster space is created and a reconfigure re-renders the
+  # version the deployment was created from, so the room a later version needs
+  # has to be asked for now or not at all.
+  #
+  # ---------------------------------------------------------------------------
+  # Why this is 25 / 66Gi / 80Gi and not the 21 / 52Gi / 64Gi prescribed for
+  # this listing's shape in `docs/open-inference-component.md`.
+  #
+  # That table is right for the shape it describes and this listing is a
+  # different one in two ways, both of which only add:
+  #
+  #   * It assumes the small embedder at 4Gi. `embeddingModel` is a PARAMETER
+  #     here, and its other answer — the multilingual 8192-token checkpoint — is
+  #     6Gi measured, as is the reranker, which that table does not carry at all
+  #     (it predates this listing having one). A quota is declared for the worst
+  #     option a parameter allows, or it refuses the deployment the first time
+  #     somebody picks it.
+  #   * It assumes `ingest` is the surge pod at 4 CPU / 4Gi. In this listing
+  #     ingestion is reserved and not rendered, and every Deployment holding a
+  #     ReadWriteOnce volume is `Recreate`, so the only pod that surges is the
+  #     console at 0.5 / 512Mi. That is the one place this listing needs LESS.
+  #
+  # Both numbers were then measured off the real renders of the worst option the
+  # parameters allow, and a deployment was created at exactly this quota and
+  # evicted nothing (`charts/tests/max_pod.py` holds the per-pod half). The CTO
+  # accepted the difference on that basis; the arithmetic is the table above.
+  min:
+    cpu: "25"
+    memory: "66Gi"
+    # Not the 65Gi sum: a storage quota equal to it fails at the last volume
+    # rather than the first, which reads as one broken service rather than as a
+    # quota.
+    storage: "80Gi"
+  # The heaviest SINGLE pod, which is a different quantity from the quota and the
+  # one a node has to be able to hold. Without it the cloud assumes the whole
+  # 25/66Gi lands on one pod and refuses the listing on any cloud whose nodes are
+  # smaller than its entire quota (SUP-824).
+  maxPod:
+    cpu: "8"
+    memory: "32Gi"
+  recommended:
+    cpu: "32"
+    memory: "96Gi"
+    storage: "128Gi"
+  gpu:
+    # Generation is vLLM. Without a card the engine does not start, and a
+    # retrieval pipeline that retrieves and cannot answer is a deployment that
+    # looks healthy and cannot do the one thing it is for.
+    required: true
+    minCount: 1
+    # The largest option the model parameter allows, not the default one.
+    minVram: "80Gi"
+    # nvidia-smi product names, which hw-measurement writes to
+    # device.swarm.io/gpu-product. Placement requires this exact string, so a
+    # different card of the same family needs its own entry and a plausible guess
+    # is worse than no entry at all. H100 NVL is the card this epic's cloud has,
+    # measured inside a cluster space on it (SUP-868); H200 NVL is what the
+    # model-serving listings run on.
+    types:
+      - NVIDIA H100 NVL
+      - NVIDIA H200 NVL
+
+data:
+  slots:
+    # -------------------------------------------------------------------------
+    # One slot, one interface, and the reason it is one interface is the most
+    # load-bearing constraint in this listing.
+    #
+    # The marketplace gatekeeper speaks ClickHouse over HTTP and nothing else: it
+    # injects `x-clickhouse-user` / `x-clickhouse-key` into every request it
+    # forwards and rewrites the database the caller named. So `clickhouse-http/v1`
+    # is the only interface a gated dataset can actually be served over today —
+    # whatever a dataset's `access.mode` says — and a document corpus sitting in
+    # object storage CANNOT be gated. That is a platform fact, not a property of
+    # this listing: registering an object-storage document contract is SUP-881,
+    # and until it lands plus the platform's own `BUNDLED_INTERFACES` carries it,
+    # naming it here would make this listing unpublishable on every marketplace
+    # (`AppPublishingService.submit()` refuses a definition naming a contract the
+    # registry does not hold).
+    #
+    # What that means for a reader of the listing page is said in the README and
+    # in the `corpusGating` output, in those words: this listing gates a
+    # ClickHouse-backed document source, and a corpus in a bucket is not gateable
+    # yet.
+    #
+    # Not required. A deployment with nothing attached is a supported state and
+    # not a broken one — it is a deployment waiting for its data owner to approve
+    # it, which is exactly what the gate is for, and the console says so. The
+    # binding, and therefore everything that varies between two deployments of
+    # this version, lives in a Secret, so the attested render is the same either
+    # way.
+    # -------------------------------------------------------------------------
+    - name: corpus
+      title: Document corpus
+      description: >-
+        The documents this deployment answers questions about: one row per document, with an
+        identifier, a title, the body as text and a last-changed timestamp. Attach more than one
+        and the first is indexed — the console names what it read. Nothing attached is also
+        supported: the deployment comes up and waits.
+      required: false
+      multiple: true
+      accepts:
+        - interface: clickhouse-http/v1
+      schema:
+        tables:
+          - columns:
+              - name: doc_id
+                type: string
+              - name: title
+                type: string
+              - name: text
+                type: string
+              - name: updated_at
+                type: timestamp
+
+components:
+  # ---------------------------------------------------------------------------
+  # 1. Generation. The open-inference component, cluster-internal, no hostname of
+  #    its own. Every NIM question the epic had about serving open weights was
+  #    answered here once (SUP-839) so that three listings do not answer it three
+  #    times and acquire three sets of bugs.
+  # ---------------------------------------------------------------------------
+  - name: inference
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: swarm-model-server
+      version: "0.4.0"
+    images:
+      - name: docker.io/vllm/vllm-openai
+        digest: sha256:0fec7ec5f3e6bc168e54899935fb0557da908a4832a1dbc88e2debcf2f889416
+      - name: docker.io/library/python
+        digest: sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
+    deployment:
+      values:
+        base:
+          # The listing's own console is what gets a hostname; this answers inside the cluster
+          # space, on a Service name the other components can write down.
+          ingress:
+            enabled: false
+          apiKey: ""
+          # `persistence.size` is deliberately absent: the chart sizes the weights volume from
+          # the manifest the preset carries, and a listing whose model is a PARAMETER has no one
+          # right number to write — the answer is 6 GiB for one option and 31 GiB for the other.
+          resources:
+            cpu: "4"
+            memory: 12Gi
+          model:
+            preset: ""
+            # The context length and the share of the card are the DEPLOYMENT's choices, not the
+            # model's, so the chart does not default them from the preset — it is the listing's
+            # job to carry the measured answer across. Defaults here are the small model's; the
+            # patches below move them for the large one.
+            maxModelLen: 32768
+            gpuMemoryUtilization: 0.85
+        patches:
+          - op: replace
+            path: apiKey
+            value: "{{ params.inferenceKey }}"
+          # Which model, in one line. The weights manifest, the chat template, the tool-call
+          # parser and the quantisation all come from the preset.
+          - op: replace
+            path: model.preset
+            value: "{{ params.generationModel }}"
+
+          # And its measured sizing, which the preset does NOT apply for us. Without these
+          # three, picking the large model gets a 30B engine in a 12Gi container: it is
+          # OOMKilled while loading, restarts, and reads as a GPU problem.
+          - op: replace
+            path: resources.cpu
+            value: "8"
+            when: "params.generationModel == 'qwen3-coder-30b-a3b-instruct-fp8'"
+
+          - op: replace
+            path: resources.memory
+            value: 32Gi
+            when: "params.generationModel == 'qwen3-coder-30b-a3b-instruct-fp8'"
+
+          - op: replace
+            path: model.maxModelLen
+            value: 65536
+            when: "params.generationModel == 'qwen3-coder-30b-a3b-instruct-fp8'"
+
+  # ---------------------------------------------------------------------------
+  # 2. The embedder, replacing the NeMo Retriever embedding NIM. CPU, in this
+  #    namespace, from weights named by sha256 in a ConfigMap the cloud signs.
+  # ---------------------------------------------------------------------------
+  - name: embeddings
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: text-embeddings-server
+      version: "0.1.5"
+    images:
+      - name: ghcr.io/huggingface/text-embeddings-inference
+        digest: sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c
+      - name: docker.io/library/python
+        digest: sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
+    deployment:
+      values:
+        base:
+          # Two releases of one chart in one namespace, so the name is what keeps their objects
+          # apart — and it is what the pipeline writes down to reach this one.
+          name: confidential-rag-embeddings
+          model:
+            preset: ""
+          apiKey: ""
+        patches:
+          - op: replace
+            path: model.preset
+            value: "{{ params.embeddingModel }}"
+          - op: replace
+            path: apiKey
+            value: "{{ params.inferenceKey }}"
+
+  # ---------------------------------------------------------------------------
+  # 3. The reranker, replacing the NeMo Retriever reranking NIM. Same chart, same
+  #    image, a cross-encoder instead of an embedding model.
+  #
+  #    Not a parameter: there is one measured open cross-encoder and offering a
+  #    choice of one is a question with no answer in it.
+  # ---------------------------------------------------------------------------
+  - name: reranker
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: text-embeddings-server
+      version: "0.1.5"
+    images:
+      - name: ghcr.io/huggingface/text-embeddings-inference
+        digest: sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c
+      - name: docker.io/library/python
+        digest: sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
+    deployment:
+      values:
+        base:
+          name: confidential-rag-reranker
+          model:
+            preset: bge-reranker-v2-m3
+          apiKey: ""
+        patches:
+          - op: replace
+            path: apiKey
+            value: "{{ params.inferenceKey }}"
+
+  # ---------------------------------------------------------------------------
+  # 4. The vector store. Milvus, which is Apache-2.0 and is the blueprint's own
+  #    option, in place of the Elasticsearch its compose file defaults to — whose
+  #    server is under the Elastic License and is therefore not something a
+  #    listing may deploy.
+  # ---------------------------------------------------------------------------
+  - name: vectors
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: milvus-standalone
+      version: "0.1.0"
+    images:
+      - name: docker.io/milvusdb/milvus
+        digest: sha256:fb57464669737ee9a9c43c6faa891527adab601241b0b488091c5f4eb4a13178
+    deployment:
+      values:
+        base:
+          name: confidential-rag-vectors
+          auth:
+            rootPassword: ""
+        patches:
+          - op: replace
+            path: auth.rootPassword
+            value: "{{ params.vectorStorePassword }}"
+
+  # ---------------------------------------------------------------------------
+  # 5. The pipeline itself, its console, its corpus indexer and the summary-status
+  #    store. The image is built from our fork; the console and the indexer are
+  #    rendered into a ConfigMap the cloud digests, so the code that decides who
+  #    may read the corpus is in the evidence rather than inside a second image
+  #    digest a verifier would have to take on trust.
+  # ---------------------------------------------------------------------------
+  - name: rag
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: confidential-rag
+      version: "0.1.6"
+    images:
+      - name: ghcr.io/super-protocol/confidential-rag/rag-server
+        digest: sha256:c68adc9c963a623256e4fe1db6be35ae6ac15fe95589504ff5b7b663ad2e06f9
+      - name: docker.io/valkey/valkey
+        digest: sha256:e706d1213aaba6896c162bb6a3a9e1894e1a435f28f8f856d14fab2e10aa098b
+    deployment:
+      values:
+        base:
+          name: confidential-rag
+          hostname: ""
+          console:
+            password: ""
+            sessionKey: ""
+          server:
+            rerankerTopK: 6
+            maxTokens: 1024
+          inference:
+            url: http://swarm-model-server:8000/v1
+            model: ""
+            licence: ""
+            apiKey: ""
+          embeddings:
+            url: http://confidential-rag-embeddings/v1
+            model: ""
+            licence: ""
+            dimensions: 1024
+            apiKey: ""
+          reranker:
+            url: http://confidential-rag-reranker
+            model: bge-reranker-v2-m3
+            licence: Apache-2.0
+            apiKey: ""
+          vectorStore:
+            url: http://confidential-rag-vectors:19530
+            password: ""
+          corpus:
+            bindingJson: ""
+            table: ""
+            idColumn: ""
+            titleColumn: ""
+            textColumn: ""
+            updatedColumn: ""
+            chunkChars: 1800
+            pollSeconds: 60
+        patches:
+          - op: replace
+            path: hostname
+            value: "{{ params.hostname }}"
+
+          - op: replace
+            path: console.password
+            value: "{{ params.accessPassword }}"
+
+          - op: replace
+            path: console.sessionKey
+            value: "{{ params.sessionKey }}"
+
+          - op: replace
+            path: inference.model
+            value: "{{ params.generationModel }}"
+
+          - op: replace
+            path: inference.apiKey
+            value: "{{ params.inferenceKey }}"
+
+          # The weights licence, per choice, shown on the console beside the model's name. A
+          # tenant should not have to have read the listing page to know what they are serving.
+          - op: replace
+            path: inference.licence
+            value: "Llama 3.2 Community License Agreement"
+            when: "params.generationModel == 'llama-3.2-3b-instruct'"
+
+          - op: replace
+            path: inference.licence
+            value: "Apache-2.0"
+            when: "params.generationModel == 'qwen3-coder-30b-a3b-instruct-fp8'"
+
+          - op: replace
+            path: embeddings.model
+            value: "{{ params.embeddingModel }}"
+
+          - op: replace
+            path: embeddings.apiKey
+            value: "{{ params.inferenceKey }}"
+
+          - op: replace
+            path: embeddings.licence
+            value: "MIT"
+            when: "params.embeddingModel == 'bge-large-en-v1.5'"
+
+          - op: replace
+            path: embeddings.licence
+            value: "Apache-2.0"
+            when: "params.embeddingModel == 'arctic-embed-l-v2.0'"
+
+          # Characters per chunk, set from the embedder's own window rather than guessed: the
+          # 512-token model truncates anything past roughly 1800 characters, and chunking to the
+          # 8192-token model's window under the 512-token one would silently embed the first fifth
+          # of every chunk.
+          - op: replace
+            path: corpus.chunkChars
+            value: 1800
+            when: "params.embeddingModel == 'bge-large-en-v1.5'"
+
+          - op: replace
+            path: corpus.chunkChars
+            value: 6000
+            when: "params.embeddingModel == 'arctic-embed-l-v2.0'"
+
+          - op: replace
+            path: reranker.apiKey
+            value: "{{ params.inferenceKey }}"
+
+          - op: replace
+            path: vectorStore.password
+            value: "{{ params.vectorStorePassword }}"
+
+          - op: replace
+            path: server.rerankerTopK
+            value: "{{ params.citationsPerAnswer }}"
+
+          - op: replace
+            path: server.maxTokens
+            value: "{{ params.answerMaxTokens }}"
+
+          # The resolved binding, straight into the chart's Secret. For a gated dataset it carries
+          # no credential at all — a local address, a database name and the literal user `gateway`,
+          # which the gate replaces with the publisher's own before it forwards. It is also the one
+          # value that differs between two deployments of this version, which is the other reason
+          # it is nowhere else.
+          - op: replace
+            path: corpus.bindingJson
+            value: "{{ data.corpus | json }}"
+
+          - op: replace
+            path: corpus.table
+            value: "{{ params.documentTable }}"
+
+          - op: replace
+            path: corpus.idColumn
+            value: "{{ params.documentIdColumn }}"
+
+          - op: replace
+            path: corpus.titleColumn
+            value: "{{ params.documentTitleColumn }}"
+
+          - op: replace
+            path: corpus.textColumn
+            value: "{{ params.documentTextColumn }}"
+
+          - op: replace
+            path: corpus.updatedColumn
+            value: "{{ params.documentUpdatedColumn }}"
+
+outputs:
+  - id: consoleUrl
+    title: Open the console
+    type: url
+    value: "https://{{ params.hostname }}"
+
+  - id: accessPassword
+    title: Access password
+    # `secret`, so it is surfaced only to people who may deploy for the organisation, masked, with
+    # one-click copy.
+    type: secret
+    value: "{{ params.accessPassword }}"
+
+  - id: signIn
+    title: How to sign in
+    type: string
+    value: >-
+      Open the console above and paste the access password into the form. The session is a signed
+      cookie with a twelve-hour life; there is no other way in, and nothing else on the hostname
+      answers without it except a health check that reports liveness and nothing about your
+      documents.
+
+  - id: whatTouchesYourData
+    title: What touches your data
+    type: string
+    value: >-
+      Generation runs on vLLM inside this deployment; embedding and reranking run on open
+      checkpoints on CPU inside it. No request leaves the cluster space at inference time, and no
+      component here needs an NVIDIA AI Enterprise entitlement, an NGC credential or any other
+      vendor account. The model weights are fetched once, at first boot, against a manifest that
+      names every file by sha256 — and that manifest is inside the deployment's own signed
+      evidence, so what was admitted and the rule that admitted it are both verifiable.
+
+  - id: corpusGating
+    title: What the gatekeeper can and cannot protect
+    type: string
+    value: >-
+      This listing gates a ClickHouse-backed document source: a dataset published through the
+      gatekeeper reaches this deployment as a local address with no credential in it, and every
+      read is admitted against the evidence this deployment published. A document corpus held in
+      OBJECT STORAGE cannot be gated today — the gatekeeper injects ClickHouse credentials and
+      rewrites the database a caller named, and it carries no other protocol — so an S3 or Azure
+      corpus would have to be loaded into a ClickHouse table to be protected this way. That is a
+      platform limit and not a property of this listing.
+
+  - id: licences
+    title: Licences of what this runs
+    type: string
+    value: >-
+      The pipeline is Apache-2.0: our fork of NVIDIA's open RAG reference architecture, at
+      github.com/Super-Protocol/confidential-rag, with its modifications recorded in
+      MODIFICATIONS.md and the licence files carried inside the image at /licenses. Milvus is
+      Apache-2.0, Valkey is BSD-3-Clause, Text Embeddings Inference is Apache-2.0, vLLM is
+      Apache-2.0. The weights carry their own terms, shown beside the model that chose them on the
+      console and in this deployment's evidence. Upstream was archived by NVIDIA on 2026-11-05;
+      this fork is maintained by Super Protocol. NVIDIA is a trademark of NVIDIA Corporation, and
+      this listing is not produced, endorsed or supported by NVIDIA.
+
+  - id: evidenceBundle
+    title: Published evidence
+    type: url
+    value: "https://{{ params.hostname }}/.well-known/swarm-evidence"
+
+  - id: corpusBound
+    title: Your documents
+    type: string
+    value: >-
+      A dataset is attached. The console's status panel names it, says how many rows were read and
+      how many chunks are in the index, and shows the gatekeeper's verdict on the last read — so a
+      withdrawn approval is visible as a refusal rather than as answers quietly getting worse.
+    when: "data.corpus.count > 0"
+
+  - id: corpusUnbound
+    title: Your documents
+    type: string
+    value: >-
+      No dataset is attached, which is a supported state: the deployment is up and waiting. Attach
+      one to the "Document corpus" slot with a reconfigure and it is indexed within a minute,
+      without a restart.
+    when: "data.corpus.count == 0"
+
+evidence:
+  # ---------------------------------------------------------------------------
+  # Measured, not derived, and it describes the GATED configuration.
+  #
+  # Two deployments of 0.1.7 on the gpu-blueprints cloud, 2026-11-22 —
+  # `rag-840j` and `rag-840k`, two hostnames in two namespaces, each with the
+  # `acme-engineering-handbook` dataset attached — published byte-identical
+  # signed snapshots and this digest. Thirty-two resources in each: nine
+  # Deployments, nine Services, seven ConfigMaps, six Secrets and the Ingress.
+  #
+  # It was measured six times over, once per version that changed something the
+  # cloud digests: `69a1160a…` on 0.1.2 (`rag-840a`, `rag-840b`, and again after
+  # a reconfigure of one of them), `6fc8b2bf…` on 0.1.3 (`rag-840c`,
+  # `rag-840d`), `1370c19e…` on 0.1.4 (`rag-840e`, `rag-840f`), `03db53be…` on
+  # 0.1.5 (`rag-840g`, `rag-840h`), `94f3ab09…` on 0.1.6 (`rag-840i` — one
+  # deployment, superseded within the hour by 0.1.7 and never declared), and
+  # this on 0.1.7. A probe, a ConfigMap and an environment variable are all
+  # fields of objects in the snapshot, so that is the ordinary reason a digest
+  # moves — and the reason it is measured again rather than carried forward.
+  # Each pair was byte-identical, which is the property being claimed: the
+  # digest is a property of the version.
+  #
+  # 0.1.6 is the one version measured from a single deployment, and it is also
+  # the one version never declared anywhere: the pair it would have needed was
+  # overtaken by the finding that made 0.1.7 — the reranker's thread pools —
+  # which moved the digest again before the second measurement was worth taking.
+  #
+  # **It is the gated configuration on purpose, and that is a decision rather
+  # than a default.** A deployment that mounts gated data gains four objects the
+  # marketplace adds itself — the egress sidecar's ConfigMap, Deployment and
+  # Service, plus the Secret holding its client certificate — and the cloud
+  # digests them, so a gated deployment and an ungated one cannot share a digest
+  # (platform-wide; SUP-842 recorded it). SUP-842 declared the ungated number
+  # and left the gated one to be re-measured. This declares the gated one,
+  # because of what the gate does with it: the marketplace hands the gate
+  # `expectedDigest` from the listing version the deployment was created from,
+  # and the gate fetches the deployment's own evidence and compares. Declaring
+  # the ungated digest would therefore mean every gated deployment of this
+  # listing is refused by the gate — which is the one thing this listing exists
+  # to do.
+  #
+  # What that costs: an UNGATED deployment of this listing does not match the
+  # number on its own listing page. It needs no gate, so nothing refuses it, and
+  # the README says which configuration the digest describes. The ungated
+  # digest, for the record, was `3dde9a40…` on chart 0.1.1 and is not declared.
+  #
+  # ---------------------------------------------------------------------------
+  # THE REFERENCE PARAMETER SET it was measured with. The digest holds for this
+  # one, and a deployment that answers differently attests its own — expected,
+  # not tampering.
+  #
+  # It is not a short list by accident. `generationModel` chooses the vLLM
+  # preset AND patches the engine's CPU, memory and context length;
+  # `embeddingModel` chooses the TEI preset and the chunk width; the corpus
+  # column names and `refreshMinutes` are rendered into the indexer's env. All
+  # of that is in the snapshot on purpose — what a verifier most needs to know
+  # is which model and which embedder touched the documents, so it is inside the
+  # signed bundle rather than excluded from it.
+  #
+  #   hostname               rag-840j / rag-840k .conf-apps.superprotocol.dev
+  #                          (excluded from the snapshot — see `exclude` below)
+  #   generationModel        llama-3.2-3b-instruct
+  #   embeddingModel         bge-large-en-v1.5
+  #   documentTable          documents
+  #   documentIdColumn       doc_id
+  #   documentTitleColumn    title
+  #   documentTextColumn     text
+  #   documentUpdatedColumn  updated_at
+  #   refreshMinutes         1
+  #   citationsPerAnswer     6
+  #   answerMaxTokens        1024
+  #   data slot `corpus`     acme-engineering-handbook   (gated)
+  #
+  # The four generated credentials — `accessPassword`, `inferenceKey`,
+  # `sessionKey`, `vectorStorePassword` — are in Secrets, which the platform
+  # lifts out before the snapshot is taken, so they reach no attested object and
+  # are not part of this set.
+  expectedDigest: "9cf45e56b96579c497f1b2cbc0ba059ca4ed84c9efe0dd9bbaefde855e0415ed"
+  # ---------------------------------------------------------------------------
+  # The hostname is the one field that differs between two deployments of this
+  # version, and excluding it is what makes the digest a property of the version
+  # rather than of the deployment. Declared here as well as in the chart's own
+  # annotation, because the listing page shows only what the definition declares
+  # — a digest displayed beside "no exclusions" answers the only question that
+  # matters about it wrongly.
+  exclude:
+    - match:
+        kind: Ingress
+        name: confidential-rag
+      fields:
+        - /spec/rules/0/host

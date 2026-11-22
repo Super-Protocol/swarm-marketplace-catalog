@@ -1,0 +1,212 @@
+{{- $p := include "tes.preset" . | fromJson -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tes.name" . }}
+  labels:
+    {{- include "tes.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  {{- if .Values.persistence.enabled }}
+  # The weights volume is ReadWriteOnce and held by the running pod, so a rolling update
+  # leaves the replacement Pending on the volume for ever while the old pod serves — a
+  # rollout that reports itself in progress and never finishes. `Recreate` costs one gap of
+  # the model's load time on an upgrade and removes that.
+  #
+  # It also keeps the cluster space's quota honest: a surging pod is a second 6Gi the quota
+  # has to cover, and a quota sized without it evicts whichever pod is heaviest at the moment
+  # the rollout starts.
+  strategy:
+    type: Recreate
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "tes.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "tes.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        # Downloads the weights and refuses to hand over anything the manifest did not name,
+        # by sha256. Idempotent: a restarted pod with a populated volume re-hashes and starts
+        # in under a minute instead of downloading the checkpoint again.
+        #
+        # This is the one outbound connection the component makes, it is made once, at boot,
+        # to a declared host, for bytes whose hashes are in the attested manifest beside it —
+        # and no data of the operator's is in the request. That is a different thing from an
+        # inference call to a hosted provider, which is what this component exists to remove.
+        - name: fetch-weights
+          image: {{ include "tes.imageRef" .Values.fetcher.image | quote }}
+          imagePullPolicy: {{ .Values.fetcher.image.pullPolicy }}
+          command: [python3, /opt/weights/fetch-weights.py]
+          env:
+            - name: WEIGHTS_MANIFEST
+              value: /opt/weights/manifest.json
+            - name: WEIGHTS_DIR
+              value: {{ .Values.model.dir | quote }}
+            - name: HF_ENDPOINT
+              value: {{ .Values.model.endpoint | quote }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.fetcher.resources | nindent 12 }}
+          volumeMounts:
+            - name: weights
+              mountPath: {{ dir .Values.model.dir | quote }}
+            - name: manifest
+              mountPath: /opt/weights
+              readOnly: true
+      containers:
+        - name: server
+          image: {{ include "tes.imageRef" .Values.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Flags, not env, for everything that is not a secret: the arguments are part of what
+          # the evidence attests, so a reader sees the model directory, the pooling and the
+          # batch ceilings this endpoint really runs with.
+          #
+          # `--hostname 0.0.0.0` is explicit because Kubernetes sets HOSTNAME to the pod name,
+          # the server reads HOSTNAME as an address to bind, finds it is not one, warns and
+          # falls back. Saying it here removes the warning and the dependence on that fallback.
+          #
+          # `--auto-truncate` is load-bearing rather than defensive. The client this serves
+          # does no tokenising of its own — upstream's client-side split was removed in the
+          # fork precisely so that the server owns truncation — so without this flag one chunk
+          # longer than the model's window fails the whole batch it arrived in.
+          args:
+            - --model-id
+            - {{ .Values.model.dir | quote }}
+            {{- if $p.pooling }}
+            - --pooling
+            - {{ $p.pooling | quote }}
+            {{- end }}
+            # Measured per preset, not a chart-wide preference: the backend warms up by
+            # pushing a full batch through the model, the activation that allocates goes as
+            # the square of the sequence length, and an 8192-token checkpoint under the
+            # 16384-token budget a 512-token one takes happily is OOMKilled three seconds
+            # into start-up — before it serves a request, and past every render test and
+            # readiness probe in this repository.
+            - --max-batch-tokens
+            - {{ $p.sizing.maxBatchTokens | quote }}
+            - --max-client-batch-size
+            - {{ $p.sizing.maxClientBatchSize | quote }}
+            - --auto-truncate
+            - --hostname
+            - 0.0.0.0
+            - --port
+            - {{ .Values.service.targetPort | quote }}
+            - --json-output
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tes.name" . }}-auth
+                  key: api-key
+            # Nothing is to be fetched at serving time: the weights are already on the volume,
+            # verified, and a model file that went missing must fail loudly rather than be
+            # quietly re-downloaded unverified.
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            # The thread pools, pinned to the cores the limit actually grants rather than the
+            # host's — see `tes.threads`. Env and not flags because the server has no flag for
+            # them: they are read by the runtimes underneath it.
+            - name: OMP_NUM_THREADS
+              value: {{ include "tes.threads" . | quote }}
+            - name: MKL_NUM_THREADS
+              value: {{ include "tes.threads" . | quote }}
+            - name: RAYON_NUM_THREADS
+              value: {{ include "tes.threads" . | quote }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+          # `/health` is outside the server's authentication, which is what makes it usable as
+          # a probe, and it answers only once the model is loaded and warmed.
+          #
+          # Twenty minutes, not ten. Warming up is real work — 126 s for a 16384-token batch on
+          # two cores, measured — and it happens while the rest of the deployment is pulling its
+          # own checkpoints onto the same node. A budget that expires mid-warm-up kills a healthy
+          # server and starts it again from the beginning, which is a pod that never becomes
+          # ready and a cause that looks like anything but a timeout.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 120
+          # ---------------------------------------------------------------------------------
+          # Both of these are deliberately slack, and the reason is the whole point of this
+          # component: it is a CPU-bound inference server, and the thing a probe measures —
+          # whether it answers — is exactly what competes with the work it is doing.
+          #
+          # Measured on the gpu-blueprints cloud: with the default 5 s timeout the embedder
+          # came up, served the corpus indexer, and was then killed mid-index with exit 137
+          # after `Liveness probe failed: context deadline exceeded`. A batch of chunks holds
+          # both cores for longer than five seconds, `/health` is served by the same runtime,
+          # and the kubelet reads a busy server as a dead one. It restarted, the indexer
+          # retried, and it died again — four restarts before the cause was visible, and the
+          # cause was this probe rather than anything about the model.
+          #
+          # Readiness staying tight-ish is correct: a saturated endpoint should leave the
+          # Service, and its caller retries. Liveness must not fire for queueing — a restart
+          # throws away the model load and makes the queue worse.
+          # Readiness is slack too, and that took a second measurement to accept. Dropping a
+          # saturated endpoint out of its Service is the textbook answer and it is wrong here:
+          # the only caller is the deployment's own indexer, so de-registering the embedder
+          # because the indexer is using it turns one slow reindex into a loop that never
+          # finishes — the indexer's batch fails, it rebuilds the collection from the start,
+          # and saturates it again. Observed on the gpu-blueprints cloud as `Connection
+          # error.` on every cycle with the read itself succeeding.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 20
+            failureThreshold: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 20
+            failureThreshold: 6
+          resources:
+            {{- include "tes.resources" . | nindent 12 }}
+          volumeMounts:
+            - name: weights
+              mountPath: {{ dir .Values.model.dir | quote }}
+              readOnly: true
+      volumes:
+        - name: manifest
+          configMap:
+            name: {{ include "tes.name" . }}-weights
+        - name: weights
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "tes.name" . }}-weights
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,493 @@
+---
+# Source: text-embeddings-server/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: confidential-rag-embeddings-auth
+  labels:
+    app.kubernetes.io/name: confidential-rag-embeddings
+    app.kubernetes.io/component: text-embeddings-server
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+type: Opaque
+stringData:
+  api-key: "EMBEDDINGS-KEY-FOR-THE-GOLDEN"
+---
+# Source: text-embeddings-server/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: confidential-rag-embeddings-weights
+  labels:
+    app.kubernetes.io/name: confidential-rag-embeddings
+    app.kubernetes.io/component: text-embeddings-server
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+data:
+  manifest.json: |
+    {
+      "files": [
+        {
+          "path": "1_Pooling/config.json",
+          "sha256": "13e69897522ee8255104483ed9f219465d1be3936654a54a318758738052789e",
+          "size": 297
+        },
+        {
+          "path": "config.json",
+          "sha256": "706f5d1eb9ddf64b5d3067c562b893b80ad1022db7f68c20eb07ff24d33b6c15",
+          "size": 818
+        },
+        {
+          "path": "config_sentence_transformers.json",
+          "sha256": "e4037d7ad09d5c33b4c8b132e485f2fc0866707688ce46d2c642f066be1d3bd4",
+          "size": 203
+        },
+        {
+          "path": "model.safetensors",
+          "sha256": "21bf1a120b1c6562aeec379dfa9039b0d360591c784cb1c6786e87256b738ee1",
+          "size": 2271064456
+        },
+        {
+          "path": "modules.json",
+          "sha256": "84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf",
+          "size": 349
+        },
+        {
+          "path": "sentencepiece.bpe.model",
+          "sha256": "cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865",
+          "size": 5069051
+        },
+        {
+          "path": "special_tokens_map.json",
+          "sha256": "8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835",
+          "size": 964
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "39feb9863a378165ab9c5c689047203d789422966c0c58721c5309fd039a8edc",
+          "size": 17083074
+        },
+        {
+          "path": "tokenizer_config.json",
+          "sha256": "cb058b4c5c0c08738eb028c2ae82ed55cd84ce8999ece76b13472af80f0f77f1",
+          "size": 1339
+        }
+      ],
+      "licence": "Apache-2.0",
+      "model": "snowflake-arctic-embed-l-v2.0",
+      "repo": "Snowflake/snowflake-arctic-embed-l-v2.0",
+      "revision": "ac6544c8a46e00af67e330e85a9028c66b8cfd9a",
+      "task": "embed",
+      "totalBytes": 2293220551
+    }
+  fetch-weights.py: |
+    #!/usr/bin/env python3
+    """Fetch model weights and refuse to hand over anything the manifest did not name.
+    
+    Reads a manifest (repo, revision, files[].path/.size/.sha256), downloads each file from
+    the Hugging Face resolve endpoint at that exact revision, and verifies the sha256 while
+    writing. Idempotent: a file already on disk with the right digest is left alone, so a
+    restarted pod does not re-download 29 GiB. Fails closed: any mismatch, any short read,
+    any file the manifest does not name is an error and the destination is not marked ready.
+    
+    stdlib only, so the image that runs this can stay a plain python base.
+    """
+    import hashlib, json, os, sys, time, urllib.error, urllib.request
+    
+    CHUNK = 8 << 20
+    # How much of a file this process keeps in the page cache before handing it back
+    # to the kernel. See release() for why a fetcher that streams in 8 MiB chunks is
+    # still OOMKilled without it.
+    RELEASE = 64 << 20
+    RETRIES = 5
+    UA = "swarm-marketplace-weights-fetcher/1"
+    
+    
+    def log(msg: str) -> None:
+        print(f"[weights] {msg}", flush=True)
+    
+    
+    def release(fd: int, offset: int, length: int, dirty: bool) -> None:
+        """Hand a range of a file back to the kernel, out of the page cache.
+    
+        This is what makes the container's memory request a small number instead of
+        a gamble. A container's page cache is charged to its cgroup, and the cache
+        of a file being *written* is dirty until writeback completes — so a fetcher
+        whose own resident set never exceeds 40 MiB still drives its cgroup to the
+        limit while it writes a 4.7 GiB shard at a few hundred MiB/s, and the kernel
+        OOMKills it rather than waiting for writeback. Measured on this manifest
+        (Llama 3.2 3B, 6.00 GiB, 9 files) in a container with the limit named:
+    
+            512Mi   OOMKilled, cgroup peak 515 MiB   (the SUP-1 experience)
+            1Gi     OOMKilled, cgroup peak 1048 MiB
+            2Gi     survived, cgroup peak 2078 MiB   — i.e. the whole limit
+    
+        `POSIX_FADV_DONTNEED` drops clean pages only, so a written range is synced
+        first; a range being read is already clean and is dropped as it is hashed.
+        """
+        if not hasattr(os, "posix_fadvise"):
+            return
+        if dirty:
+            os.fsync(fd)
+        os.posix_fadvise(fd, offset, length, os.POSIX_FADV_DONTNEED)
+    
+    
+    def digest(path: str) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            pending = 0
+            read = 0
+            while chunk := fh.read(CHUNK):
+                h.update(chunk)
+                read += len(chunk)
+                pending += len(chunk)
+                if pending >= RELEASE:
+                    release(fh.fileno(), read - pending, pending, dirty=False)
+                    pending = 0
+        return h.hexdigest()
+    
+    
+    def fetch(url: str, dest: str, expect_sha: str, expect_size: int) -> None:
+        tmp = dest + ".part"
+        h = hashlib.sha256()
+        written = 0
+        pending = 0
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=120) as resp, open(tmp, "wb") as out:
+            while chunk := resp.read(CHUNK):
+                out.write(chunk)
+                h.update(chunk)
+                written += len(chunk)
+                pending += len(chunk)
+                if pending >= RELEASE:
+                    out.flush()
+                    release(out.fileno(), written - pending, pending, dirty=True)
+                    pending = 0
+        if written != expect_size:
+            os.unlink(tmp)
+            raise ValueError(f"size {written} != manifest {expect_size}")
+        got = h.hexdigest()
+        if got != expect_sha:
+            os.unlink(tmp)
+            raise ValueError(f"sha256 {got} != manifest {expect_sha}")
+        os.replace(tmp, dest)
+    
+    
+    def main() -> int:
+        manifest_path = os.environ.get("WEIGHTS_MANIFEST", "/etc/model/manifest.json")
+        target = os.environ.get("WEIGHTS_DIR", "/models/current")
+        endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
+    
+        with open(manifest_path) as fh:
+            manifest = json.load(fh)
+        repo, revision = manifest["repo"], manifest["revision"]
+        source = os.environ.get("WEIGHTS_REPO", repo)
+    
+        os.makedirs(target, exist_ok=True)
+        ready = os.path.join(target, ".weights-ready")
+        stamp = f"{source}@{revision}"
+        if os.path.exists(ready) and open(ready).read().strip() == stamp:
+            log(f"already verified {stamp}")
+            return 0
+    
+        total = manifest["totalBytes"]
+        log(f"{stamp}: {len(manifest['files'])} files, {total / 2**30:.2f} GiB -> {target}")
+        done = 0
+        for entry in manifest["files"]:
+            rel, sha, size = entry["path"], entry["sha256"], entry["size"]
+            # Every component, not only the ones in a path with a separator in it:
+            # a bare ".." has no "/" and would otherwise reach os.path.join.
+            if rel.startswith("/") or any(part in ("", ".", "..") for part in rel.split("/")):
+                log(f"refusing suspicious manifest path {rel!r}")
+                return 1
+            dest = os.path.join(target, rel)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            if os.path.exists(dest) and os.path.getsize(dest) == size and digest(dest) == sha:
+                log(f"ok (cached)  {rel}")
+                done += size
+                continue
+            url = f"{endpoint}/{source}/resolve/{revision}/{rel}"
+            for attempt in range(1, RETRIES + 1):
+                try:
+                    started = time.monotonic()
+                    fetch(url, dest, sha, size)
+                    took = max(time.monotonic() - started, 1e-6)
+                    done += size
+                    log(f"ok  {rel}  {size / 2**20:.0f} MiB in {took:.0f}s "
+                        f"({size / 2**20 / took:.0f} MiB/s)  [{done / total:.0%}]")
+                    break
+                except (urllib.error.URLError, OSError, ValueError, TimeoutError) as err:
+                    log(f"attempt {attempt}/{RETRIES} failed for {rel}: {err}")
+                    if attempt == RETRIES:
+                        log("giving up — weights are NOT usable, failing closed")
+                        return 1
+                    time.sleep(min(2 ** attempt, 30))
+    
+        # Nothing outside the manifest may reach the serving container.
+        named = {e["path"] for e in manifest["files"]}
+        for root, _dirs, names in os.walk(target):
+            for name in names:
+                rel = os.path.relpath(os.path.join(root, name), target)
+                if rel in named or rel == ".weights-ready":
+                    continue
+                log(f"removing unmanifested file {rel}")
+                os.unlink(os.path.join(root, name))
+    
+        with open(ready, "w") as fh:
+            fh.write(stamp + "\n")
+        log(f"verified {stamp}")
+        return 0
+    
+    
+    if __name__ == "__main__":
+        sys.exit(main())
+---
+# Source: text-embeddings-server/templates/pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: confidential-rag-embeddings-weights
+  labels:
+    app.kubernetes.io/name: confidential-rag-embeddings
+    app.kubernetes.io/component: text-embeddings-server
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: "3Gi"
+---
+# Source: text-embeddings-server/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: confidential-rag-embeddings
+  labels:
+    app.kubernetes.io/name: confidential-rag-embeddings
+    app.kubernetes.io/component: text-embeddings-server
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: confidential-rag-embeddings
+    app.kubernetes.io/instance: rag
+---
+# Source: text-embeddings-server/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: confidential-rag-embeddings
+  labels:
+    app.kubernetes.io/name: confidential-rag-embeddings
+    app.kubernetes.io/component: text-embeddings-server
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  # The weights volume is ReadWriteOnce and held by the running pod, so a rolling update
+  # leaves the replacement Pending on the volume for ever while the old pod serves — a
+  # rollout that reports itself in progress and never finishes. `Recreate` costs one gap of
+  # the model's load time on an upgrade and removes that.
+  #
+  # It also keeps the cluster space's quota honest: a surging pod is a second 6Gi the quota
+  # has to cover, and a quota sized without it evicts whichever pod is heaviest at the moment
+  # the rollout starts.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: confidential-rag-embeddings
+      app.kubernetes.io/instance: rag
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: confidential-rag-embeddings
+        app.kubernetes.io/instance: rag
+    spec:
+      initContainers:
+        # Downloads the weights and refuses to hand over anything the manifest did not name,
+        # by sha256. Idempotent: a restarted pod with a populated volume re-hashes and starts
+        # in under a minute instead of downloading the checkpoint again.
+        #
+        # This is the one outbound connection the component makes, it is made once, at boot,
+        # to a declared host, for bytes whose hashes are in the attested manifest beside it —
+        # and no data of the operator's is in the request. That is a different thing from an
+        # inference call to a hosted provider, which is what this component exists to remove.
+        - name: fetch-weights
+          image: "docker.io/library/python@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df"
+          imagePullPolicy: IfNotPresent
+          command: [python3, /opt/weights/fetch-weights.py]
+          env:
+            - name: WEIGHTS_MANIFEST
+              value: /opt/weights/manifest.json
+            - name: WEIGHTS_DIR
+              value: "/models/current"
+            - name: HF_ENDPOINT
+              value: "https://huggingface.co"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: "1"
+              memory: 512Mi
+              nvidia.com/gpu: "0"
+          volumeMounts:
+            - name: weights
+              mountPath: "/models"
+            - name: manifest
+              mountPath: /opt/weights
+              readOnly: true
+      containers:
+        - name: server
+          image: "ghcr.io/huggingface/text-embeddings-inference@sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c"
+          imagePullPolicy: IfNotPresent
+          # Flags, not env, for everything that is not a secret: the arguments are part of what
+          # the evidence attests, so a reader sees the model directory, the pooling and the
+          # batch ceilings this endpoint really runs with.
+          #
+          # `--hostname 0.0.0.0` is explicit because Kubernetes sets HOSTNAME to the pod name,
+          # the server reads HOSTNAME as an address to bind, finds it is not one, warns and
+          # falls back. Saying it here removes the warning and the dependence on that fallback.
+          #
+          # `--auto-truncate` is load-bearing rather than defensive. The client this serves
+          # does no tokenising of its own — upstream's client-side split was removed in the
+          # fork precisely so that the server owns truncation — so without this flag one chunk
+          # longer than the model's window fails the whole batch it arrived in.
+          args:
+            - --model-id
+            - "/models/current"
+            - --pooling
+            - "cls"
+            # Measured per preset, not a chart-wide preference: the backend warms up by
+            # pushing a full batch through the model, the activation that allocates goes as
+            # the square of the sequence length, and an 8192-token checkpoint under the
+            # 16384-token budget a 512-token one takes happily is OOMKilled three seconds
+            # into start-up — before it serves a request, and past every render test and
+            # readiness probe in this repository.
+            - --max-batch-tokens
+            - "2048"
+            - --max-client-batch-size
+            - "32"
+            - --auto-truncate
+            - --hostname
+            - 0.0.0.0
+            - --port
+            - "8080"
+            - --json-output
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-rag-embeddings-auth
+                  key: api-key
+            # Nothing is to be fetched at serving time: the weights are already on the volume,
+            # verified, and a model file that went missing must fail loudly rather than be
+            # quietly re-downloaded unverified.
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            # The thread pools, pinned to the cores the limit actually grants rather than the
+            # host's — see `tes.threads`. Env and not flags because the server has no flag for
+            # them: they are read by the runtimes underneath it.
+            - name: OMP_NUM_THREADS
+              value: "2"
+            - name: MKL_NUM_THREADS
+              value: "2"
+            - name: RAYON_NUM_THREADS
+              value: "2"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          # `/health` is outside the server's authentication, which is what makes it usable as
+          # a probe, and it answers only once the model is loaded and warmed.
+          #
+          # Twenty minutes, not ten. Warming up is real work — 126 s for a 16384-token batch on
+          # two cores, measured — and it happens while the rest of the deployment is pulling its
+          # own checkpoints onto the same node. A budget that expires mid-warm-up kills a healthy
+          # server and starts it again from the beginning, which is a pod that never becomes
+          # ready and a cause that looks like anything but a timeout.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 120
+          # ---------------------------------------------------------------------------------
+          # Both of these are deliberately slack, and the reason is the whole point of this
+          # component: it is a CPU-bound inference server, and the thing a probe measures —
+          # whether it answers — is exactly what competes with the work it is doing.
+          #
+          # Measured on the gpu-blueprints cloud: with the default 5 s timeout the embedder
+          # came up, served the corpus indexer, and was then killed mid-index with exit 137
+          # after `Liveness probe failed: context deadline exceeded`. A batch of chunks holds
+          # both cores for longer than five seconds, `/health` is served by the same runtime,
+          # and the kubelet reads a busy server as a dead one. It restarted, the indexer
+          # retried, and it died again — four restarts before the cause was visible, and the
+          # cause was this probe rather than anything about the model.
+          #
+          # Readiness staying tight-ish is correct: a saturated endpoint should leave the
+          # Service, and its caller retries. Liveness must not fire for queueing — a restart
+          # throws away the model load and makes the queue worse.
+          # Readiness is slack too, and that took a second measurement to accept. Dropping a
+          # saturated endpoint out of its Service is the textbook answer and it is wrong here:
+          # the only caller is the deployment's own indexer, so de-registering the embedder
+          # because the indexer is using it turns one slow reindex into a loop that never
+          # finishes — the indexer's batch fails, it rebuilds the collection from the start,
+          # and saturates it again. Observed on the gpu-blueprints cloud as `Connection
+          # error.` on every cycle with the read itself succeeding.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 20
+            failureThreshold: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 20
+            failureThreshold: 6
+          resources:
+            limits:
+              cpu: "2"
+              memory: 6Gi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: "2"
+              memory: 6Gi
+              nvidia.com/gpu: "0"
+          volumeMounts:
+            - name: weights
+              mountPath: "/models"
+              readOnly: true
+      volumes:
+        - name: manifest
+          configMap:
+            name: confidential-rag-embeddings-weights
+        - name: weights
+          persistentVolumeClaim:
+            claimName: confidential-rag-embeddings-weights

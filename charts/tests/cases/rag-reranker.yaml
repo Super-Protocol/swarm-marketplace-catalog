@@ -1,0 +1,8 @@
+# The same chart as the embedder, serving a cross-encoder instead — the listing deploys two
+# releases of it. `--pooling` must be absent from this render: pooling is a property of an
+# embedding model, and passing it with a classifier checkpoint is a flag the backend has no
+# use for.
+name: confidential-rag-reranker
+model:
+  preset: bge-reranker-v2-m3
+apiKey: RERANKER-KEY-FOR-THE-GOLDEN

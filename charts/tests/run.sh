@@ -21,13 +21,14 @@ cd "$root"
 # only for the label: those charts address one another by `<release>-<subchart>` and the
 # listing resolves the same names through `{{ components.agent.release }}`, so a golden taken
 # under a different release name would not be the deployment anybody gets.
-release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; rapids-singlecell-notebook) printf 'sc' ;; patroni-postgresql) printf 'pg' ;; swarm-model-server) printf 'ms' ;; swarm-doc-ingest) printf 'di' ;; conversational-analyst-*) printf 'analyst' ;; *) printf 'cr' ;; esac; }
-namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; rapids-singlecell-notebook) printf 'single-cell' ;; patroni-postgresql) printf 'patroni' ;; swarm-model-server) printf 'model-server' ;; swarm-doc-ingest) printf 'doc-ingest' ;; conversational-analyst-*) printf 'conversational-analyst' ;; *) printf 'confidential-router' ;; esac; }
+release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; rapids-singlecell-notebook) printf 'sc' ;; text-embeddings-server|milvus-standalone|confidential-rag) printf 'rag' ;; patroni-postgresql) printf 'pg' ;; swarm-model-server) printf 'ms' ;; swarm-doc-ingest) printf 'di' ;; conversational-analyst-*) printf 'analyst' ;; *) printf 'cr' ;; esac; }
+namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; rapids-singlecell-notebook) printf 'single-cell' ;; text-embeddings-server|milvus-standalone|confidential-rag) printf 'confidential-rag' ;; patroni-postgresql) printf 'patroni' ;; swarm-model-server) printf 'model-server' ;; swarm-doc-ingest) printf 'doc-ingest' ;; conversational-analyst-*) printf 'conversational-analyst' ;; *) printf 'confidential-router' ;; esac; }
 
 RELEASE=cr
 NAMESPACE=confidential-router
 CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ollama confidential-router-ui confidential-s3 patroni-postgresql swarm-model-server rapids-singlecell-notebook swarm-doc-ingest
-        conversational-analyst-platform conversational-analyst-embeddings conversational-analyst-identity conversational-analyst-agent conversational-analyst-gateway conversational-analyst-grounding)
+        conversational-analyst-platform conversational-analyst-embeddings conversational-analyst-identity conversational-analyst-agent conversational-analyst-gateway conversational-analyst-grounding
+        text-embeddings-server milvus-standalone confidential-rag)
 
 update="${UPDATE:-}"
 failures=0
@@ -83,6 +84,9 @@ for chart in "${CHARTS[@]}"; do
     conversational-analyst-agent) values="charts/tests/cases/analyst-agent.yaml" ;;
     conversational-analyst-gateway) values="charts/tests/cases/analyst-gateway.yaml" ;;
     conversational-analyst-grounding) values="charts/tests/cases/analyst-grounding.yaml" ;;
+    text-embeddings-server) values="charts/tests/cases/rag-embeddings.yaml" ;;
+    milvus-standalone) values="charts/tests/cases/rag-vectors.yaml" ;;
+    confidential-rag) values="charts/tests/cases/rag-stack.yaml" ;;
   esac
   if output=$(helm lint "charts/$chart" --values "$values" 2>&1); then
     pass "$chart"
@@ -1938,6 +1942,124 @@ PYTHON
     fail "$app: $output"
   fi
 done
+
+# ---------------------------------------------------------------------------
+# Confidential RAG (SUP-840), ported from NVIDIA's open RAG reference
+# architecture. Five components and three charts of this repository's own, so
+# every check that can be asked of the composed render is asked here.
+# ---------------------------------------------------------------------------
+
+note "every image the Confidential RAG listing renders is declared by its listing"
+rag_images() {
+  if output=$(python3 charts/tests/declared_images.py confidential-rag "$1" "$2" "charts/tests/cases/$3.yaml"); then
+    printf '%s\n' "$output"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/declared_images.py confidential-rag $1"
+  fi
+}
+rag_images inference  swarm-model-server      model-server-component
+rag_images embeddings text-embeddings-server  rag-embeddings
+rag_images reranker   text-embeddings-server  rag-reranker
+rag_images vectors    milvus-standalone       rag-vectors
+rag_images rag        confidential-rag        rag-stack
+
+# The worst option the model and embedder parameters allow, because that is what
+# `resources.min` and `resources.maxPod` are declared for. Rendering only the
+# default would leave the large embedder's 6Gi unweighed — and the preset does
+# not apply the engine's sizing, the listing carries it, so a listing that
+# forgot to would put a 30B engine in a 12Gi container.
+note "the heaviest pod the Confidential RAG listing renders is within its declared maxPod"
+if output=$(python3 charts/tests/max_pod.py confidential-rag \
+      embeddings:text-embeddings-server:rag-embeddings-arctic \
+      reranker:text-embeddings-server:rag-reranker \
+      vectors:milvus-standalone:rag-vectors \
+      rag:confidential-rag:rag-stack); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/max_pod.py confidential-rag"
+fi
+
+note "the Confidential RAG charts default every image to a digest"
+for chart in text-embeddings-server milvus-standalone confidential-rag; do
+  if output=$(python3 charts/tests/digests.py "$chart"); then
+    printf '%s\n' "$output"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/digests.py $chart"
+  fi
+done
+
+note "every object of the Confidential RAG render is its own document"
+rag_inventory() {
+  if output=$(python3 charts/tests/inventory.py "$1" "charts/tests/cases/$2.yaml" ${3:+"$3"}); then
+    printf '%s\n' "$output"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/inventory.py $1 $2"
+  fi
+}
+rag_inventory text-embeddings-server rag-embeddings
+rag_inventory text-embeddings-server rag-reranker text-embeddings-server:rerank
+rag_inventory milvus-standalone      rag-vectors
+rag_inventory confidential-rag       rag-stack
+rag_inventory confidential-rag       rag-stack-unbound
+
+# The property the listing's `expectedDigest` rests on. The pipeline chart has
+# exactly one field that differs between two consumers — the Ingress host — and
+# the two component charts have none at all, because neither renders an Ingress.
+note "two consumers of Confidential RAG attest the same snapshot"
+if output=$(python3 charts/tests/evidence_drift.py confidential-rag \
+      charts/tests/cases/rag-stack.yaml confidential-rag \
+      'hostname={t}.conf-apps.superprotocol.dev' \
+      'console.password=ACCESS-{t}' \
+      'console.sessionKey=SESSION-SIGNING-KEY-FOR-{t}-0123456789'); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/evidence_drift.py confidential-rag"
+fi
+if output=$(python3 charts/tests/evidence_drift.py text-embeddings-server \
+      charts/tests/cases/rag-embeddings.yaml confidential-rag \
+      'apiKey=KEY-FOR-{t}-0123456789abcdef'); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/evidence_drift.py text-embeddings-server"
+fi
+if output=$(python3 charts/tests/evidence_drift.py milvus-standalone \
+      charts/tests/cases/rag-vectors.yaml confidential-rag \
+      'auth.rootPassword=VECTOR-PASSWORD-FOR-{t}-012345'); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/evidence_drift.py milvus-standalone"
+fi
+
+note "attaching a document corpus changes only the Secret"
+if output=$(python3 charts/tests/rag_binding.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/rag_binding.py"
+fi
+
+note "the retriever asks for no more than the reranker will accept"
+if output=$(python3 charts/tests/rag_reranker_budget.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/rag_reranker_budget.py"
+fi
+
+note "the console is the only door, and only its probe is outside the session"
+if output=$(python3 charts/tests/rag_console.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/rag_console.py"
+fi
 
 note "Result"
 if [ "$failures" -eq 0 ]; then

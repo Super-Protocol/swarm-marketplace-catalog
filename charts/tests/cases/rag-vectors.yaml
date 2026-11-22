@@ -1,0 +1,4 @@
+# The vector store, as the Confidential RAG listing deploys it.
+name: confidential-rag-vectors
+auth:
+  rootPassword: VECTOR-STORE-PASSWORD-FOR-THE-GOLDEN
