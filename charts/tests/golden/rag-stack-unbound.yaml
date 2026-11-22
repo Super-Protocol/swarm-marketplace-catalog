@@ -1252,6 +1252,8 @@ spec:
         app.kubernetes.io/instance: rag
         app.kubernetes.io/component: cache
     spec:
+      securityContext:
+        fsGroup: 1000
       containers:
         - name: cache
           image: "docker.io/valkey/valkey@sha256:e706d1213aaba6896c162bb6a3a9e1894e1a435f28f8f856d14fab2e10aa098b"
@@ -1279,6 +1281,9 @@ spec:
               drop:
               - ALL
             privileged: false
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 999
           ports:
             - name: valkey
               containerPort: 6379
@@ -1387,8 +1392,16 @@ spec:
               value: "Apache-2.0"
             - name: ABOUT_SOURCE_REPO
               value: "https://github.com/Super-Protocol/confidential-rag"
-            - name: ABOUT_EXPECTED_DIGEST
-              value: "4c5bb0e9b5f78a7a04ba54de3c0e9a0b2b3d1cb0ba0e4b3b57a3d7bd6cbe95c7"
+            # There is deliberately no ABOUT_EXPECTED_DIGEST here, and the reason is worth
+            # keeping: this env value is rendered into the Deployment, the Deployment is in the
+            # evidence snapshot, and the snapshot is what the digest is OVER. So a console
+            # showing the digest it is expected to match changes that digest by displaying it —
+            # measure, write the number in, and it is no longer the number. It cost a deploy
+            # cycle to notice.
+            #
+            # The deployment's OWN digest is served at the evidence URL the console links, which
+            # is outside the snapshot by construction, and the version's declared digest is on
+            # the listing page.
             - name: LOG_LEVEL
               value: "INFO"
           securityContext:

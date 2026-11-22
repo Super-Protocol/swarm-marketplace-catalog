@@ -5,7 +5,15 @@ description: >-
   Text Embeddings Inference, from weights pinned by sha256. CPU only, no public hostname, and
   authenticated even so.
 type: application
-version: 0.1.0
+# 0.1.1 corrected one measured number: the English embedder's memory, 4Gi -> 6Gi. The 4Gi came
+# from a sampled peak of 2320 MiB; the cgroup's own `memory.peak` for the same run is 3361 MiB.
+# 0.1.2 corrects the other one — that embedder's batch ceiling, 16384 -> 2048 — and gives every
+# preset a 20-minute startup budget instead of ten. The ceiling had been chosen from the
+# warm-up's MEMORY, which is small for a 512-token model, and ignored the warm-up's CPU cost:
+# 126 s on the two cores the container gets, against 9 s at 2048. On a node also pulling a 6 GiB
+# checkpoint for the engine it did not finish inside the probe's budget at all, so a healthy
+# server was killed and restarted from the beginning.
+version: 0.1.2
 # Text Embeddings Inference. Bumping it is a chart change, not an image bump: the backend
 # selection, the flags and the pooling behaviour move with it.
 appVersion: "1.8"

@@ -135,13 +135,25 @@ the corpus is in the snapshot in full.
 
 ## The digest
 
-`evidence.expectedDigest` describes the **ungated configuration** — a deployment with nothing
-attached to the `corpus` slot, which is what every deployment of this listing is until a data owner
-approves one. A deployment that mounts gated data gains three objects the marketplace adds itself
-(the egress sidecar's ConfigMap, Deployment and Service), the cloud digests them, and its snapshot
-is therefore a different one. That is platform-wide and true of every gated listing in this
-catalogue; the first gated deployment of this listing has to re-measure and the listing has to
-declare which configuration its number describes, which is what this paragraph is.
+`evidence.expectedDigest` describes the **gated configuration**: a deployment with a dataset
+attached to the `corpus` slot.
+
+`69a1160a3599240365cfcf30fc56c3d3bbc3f37e8846715ff053baa0452efa14`, measured on two deployments of
+0.1.2 on the `gpu-blueprints` cloud — two hostnames, two namespaces — which published
+byte-identical signed snapshots of 32 resources.
+
+**Which configuration is a decision, not a default.** A deployment that mounts gated data gains
+four objects the marketplace adds itself — the egress sidecar's ConfigMap, Deployment and Service,
+plus the Secret holding its client certificate — and the cloud digests them, so a gated deployment
+and an ungated one cannot share a digest. That is platform-wide and true of every gated listing
+here. The gated one is declared because of what the gate does with it: the marketplace hands the
+gate the `expectedDigest` of the listing version a deployment was created from, and the gate
+fetches that deployment's own evidence and compares. Declaring the ungated digest would mean every
+**gated** deployment of this listing is refused — which is the one thing it exists to do.
+
+What that costs: an ungated deployment does not match the number on its own listing page. It needs
+no gate, so nothing refuses it. The ungated digest was `3dde9a40…` on chart 0.1.1 and is not
+declared.
 
 What makes the number a property of the *version* rather than of the deployment: the hostname is
 the only field that differs between two consumers, and it appears in exactly one object. It is

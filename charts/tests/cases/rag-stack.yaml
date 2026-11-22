@@ -12,8 +12,6 @@ ingress:
 console:
   password: ACCESS-PASSWORD-FOR-THE-GOLDEN
   sessionKey: SESSION-SIGNING-KEY-FOR-THE-GOLDEN-0123
-  about:
-    expectedDigest: 4c5bb0e9b5f78a7a04ba54de3c0e9a0b2b3d1cb0ba0e4b3b57a3d7bd6cbe95c7
 inference:
   url: http://swarm-model-server:8000/v1
   model: llama-3.2-3b-instruct

@@ -396,12 +396,18 @@ spec:
               protocol: TCP
           # `/health` is outside the server's authentication, which is what makes it usable as
           # a probe, and it answers only once the model is loaded and warmed.
+          #
+          # Twenty minutes, not ten. Warming up is real work — 126 s for a 16384-token batch on
+          # two cores, measured — and it happens while the rest of the deployment is pulling its
+          # own checkpoints onto the same node. A budget that expires mid-warm-up kills a healthy
+          # server and starts it again from the beginning, which is a pod that never becomes
+          # ready and a cause that looks like anything but a timeout.
           startupProbe:
             httpGet:
               path: /health
               port: http
             periodSeconds: 10
-            failureThreshold: 60
+            failureThreshold: 120
           readinessProbe:
             httpGet:
               path: /health

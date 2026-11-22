@@ -43,7 +43,6 @@ console:
   # thing.
   about:
     sourceRepo: https://github.com/Super-Protocol/confidential-rag
-    expectedDigest: ""
   # Request equals limit, in both dimensions, and neither is below 100m / 128Mi. A cluster
   # space's LimitRange sets `maxLimitRequestRatio: 1` and those floors, and a container
   # breaking either is refused at admission — so the pod never exists, and nothing an
@@ -148,6 +147,30 @@ cache:
   # Ingress, in protected mode. Giving it `requirepass` would mean the rag-server could not
   # reach it at all.
   enabled: true
+
+  # ---------------------------------------------------------------------------------------------
+  # The pod runs AS the image's own user, rather than as root and letting the image get there.
+  #
+  # Measured, and it is the whole reason this block exists. The Valkey image's entrypoint starts
+  # as root, chowns its data directory and drops privileges with
+  # `setpriv --reuid=valkey --regid=valkey`. `setpriv` needs CAP_SETUID and CAP_SETGID, and this
+  # chart drops every capability — so the container exited on every start and the pod sat in
+  # CrashLoopBackOff. Reproduced locally: `setpriv: setresuid failed: Operation not permitted`;
+  # in the cluster it was ten restarts before it was understood.
+  #
+  # Naming the uid skips that path entirely: the entrypoint sees it is not root and execs the
+  # server. `fsGroup` is what then makes a fresh volume writable, since the chown the entrypoint
+  # would have done cannot happen either. 999 and 1000 are the image's own `valkey` user and
+  # group.
+  #
+  # Dropping every capability AND running as a non-root uid is the better posture; what was wrong
+  # was asking for both and expecting the image to bridge them.
+  securityContext:
+    runAsUser: 999
+    runAsGroup: 1000
+    runAsNonRoot: true
+  podSecurityContext:
+    fsGroup: 1000
   image:
     registry: docker.io
     repository: valkey/valkey

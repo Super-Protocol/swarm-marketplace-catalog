@@ -1,0 +1,88 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: DataDefinition
+
+# ---------------------------------------------------------------------------
+# The first DOCUMENT corpus in this catalogue, and it exists because of a
+# constraint rather than a preference.
+#
+# The marketplace gatekeeper speaks ClickHouse over HTTP and nothing else: it
+# injects `x-clickhouse-user` / `x-clickhouse-key` into every request it
+# forwards and rewrites the database the caller named. So a document corpus a
+# data owner wants to GATE has to be a ClickHouse table — one row per document —
+# and a corpus in object storage cannot be gated today whatever its access mode
+# says. Everything else here was tabular clinical or retail data, and
+# Confidential RAG (SUP-840) needs a gated corpus to demonstrate anything at
+# all.
+#
+# `acme-internal-knowledge-base` is the same shape on paper and is NOT this: its
+# connection is a placeholder pointing at `ch.acme-internal.svc`, it is
+# `access.mode: direct`, and nothing is behind it. This one is real, gated, and
+# has rows.
+# ---------------------------------------------------------------------------
+
+metadata:
+  name: acme-engineering-handbook
+  title: Acme Engineering Handbook
+  description: >-
+    The platform team's own handbook — runbooks, policies, architecture notes, incident
+    postmortems and troubleshooting entries — as one row per document. The corpus a
+    retrieval-augmented deployment is pointed at when the question is "what do we do about
+    this", and the reason the documents cannot simply be uploaded somewhere.
+  category: language
+  tags:
+    - documents
+    - nlp
+    - runbooks
+    - rag
+
+spec:
+  secrets:
+    - name: readUser
+      title: ClickHouse read-only user
+      description: >-
+        A user with SELECT on the one document table and nothing else, read-only, and visible
+        only from inside the stand's own subnet. The gate holds it; a consumer never sees it.
+    - name: readPassword
+      title: ClickHouse read-only password
+
+  access:
+    # The point of this dataset. The owner hands out no credentials: a consumer is given a
+    # local address, every request through it is admitted against the evidence their deployment
+    # published, and access stops the moment that evidence stops matching what was approved.
+    mode: gateway
+
+  provides:
+    - interface: clickhouse-http/v1
+      connection:
+        static:
+          # The corpus lives on the stand's own subnet, reachable by the gate and by nothing
+          # else — the NSG does not open 8123 to the internet. This is the marketplace host
+          # rather than the clinics host because the account this catalogue holds on the
+          # clinics ClickHouse is a reader and cannot create a database.
+          host: 10.10.1.10
+          port: 8123
+          database: handbook
+          username: "{{ secrets.readUser }}"
+          password: "{{ secrets.readPassword }}"
+          tls: false
+
+  schema:
+    tables:
+      - name: documents
+        description: >-
+          One row per document revision. A superseded entry is kept with `(revision N)` in its
+          title rather than deleted, which is what a handbook actually looks like — and what
+          makes a reranker earn its keep, because two revisions of one runbook both match.
+        columns:
+          - name: doc_id
+            type: string
+            description: Stable document identifier, prefixed by kind (RUN, POL, ARC, TRO, REF, INC, HOW).
+          - name: title
+            type: string
+            description: Document title.
+          - name: text
+            type: string
+            description: The document body, plain text, paragraphs separated by a blank line.
+          - name: updated_at
+            type: timestamp
+            description: Last revision time (UTC). A consumer re-reads the maximum of this to decide whether to re-index.

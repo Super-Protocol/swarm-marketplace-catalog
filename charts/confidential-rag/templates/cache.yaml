@@ -33,7 +33,7 @@ spec:
         {{- include "crag.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: cache
     spec:
-      {{- with .Values.podSecurityContext }}
+      {{- with (mergeOverwrite (deepCopy .Values.podSecurityContext) .Values.cache.podSecurityContext) }}
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -58,7 +58,7 @@ spec:
             - "no"
             - --save
             - 300 1
-          {{- with .Values.securityContext }}
+          {{- with (mergeOverwrite (deepCopy .Values.securityContext) .Values.cache.securityContext) }}
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}

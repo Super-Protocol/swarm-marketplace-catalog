@@ -6,7 +6,16 @@ description: >-
   source, and the summary-status store. Composes an embedder, a reranker, a vector store and a
   generation endpoint deployed beside it.
 type: application
-version: 0.1.0
+# 0.1.1 is one fix, found by deploying: the Valkey pod runs as the image's own uid.
+# Its entrypoint starts as root and drops privileges with `setpriv`, which needs CAP_SETUID —
+# and this chart drops every capability, so the container exited on every start and the pod sat
+# in CrashLoopBackOff. Naming the uid skips that path; `fsGroup` makes the fresh volume writable
+# in place of the chown the entrypoint can no longer do.
+# 0.1.2 removes the console's ABOUT_EXPECTED_DIGEST. It was an env value in the Deployment, the
+# Deployment is in the evidence snapshot, and the snapshot is what the digest is over — so a
+# console displaying the digest it should match changed that digest by displaying it. The
+# deployment's own digest is at the evidence URL the console already links.
+version: 0.1.2
 # The upstream release this is a port of. The image is built from
 # Super-Protocol/confidential-rag at branch confidential/2.6.2 — see MODIFICATIONS.md there for
 # what differs, which is the open embedding, reranking and generation engines and nothing about

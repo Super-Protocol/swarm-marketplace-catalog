@@ -2,6 +2,37 @@ apiVersion: swarm.cloud/v1alpha1
 kind: AppDefinition
 
 # ---------------------------------------------------------------------------
+# 0.1.2 removes one patch from this definition, and it is the most instructive
+# mistake of the port: the console was given the listing's own
+# `expectedDigest` to display. That value is an env entry in a Deployment, the
+# Deployment is in the evidence snapshot, and the snapshot is what the digest is
+# OVER — so measuring the digest and writing it in made it no longer the digest.
+# A deployment's own digest is at the evidence URL the console already links,
+# which is outside the snapshot by construction.
+#
+# 0.1.2 also carries `text-embeddings-server` 0.1.2, which lowers the English
+# embedder's batch ceiling to the reranker's 2048 and gives both a 20-minute
+# startup budget. Measured: the 16384-token warm-up is 126 s on the two cores
+# the container has, and on a node simultaneously pulling the engine's 6 GiB of
+# weights it did not finish inside the probe's ten minutes — so a healthy server
+# was killed and restarted from the beginning.
+#
+# 0.1.1 was two fixes, both found by deploying rather than by reading, and
+# neither of them in this definition:
+#
+#   * `confidential-rag` 0.1.1 runs the Valkey pod as the image's own uid. Its
+#     entrypoint starts as root and drops privileges with `setpriv`, which needs
+#     CAP_SETUID — and the chart drops every capability, so the container exited
+#     on every start.
+#   * `text-embeddings-server` 0.1.1 corrects the English embedder's measured
+#     memory, 4Gi -> 6Gi. The 4Gi came from a sampled peak of 2320 MiB; the
+#     cgroup's own `memory.peak` for the same run is 3361 MiB.
+#
+# The quota below already covered 6Gi for the embedder, because it is declared
+# for the worst option the parameters allow and the multilingual embedder was
+# always 6Gi. So `resources.min` does not move, and a deployment of 0.1.0 is
+# within the quota a deployment of 0.1.1 asks for.
+# ---------------------------------------------------------------------------
 # Confidential RAG — the pilot of the blueprint-port epic (SUP-837), and the
 # first listing in it that needed real licence substitution rather than a
 # repackaging.
@@ -38,7 +69,7 @@ metadata:
     deployment publishes cryptographic proof of which embedder and which model touch your data, and
     the data owner can withdraw access the moment that changes. Based on the open-source NVIDIA RAG
     reference architecture (Apache-2.0), rebuilt on open components.
-  version: "0.1.0"
+  version: "0.1.2"
   category: ai-inference
   # Our fork — the code the image is built from — and not the upstream repository.
   sourceRepo: https://github.com/Super-Protocol/confidential-rag
@@ -535,7 +566,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: text-embeddings-server
-      version: "0.1.0"
+      version: "0.1.2"
     images:
       - name: ghcr.io/huggingface/text-embeddings-inference
         digest: sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c
@@ -570,7 +601,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: text-embeddings-server
-      version: "0.1.0"
+      version: "0.1.2"
     images:
       - name: ghcr.io/huggingface/text-embeddings-inference
         digest: sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c
@@ -626,7 +657,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-rag
-      version: "0.1.0"
+      version: "0.1.2"
     images:
       - name: ghcr.io/super-protocol/confidential-rag/rag-server
         digest: sha256:c68adc9c963a623256e4fe1db6be35ae6ac15fe95589504ff5b7b663ad2e06f9
@@ -640,8 +671,6 @@ components:
           console:
             password: ""
             sessionKey: ""
-            about:
-              expectedDigest: ""
           server:
             rerankerTopK: 6
             maxTokens: 1024
@@ -685,12 +714,6 @@ components:
           - op: replace
             path: console.sessionKey
             value: "{{ params.sessionKey }}"
-
-          # What the console tells a user about the deployment they are using, and the digest it
-          # should be matching. Plain configuration, attested with everything else.
-          - op: replace
-            path: console.about.expectedDigest
-            value: "4c5bb0e9b5f78a7a04ba54de3c0e9a0b2b3d1cb0ba0e4b3b57a3d7bd6cbe95c7"
 
           - op: replace
             path: inference.model
@@ -872,9 +895,33 @@ outputs:
 
 evidence:
   # ---------------------------------------------------------------------------
-  # PLACEHOLDER until two deployments have been measured. Replaced before merge.
-  # ---------------------------------------------------------------------------
-  expectedDigest: "4c5bb0e9b5f78a7a04ba54de3c0e9a0b2b3d1cb0ba0e4b3b57a3d7bd6cbe95c7"
+  # Measured, not derived, and it describes the GATED configuration.
+  #
+  # Two deployments of 0.1.2 on the gpu-blueprints cloud, 2026-11-22 —
+  # `rag-840a` and `rag-840b`, two hostnames in two namespaces, each with the
+  # `acme-engineering-handbook` dataset attached — published byte-identical
+  # signed snapshots and this digest. Thirty-two resources in each: nine
+  # Deployments, nine Services, seven ConfigMaps, six Secrets and the Ingress.
+  #
+  # **It is the gated configuration on purpose, and that is a decision rather
+  # than a default.** A deployment that mounts gated data gains four objects the
+  # marketplace adds itself — the egress sidecar's ConfigMap, Deployment and
+  # Service, plus the Secret holding its client certificate — and the cloud
+  # digests them, so a gated deployment and an ungated one cannot share a digest
+  # (platform-wide; SUP-842 recorded it). SUP-842 declared the ungated number
+  # and left the gated one to be re-measured. This declares the gated one,
+  # because of what the gate does with it: the marketplace hands the gate
+  # `expectedDigest` from the listing version the deployment was created from,
+  # and the gate fetches the deployment's own evidence and compares. Declaring
+  # the ungated digest would therefore mean every gated deployment of this
+  # listing is refused by the gate — which is the one thing this listing exists
+  # to do.
+  #
+  # What that costs: an UNGATED deployment of this listing does not match the
+  # number on its own listing page. It needs no gate, so nothing refuses it, and
+  # the README says which configuration the digest describes. The ungated
+  # digest, for the record, was `3dde9a40…` on chart 0.1.1 and is not declared.
+  expectedDigest: "69a1160a3599240365cfcf30fc56c3d3bbc3f37e8846715ff053baa0452efa14"
   # ---------------------------------------------------------------------------
   # The hostname is the one field that differs between two deployments of this
   # version, and excluding it is what makes the digest a property of the version

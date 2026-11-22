@@ -53,13 +53,32 @@ model:
       # therefore take the wide batch, and the two 8192-token checkpoints below
       # cannot — see their notes.
       #
-      # Ready at a 3Gi limit, cgroup peak 2.98 GiB. 4Gi is the declaration.
+      # 2048 and 6Gi, and BOTH numbers were measured wrong the first time. Worth
+      # the space, because each was wrong for a different reason:
+      #
+      # Memory was 4Gi, from a peak read by sampling `docker stats` once a
+      # second: 2320 MiB. The cgroup's own `memory.peak` for the same run says
+      # **3361 MiB** — the sampler never landed on the warm-up. 4Gi was
+      # therefore 82% utilised by a measurement that looked like 57%.
+      #
+      # The batch ceiling was 16384, because this checkpoint's 512-token window
+      # makes the warm-up's activation small — which is true, and was the wrong
+      # question. The warm-up is also WORK: measured in a container limited to
+      # the two cores this one gets, 16384 tokens takes **126 s** against the
+      # reranker's 9 s at 2048. On an unloaded host that is fine. On a cluster
+      # node also pulling a 6 GiB checkpoint for the engine, it did not finish
+      # inside the startup probe's budget at all, and the container was killed
+      # and restarted — a pod that never becomes ready while nothing is wrong
+      # with it.
+      #
+      # 2048 is what the reranker uses and comes up on every time. What it costs
+      # is micro-batches on a reindex: seconds, on a corpus of this size.
       sizing:
-        maxBatchTokens: 16384
+        maxBatchTokens: 2048
         maxClientBatchSize: 32
         resources:
           cpu: "2"
-          memory: 4Gi
+          memory: 6Gi
       weights:
         repo: BAAI/bge-large-en-v1.5
         revision: d4aa6901d3a41ba39fb536a557fa166f842b0e09
