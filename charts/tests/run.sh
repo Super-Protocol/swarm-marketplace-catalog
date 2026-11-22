@@ -21,12 +21,12 @@ cd "$root"
 # only for the label: those charts address one another by `<release>-<subchart>` and the
 # listing resolves the same names through `{{ components.agent.release }}`, so a golden taken
 # under a different release name would not be the deployment anybody gets.
-release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; rapids-singlecell-notebook) printf 'sc' ;; patroni-postgresql) printf 'pg' ;; swarm-model-server) printf 'ms' ;; conversational-analyst-*) printf 'analyst' ;; *) printf 'cr' ;; esac; }
-namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; rapids-singlecell-notebook) printf 'single-cell' ;; patroni-postgresql) printf 'patroni' ;; swarm-model-server) printf 'model-server' ;; conversational-analyst-*) printf 'conversational-analyst' ;; *) printf 'confidential-router' ;; esac; }
+release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; rapids-singlecell-notebook) printf 'sc' ;; patroni-postgresql) printf 'pg' ;; swarm-model-server) printf 'ms' ;; swarm-doc-ingest) printf 'di' ;; conversational-analyst-*) printf 'analyst' ;; *) printf 'cr' ;; esac; }
+namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; rapids-singlecell-notebook) printf 'single-cell' ;; patroni-postgresql) printf 'patroni' ;; swarm-model-server) printf 'model-server' ;; swarm-doc-ingest) printf 'doc-ingest' ;; conversational-analyst-*) printf 'conversational-analyst' ;; *) printf 'confidential-router' ;; esac; }
 
 RELEASE=cr
 NAMESPACE=confidential-router
-CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ollama confidential-router-ui confidential-s3 patroni-postgresql swarm-model-server rapids-singlecell-notebook
+CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ollama confidential-router-ui confidential-s3 patroni-postgresql swarm-model-server rapids-singlecell-notebook swarm-doc-ingest
         conversational-analyst-platform conversational-analyst-embeddings conversational-analyst-identity conversational-analyst-agent conversational-analyst-gateway conversational-analyst-grounding)
 
 update="${UPDATE:-}"
@@ -76,6 +76,7 @@ for chart in "${CHARTS[@]}"; do
     patroni-postgresql) values="charts/tests/cases/patroni-default.yaml" ;;
     swarm-model-server) values="charts/tests/cases/model-server-llama.yaml" ;;
     rapids-singlecell-notebook) values="charts/tests/cases/single-cell-default.yaml" ;;
+    swarm-doc-ingest) values="charts/tests/cases/doc-ingest-component.yaml" ;;
     conversational-analyst-platform) values="charts/tests/cases/analyst-platform.yaml" ;;
     conversational-analyst-embeddings) values="charts/tests/cases/analyst-embeddings.yaml" ;;
     conversational-analyst-identity) values="charts/tests/cases/analyst-identity.yaml" ;;
@@ -1598,6 +1599,20 @@ done
 # end — and with the model named by preset, because "which model" is a question
 # put to a person and the answer has to reach the chart as one value.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# The extraction component (SUP-874). Documents are the sensitive asset in a RAG
+# listing, so what this checks is the half a reviewer cannot see by reading
+# values: that no model can be fetched at request time, that there is no
+# hostname in any object, and that the key never leaves a Secret.
+# ---------------------------------------------------------------------------
+note "the extraction component keeps its guarantees in the render"
+if output=$(python3 charts/tests/doc_ingest.py 2>&1); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/doc_ingest.py"
+fi
+
 note "the vetted model presets are what they claim to be"
 if output=$(python3 charts/tests/model_presets.py 2>&1); then
   printf '%s\n' "$output"

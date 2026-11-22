@@ -1,0 +1,43 @@
+{{- include "swarm-doc-ingest.validate" . -}}
+{{- /*
+Everything the extraction behaviour depends on, in one object the cloud digests
+and signs. A tenant who approved a digest approved *these* presets: a reconfigure
+that switched the layout model or turned OCR off would change what the component
+reads out of their documents, and the evidence is where that becomes visible.
+
+The key is not here. It is in a Secret, which the platform lifts out of the
+bundle and seals, and which the evidence snapshot excludes.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "swarm-doc-ingest.fullname" . }}
+  labels:
+    {{- include "swarm-doc-ingest.labels" . | nindent 4 }}
+data:
+  INGEST_LAYOUT_PRESET: {{ .Values.extraction.layoutPreset | quote }}
+  INGEST_TABLE_MODE: {{ .Values.extraction.tableMode | quote }}
+  INGEST_OCR_ENGINE: {{ .Values.extraction.ocrEngine | quote }}
+  INGEST_FORCE_FULL_PAGE_OCR: {{ .Values.extraction.forceFullPageOcr | quote }}
+  INGEST_INCLUDE_IMAGE_CONTENT: {{ .Values.extraction.includeImageContent | quote }}
+  {{- /*
+  `int64` and `printf "%d"`, not `quote` on the raw value: Helm reads a large
+  YAML integer as a float and renders 268435456 as "2.68435456e+08", which the
+  service parses with int() and dies on at boot. The golden render is where that
+  was caught.
+  */}}
+  INGEST_MAX_UPLOAD_BYTES: {{ printf "%d" (int64 .Values.extraction.maxUploadBytes) | quote }}
+  {{- /*
+  The guarantee, as a value in the signed document rather than only as a default
+  inside the image: no model is fetched at request time. The service refuses to
+  boot if this is anything but 1, so an operator who unsets it gets a pod that
+  will not start instead of a pod that reaches the Hugging Face Hub with a
+  tenant's page in memory.
+  */}}
+  HF_HUB_OFFLINE: "1"
+  {{- /*
+  Thread count from the pod's own CPU limit. Above the cgroup quota a CPU-bound
+  extraction gets slower rather than faster, and the limit is the only number
+  that knows the right answer.
+  */}}
+  OMP_NUM_THREADS: {{ .Values.ompNumThreads | default (.Values.resources.cpu | toString | replace "m" "") | quote }}

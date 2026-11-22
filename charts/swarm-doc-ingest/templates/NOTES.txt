@@ -1,0 +1,28 @@
+{{ .Chart.Name }} {{ .Chart.Version }} — image {{ .Chart.AppVersion }}
+
+  Reads      PDF, DOCX, PPTX, XLSX, HTML, Markdown, text, and PNG / JPEG / TIFF / BMP scans
+  Layout     {{ .Values.extraction.layoutPreset }}
+  Tables     TableFormer, {{ .Values.extraction.tableMode }} — extracted as cell grids and Markdown, never flattened into prose
+  Charts     located, not transcribed: an image element with its bounding box, not a table of its series
+  OCR        {{ if eq .Values.extraction.ocrEngine "off" }}off — a page with no text layer yields no text{{ else }}RapidOCR{{ if .Values.extraction.forceFullPageOcr }}, forced on every page (~3.5 s a page){{ else }}, only where there is no text layer{{ end }}{{ end }}
+  Network    none at run time. The models are baked into the image and HF_HUB_OFFLINE=1
+  GPU        not used
+
+  Inside     http://{{ include "swarm-doc-ingest.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
+
+This is a component, not a listing: it has no hostname of its own and this chart
+has no Ingress. The listing that composes it publishes its own front end.
+
+Every request to /v1 needs `Authorization: Bearer <the key>`, which is why
+/v1/health is the probe — it is the one endpoint that does not, because a kubelet
+carries no token.
+
+  POST /v1/extract   multipart `file`; `?force_ocr=true`, `?images=true`, `?source_location=`
+  GET  /v1/config    the model pins and presets this deployment is running
+  GET  /v1/health    503 until the models are loaded, then the queue depth
+
+One document is extracted at a time and the rest queue. That is the memory
+measurement, not an unfinished feature: a single document peaks at 2.34 GiB
+against the {{ .Values.resources.memory }} limit sized from it. Scale with
+`replicaCount`, not with workers — and remember the surge pod in the listing's
+`resources.min`.

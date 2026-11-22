@@ -1,0 +1,135 @@
+{{- include "swarm-doc-ingest.validate" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "swarm-doc-ingest.fullname" . }}
+  labels:
+    {{- include "swarm-doc-ingest.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  {{- /*
+  A rolling update, unlike `swarm-model-server`, and the difference is the
+  reason: that chart has to use `Recreate` because the card is held by the
+  running pod and a new one would stay Pending on a GPU quota of one for ever.
+  This component holds no device, so it can roll — which means the composing
+  listing must count **one surge pod** of it in `resources.min`.
+  */}}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "swarm-doc-ingest.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "swarm-doc-ingest.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- /*
+        The ConfigMap's own content, so a change to what this deployment
+        extracts restarts the pods that were extracting the old way. `sha256sum`
+        of the rendered object rather than a timestamp: a timestamp would make
+        every render differ from the last and the evidence digest a property of
+        when it was taken.
+        */}}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: ingest
+          image: {{ include "swarm-doc-ingest.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          {{- /*
+          No command and no args. The image's own CMD is one uvicorn worker,
+          which is a memory decision rather than a packaging one — see the
+          `resources` comment in values.yaml — and overriding it here would put
+          that decision in two places. It also keeps the key off the command
+          line, which is published in the evidence snapshot in clear.
+          */}}
+          envFrom:
+            - configMapRef:
+                name: {{ include "swarm-doc-ingest.fullname" . }}
+          env:
+            - name: INGEST_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "swarm-doc-ingest.secretName" . }}
+                  key: api-key
+            - name: TMPDIR
+              value: /tmp
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          resources:
+            {{- /*
+            Requests equal limits. The quota a cluster space gets is
+            `resources.min` in the listing, and it has to cover every
+            container's limits at once; a request below the limit would let the
+            scheduler place a pod the quota cannot actually hold.
+            */}}
+            requests:
+              cpu: {{ .Values.resources.cpu | quote }}
+              memory: {{ .Values.resources.memory | quote }}
+            limits:
+              cpu: {{ .Values.resources.cpu | quote }}
+              memory: {{ .Values.resources.memory | quote }}
+          volumeMounts:
+            - name: work
+              mountPath: /tmp
+      volumes:
+        - name: work
+          emptyDir:
+            {{- /*
+            Disk, not memory. An emptyDir with `medium: Memory` is charged to the
+            container's memory limit, and a 256 MiB upload against a 4Gi limit
+            sized from a 2.34 GiB extraction peak is how a pod is OOMKilled by
+            its own scratch space.
+            */}}
+            sizeLimit: {{ .Values.workVolume.sizeLimit }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

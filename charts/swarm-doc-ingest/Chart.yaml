@@ -1,0 +1,16 @@
+apiVersion: v2
+name: swarm-doc-ingest
+description: Document ingestion — layout, table structure and OCR on open components — emitting the nv-ingest element contract. Cluster-internal, CPU-only, no NIM.
+type: application
+version: 0.1.0
+# The image, and the extraction behaviour that moves with it. Bumping this is a
+# chart change: the model set, the layout preset and the TableFormer mode are
+# baked, so a new image is a new set of extraction numbers.
+appVersion: "0.1.0"
+sources:
+  - https://github.com/Super-Protocol/swarm-doc-ingest
+keywords:
+  - ingestion
+  - rag
+  - ocr
+  - docling

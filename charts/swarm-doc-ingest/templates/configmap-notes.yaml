@@ -1,0 +1,38 @@
+{{- /*
+A second ConfigMap, and the split is not cosmetic: `configmap.yaml` is consumed
+with `envFrom`, which turns every key into an environment variable name, and
+`extraction-notes.md` is not a legal one — the kubelet skips it and files an
+`InvalidEnvironmentVariableNames` event, which is a warning on every pod start
+for the lifetime of the deployment.
+
+This one is not read by the service at all. It is here because the deployment's
+evidence should say what this component does and does not do, beside the digest
+it says it with: a reader should not have to find the chart to learn that a
+chart in a RAG listing locates charts without transcribing them.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "swarm-doc-ingest.fullname" . }}-extraction-notes
+  labels:
+    {{- include "swarm-doc-ingest.labels" . | nindent 4 }}
+data:
+  extraction-notes.md: |
+    # What this deployment extracts
+
+    Layout `{{ .Values.extraction.layoutPreset }}`, table structure
+    `{{ .Values.extraction.tableMode }}`, OCR `{{ .Values.extraction.ocrEngine }}`.
+    Model weights are baked into the image named by digest beside this document
+    and are pinned there by Hugging Face commit and by sha256; nothing is
+    fetched at run time.
+
+    Tables are extracted as cell grids and as Markdown, never flattened into
+    prose. **Charts are located, not transcribed**: a chart is returned as an
+    image element with its bounding box, not as a table of its series.
+    Transcribing one needs a vision-language model on a GPU and this component
+    is CPU-only by design.
+
+    Measured on this configuration, 8 vCPU, no accelerator: mean table F1 0.844
+    over ten documents and 0.935 over the three published by the reference
+    architecture this replaces. A text-only extractor on the same documents
+    recovers 0 tables out of 19.
