@@ -19,7 +19,10 @@ type: application
 # Both spend their time on work that holds the cores their own health endpoint is served from,
 # and a five-second timeout reads a busy process as a dead one — observed on the cloud as
 # readiness flapping while the corpus indexed.
-version: 0.1.3
+# 0.1.4 halves the indexer's embedding batch twice over, 16 chunks to 4: a batch that holds
+# the embedder's two cores for half a minute is a batch its health endpoint cannot answer
+# during, and the same total work in smaller pieces leaves it answerable.
+version: 0.1.4
 # The upstream release this is a port of. The image is built from
 # Super-Protocol/confidential-rag at branch confidential/2.6.2 — see MODIFICATIONS.md there for
 # what differs, which is the open embedding, reranking and generation engines and nothing about

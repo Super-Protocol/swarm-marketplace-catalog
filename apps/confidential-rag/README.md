@@ -138,11 +138,11 @@ the corpus is in the snapshot in full.
 `evidence.expectedDigest` describes the **gated configuration**: a deployment with a dataset
 attached to the `corpus` slot.
 
-`6fc8b2bf6569326c04e9766fdaa10c96b34ba07cf6b2ab459a6ed116e192ea36`, measured on two deployments of
-0.1.3 on the `gpu-blueprints` cloud — two hostnames, two namespaces — which published
-byte-identical signed snapshots of 32 resources. (0.1.2's was `69a1160a…`, measured the same way;
-it moved because 0.1.3 changes three probes, and a probe is a field of a Deployment the cloud
-digests.)
+`1370c19e086116ce41272de6884e2f13284788a6e21f2a7f3cfc8cc71ef2199e`, measured on two deployments of
+0.1.4 on the `gpu-blueprints` cloud — two hostnames, two namespaces — which published
+byte-identical signed snapshots of 32 resources. It was measured again for 0.1.3 (`6fc8b2bf…`) and
+0.1.2 (`69a1160a…`): each of those versions changed a probe, a probe is a field of a Deployment the
+cloud digests, and a digest is re-measured rather than carried forward.
 
 **Which configuration is a decision, not a default.** A deployment that mounts gated data gains
 four objects the marketplace adds itself — the egress sidecar's ConfigMap, Deployment and Service,

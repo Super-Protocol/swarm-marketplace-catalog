@@ -21,7 +21,12 @@ type: application
 # it died again. Liveness now tolerates three minutes of queueing; readiness tolerates a
 # minute, which is right — a saturated endpoint should leave the Service and its caller should
 # retry.
-version: 0.1.3
+# 0.1.4 extends the same reasoning to readiness, which 0.1.3 left tight on the textbook
+# argument that a saturated endpoint should leave its Service. That is wrong when the only
+# caller is the deployment's own indexer: de-registering the embedder because the indexer is
+# using it fails the batch, the indexer rebuilds the collection from the start, and the loop
+# never finishes.
+version: 0.1.4
 # Text Embeddings Inference. Bumping it is a chart change, not an image bump: the backend
 # selection, the flags and the pooling behaviour move with it.
 appVersion: "1.8"

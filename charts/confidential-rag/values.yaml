@@ -214,7 +214,11 @@ corpus:
   chunkOverlapChars: 200
   rowLimit: 20000
   pollSeconds: 60
-  embedBatch: 16
+  # Chunks per embedding call. Four rather than sixteen: the embedder has two cores, and a
+  # batch that holds them for half a minute is a batch its health endpoint cannot answer
+  # during — which is how a reindex became a loop that never finished. Smaller calls make the
+  # same total work, in pieces the endpoint stays answerable through.
+  embedBatch: 4
   resources:
     requests:
       cpu: "1"

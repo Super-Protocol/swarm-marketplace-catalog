@@ -1513,7 +1513,7 @@ spec:
             - name: CORPUS_POLL_SECONDS
               value: "60"
             - name: CORPUS_EMBED_BATCH
-              value: "16"
+              value: "4"
             - name: CORPUS_STATUS_PORT
               value: "8085"
           securityContext:

@@ -85,7 +85,7 @@ metadata:
     deployment publishes cryptographic proof of which embedder and which model touch your data, and
     the data owner can withdraw access the moment that changes. Based on the open-source NVIDIA RAG
     reference architecture (Apache-2.0), rebuilt on open components.
-  version: "0.1.3"
+  version: "0.1.4"
   category: ai-inference
   # Our fork — the code the image is built from — and not the upstream repository.
   sourceRepo: https://github.com/Super-Protocol/confidential-rag
@@ -582,7 +582,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: text-embeddings-server
-      version: "0.1.3"
+      version: "0.1.4"
     images:
       - name: ghcr.io/huggingface/text-embeddings-inference
         digest: sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c
@@ -617,7 +617,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: text-embeddings-server
-      version: "0.1.3"
+      version: "0.1.4"
     images:
       - name: ghcr.io/huggingface/text-embeddings-inference
         digest: sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c
@@ -673,7 +673,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-rag
-      version: "0.1.3"
+      version: "0.1.4"
     images:
       - name: ghcr.io/super-protocol/confidential-rag/rag-server
         digest: sha256:c68adc9c963a623256e4fe1db6be35ae6ac15fe95589504ff5b7b663ad2e06f9
@@ -913,17 +913,18 @@ evidence:
   # ---------------------------------------------------------------------------
   # Measured, not derived, and it describes the GATED configuration.
   #
-  # Two deployments of 0.1.3 on the gpu-blueprints cloud, 2026-11-22 —
-  # `rag-840c` and `rag-840d`, two hostnames in two namespaces, each with the
+  # Two deployments of 0.1.4 on the gpu-blueprints cloud, 2026-11-22 —
+  # `rag-840e` and `rag-840f`, two hostnames in two namespaces, each with the
   # `acme-engineering-handbook` dataset attached — published byte-identical
   # signed snapshots and this digest. Thirty-two resources in each: nine
   # Deployments, nine Services, seven ConfigMaps, six Secrets and the Ingress.
   #
-  # 0.1.2's number was `69a1160a…`, measured the same way on `rag-840a` and
-  # `rag-840b` and confirmed again by a reconfigure of one of them. It moved
-  # because 0.1.3 changes three probes, and a probe is a field of a Deployment
-  # the cloud digests — which is the ordinary reason a digest moves and the
-  # reason it has to be re-measured rather than carried forward.
+  # It was measured three times over, because each version that fixed a probe
+  # moved it: `69a1160a…` on 0.1.2 (`rag-840a`, `rag-840b`, and again after a
+  # reconfigure of one of them), `6fc8b2bf…` on 0.1.3 (`rag-840c`, `rag-840d`),
+  # and this on 0.1.4. A probe is a field of a Deployment the cloud digests, so
+  # that is the ordinary reason a digest moves — and the reason it is measured
+  # again rather than carried forward.
   #
   # **It is the gated configuration on purpose, and that is a decision rather
   # than a default.** A deployment that mounts gated data gains four objects the
@@ -943,7 +944,7 @@ evidence:
   # number on its own listing page. It needs no gate, so nothing refuses it, and
   # the README says which configuration the digest describes. The ungated
   # digest, for the record, was `3dde9a40…` on chart 0.1.1 and is not declared.
-  expectedDigest: "6fc8b2bf6569326c04e9766fdaa10c96b34ba07cf6b2ab459a6ed116e192ea36"
+  expectedDigest: "1370c19e086116ce41272de6884e2f13284788a6e21f2a7f3cfc8cc71ef2199e"
   # ---------------------------------------------------------------------------
   # The hostname is the one field that differs between two deployments of this
   # version, and excluding it is what makes the digest a property of the version

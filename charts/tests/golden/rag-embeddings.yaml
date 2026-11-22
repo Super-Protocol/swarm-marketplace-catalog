@@ -446,13 +446,20 @@ spec:
           # Readiness staying tight-ish is correct: a saturated endpoint should leave the
           # Service, and its caller retries. Liveness must not fire for queueing — a restart
           # throws away the model load and makes the queue worse.
+          # Readiness is slack too, and that took a second measurement to accept. Dropping a
+          # saturated endpoint out of its Service is the textbook answer and it is wrong here:
+          # the only caller is the deployment's own indexer, so de-registering the embedder
+          # because the indexer is using it turns one slow reindex into a loop that never
+          # finishes — the indexer's batch fails, it rebuilds the collection from the start,
+          # and saturates it again. Observed on the gpu-blueprints cloud as `Connection
+          # error.` on every cycle with the read itself succeeding.
           readinessProbe:
             httpGet:
               path: /health
               port: http
-            periodSeconds: 15
-            timeoutSeconds: 15
-            failureThreshold: 4
+            periodSeconds: 30
+            timeoutSeconds: 20
+            failureThreshold: 10
           livenessProbe:
             httpGet:
               path: /health
