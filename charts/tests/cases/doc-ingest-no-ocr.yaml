@@ -1,0 +1,18 @@
+# OCR off and a listing-supplied Secret.
+#
+# `ocrEngine: off` is right only for a corpus that is certainly born-digital: a
+# scan then yields no text at all rather than bad text, which is the honest
+# failure. The case exists to hold the render that says so — and to exercise
+# `existingSecret`, which is what a listing uses when one generated parameter is
+# patched into several components and the Secret is created once.
+existingSecret: confidential-rag-ingest-key
+
+extraction:
+  ocrEngine: "off"
+  tableMode: fast
+
+# Two replicas: this component rolls (it holds no GPU), so a listing composing it
+# counts a surge pod on top of these two in `resources.min`.
+replicaCount: 2
+workVolume:
+  sizeLimit: 2Gi

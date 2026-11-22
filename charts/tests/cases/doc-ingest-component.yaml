@@ -1,0 +1,12 @@
+# The component shape: the extraction stage a RAG listing composes behind its own
+# front end, cluster-internal, with no hostname of its own (SUP-874).
+#
+# Three things about this render are the point of the case. There is no Ingress
+# template in this chart at all, so there is no hostname in any object and two
+# deployments of one version differ in nothing but the namespace — which the
+# platform drops from the evidence snapshot anyway. The key is still demanded on
+# every /v1 request, through a Secret and never an argument. And the whole
+# extraction configuration is in a ConfigMap the cloud digests and signs, so a
+# tenant who approved a digest approved these presets rather than "whatever the
+# operator picks next".
+apiKey: TESTKEYtestkey0123456789abcdefAB

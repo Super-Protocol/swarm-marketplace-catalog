@@ -1,0 +1,179 @@
+---
+# Source: swarm-doc-ingest/templates/configmap-notes.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: swarm-doc-ingest-extraction-notes
+  labels:
+    helm.sh/chart: swarm-doc-ingest-0.1.0
+    app.kubernetes.io/name: swarm-doc-ingest
+    app.kubernetes.io/instance: di
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: doc-ingest
+data:
+  extraction-notes.md: |
+    # What this deployment extracts
+
+    Layout `layout_heron_default`, table structure
+    `fast`, OCR `off`.
+    Model weights are baked into the image named by digest beside this document
+    and are pinned there by Hugging Face commit and by sha256; nothing is
+    fetched at run time.
+
+    Tables are extracted as cell grids and as Markdown, never flattened into
+    prose. **Charts are located, not transcribed**: a chart is returned as an
+    image element with its bounding box, not as a table of its series.
+    Transcribing one needs a vision-language model on a GPU and this component
+    is CPU-only by design.
+
+    Measured on this configuration, 8 vCPU, no accelerator: mean table F1 0.844
+    over ten documents and 0.935 over the three published by the reference
+    architecture this replaces. A text-only extractor on the same documents
+    recovers 0 tables out of 19.
+---
+# Source: swarm-doc-ingest/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: swarm-doc-ingest
+  labels:
+    helm.sh/chart: swarm-doc-ingest-0.1.0
+    app.kubernetes.io/name: swarm-doc-ingest
+    app.kubernetes.io/instance: di
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: doc-ingest
+data:
+  INGEST_LAYOUT_PRESET: "layout_heron_default"
+  INGEST_TABLE_MODE: "fast"
+  INGEST_OCR_ENGINE: "off"
+  INGEST_FORCE_FULL_PAGE_OCR: "false"
+  INGEST_INCLUDE_IMAGE_CONTENT: "false"
+  INGEST_MAX_UPLOAD_BYTES: "268435456"
+  HF_HUB_OFFLINE: "1"
+  OMP_NUM_THREADS: "4"
+---
+# Source: swarm-doc-ingest/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: swarm-doc-ingest
+  labels:
+    helm.sh/chart: swarm-doc-ingest-0.1.0
+    app.kubernetes.io/name: swarm-doc-ingest
+    app.kubernetes.io/instance: di
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: doc-ingest
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: swarm-doc-ingest
+    app.kubernetes.io/instance: di
+---
+# Source: swarm-doc-ingest/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: swarm-doc-ingest
+  labels:
+    helm.sh/chart: swarm-doc-ingest-0.1.0
+    app.kubernetes.io/name: swarm-doc-ingest
+    app.kubernetes.io/instance: di
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: doc-ingest
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: swarm-doc-ingest
+      app.kubernetes.io/instance: di
+  template:
+    metadata:
+      labels:
+        helm.sh/chart: swarm-doc-ingest-0.1.0
+        app.kubernetes.io/name: swarm-doc-ingest
+        app.kubernetes.io/instance: di
+        app.kubernetes.io/version: "0.1.0"
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/component: doc-ingest
+      annotations:
+        checksum/config: bf181e1763731adc7a2e291e13746ac2dbc9eccf1afb1625b8625f115fd78060
+    spec:
+      securityContext:
+        fsGroup: 10001
+        runAsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ingest
+          image: ghcr.io/super-protocol/swarm-doc-ingest/ingest@sha256:a114f3df285a9c0f30e96e3bf2b31b04184ba5d956b007e8df81cc4a4db704d1
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          envFrom:
+            - configMapRef:
+                name: swarm-doc-ingest
+          env:
+            - name: INGEST_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: confidential-rag-ingest-key
+                  key: api-key
+            - name: TMPDIR
+              value: /tmp
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: "4"
+              memory: "4Gi"
+            limits:
+              cpu: "4"
+              memory: "4Gi"
+          volumeMounts:
+            - name: work
+              mountPath: /tmp
+      volumes:
+        - name: work
+          emptyDir:
+            sizeLimit: 2Gi

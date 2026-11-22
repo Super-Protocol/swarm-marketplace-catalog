@@ -246,9 +246,10 @@ Two things are specific to this component:
 
 ### Worked example: this component plus a retrieval stack
 
-A listing composing the open-inference component with an embedding server, a vector store and its
-own API and front end — the shape the Confidential RAG pilot (SUP-840) will have — with the model
-offered as a parameter whose largest option is `qwen3-coder-30b-a3b-instruct-fp8`:
+A listing composing the open-inference component with an embedding server, a **document-extraction
+stage**, a vector store and its own API and front end — the shape the Confidential RAG pilot
+(SUP-840) will have — with the model offered as a parameter whose largest option is
+`qwen3-coder-30b-a3b-instruct-fp8`:
 
 | Pod | CPU | Memory | Volume |
 |---|---|---|---|
@@ -256,33 +257,34 @@ offered as a parameter whose largest option is `qwen3-coder-30b-a3b-instruct-fp8
 | `inference` — weights fetcher (init, sequential, not summed) | *2* | *512Mi* | — |
 | `embeddings` — CPU embedding model | 2 | 4Gi | 4Gi |
 | `embeddings` — weights fetcher (init) | *1* | *512Mi* | — |
+| `ingest` — document extraction, [`swarm-doc-ingest`](../charts/swarm-doc-ingest/) | 4 | 4Gi | 1Gi |
 | `vectors` — PostgreSQL with pgvector | 1 | 4Gi | 20Gi |
 | `api` — retrieval and generation API | 1 | 2Gi | — |
 | `front` — the published web interface | 0.25 | 0.5Gi | — |
-| **sum of pods** | **12.25** | **42.5Gi** | **56Gi** |
-| one surge pod of the heaviest rolling Deployment (`embeddings`) | 2 | 4Gi | — |
+| **sum of pods** | **16.25** | **46.5Gi** | **57Gi** |
+| one surge pod of the heaviest rolling Deployment (`ingest`) | 4 | 4Gi | — |
 | marketplace egress sidecar, with a gated dataset attached | 0.25 | 0.125Gi | — |
-| **total** | **14.5** | **46.6Gi** | **56Gi** |
+| **total** | **20.5** | **50.6Gi** | **57Gi** |
 
 ```yaml
 resources:
   min:
-    cpu: "15"
-    memory: "48Gi"
-    # Not the 56Gi sum: a storage quota equal to it fails at the last volume
+    cpu: "21"
+    memory: "52Gi"
+    # Not the 57Gi sum: a storage quota equal to it fails at the last volume
     # rather than the first, which reads as one broken service rather than as a
     # quota.
     storage: "64Gi"
   # The heaviest SINGLE pod, which is a different quantity from the quota and the
   # one a node has to be able to hold. Without it the cloud assumes the whole
-  # 15/48Gi lands on one pod and refuses the listing on any cloud whose nodes are
+  # 21/52Gi lands on one pod and refuses the listing on any cloud whose nodes are
   # smaller than its entire quota (SUP-824).
   maxPod:
     cpu: "8"
     memory: "32Gi"
   recommended:
-    cpu: "20"
-    memory: "64Gi"
+    cpu: "26"
+    memory: "68Gi"
     storage: "96Gi"
   gpu:
     required: true

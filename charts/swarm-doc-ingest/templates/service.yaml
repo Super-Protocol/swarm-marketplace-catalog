@@ -1,0 +1,25 @@
+{{- include "swarm-doc-ingest.validate" . -}}
+{{- /*
+ClusterIP and nothing else. This chart has no Ingress template at all, which is
+the component shape taken literally: with no hostname in any object there is
+nothing to exclude from the evidence snapshot, so two deployments of one version
+differ in the namespace alone — and the platform drops that by default.
+
+A listing that wanted to publish extraction as an endpoint of its own would be a
+different listing, with its own hostname to exclude.
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "swarm-doc-ingest.fullname" . }}
+  labels:
+    {{- include "swarm-doc-ingest.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "swarm-doc-ingest.selectorLabels" . | nindent 4 }}

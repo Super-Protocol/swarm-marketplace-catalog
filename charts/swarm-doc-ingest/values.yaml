@@ -1,0 +1,169 @@
+# swarm-doc-ingest — the document-extraction stage a RAG listing composes.
+#
+# It replaces `nemo-microservices/nv-ingest` and the four extraction NIMs with
+# open components, and it is a *component*: cluster-internal, no hostname of its
+# own, no Ingress template in this chart at all. A listing's own front end is
+# what gets published; this answers inside the cluster space.
+#
+# Three properties the defaults exist to keep:
+#
+#   * **No network at run time.** The model set is baked into the image and
+#     `HF_HUB_OFFLINE=1`, so a missing weight is a refusal at boot rather than a
+#     download while a tenant's document is in memory. Documents are the
+#     sensitive asset here.
+#   * **No GPU.** Measured on 8 vCPU with no accelerator; four cores give up 15%
+#     of the eight-core time. On a cloud with one card, ingestion and the LLM
+#     never queue behind each other.
+#   * **Tables as structure.** The failure this component exists to avoid is a
+#     table flattened into prose, and the measurement of a text-only extractor
+#     is 0 tables out of 19.
+#
+# The numbers quoted throughout are from `bakeoff/` in
+# github.com/Super-Protocol/swarm-doc-ingest, which is also where the image is
+# built.
+# ---------------------------------------------------------------------------
+image:
+  registry: ghcr.io
+  repository: super-protocol/swarm-doc-ingest/ingest
+  # Ours, built by Super-Protocol/swarm-doc-ingest and attested there.
+  # `scripts/verify-pins/` traces this digest to the commit that produced it.
+  digest: sha256:a114f3df285a9c0f30e96e3bf2b31b04184ba5d956b007e8df81cc4a4db704d1
+  # What says *which* release this is. A digest wins over the tag beside it; the
+  # tag stays because a digest alone does not tell a reader which version they
+  # are looking at.
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# One pod. See `resources` below: the memory limit is sized from a single
+# document's measured peak, so concurrency is replicas rather than workers, and
+# the service queues inside one replica instead of oversubscribing it.
+replicaCount: 1
+
+# The key every request to /v1 presents. Declare it in the composing listing as
+# one generated, sensitive parameter and patch it into both components' values:
+# the marketplace lifts every rendered Secret out of the bundle and seals it, so
+# a generated value inside a Secret costs the evidence digest nothing.
+apiKey: ""
+# Or name a Secret the listing already created, with the key under `api-key`.
+# Setting both is a render error.
+existingSecret: ""
+
+extraction:
+  # ---------------------------------------------------------------------------
+  # Every value here was chosen by measurement and each one has a recorded
+  # price. Changing one without re-running the bake-off changes what the
+  # component extracts while the README still claims the old numbers.
+  # ---------------------------------------------------------------------------
+
+  # The only preset baked into this image, and the only one measured for it. It
+  # is Docling's own default and the only one of five tested that reads a table
+  # drawn without ruling lines as a table (0.968) rather than as prose (0.000).
+  # What it costs: 0.956 against egret_large's 0.988 on one wide numeric table.
+  layoutPreset: layout_heron_default
+  # Naming another preset is refused unless this is set, because the weights are
+  # not in the image and the numbers do not hold.
+  acknowledgeUnmeasuredLayout: false
+
+  # TableFormer. `accurate` scores 0.956 against `fast`'s 0.491 on a 21-row
+  # table; `fast` collapses a wide table almost completely. The counter-case is
+  # a two-level spanning header, where `accurate` merges the header rows
+  # (0.522 against 0.968) but keeps every value (cell F1 0.900).
+  tableMode: accurate
+
+  # RapidOCR: character error rate 0.0000 against EasyOCR's 0.012–0.020, at
+  # 2.0 GiB of memory instead of 5.1 GiB and half the wall time. `off` skips OCR
+  # entirely, which is right only for a corpus that is certainly born-digital.
+  ocrEngine: rapidocr
+
+  # OCR every page, even one that already has a text layer. Costs about 3.5 s a
+  # page and buys nothing on a born-digital document, so it is off here and
+  # available per request as `?force_ocr=true`.
+  forceFullPageOcr: false
+
+  # Return picture crops base64 in the element's `content`. Off: a fifteen-page
+  # catalogue of pictures is tens of megabytes of JSON, and a citation usually
+  # wants the bounding box and the original, not an inlined copy.
+  includeImageContent: false
+
+  maxUploadBytes: 268435456
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# The volume uploads are written to. Docling's PDF backends seek, so the bytes
+# land on disk rather than being streamed; `/tmp` is the only writable path in
+# the container and the root filesystem is read-only.
+#
+# Deliberately not memory-backed: an emptyDir with `medium: Memory` is charged to
+# the container's memory limit, and a 256 MiB upload against a 4Gi limit sized
+# from a 2.34 GiB extraction peak is how a pod gets OOMKilled by its own
+# scratch space.
+workVolume:
+  sizeLimit: 1Gi
+
+resources:
+  # Measured, not estimated. On 8 vCPU with no accelerator: a 15-page PDF with a
+  # text layer peaks at 1.96 GiB in 13.1 s; the same 15 pages as a 200-dpi scan
+  # through OCR peak at 2.34 GiB in 52.6 s. The highest figure seen anywhere in
+  # the sweep is 2.46 GiB. Memory is bounded rather than linear in pages —
+  # Docling works a page at a time.
+  #
+  # 4Gi is 1.6x that peak. 4 CPU because the scan takes 59.4 s on four cores
+  # against 51.7 s on eight and 93.1 s on two: four cores give up 15% for half
+  # the quota, two give up 80%.
+  cpu: "4"
+  memory: 4Gi
+
+# `OMP_NUM_THREADS` is set to the CPU limit in the image. It is here because a
+# thread count above the cgroup's quota makes a CPU-bound extraction slower, not
+# faster, and the pod's own limit is the only number that knows the answer.
+ompNumThreads: ""
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# The container writes nothing outside the work volume and runs as the image's
+# unprivileged user. A document is the sensitive asset; the process that handles
+# it should own nothing it can persist to.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+# Loading three models takes seconds, and a readiness probe that goes green
+# before they are loaded hands the first real document a stall that looks like a
+# hang. So readiness is gated on the service's own `/v1/health`, which returns
+# 503 until the converter is built, and the startup probe is what tolerates the
+# load time.
+probes:
+  startup:
+    periodSeconds: 5
+    failureThreshold: 60
+  readiness:
+    periodSeconds: 10
+    failureThreshold: 3
+  liveness:
+    periodSeconds: 30
+    # Generous on purpose: a 15-page scan holds the event loop's worker thread
+    # for ~53 s, and a liveness probe that killed the pod mid-extraction would
+    # turn a slow document into a crash loop.
+    timeoutSeconds: 10
+    failureThreshold: 6
