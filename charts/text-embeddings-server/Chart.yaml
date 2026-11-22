@@ -13,7 +13,15 @@ type: application
 # 126 s on the two cores the container gets, against 9 s at 2048. On a node also pulling a 6 GiB
 # checkpoint for the engine it did not finish inside the probe's budget at all, so a healthy
 # server was killed and restarted from the beginning.
-version: 0.1.2
+# 0.1.3 is the probe, and it is the fix the two before it were reaching for. With a 5 s
+# liveness timeout the embedder came up, served the corpus indexer, and was killed mid-index
+# with exit 137 after `Liveness probe failed: context deadline exceeded`: a batch of chunks
+# holds both cores for longer than that, `/health` is served by the same runtime, and the
+# kubelet reads a busy inference server as a dead one. It restarted, the indexer retried, and
+# it died again. Liveness now tolerates three minutes of queueing; readiness tolerates a
+# minute, which is right — a saturated endpoint should leave the Service and its caller should
+# retry.
+version: 0.1.3
 # Text Embeddings Inference. Bumping it is a chart change, not an image bump: the backend
 # selection, the flags and the pooling behaviour move with it.
 appVersion: "1.8"

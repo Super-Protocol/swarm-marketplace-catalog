@@ -430,19 +430,36 @@ spec:
               port: http
             periodSeconds: 10
             failureThreshold: 120
+          # ---------------------------------------------------------------------------------
+          # Both of these are deliberately slack, and the reason is the whole point of this
+          # component: it is a CPU-bound inference server, and the thing a probe measures —
+          # whether it answers — is exactly what competes with the work it is doing.
+          #
+          # Measured on the gpu-blueprints cloud: with the default 5 s timeout the embedder
+          # came up, served the corpus indexer, and was then killed mid-index with exit 137
+          # after `Liveness probe failed: context deadline exceeded`. A batch of chunks holds
+          # both cores for longer than five seconds, `/health` is served by the same runtime,
+          # and the kubelet reads a busy server as a dead one. It restarted, the indexer
+          # retried, and it died again — four restarts before the cause was visible, and the
+          # cause was this probe rather than anything about the model.
+          #
+          # Readiness staying tight-ish is correct: a saturated endpoint should leave the
+          # Service, and its caller retries. Liveness must not fire for queueing — a restart
+          # throws away the model load and makes the queue worse.
           readinessProbe:
             httpGet:
               path: /health
               port: http
-            periodSeconds: 10
-            timeoutSeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 15
+            failureThreshold: 4
           livenessProbe:
             httpGet:
               path: /health
               port: http
-            periodSeconds: 20
-            timeoutSeconds: 5
-            failureThreshold: 3
+            periodSeconds: 30
+            timeoutSeconds: 20
+            failureThreshold: 6
           resources:
             limits:
               cpu: "2"

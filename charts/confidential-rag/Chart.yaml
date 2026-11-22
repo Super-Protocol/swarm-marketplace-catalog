@@ -15,7 +15,11 @@ type: application
 # Deployment is in the evidence snapshot, and the snapshot is what the digest is over — so a
 # console displaying the digest it should match changed that digest by displaying it. The
 # deployment's own digest is at the evidence URL the console already links.
-version: 0.1.2
+# 0.1.3 gives the indexer's and the pipeline's probes the same slack the embedder's needed.
+# Both spend their time on work that holds the cores their own health endpoint is served from,
+# and a five-second timeout reads a busy process as a dead one — observed on the cloud as
+# readiness flapping while the corpus indexed.
+version: 0.1.3
 # The upstream release this is a port of. The image is built from
 # Super-Protocol/confidential-rag at branch confidential/2.6.2 — see MODIFICATIONS.md there for
 # what differs, which is the open embedding, reranking and generation engines and nothing about

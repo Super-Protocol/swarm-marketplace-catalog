@@ -81,15 +81,19 @@ spec:
             httpGet: { path: /v1/health, port: http }
             periodSeconds: 10
             failureThreshold: 60
+          # A question in flight holds a worker until the model answers, so these tolerate
+          # queueing: restarting a pipeline mid-answer makes the queue worse and loses the
+          # answer. Same reasoning as the embedder's probes, which killed it mid-index.
           readinessProbe:
             httpGet: { path: /v1/health, port: http }
             periodSeconds: 15
-            timeoutSeconds: 10
+            timeoutSeconds: 15
+            failureThreshold: 4
           livenessProbe:
             httpGet: { path: /v1/health, port: http }
             periodSeconds: 30
-            timeoutSeconds: 10
-            failureThreshold: 4
+            timeoutSeconds: 20
+            failureThreshold: 6
           resources:
             {{- toYaml .Values.server.resources | nindent 12 }}
           volumeMounts:

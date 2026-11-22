@@ -1533,15 +1533,20 @@ spec:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 5
             failureThreshold: 30
+          # Slack for the same reason as the embedder's: this pod spends its time chunking and
+          # embedding, both of which hold the one core it has, and `/status` is served by a
+          # thread in the same process. A five-second timeout reads a working indexer as a
+          # dead one — which was observed on the cloud as readiness flapping while it indexed.
           readinessProbe:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 20
-            timeoutSeconds: 5
+            timeoutSeconds: 15
+            failureThreshold: 4
           livenessProbe:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 30
-            timeoutSeconds: 5
-            failureThreshold: 4
+            timeoutSeconds: 20
+            failureThreshold: 6
           resources:
             limits:
               cpu: "1"
@@ -1650,15 +1655,19 @@ spec:
             httpGet: { path: /v1/health, port: http }
             periodSeconds: 10
             failureThreshold: 60
+          # A question in flight holds a worker until the model answers, so these tolerate
+          # queueing: restarting a pipeline mid-answer makes the queue worse and loses the
+          # answer. Same reasoning as the embedder's probes, which killed it mid-index.
           readinessProbe:
             httpGet: { path: /v1/health, port: http }
             periodSeconds: 15
-            timeoutSeconds: 10
+            timeoutSeconds: 15
+            failureThreshold: 4
           livenessProbe:
             httpGet: { path: /v1/health, port: http }
             periodSeconds: 30
-            timeoutSeconds: 10
-            failureThreshold: 4
+            timeoutSeconds: 20
+            failureThreshold: 6
           resources:
             limits:
               cpu: "2"
