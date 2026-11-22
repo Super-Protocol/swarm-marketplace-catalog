@@ -92,7 +92,7 @@ derived from the charts. Two things make it stable:
   that way.
 
 The declared digest is
-`81b5c2feb8f3b39ea3008cc60a039c7d8b41330ce569c9d5e903320feb29232e`, measured on
+`3e03a7196d77d9e0b9f8340a976d372337fc2e5474f591530e6f84b41730979a`, measured on
 2026-11-22 from the signed evidence of two deployments on the `gpu-blueprints`
 cloud — `sc-842a` and `sc-842b`, two hostnames in two namespaces. The snapshots
 were byte-identical: six resources each (two ConfigMaps, the Deployment, the
@@ -121,9 +121,14 @@ that is true of every gated listing in this catalogue, not only this one.
   kind of data), and the two built around specific public datasets. Reasons per
   notebook are in `PROVENANCE.md`.
 - **It is not a cage around the tenant's own operator.** A notebook is a shell.
-  What the deployment guarantees is that the platform moves no data out, that
-  the gatekeeper can refuse to serve a deployment whose evidence changed, and
-  that nothing in the shipped notebooks reaches the network.
+  What the deployment guarantees is that the platform moves no data out and that
+  the gatekeeper can refuse to serve a deployment whose evidence changed.
+- **One notebook needs outbound HTTPS, and says so above the cell that does.**
+  `02_regulatory_activity.ipynb` downloads the CollecTRI regulon table from
+  Zenodo — public reference data, a plain GET, nothing of yours in it — so that
+  notebook fails in a space with no egress, and that table is not covered by the
+  attested lock. `01_preprocessing` and `03_pearson_residuals` read and write
+  the workspace only.
 - **It does not promise clinical validity.** It is research tooling, and the
   container it runs in is explicitly not certified by its vendor for medical use.
 

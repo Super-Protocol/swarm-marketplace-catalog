@@ -52,6 +52,12 @@ touches, so the diff against upstream is readable from inside the notebook.
    the pod. 01 now writes `/workspace/derived/preprocessed.h5ad` and 02 reads it
    from there.
 
+A fifth edit, in `02_regulatory_activity.ipynb` only: a note above
+`decoupler.op.collectri()`, which downloads the CollecTRI regulon table from
+Zenodo. Nothing of the tenant's leaves in that request, but it is the one
+network call left in these notebooks and it is not covered by the attested
+`requirements.lock`, so it is marked where it happens.
+
 Stored cell outputs were stripped. They are 11 MB of images and tables computed
 from a corpus this deployment does not have, and they would be published inside
 the deployment's evidence snapshot.

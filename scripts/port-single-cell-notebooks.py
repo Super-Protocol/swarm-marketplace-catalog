@@ -58,6 +58,34 @@ adata = scw.load_matrix()
 batch = scw.batch_key(adata)
 label = scw.label_key(adata)
 print(f"batch column: {batch!r}; annotation column: {label!r}; {adata.n_obs} cells x {adata.n_vars} genes")
+
+# The batch column is required and raised above if it was wrong. The annotation
+# is not required by the workflow — but every cell that compares this notebook's
+# own clustering against a known cell type needs it, and without it they fail on
+# a bare KeyError from scanpy a long way below. Said here instead.
+if label is None:
+    print(
+        f"\nNOTE: no annotation column. This deployment names {scw.LABEL_KEY!r} and the matrix\n"
+        f"      has none of it. Everything up to the clustering runs; the cells that colour or\n"
+        f"      group by the annotation will raise KeyError({scw.LABEL_KEY!r}).\n"
+        f"      Available: {', '.join(map(str, adata.obs.columns))}\n"
+        f"      Fix it by reconfiguring the deployment, or set scw.LABEL_KEY here."
+    )
+"""
+
+NETWORK_NOTE = """> **This notebook reaches the network, and it is the only one that does.**
+> The next cell calls `decoupler.op.collectri()`, which downloads the CollecTRI
+> regulon table from Zenodo (~6 MB of public reference data: transcription
+> factors and their targets). **No data of yours leaves the deployment** — the
+> request carries nothing but a GET — but it does mean this notebook needs
+> outbound HTTPS, and that the table is not covered by the attested
+> `requirements.lock`, so it is whatever Zenodo serves that day.
+>
+> In a deployment with no egress the call fails. Two ways round it: upload the
+> CSV into `/workspace/data` yourself and read it with `pandas.read_csv`
+> (`decoupler` takes any frame with `source`, `target` and `weight` columns), or
+> leave this notebook for a deployment that is allowed out. `01_preprocessing`
+> and `03_pearson_residuals` touch nothing outside the workspace.
 """
 
 ALREADY_LOADED = """# Ported: the matrix is already in memory — the cell above read it from the
@@ -153,6 +181,14 @@ set_source(
 for index, c in enumerate(nb["cells"]):
     if c["cell_type"] == "code" and index != 2:
         set_source(nb, index, keys("".join(c["source"])))
+# The one network call left anywhere in these notebooks, marked immediately
+# above the cell that makes it rather than in a README nobody opens next to the
+# traceback. Located rather than indexed, so it stays correct if upstream moves.
+network = next(
+    index for index, c in enumerate(nb["cells"])
+    if c["cell_type"] == "code" and "dc.op.collectri(" in "".join(c["source"])
+)
+nb["cells"].insert(network, cell("markdown", NETWORK_NOTE))
 write(nb, "02_regulatory_activity.ipynb")
 
 # --- 03: Pearson residuals -------------------------------------------------

@@ -170,10 +170,20 @@ def _read_h5ad_from_s3(entry: dict):
         keys = sorted(key for key in fs.find(root) if key.endswith('.h5ad'))
     if not keys:
         raise RuntimeError(f'{entry.get("dataset")}: no .h5ad object under s3://{bucket}/{prefix}')
+    if len(keys) > 1:
+        # Reading the first of several and calling it the dataset is how an
+        # analysis quietly runs on one shard. Which object, or which order, is
+        # the dataset owner's to say.
+        names = ', '.join(key.rsplit('/', 1)[-1] for key in keys)
+        raise RuntimeError(
+            f'{entry.get("dataset")} resolves to {len(keys)} .h5ad objects ({names}). '
+            "Name the one to read in the dataset's `objects` connection property, or pass "
+            'load_matrix(path=...) for a specific file.'
+        )
 
     # read_h5ad wants a file it can seek in, and h5py will not read a stream.
-    # One object at a time, into memory: these are the matrices the card is
-    # sized for, and the pod has host RAM for one of them.
+    # One object into memory: these are the matrices the card is sized for, and
+    # the pod has host RAM for one of them.
     with fs.open(keys[0], 'rb') as handle:
         return ad.read_h5ad(io.BytesIO(handle.read()))
 

@@ -32,7 +32,11 @@ mkdir -p /workspace/notebooks /workspace/data /workspace/derived
 cp -n /opt/sc-notebooks/*.ipynb /workspace/notebooks/ 2>/dev/null || true
 cp -n /opt/sc-notebooks/*.md    /workspace/notebooks/ 2>/dev/null || true
 cp -n /opt/sc-notebooks/LICENSE /workspace/notebooks/ 2>/dev/null || true
-cp -n /opt/sc/sc_workspace.py   /workspace/notebooks/ 2>/dev/null || true
+# `sc_workspace.py` is deliberately NOT copied. It is imported from /opt/sc,
+# which the chart mounts and PYTHONPATH names first, so a fix to the loader
+# reaches an existing deployment when the pod rolls. Copied here under `cp -n`
+# it never would: the volume's stale copy would shadow the chart's for the life
+# of the deployment, while this script's own log line read the fresh one.
 
 # What this deployment is bound to, in the log, where somebody debugging a
 # deployment will look first. Deliberately NOT fatal: a workspace whose loader

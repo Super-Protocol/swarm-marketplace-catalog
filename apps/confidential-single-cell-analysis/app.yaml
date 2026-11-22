@@ -354,7 +354,7 @@ evidence:
   # below is the no-gated-data configuration, which is what every deployment of
   # this listing is today; the first gated deployment has to re-measure and
   # re-declare.
-  expectedDigest: "81b5c2feb8f3b39ea3008cc60a039c7d8b41330ce569c9d5e903320feb29232e"
+  expectedDigest: "3e03a7196d77d9e0b9f8340a976d372337fc2e5474f591530e6f84b41730979a"
   # ---------------------------------------------------------------------------
   # The hostname is the one field that differs between two deployments of this
   # version, and excluding it is what makes the digest a property of the version

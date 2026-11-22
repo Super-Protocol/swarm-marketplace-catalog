@@ -64,7 +64,11 @@ data:
     cp -n /opt/sc-notebooks/*.ipynb /workspace/notebooks/ 2>/dev/null || true
     cp -n /opt/sc-notebooks/*.md    /workspace/notebooks/ 2>/dev/null || true
     cp -n /opt/sc-notebooks/LICENSE /workspace/notebooks/ 2>/dev/null || true
-    cp -n /opt/sc/sc_workspace.py   /workspace/notebooks/ 2>/dev/null || true
+    # `sc_workspace.py` is deliberately NOT copied. It is imported from /opt/sc,
+    # which the chart mounts and PYTHONPATH names first, so a fix to the loader
+    # reaches an existing deployment when the pod rolls. Copied here under `cp -n`
+    # it never would: the volume's stale copy would shadow the chart's for the life
+    # of the deployment, while this script's own log line read the fresh one.
   
     # What this deployment is bound to, in the log, where somebody debugging a
     # deployment will look first. Deliberately NOT fatal: a workspace whose loader
@@ -370,10 +374,20 @@ data:
             keys = sorted(key for key in fs.find(root) if key.endswith('.h5ad'))
         if not keys:
             raise RuntimeError(f'{entry.get("dataset")}: no .h5ad object under s3://{bucket}/{prefix}')
+        if len(keys) > 1:
+            # Reading the first of several and calling it the dataset is how an
+            # analysis quietly runs on one shard. Which object, or which order, is
+            # the dataset owner's to say.
+            names = ', '.join(key.rsplit('/', 1)[-1] for key in keys)
+            raise RuntimeError(
+                f'{entry.get("dataset")} resolves to {len(keys)} .h5ad objects ({names}). '
+                "Name the one to read in the dataset's `objects` connection property, or pass "
+                'load_matrix(path=...) for a specific file.'
+            )
   
         # read_h5ad wants a file it can seek in, and h5py will not read a stream.
-        # One object at a time, into memory: these are the matrices the card is
-        # sized for, and the pod has host RAM for one of them.
+        # One object into memory: these are the matrices the card is sized for, and
+        # the pod has host RAM for one of them.
         with fs.open(keys[0], 'rb') as handle:
             return ad.read_h5ad(io.BytesIO(handle.read()))
   
@@ -502,7 +516,12 @@ data:
         "A deployment of this listing reads its data from one of two places and no\n",
         "others: a dataset the operator attached to the **Single-cell matrices** slot, or\n",
         "a file dropped into `/workspace/data` with the file browser on the left. Nothing\n",
-        "in this workspace downloads a corpus from the internet.\n"
+        "in this workspace downloads a corpus from the internet.\n",
+        "\n",
+        "`sc_workspace` is the chart's, not yours: it lives at `/opt/sc/sc_workspace.py`\n",
+        "and is first on `PYTHONPATH`, so a fix to it reaches this deployment when the pod\n",
+        "rolls. Read it there; override `scw.BATCH_KEY` or `scw.LABEL_KEY` in a notebook if\n",
+        "you need to.\n"
        ],
        "id": "sc001"
       },
@@ -562,13 +581,45 @@ data:
        "cell_type": "markdown",
        "metadata": {},
        "source": [
-        "## 3. The GPU\n",
+        "## 3. A copy that survives a restart\n",
+        "\n",
+        "`/workspace` is the volume. `/workspace/derived` is where the notebooks hand\n",
+        "files to one another, and it is the only place a result is safe — everything\n",
+        "else in this container is thrown away when the pod moves.\n",
+        "\n",
+        "Nothing written here leaves the deployment. There is no egress path out of this\n",
+        "workspace for the data: what you export, you export yourself, by downloading it\n",
+        "through the browser.\n"
+       ],
+       "id": "sc006"
+      },
+      {
+       "cell_type": "code",
+       "metadata": {},
+       "execution_count": null,
+       "outputs": [],
+       "source": [
+        "# Written here, BEFORE the GPU cell below, on purpose: that cell filters and\n",
+        "# log-normalises `adata` IN PLACE, and a copy saved afterwards would be a\n",
+        "# normalised matrix under a name that says otherwise — resumed from, it would\n",
+        "# be normalised twice and nothing would say so.\n",
+        "path = scw.derived(\"as_loaded.h5ad\")\n",
+        "adata.write(path)\n",
+        "print(\"wrote\", path, \"- the matrix exactly as it arrived\")\n"
+       ],
+       "id": "sc007"
+      },
+      {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "## 4. The GPU\n",
         "\n",
         "This is the cell worth running on a new deployment. RAPIDS-singlecell computes on\n",
         "the card; if the card is not reachable from inside the enclave, everything below\n",
         "is a CPU-only notebook server and the listing is not doing its job.\n"
        ],
-       "id": "sc006"
+       "id": "sc008"
       },
       {
        "cell_type": "code",
@@ -585,7 +636,7 @@ data:
         "print(f\"{properties['name'].decode()}  {total / 2**30:.1f} GiB total, {free / 2**30:.1f} GiB free\")\n",
         "print(\"rapids_singlecell\", rsc.__version__)\n"
        ],
-       "id": "sc007"
+       "id": "sc009"
       },
       {
        "cell_type": "code",
@@ -595,6 +646,10 @@ data:
        "source": [
         "# The matrix on the card, and one real computation on it. ~seconds for a few\n",
         "# hundred thousand cells; if this raises a CUDA error, nothing further will work.\n",
+        "#\n",
+        "# This MUTATES `adata`: filtered, normalised and log1p, in place. The cell above\n",
+        "# already wrote the as-loaded copy, and the analysis notebooks start from their\n",
+        "# own `load_matrix()` rather than from this one, so the mutation stays here.\n",
         "import time\n",
         "\n",
         "start = time.time()\n",
@@ -604,34 +659,6 @@ data:
         "rsc.pp.log1p(adata)\n",
         "print(f\"normalised {adata.n_obs} x {adata.n_vars} on the GPU in {time.time() - start:.1f}s\")\n",
         "rsc.get.anndata_to_CPU(adata)\n"
-       ],
-       "id": "sc008"
-      },
-      {
-       "cell_type": "markdown",
-       "metadata": {},
-       "source": [
-        "## 4. A copy that survives a restart\n",
-        "\n",
-        "`/workspace` is the volume. `/workspace/derived` is where the notebooks hand\n",
-        "files to one another, and it is the only place a result is safe — everything else\n",
-        "in this container is thrown away when the pod moves.\n",
-        "\n",
-        "Nothing written here leaves the deployment. There is no egress path out of this\n",
-        "workspace for the data: what you export, you export yourself, by downloading it\n",
-        "through the browser.\n"
-       ],
-       "id": "sc009"
-      },
-      {
-       "cell_type": "code",
-       "metadata": {},
-       "execution_count": null,
-       "outputs": [],
-       "source": [
-        "path = scw.derived(\"as_loaded.h5ad\")\n",
-        "adata.write(path)\n",
-        "print(\"wrote\", path)\n"
        ],
        "id": "sc010"
       },
@@ -777,7 +804,25 @@ data:
         "# the column list in the error, rather than forty cells later inside Harmony.\n",
         "batch = scw.batch_key(adata)\n",
         "label = scw.label_key(adata)\n",
-        "print(f\"batch column: {batch!r}; annotation column: {label!r}; {adata.n_obs} cells x {adata.n_vars} genes\")\n"
+        "print(f\"batch column: {batch!r}; annotation column: {label!r}; {adata.n_obs} cells x {adata.n_vars} genes\")\n",
+        "\n",
+        "# The batch column is required and raised above if it was wrong. The annotation\n",
+        "# is not required by the workflow — but every cell that compares this notebook's\n",
+        "# own clustering against a known cell type needs it, and without it they fail on\n",
+        "# a bare KeyError from scanpy a long way below. Said here instead.\n",
+        "if label is None:\n",
+        "    print(\n",
+        "        f\"\n",
+        "NOTE: no annotation column. This deployment names {scw.LABEL_KEY!r} and the matrix\n",
+        "\"\n",
+        "        f\"      has none of it. Everything up to the clustering runs; the cells that colour or\n",
+        "\"\n",
+        "        f\"      group by the annotation will raise KeyError({scw.LABEL_KEY!r}).\n",
+        "\"\n",
+        "        f\"      Available: {', '.join(map(str, adata.obs.columns))}\n",
+        "\"\n",
+        "        f\"      Fix it by reconfiguring the deployment, or set scw.LABEL_KEY here.\"\n",
+        "    )\n"
        ],
        "id": "sc006"
       },
@@ -1853,6 +1898,26 @@ data:
        "id": "sc006"
       },
       {
+       "cell_type": "markdown",
+       "metadata": {},
+       "source": [
+        "> **This notebook reaches the network, and it is the only one that does.**\n",
+        "> The next cell calls `decoupler.op.collectri()`, which downloads the CollecTRI\n",
+        "> regulon table from Zenodo (~6 MB of public reference data: transcription\n",
+        "> factors and their targets). **No data of yours leaves the deployment** — the\n",
+        "> request carries nothing but a GET — but it does mean this notebook needs\n",
+        "> outbound HTTPS, and that the table is not covered by the attested\n",
+        "> `requirements.lock`, so it is whatever Zenodo serves that day.\n",
+        ">\n",
+        "> In a deployment with no egress the call fails. Two ways round it: upload the\n",
+        "> CSV into `/workspace/data` yourself and read it with `pandas.read_csv`\n",
+        "> (`decoupler` takes any frame with `source`, `target` and `weight` columns), or\n",
+        "> leave this notebook for a deployment that is allowed out. `01_preprocessing`\n",
+        "> and `03_pearson_residuals` touch nothing outside the workspace.\n"
+       ],
+       "id": "sc007"
+      },
+      {
        "cell_type": "code",
        "execution_count": null,
        "metadata": {},
@@ -1860,7 +1925,7 @@ data:
        "source": [
         "collectri = dc.op.collectri(organism=\"human\",license=\"commercial\")"
        ],
-       "id": "sc007"
+       "id": "sc008"
       },
       {
        "cell_type": "markdown",
@@ -1873,7 +1938,7 @@ data:
         "\n",
         "We apply **ULM** using the **Dorothea** regulatory network retrieved earlier. "
        ],
-       "id": "sc008"
+       "id": "sc009"
       },
       {
        "cell_type": "code",
@@ -1886,7 +1951,7 @@ data:
         "%%time\n",
         "rsc.dcg.ulm(adata, collectri, verbose=True, raw = False, pre_load=True)"
        ],
-       "id": "sc009"
+       "id": "sc010"
       },
       {
        "cell_type": "code",
@@ -1896,7 +1961,7 @@ data:
        "source": [
         "acts = dc.pp.get_obsm(adata=adata, key=\"score_ulm\")"
        ],
-       "id": "sc010"
+       "id": "sc011"
       },
       {
        "cell_type": "code",
@@ -1907,7 +1972,7 @@ data:
         "sc.pl.embedding(acts,basis=\"X_umap_harmony\", color=[scw.LABEL_KEY, \"GATA3\"], cmap='RdBu_r',ncols=1)\n",
         "sc.pl.violin(acts, keys=['GATA3'], groupby=scw.LABEL_KEY, rotation=90, size = 0)\n"
        ],
-       "id": "sc011"
+       "id": "sc012"
       },
       {
        "cell_type": "markdown",
@@ -1919,7 +1984,7 @@ data:
         "Unlike **ULM**, which considers each TF independently, **MLM** accounts for multiple TFs simultaneously,  \n",
         "providing a more comprehensive estimation of regulatory influences. "
        ],
-       "id": "sc012"
+       "id": "sc013"
       },
       {
        "cell_type": "code",
@@ -1933,7 +1998,7 @@ data:
         "%%time\n",
         "rsc.dcg.mlm(adata, collectri, verbose=True, raw = False, pre_load=True)"
        ],
-       "id": "sc013"
+       "id": "sc014"
       },
       {
        "cell_type": "markdown",
@@ -1945,7 +2010,7 @@ data:
         "AUCell estimates TF activity based on the **enrichment of TF target genes within the top-expressed genes** in each cell.  \n",
         "Unlike regression-based methods (**ULM**, **MLM**), AUCell is a **rank-based approach** that does not assume linear relationships. "
        ],
-       "id": "sc014"
+       "id": "sc015"
       },
       {
        "cell_type": "code",
@@ -1959,7 +2024,7 @@ data:
         "%%time\n",
         "rsc.dcg.aucell(adata, collectri, verbose=True, raw = False, pre_load=True)"
        ],
-       "id": "sc015"
+       "id": "sc016"
       },
       {
        "cell_type": "code",
@@ -1969,7 +2034,7 @@ data:
        "source": [
         "acts = dc.pp.get_obsm(adata=adata, key=\"score_aucell\")"
        ],
-       "id": "sc016"
+       "id": "sc017"
       },
       {
        "cell_type": "code",
@@ -1980,7 +2045,7 @@ data:
         "sc.pl.embedding(acts,basis=\"X_umap_harmony\", color=[scw.LABEL_KEY, \"GATA3\"], cmap='RdBu_r',ncols=1)\n",
         "sc.pl.violin(acts, keys=['GATA3'], groupby=scw.LABEL_KEY, rotation=90, size = 0)\n"
        ],
-       "id": "sc017"
+       "id": "sc018"
       },
       {
        "cell_type": "code",
@@ -1998,7 +2063,7 @@ data:
         "\n",
         "IPython.Application.instance().kernel.do_shutdown(True)"
        ],
-       "id": "sc018"
+       "id": "sc019"
       }
      ],
      "metadata": {
@@ -2123,7 +2188,25 @@ data:
         "# the column list in the error, rather than forty cells later inside Harmony.\n",
         "batch = scw.batch_key(adata)\n",
         "label = scw.label_key(adata)\n",
-        "print(f\"batch column: {batch!r}; annotation column: {label!r}; {adata.n_obs} cells x {adata.n_vars} genes\")\n"
+        "print(f\"batch column: {batch!r}; annotation column: {label!r}; {adata.n_obs} cells x {adata.n_vars} genes\")\n",
+        "\n",
+        "# The batch column is required and raised above if it was wrong. The annotation\n",
+        "# is not required by the workflow — but every cell that compares this notebook's\n",
+        "# own clustering against a known cell type needs it, and without it they fail on\n",
+        "# a bare KeyError from scanpy a long way below. Said here instead.\n",
+        "if label is None:\n",
+        "    print(\n",
+        "        f\"\n",
+        "NOTE: no annotation column. This deployment names {scw.LABEL_KEY!r} and the matrix\n",
+        "\"\n",
+        "        f\"      has none of it. Everything up to the clustering runs; the cells that colour or\n",
+        "\"\n",
+        "        f\"      group by the annotation will raise KeyError({scw.LABEL_KEY!r}).\n",
+        "\"\n",
+        "        f\"      Available: {', '.join(map(str, adata.obs.columns))}\n",
+        "\"\n",
+        "        f\"      Fix it by reconfiguring the deployment, or set scw.LABEL_KEY here.\"\n",
+        "    )\n"
        ],
        "id": "sc006"
       },
@@ -2920,6 +3003,12 @@ data:
        the pod. 01 now writes `/workspace/derived/preprocessed.h5ad` and 02 reads it
        from there.
   
+    A fifth edit, in `02_regulatory_activity.ipynb` only: a note above
+    `decoupler.op.collectri()`, which downloads the CollecTRI regulon table from
+    Zenodo. Nothing of the tenant's leaves in that request, but it is the one
+    network call left in these notebooks and it is not covered by the attested
+    `requirements.lock`, so it is marked where it happens.
+  
     Stored cell outputs were stripped. They are 11 MB of images and tables computed
     from a corpus this deployment does not have, and they would be published inside
     the deployment's evidence snapshot.
@@ -3014,7 +3103,7 @@ spec:
       annotations:
         # The environment lock and the notebooks are mounted, not baked, so a
         # change to either has to roll the pod for anything to notice.
-        checksum/workspace: 8ed33c1ba37047d5efcb2a461d6ae924acefd214bbe5edd697a223a53eb34fa4
+        checksum/workspace: b975feaf6adb66d8a60d320ded0ad0a9750f45bc6cd0a94322177cfe03f5b893
       labels:
         app.kubernetes.io/name: rapids-singlecell-notebook
         app.kubernetes.io/instance: sc
@@ -3058,11 +3147,14 @@ spec:
               value: /workspace/data
             - name: SC_DERIVED_DIR
               value: /workspace/derived
-            # sc_workspace.py and the notebooks are seeded into /workspace, and
-            # /opt/sc is also importable so a tenant who has edited their copy
-            # into a corner can still `sys.path` back to the shipped one.
+            # /opt/sc FIRST, deliberately. `sc_workspace` is the chart's and is
+            # imported from there, so a fix to it reaches an existing deployment
+            # when the pod rolls; /workspace/notebooks follows so a tenant's own
+            # modules beside their notebooks still import. Reverse the order and
+            # a copy of the loader left on the volume shadows the chart's for
+            # the life of the deployment.
             - name: PYTHONPATH
-              value: /workspace/notebooks:/opt/sc
+              value: /opt/sc:/workspace/notebooks
             # Telemetry off. A deployment serving patient-derived matrices inside
             # an enclave should not be reporting anything about itself.
             - name: DO_NOT_TRACK

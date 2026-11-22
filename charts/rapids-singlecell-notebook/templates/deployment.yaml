@@ -80,11 +80,14 @@ spec:
               value: /workspace/data
             - name: SC_DERIVED_DIR
               value: /workspace/derived
-            # sc_workspace.py and the notebooks are seeded into /workspace, and
-            # /opt/sc is also importable so a tenant who has edited their copy
-            # into a corner can still `sys.path` back to the shipped one.
+            # /opt/sc FIRST, deliberately. `sc_workspace` is the chart's and is
+            # imported from there, so a fix to it reaches an existing deployment
+            # when the pod rolls; /workspace/notebooks follows so a tenant's own
+            # modules beside their notebooks still import. Reverse the order and
+            # a copy of the loader left on the volume shadows the chart's for
+            # the life of the deployment.
             - name: PYTHONPATH
-              value: /workspace/notebooks:/opt/sc
+              value: /opt/sc:/workspace/notebooks
             # Telemetry off. A deployment serving patient-derived matrices inside
             # an enclave should not be reporting anything about itself.
             - name: DO_NOT_TRACK

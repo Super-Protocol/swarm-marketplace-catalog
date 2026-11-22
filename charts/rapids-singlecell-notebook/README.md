@@ -123,7 +123,15 @@ memory limit, so `resources.memory` includes it.
   out-of-core notebook wants "a large multi-GPU system" and is not shipped.
 - **No egress restriction.** A notebook is a shell, and a tenant who can run
   `pip` can run `curl`. What the deployment guarantees is that the *platform*
-  moves no data out, the gatekeeper can stop serving data to a deployment whose
-  evidence changed, and nothing in the shipped notebooks reaches the network.
-  It is not a data-exfiltration cage against the tenant's own operator, and the
-  listing says so rather than implying otherwise.
+  moves no data out and that the gatekeeper can stop serving data to a
+  deployment whose evidence changed. It is not a data-exfiltration cage against
+  the tenant's own operator, and the listing says so rather than implying
+  otherwise.
+- **One shipped notebook does reach out, and it is marked.**
+  `02_regulatory_activity.ipynb` calls `decoupler.op.collectri()`, which
+  downloads the CollecTRI regulon table from Zenodo — public reference data, a
+  bare GET, no tenant data in the request — and the table is therefore outside
+  the attested lock. The notebook carries that note in the cell above the call.
+  `01_preprocessing` and `03_pearson_residuals` touch nothing outside the
+  workspace; the environment install at boot is the only other outbound
+  request the chart makes, and every byte of it is hash-checked.
