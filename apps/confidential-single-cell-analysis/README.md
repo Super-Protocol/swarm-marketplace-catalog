@@ -91,12 +91,20 @@ derived from the charts. Two things make it stable:
   snapshot. `charts/tests/run.sh` diffs the bound and unbound renders to keep it
   that way.
 
+The declared digest is
+`81b5c2feb8f3b39ea3008cc60a039c7d8b41330ce569c9d5e903320feb29232e`, measured on
+2026-11-22 from the signed evidence of two deployments on the `gpu-blueprints`
+cloud — `sc-842a` and `sc-842b`, two hostnames in two namespaces. The snapshots
+were byte-identical: six resources each (two ConfigMaps, the Deployment, the
+Ingress, the Secret, the Service).
+
 One caveat that belongs to the platform rather than to this listing: a
 deployment that mounts **gated** data gains three objects the marketplace adds
 itself (the egress sidecar's ConfigMap, Deployment and Service), so its snapshot
-is not the snapshot of a deployment with nothing attached. The digest declared
-here is measured in one configuration and named as such in the pull request that
-declares it.
+is not the snapshot of a deployment with nothing attached. The digest above is
+the no-gated-data configuration, which is what every deployment of this listing
+is today. The first gated deployment has to re-measure and re-declare — and
+that is true of every gated listing in this catalogue, not only this one.
 
 ## What it deliberately does not do
 

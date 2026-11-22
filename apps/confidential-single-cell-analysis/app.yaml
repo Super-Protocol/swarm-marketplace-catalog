@@ -334,6 +334,28 @@ outputs:
     when: "data.matrices.count == 0"
 
 evidence:
+  # ---------------------------------------------------------------------------
+  # Measured, not derived. Two deployments of this version on the gpu-blueprints
+  # cloud, 2026-11-22 — `sc-842a` and `sc-842b`, two hostnames in two namespaces
+  # — published byte-identical signed snapshots and this digest. Six resources
+  # in each: two ConfigMaps, the Deployment, the Ingress, the Secret and the
+  # Service.
+  #
+  # Declaring it is not documentation. The marketplace admits a deployment to the
+  # gatekeeper only when its listing version carries one, so a listing with a
+  # data slot and no digest produces deployments the gate has never heard of
+  # (SUP-711, and `apps/tests/gated_digest.py`).
+  #
+  # One caveat the measurement cannot cover, and it belongs to the platform
+  # rather than to this listing: a deployment that mounts GATED data gains three
+  # objects the marketplace adds itself — the egress sidecar's ConfigMap,
+  # Deployment and Service (`gatekeeper/egress-sidecar.ts`) — which are part of
+  # what the cloud digests. Its snapshot is therefore not this one. The digest
+  # below is the no-gated-data configuration, which is what every deployment of
+  # this listing is today; the first gated deployment has to re-measure and
+  # re-declare.
+  expectedDigest: "81b5c2feb8f3b39ea3008cc60a039c7d8b41330ce569c9d5e903320feb29232e"
+  # ---------------------------------------------------------------------------
   # The hostname is the one field that differs between two deployments of this
   # version, and excluding it is what makes the digest a property of the version
   # rather than of the deployment. Declared here as well as in the chart's own
