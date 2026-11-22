@@ -2,6 +2,27 @@ apiVersion: swarm.cloud/v1alpha1
 kind: AppDefinition
 
 # ---------------------------------------------------------------------------
+# 0.1.6 answers the CTO's review of 0.1.5, and the blocking item is the reason
+# this listing exists: the reranker was doing nothing on every query. Not a
+# timeout, which is what I guessed in the hand-off — `server.topK` was 40
+# against the reranker's `--max-client-batch-size 32`, so Text Embeddings
+# Inference refused each batch in the first millisecond with
+# `413 batch size 40 > maximum allowed batch size 32`. The adapter fell back to
+# the retriever's own order, which is what it is for, so the answers stayed
+# correct and the only trace was citations with no relevance score. A component
+# this listing advertises, attests and budgets two cores and 6Gi for did no work
+# at all.
+#
+# Fixed by bringing `topK` under the ceiling (12), and by making the class of
+# mistake impossible: the ceiling lives in a different chart, so
+# `crag.validate` now refuses the render and
+# `charts/tests/rag_reranker_budget.py` holds the mirrored value equal to the
+# one the server is started with.
+#
+# Also: `login()` called `time.sleep(0.5)` on the event loop, which froze the
+# whole console — streaming answers included — on every wrong password.
+#
+# ---------------------------------------------------------------------------
 # 0.1.3 carries `text-embeddings-server` 0.1.3, which is one probe and the fix
 # the two versions before it were reaching for. The embedder came up, served the
 # corpus indexer, and was killed mid-index with exit 137 after
@@ -85,7 +106,7 @@ metadata:
     deployment publishes cryptographic proof of which embedder and which model touch your data, and
     the data owner can withdraw access the moment that changes. Based on the open-source NVIDIA RAG
     reference architecture (Apache-2.0), rebuilt on open components.
-  version: "0.1.5"
+  version: "0.1.6"
   category: ai-inference
   # Our fork — the code the image is built from — and not the upstream repository.
   sourceRepo: https://github.com/Super-Protocol/confidential-rag
@@ -419,6 +440,29 @@ resources:
   # is fixed when the cluster space is created and a reconfigure re-renders the
   # version the deployment was created from, so the room a later version needs
   # has to be asked for now or not at all.
+  #
+  # ---------------------------------------------------------------------------
+  # Why this is 25 / 66Gi / 80Gi and not the 21 / 52Gi / 64Gi prescribed for
+  # this listing's shape in `docs/open-inference-component.md`.
+  #
+  # That table is right for the shape it describes and this listing is a
+  # different one in two ways, both of which only add:
+  #
+  #   * It assumes the small embedder at 4Gi. `embeddingModel` is a PARAMETER
+  #     here, and its other answer — the multilingual 8192-token checkpoint — is
+  #     6Gi measured, as is the reranker, which that table does not carry at all
+  #     (it predates this listing having one). A quota is declared for the worst
+  #     option a parameter allows, or it refuses the deployment the first time
+  #     somebody picks it.
+  #   * It assumes `ingest` is the surge pod at 4 CPU / 4Gi. In this listing
+  #     ingestion is reserved and not rendered, and every Deployment holding a
+  #     ReadWriteOnce volume is `Recreate`, so the only pod that surges is the
+  #     console at 0.5 / 512Mi. That is the one place this listing needs LESS.
+  #
+  # Both numbers were then measured off the real renders of the worst option the
+  # parameters allow, and a deployment was created at exactly this quota and
+  # evicted nothing (`charts/tests/max_pod.py` holds the per-pod half). The CTO
+  # accepted the difference on that basis; the arithmetic is the table above.
   min:
     cpu: "25"
     memory: "66Gi"
@@ -676,7 +720,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-rag
-      version: "0.1.5"
+      version: "0.1.6"
     images:
       - name: ghcr.io/super-protocol/confidential-rag/rag-server
         digest: sha256:c68adc9c963a623256e4fe1db6be35ae6ac15fe95589504ff5b7b663ad2e06f9
@@ -949,6 +993,38 @@ evidence:
   # number on its own listing page. It needs no gate, so nothing refuses it, and
   # the README says which configuration the digest describes. The ungated
   # digest, for the record, was `3dde9a40…` on chart 0.1.1 and is not declared.
+  #
+  # ---------------------------------------------------------------------------
+  # THE REFERENCE PARAMETER SET it was measured with. The digest holds for this
+  # one, and a deployment that answers differently attests its own — expected,
+  # not tampering.
+  #
+  # It is not a short list by accident. `generationModel` chooses the vLLM
+  # preset AND patches the engine's CPU, memory and context length;
+  # `embeddingModel` chooses the TEI preset and the chunk width; the corpus
+  # column names and `refreshMinutes` are rendered into the indexer's env. All
+  # of that is in the snapshot on purpose — what a verifier most needs to know
+  # is which model and which embedder touched the documents, so it is inside the
+  # signed bundle rather than excluded from it.
+  #
+  #   hostname               rag-840g / rag-840h .conf-apps.superprotocol.dev
+  #                          (excluded from the snapshot — see `exclude` below)
+  #   generationModel        llama-3.2-3b-instruct
+  #   embeddingModel         bge-large-en-v1.5
+  #   documentTable          documents
+  #   documentIdColumn       doc_id
+  #   documentTitleColumn    title
+  #   documentTextColumn     text
+  #   documentUpdatedColumn  updated_at
+  #   refreshMinutes         1
+  #   citationsPerAnswer     6
+  #   answerMaxTokens        1024
+  #   data slot `corpus`     acme-engineering-handbook   (gated)
+  #
+  # The four generated credentials — `accessPassword`, `inferenceKey`,
+  # `sessionKey`, `vectorStorePassword` — are in Secrets, which the platform
+  # lifts out before the snapshot is taken, so they reach no attested object and
+  # are not part of this set.
   expectedDigest: "03db53bee699d2f4f4751e697a7a4403a08e5eb891d705e4631a40adf7f50df8"
   # ---------------------------------------------------------------------------
   # The hostname is the one field that differs between two deployments of this

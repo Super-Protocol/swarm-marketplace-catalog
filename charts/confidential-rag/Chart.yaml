@@ -29,7 +29,19 @@ type: application
 # nothing published. Each batch now runs under a timeout, progress is published per batch, and a
 # stall is its own verdict rather than a refusal: the source served the documents, the index did
 # not take them, and those want different people looking.
-version: 0.1.5
+# 0.1.6 is the reranker doing its job, and one blocking sleep removed.
+#
+# `server.topK` was 40 against the reranker's `--max-client-batch-size 32`, so Text Embeddings
+# Inference refused every rerank instantly with `413 batch size 40 > maximum allowed batch size
+# 32`. The adapter fell back to the retriever's order as designed, so answers stayed correct and
+# the only symptom was citations with no relevance score. Now 12 — a third of the ceiling and
+# ~36 s of the adapter's 60 s budget at the measured 3.0 s per passage on two cores — and
+# `crag.validate` refuses a render that breaks the ceiling, because the two numbers live in
+# different charts and nothing checked that they agreed.
+#
+# And `login()` called `time.sleep(0.5)` on the event loop: every wrong password froze the whole
+# console for half a second, streaming answers included. It awaits now.
+version: 0.1.6
 # The upstream release this is a port of. The image is built from
 # Super-Protocol/confidential-rag at branch confidential/2.6.2 — see MODIFICATIONS.md there for
 # what differs, which is the open embedding, reranking and generation engines and nothing about

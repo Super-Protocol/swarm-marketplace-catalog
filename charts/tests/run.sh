@@ -2045,6 +2045,14 @@ else
   fail "charts/tests/rag_binding.py"
 fi
 
+note "the retriever asks for no more than the reranker will accept"
+if output=$(python3 charts/tests/rag_reranker_budget.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/rag_reranker_budget.py"
+fi
+
 note "the console is the only door, and only its probe is outside the session"
 if output=$(python3 charts/tests/rag_console.py); then
   printf '%s\n' "$output"

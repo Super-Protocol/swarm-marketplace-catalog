@@ -66,6 +66,9 @@ time — which reads as "the answers stopped being grounded" rather than as a mi
 {{- if gt (.Values.server.topK | int) (.Values.server.ef | int) }}
 {{- fail (printf "confidential-rag: server.topK (%d) is above server.ef (%d) — Milvus refuses a search whose top-k exceeds its candidate list, and every answer then comes back ungrounded" (.Values.server.topK | int) (.Values.server.ef | int)) }}
 {{- end }}
+{{- if and .Values.reranker.enabled (gt (.Values.server.topK | int) (.Values.reranker.maxClientBatchSize | int)) }}
+{{- fail (printf "confidential-rag: server.topK (%d) is above the reranker's client batch ceiling (%d) — Text Embeddings Inference answers a bigger batch with `413 batch size %d > maximum allowed batch size %d`, the adapter falls back to the retriever's own order, and the only symptom is citations with no relevance score. Every query would be unreranked while the listing still advertises a reranker" (.Values.server.topK | int) (.Values.reranker.maxClientBatchSize | int) (.Values.server.topK | int) (.Values.reranker.maxClientBatchSize | int)) }}
+{{- end }}
 {{- if gt (.Values.server.rerankerTopK | int) (.Values.server.topK | int) }}
 {{- fail "confidential-rag: server.rerankerTopK is above server.topK — the reranker cannot return more documents than the retriever found" }}
 {{- end }}

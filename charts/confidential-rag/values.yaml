@@ -66,9 +66,29 @@ server:
   # multiplier as much as a concurrency one.
   workers: 2
   collection: documents
-  # Candidates out of the vector store, which is what the reranker then orders. Must not exceed
-  # `ef` below — Milvus refuses a search whose top-k is larger than its candidate list.
-  topK: 40
+  # ---------------------------------------------------------------------------------------------
+  # Candidates out of the vector store, which is what the reranker then orders.
+  #
+  # TWELVE, and the first number here was 40, which made the reranker do nothing at all on every
+  # single query. Measured, because the symptom pointed somewhere else entirely:
+  #
+  #   * Text Embeddings Inference refuses a client batch larger than
+  #     `--max-client-batch-size`, which the reranker preset sets to 32, with
+  #     `413 {"error":"batch size 40 > maximum allowed batch size 32"}`. Instantly — it is a
+  #     validation error, not a timeout. The adapter caught it, fell back to the retriever's
+  #     own order as it is designed to, and the only trace outside the log was citations whose
+  #     `relevance_score` was absent and therefore read 0.0. The answers stayed correct, which
+  #     is why this survived a review.
+  #   * And the time budget, on the two cores the reranker gets, for chunks this listing's size
+  #     (`corpus.chunkChars`): 8 passages 24.4 s, 16 passages 48.4 s, 24 passages 73.3 s. The
+  #     adapter waits 60 s. So 16 would have worked and spent 80% of the budget; 24 would not.
+  #
+  # Twelve is ~36 s of a 60 s budget and a third of the batch ceiling. `topK` is therefore
+  # bounded by BOTH numbers, and `crag.validate` refuses a render that breaks the first — the
+  # two live in different charts and nothing checked that they agreed.
+  topK: 12
+  # Milvus refuses a search whose top-k is larger than its candidate list, so `ef` is the other
+  # ceiling over `topK`.
   ef: 100
   # What survives reranking and reaches the prompt.
   rerankerTopK: 6
@@ -124,6 +144,11 @@ reranker:
   model: ""
   licence: ""
   apiKey: ""
+  # Mirrors `--max-client-batch-size` from the reranker preset in charts/text-embeddings-server,
+  # because the server refuses a bigger batch with a 413 and the client falls back silently. It
+  # is duplicated here only so this chart can refuse the render instead; the two are held equal
+  # by `charts/tests/rag_reranker_budget.py`, which reads the preset.
+  maxClientBatchSize: 32
 
 vectorStore:
   url: http://milvus:19530

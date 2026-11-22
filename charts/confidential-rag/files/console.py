@@ -30,6 +30,7 @@ beside the code answering the questions.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -171,7 +172,13 @@ async def login(response: Response, password: str = Form("")) -> Response:
     if not hmac.compare_digest(password.encode(), PASSWORD.encode()):
         # A deliberate, fixed delay. Not rate limiting — one process cannot do that honestly —
         # but enough that an online guess against this door is not free.
-        time.sleep(0.5)
+        #
+        # `asyncio.sleep` and not `time.sleep`: this handler runs on the event loop, and a
+        # blocking sleep here stops the whole console for half a second — including an answer
+        # streaming to somebody already signed in. Two wrong passwords a second from anyone who
+        # finds the hostname would be a denial of service against every legitimate user, which
+        # is a worse bargain than the brute-force cost it buys.
+        await asyncio.sleep(0.5)
         return login_page(error="bad")
     redirect = RedirectResponse("/", status_code=303)
     redirect.set_cookie(
