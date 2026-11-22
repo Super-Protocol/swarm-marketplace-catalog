@@ -37,7 +37,14 @@ import sys
 import yaml
 
 CHART = "charts/swarm-doc-ingest"
-DIGEST = "sha256:" + "0" * 64
+#: The digest `values.yaml` pins. Read from the chart rather than written here,
+#: so moving the pin does not silently leave this test asserting the old bytes.
+def _pinned_digest() -> str:
+    values = yaml.safe_load(open(f"{CHART}/values.yaml"))
+    return values["image"]["digest"]
+
+
+DIGEST = _pinned_digest()
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 failures: list[str] = []

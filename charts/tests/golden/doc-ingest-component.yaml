@@ -137,7 +137,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: ingest
-          image: ghcr.io/super-protocol/swarm-doc-ingest/ingest@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          image: ghcr.io/super-protocol/swarm-doc-ingest/ingest@sha256:a114f3df285a9c0f30e96e3bf2b31b04184ba5d956b007e8df81cc4a4db704d1
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

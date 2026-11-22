@@ -68,7 +68,7 @@ components:
       version: "0.1.0"
     images:
       - name: ghcr.io/super-protocol/swarm-doc-ingest/ingest
-        digest: sha256:<the digest in values.yaml>
+        digest: sha256:a114f3df285a9c0f30e96e3bf2b31b04184ba5d956b007e8df81cc4a4db704d1
     deployment:
       values:
         base:

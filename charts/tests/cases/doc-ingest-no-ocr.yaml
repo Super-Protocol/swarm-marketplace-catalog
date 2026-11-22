@@ -5,10 +5,6 @@
 # failure. The case exists to hold the render that says so — and to exercise
 # `existingSecret`, which is what a listing uses when one generated parameter is
 # patched into several components and the Secret is created once.
-image:
-  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
-  tag: "0.1.0"
-
 existingSecret: confidential-rag-ingest-key
 
 extraction:

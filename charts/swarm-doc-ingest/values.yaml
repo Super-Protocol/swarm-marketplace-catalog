@@ -27,11 +27,11 @@ image:
   repository: super-protocol/swarm-doc-ingest/ingest
   # Ours, built by Super-Protocol/swarm-doc-ingest and attested there.
   # `scripts/verify-pins/` traces this digest to the commit that produced it.
-  digest: ""
+  digest: sha256:a114f3df285a9c0f30e96e3bf2b31b04184ba5d956b007e8df81cc4a4db704d1
   # What says *which* release this is. A digest wins over the tag beside it; the
   # tag stays because a digest alone does not tell a reader which version they
   # are looking at.
-  tag: ""
+  tag: "0.1.0"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []

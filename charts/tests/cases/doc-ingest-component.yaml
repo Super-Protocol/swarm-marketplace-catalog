@@ -9,8 +9,4 @@
 # extraction configuration is in a ConfigMap the cloud digests and signs, so a
 # tenant who approved a digest approved these presets rather than "whatever the
 # operator picks next".
-image:
-  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
-  tag: "0.1.0"
-
 apiKey: TESTKEYtestkey0123456789abcdefAB
