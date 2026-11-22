@@ -403,14 +403,17 @@ resources:
   #    GATED data (limits 250m / 128Mi), and a quota sized for the application
   #    alone refuses it. This listing exists to mount gated data, so it is in.
   #
-  # The 4 CPU / 4Gi for ingestion is RESERVED and nothing renders it. The
-  # document-ingestion stage this listing will consume — Docling, TableFormer and
-  # RapidOCR, CPU-only, measured on SUP-874 — is not published yet, so 0.1.0
-  # reads documents from a table rather than from files. The room is held because
-  # a cluster space's quota is fixed at creation and a reconfigure re-renders the
-  # version the deployment was created from: a deployment of 0.1.0 can therefore
-  # take the ingestion component when it lands without being rebuilt, and one
-  # whose quota was sized exactly cannot.
+  # The 4 CPU / 4Gi for ingestion is RESERVED and nothing renders it yet.
+  # `charts/swarm-doc-ingest` — Docling, TableFormer and RapidOCR, CPU-only,
+  # measured on SUP-874 — landed on `main` while this listing's digest was being
+  # measured, so the component exists; composing it needs the `ingestor-server`
+  # that owns collection and document management, and a place in the console to
+  # submit a file. Until then this listing reads documents from a table.
+  #
+  # The room is held now because a cluster space's quota is fixed at creation and
+  # a reconfigure re-renders the version the deployment was created from: a
+  # deployment of this version can take the ingestion component when the listing
+  # composes it, and one whose quota was sized exactly cannot.
   # 25 and 66Gi against a measured 22.75 and 64.125: a little over two cores and
   # two gigabytes of headroom, which is deliberate rather than rounding. A quota
   # is fixed when the cluster space is created and a reconfigure re-renders the

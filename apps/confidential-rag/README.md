@@ -76,12 +76,18 @@ at `/licenses`.
 
 ## What this version does not do
 
-**Files.** 0.1.0 reads documents from a table, not from PDFs, DOCX or slides. The extraction stage
-that handles files — Docling, TableFormer and RapidOCR, CPU-only, chosen on measurements in SUP-874
-— is not published yet. Its footprint (4 CPU, 4Gi, a 1Gi model volume) is already reserved in
-`resources.min`, because a cluster space's quota is fixed when it is created and a reconfigure
-re-renders the version the deployment was created from: a deployment of 0.1.0 can therefore take
-that component when it lands, and one whose quota was sized exactly could not.
+**Files.** This version reads documents from a table, not from PDFs, DOCX or slides.
+[`swarm-doc-ingest`](../../charts/swarm-doc-ingest/) — Docling, TableFormer and RapidOCR, CPU-only,
+chosen on measurements in SUP-874 — landed on `main` while this listing was being measured, so the
+component now exists; composing it needs two things this version does not have: the
+`ingestor-server` that owns collection and document management, and a place in the console to
+submit a file. Both are a follow-up rather than a line of YAML.
+
+What is already done for it: its footprint (4 CPU, 4Gi, a 1Gi model volume) is reserved in
+`resources.min`. A cluster space's quota is fixed when the space is created and a reconfigure
+re-renders the version the deployment was created from, so a deployment of this version can take
+that component when the listing composes it — and one whose quota had been sized exactly could
+not.
 
 **Charts are not transcribed.** When the extraction stage does land, a chart in a document is
 located and cited as an image; its series are not searchable. NVIDIA's Graphic Elements NIM is what
