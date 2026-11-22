@@ -1,0 +1,134 @@
+{{- $name := include "crag.name" . -}}
+{{- if .Values.cache.enabled }}
+{{- /*
+Valkey, BSD-3-Clause, where upstream's compose runs Redis Stack — which is under RSALv2/SSPL and
+is therefore not something this listing may deploy. It holds document-summarisation status keys
+with a 24-hour expiry and nothing else; the index is in Milvus and the answers are not cached.
+
+No credential, and that is upstream's constraint rather than a choice: the client in
+`nvidia_rag.utils.summary_status_handler` builds its connection pool from a host, a port and a
+database number and takes no password, so `requirepass` here would mean the pipeline could not
+reach it at all. What bounds it instead: ClusterIP, no Ingress, protected mode, and nothing in
+it that is not a status string. Giving Valkey a password is a change to the fork, and the right
+place to make it is the first release that has a reason to keep anything here worth protecting.
+*/ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-cache
+  labels:
+    {{- include "crag.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cache
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "crag.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: cache
+  template:
+    metadata:
+      labels:
+        {{- include "crag.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: cache
+    spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: cache
+          image: {{ include "crag.imageRef" .Values.cache.image | quote }}
+          imagePullPolicy: {{ .Values.cache.image.pullPolicy }}
+          args:
+            - --dir
+            - /data
+            - --protected-mode
+            - "yes"
+            # One hundred megabytes of status keys is already far more than this holds; past it,
+            # the oldest go rather than the process growing until the kubelet kills it.
+            - --maxmemory
+            - 100mb
+            - --maxmemory-policy
+            - allkeys-lru
+            # Status keys are rebuildable by asking for the summary again, so an fsync per write
+            # buys nothing. A periodic snapshot keeps a restart from losing an in-flight one.
+            - --appendonly
+            - "no"
+            - --save
+            - 300 1
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: valkey
+              containerPort: 6379
+              protocol: TCP
+          startupProbe:
+            tcpSocket: { port: valkey }
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            tcpSocket: { port: valkey }
+            periodSeconds: 20
+          livenessProbe:
+            tcpSocket: { port: valkey }
+            periodSeconds: 30
+            failureThreshold: 4
+          resources:
+            {{- toYaml .Values.cache.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          {{- if .Values.cache.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ $name }}-cache
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-cache
+  labels:
+    {{- include "crag.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cache
+spec:
+  type: ClusterIP
+  ports:
+    - name: valkey
+      port: 6379
+      targetPort: valkey
+      protocol: TCP
+  selector:
+    {{- include "crag.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: cache
+{{- if .Values.cache.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-cache
+  labels:
+    {{- include "crag.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cache
+spec:
+  accessModes:
+    - {{ .Values.cache.persistence.accessMode }}
+  {{- with .Values.cache.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.cache.persistence.size | quote }}
+{{- end }}
+{{- end }}

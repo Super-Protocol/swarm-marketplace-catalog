@@ -1,0 +1,20 @@
+{{- /*
+ClusterIP, and there is deliberately no Ingress anywhere in this chart. The only caller is in
+the same namespace; `/health` and `/metrics` are outside the server's own authentication, so a
+hostname here would publish them beside the authenticated endpoint.
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tes.name" . }}
+  labels:
+    {{- include "tes.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "tes.selectorLabels" . | nindent 4 }}

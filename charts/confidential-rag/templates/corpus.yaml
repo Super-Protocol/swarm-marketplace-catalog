@@ -1,0 +1,161 @@
+{{- $name := include "crag.name" . -}}
+{{- /*
+The indexer, and the place the gatekeeper story is actually observable.
+
+It reads the bound document source — through the gate, when the dataset is gated — chunks it,
+embeds it with this deployment's own embedder and writes the collection the pipeline retrieves
+from. Then it keeps checking, so a corpus that grows is picked up without anybody triggering
+anything, and a corpus the owner has withdrawn approval for turns into a refusal on `/status`
+that the console shows, rather than answers quietly getting worse.
+
+A Deployment and not a Job, for two reasons. A Job is applied as an ordinary object, is not
+collected into the evidence, and is deleted and re-created on every reconfigure because its
+`spec.template` is immutable — so the one object that proves the gate is working would be the
+one object outside the attestation. And a one-shot indexer cannot show a refusal that happens
+after it exited.
+*/ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-corpus
+  labels:
+    {{- include "crag.labels" . | nindent 4 }}
+    app.kubernetes.io/component: corpus
+spec:
+  replicas: 1
+  # Two indexers rebuilding one collection would race. `Recreate` costs one gap of a few
+  # seconds in the status panel on an upgrade and removes that entirely.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "crag.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: corpus
+  template:
+    metadata:
+      labels:
+        {{- include "crag.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: corpus
+    spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: corpus
+          image: {{ include "crag.imageRef" .Values.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [python3, /opt/app/corpus_sync.py]
+          # The pipeline's own configuration, so the embedder, the vector store and the
+          # collection this writes are by construction the ones the retriever reads.
+          envFrom:
+            - configMapRef:
+                name: {{ $name }}-config
+          env:
+            - name: APP_EMBEDDINGS_APIKEY
+              valueFrom:
+                secretKeyRef: { name: {{ $name }}-secrets, key: embeddings-api-key }
+            - name: APP_VECTORSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ $name }}-secrets, key: vector-store-password }
+            - name: CORPUS_BINDING_FILE
+              value: /etc/corpus/corpus-binding.json
+            - name: CORPUS_TABLE
+              value: {{ .Values.corpus.table | quote }}
+            - name: CORPUS_ID_COLUMN
+              value: {{ .Values.corpus.idColumn | quote }}
+            - name: CORPUS_TITLE_COLUMN
+              value: {{ .Values.corpus.titleColumn | quote }}
+            - name: CORPUS_TEXT_COLUMN
+              value: {{ .Values.corpus.textColumn | quote }}
+            - name: CORPUS_UPDATED_COLUMN
+              value: {{ .Values.corpus.updatedColumn | quote }}
+            - name: CORPUS_CHUNK_CHARS
+              value: {{ .Values.corpus.chunkChars | quote }}
+            - name: CORPUS_CHUNK_OVERLAP_CHARS
+              value: {{ .Values.corpus.chunkOverlapChars | quote }}
+            - name: CORPUS_ROW_LIMIT
+              value: {{ .Values.corpus.rowLimit | quote }}
+            - name: CORPUS_POLL_SECONDS
+              value: {{ .Values.corpus.pollSeconds | quote }}
+            - name: CORPUS_EMBED_BATCH
+              value: {{ .Values.corpus.embedBatch | quote }}
+            - name: CORPUS_STATUS_PORT
+              value: "8085"
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8085
+              protocol: TCP
+          # `/healthz` answers as soon as the status server is up — which is before the first
+          # read of the source, deliberately: a deployment whose data owner has not approved it
+          # yet is a healthy deployment waiting, not a broken one.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 4
+          resources:
+            {{- toYaml .Values.corpus.resources | nindent 12 }}
+          volumeMounts:
+            - name: app
+              mountPath: /opt/app
+              readOnly: true
+            - name: binding
+              mountPath: /etc/corpus
+              readOnly: true
+            - name: scratch
+              mountPath: /tmp-data
+      volumes:
+        - name: app
+          configMap:
+            name: {{ $name }}-app
+        - name: binding
+          secret:
+            secretName: {{ $name }}-secrets
+            items:
+              - key: corpus-binding.json
+                path: corpus-binding.json
+        - name: scratch
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-corpus
+  labels:
+    {{- include "crag.labels" . | nindent 4 }}
+    app.kubernetes.io/component: corpus
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8085
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "crag.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: corpus

@@ -1,0 +1,14 @@
+apiVersion: v2
+name: confidential-rag
+description: >-
+  The ported RAG pipeline — retrieval, reranking and grounded generation over a tenant's own
+  documents — with its own authenticating console, the indexer that reads the gated document
+  source, and the summary-status store. Composes an embedder, a reranker, a vector store and a
+  generation endpoint deployed beside it.
+type: application
+version: 0.1.0
+# The upstream release this is a port of. The image is built from
+# Super-Protocol/confidential-rag at branch confidential/2.6.2 — see MODIFICATIONS.md there for
+# what differs, which is the open embedding, reranking and generation engines and nothing about
+# the pipeline itself.
+appVersion: "2.6.2"

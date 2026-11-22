@@ -1,0 +1,280 @@
+# One chart, used twice in the same namespace.
+#
+# A retrieval stack needs two of these — an embedder and a reranker — and they differ in the
+# checkpoint, the flags and nothing else. So the chart takes a preset name rather than a
+# checkpoint, and `name` is what keeps the two releases' objects apart.
+#
+# `name` is REQUIRED and has no default on purpose. Two releases of this chart in one namespace
+# with the same name would fight over the same Service, Secret, ConfigMap and PVC, and the
+# symptom — one endpoint serving the other's model — is invisible in a render.
+name: ""
+
+# Which preset below to serve. Also required: there is no sensible default when the answer
+# decides whether this process is an embedder or a reranker.
+model:
+  preset: ""
+  # Where the weights are fetched from, once, at first boot, against the hashes below.
+  endpoint: https://huggingface.co
+  # Where the verified weights land, and what the server is pointed at.
+  dir: /models/current
+
+  # ---------------------------------------------------------------------------
+  # The vetted set. Every entry is open-weights, licensed for commercial
+  # self-hosting, carries `model.safetensors` (the only format this backend
+  # loads — `BAAI/bge-m3` is absent for that reason and no other), and names
+  # every file it may load by sha256.
+  #
+  # `licence` is rendered into the attested ConfigMap beside the hashes, so the
+  # terms a tenant is serving under are in the deployment's own evidence rather
+  # than only on a listing page they saw once.
+  #
+  # Build a new entry with `scripts/model-weights-manifest.py <repo>`.
+  # ---------------------------------------------------------------------------
+  presets:
+    bge-large-en-v1.5:
+      task: embed
+      id: bge-large-en-v1.5
+      title: BGE Large EN v1.5
+      licence: MIT
+      # The width this checkpoint really returns. The vector field of the
+      # collection is created from it and cannot be re-sized once the
+      # collection holds anything.
+      dimensions: 1024
+      # Read from the checkpoint's own 1_Pooling/config.json. Named here so a
+      # reader does not have to open it.
+      pooling: cls
+      # The model's own ceiling. A chunk longer than this is truncated by the
+      # server, which is why `--auto-truncate` is not optional.
+      maxInputTokens: 512
+      # Measured, in a container with the limit named, on 2026-11-22. The batch
+      # ceiling is not a throughput preference here: the backend warms up by
+      # pushing a full batch through the model, and the activation it allocates
+      # for that goes as the square of the sequence length. A 512-token model can
+      # therefore take the wide batch, and the two 8192-token checkpoints below
+      # cannot — see their notes.
+      #
+      # Ready at a 3Gi limit, cgroup peak 2.98 GiB. 4Gi is the declaration.
+      sizing:
+        maxBatchTokens: 16384
+        maxClientBatchSize: 32
+        resources:
+          cpu: "2"
+          memory: 4Gi
+      weights:
+        repo: BAAI/bge-large-en-v1.5
+        revision: d4aa6901d3a41ba39fb536a557fa166f842b0e09
+        totalBytes: 1341561506
+        files:
+          - path: 1_Pooling/config.json
+            size: 191
+            sha256: e54c164a07274f2eb45bb724f54a79d1efcc90c41573887cd9a29aeee0597352
+          - path: config.json
+            size: 779
+            sha256: 446712fac367857b4b1302762fe1cd7bfa8b3c4b77b4dc5d77c4025407660896
+          - path: config_sentence_transformers.json
+            size: 124
+            sha256: 940d5f50db195fa6e5e6a4f122c095f77880de259d74b14a65779ed48bdd7c56
+          - path: model.safetensors
+            size: 1340616616
+            sha256: 45e1954914e29bd74080e6c1510165274ff5279421c89f76c418878732f64ae7
+          - path: modules.json
+            size: 349
+            sha256: 84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf
+          - path: sentence_bert_config.json
+            size: 52
+            sha256: 84e39fda68ccbff05bfa723ae9c0e70e23e2ec373b76e0f8c6e71af72a693cbf
+          - path: special_tokens_map.json
+            size: 125
+            sha256: b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3
+          - path: tokenizer.json
+            size: 711396
+            sha256: d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66
+          - path: tokenizer_config.json
+            size: 366
+            sha256: 9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3
+          - path: vocab.txt
+            size: 231508
+            sha256: 07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3
+
+    arctic-embed-l-v2.0:
+      task: embed
+      id: snowflake-arctic-embed-l-v2.0
+      title: Snowflake Arctic Embed L v2.0
+      licence: Apache-2.0
+      dimensions: 1024
+      pooling: cls
+      # Sixteen times the English model's window, which is what makes a whole
+      # section of a document one chunk instead of twelve.
+      maxInputTokens: 8192
+      # Measured 2026-11-22, and this is where the obvious number was wrong.
+      # At `--max-batch-tokens 16384` the warm-up allocates attention for a
+      # 16384-token batch over a 24-layer XLM-R large and the process is
+      # OOMKilled under an 8Gi limit — three seconds in, before it ever serves a
+      # request, which a render test and a readiness probe both miss. At 2048 it
+      # is ready in 8 s with a cgroup peak of 5.72 GiB.
+      #
+      # What the smaller budget costs: more micro-batches per reindex, which is
+      # a few seconds on a corpus of this size. What it buys: a component that
+      # starts.
+      sizing:
+        maxBatchTokens: 2048
+        maxClientBatchSize: 32
+        resources:
+          cpu: "2"
+          memory: 6Gi
+      weights:
+        repo: Snowflake/snowflake-arctic-embed-l-v2.0
+        revision: ac6544c8a46e00af67e330e85a9028c66b8cfd9a
+        totalBytes: 2293220551
+        files:
+          - path: 1_Pooling/config.json
+            size: 297
+            sha256: 13e69897522ee8255104483ed9f219465d1be3936654a54a318758738052789e
+          - path: config.json
+            size: 818
+            sha256: 706f5d1eb9ddf64b5d3067c562b893b80ad1022db7f68c20eb07ff24d33b6c15
+          - path: config_sentence_transformers.json
+            size: 203
+            sha256: e4037d7ad09d5c33b4c8b132e485f2fc0866707688ce46d2c642f066be1d3bd4
+          - path: model.safetensors
+            size: 2271064456
+            sha256: 21bf1a120b1c6562aeec379dfa9039b0d360591c784cb1c6786e87256b738ee1
+          - path: modules.json
+            size: 349
+            sha256: 84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf
+          - path: sentencepiece.bpe.model
+            size: 5069051
+            sha256: cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865
+          - path: special_tokens_map.json
+            size: 964
+            sha256: 8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835
+          - path: tokenizer.json
+            size: 17083074
+            sha256: 39feb9863a378165ab9c5c689047203d789422966c0c58721c5309fd039a8edc
+          - path: tokenizer_config.json
+            size: 1339
+            sha256: cb058b4c5c0c08738eb028c2ae82ed55cd84ce8999ece76b13472af80f0f77f1
+
+    bge-reranker-v2-m3:
+      task: rerank
+      id: bge-reranker-v2-m3
+      title: BGE Reranker v2 M3
+      licence: Apache-2.0
+      # A cross-encoder returns a score, not a vector. Declared zero so the
+      # chart can refuse a reranker where an embedder was meant.
+      dimensions: 0
+      # Not passed to the server: pooling is a property of an embedding model,
+      # and the backend infers a classifier head from the checkpoint's config.
+      pooling: ""
+      maxInputTokens: 8192
+      # Measured 2026-11-22. Same shape as the Arctic embedder above and for the
+      # same reason — 8192-token XLM-R large: OOMKilled at an 8Gi limit with
+      # `--max-batch-tokens 16384`, ready in 9 s at 2048 with a cgroup peak of
+      # 4.67 GiB. Declared 6Gi rather than 5Gi: 5Gi survived with 330 MiB to
+      # spare, which is not headroom.
+      sizing:
+        maxBatchTokens: 2048
+        maxClientBatchSize: 32
+        resources:
+          cpu: "2"
+          memory: 6Gi
+      weights:
+        repo: BAAI/bge-reranker-v2-m3
+        revision: 953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e
+        totalBytes: 2293242108
+        files:
+          - path: config.json
+            size: 795
+            sha256: 13dcd6c31d9fec9d1d8e158702072f62d7fa7d312a64b9fe057bec9a08cfe41a
+          - path: model.safetensors
+            size: 2271071852
+            sha256: d9e3e081faff1eefb84019509b2f5558fd74c1a05a2c7db22f74174fcedb5286
+          - path: sentencepiece.bpe.model
+            size: 5069051
+            sha256: cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865
+          - path: special_tokens_map.json
+            size: 964
+            sha256: 8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835
+          - path: tokenizer.json
+            size: 17098273
+            sha256: 69564b696052886ed0ac63fa393e928384e0f8caada38c1f4864a9bfbf379c15
+          - path: tokenizer_config.json
+            size: 1173
+            sha256: 7e4c1cc848840aeccdd763458c18dd525eb0f795c992e00ebe9c28554e7db2d4
+
+# Referenced by digest, not by tag. `cpu-1.8` is a release tag the publisher could rebuild, and
+# a rebuilt tag replaces the software while leaving the manifests — and so the digest the
+# deployment attests to — unchanged. The tag stays beside it so a human can see which release
+# this is.
+image:
+  registry: ghcr.io
+  repository: huggingface/text-embeddings-inference
+  digest: sha256:8de25e75ce39617f17f2f6c77d60a4f75b65e779ed5005420eb1400072a15c1c
+  tag: cpu-1.8
+  pullPolicy: IfNotPresent
+
+# The fetcher is stdlib Python and the serving image carries no interpreter, so the init
+# container runs a plain Python base. Two images, both pinned by digest in the listing.
+fetcher:
+  image:
+    registry: docker.io
+    repository: library/python
+    digest: sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
+    tag: 3.12.16-slim-bookworm
+    pullPolicy: IfNotPresent
+  # Measured, and the obvious number was wrong: a streaming writer's resident set is not its
+  # container's memory demand, because the page cache of a file being written is charged to the
+  # cgroup. 512Mi is 2.6x the measured peak of the releasing fetcher
+  # (charts/swarm-model-server/README.md has the table).
+  resources:
+    requests:
+      cpu: "1"
+      memory: 512Mi
+      nvidia.com/gpu: "0"
+    limits:
+      cpu: "1"
+      memory: 512Mi
+      nvidia.com/gpu: "0"
+
+# The endpoint authenticates. It is reachable only from inside the namespace and is on no
+# Ingress, but an unauthenticated inference endpoint is an unauthenticated inference endpoint,
+# and the caller has to carry a key for its OpenAI client anyway. Required: the chart refuses
+# to render without one.
+apiKey: ""
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+# Holds the verified weights. Survives a restart, so a bounced pod re-hashes a couple of GiB in
+# under a minute instead of downloading them again. Left empty, the chart sizes it from the
+# preset's own manifest — every byte plus a tenth, rounded up to whole GiB — because a listing
+# whose model is a parameter has no one right number to write here.
+persistence:
+  enabled: true
+  size: ""
+  storageClass: ""
+  accessMode: ReadWriteOnce
+
+replicaCount: 1
+
+# Left empty, the CPU and memory come from the selected preset's measured `sizing` — which is
+# the only place they can be right, because the demand is a property of the checkpoint's
+# sequence length and not of this chart. Set it to override, and own the measurement.
+#
+# The explicit `nvidia.com/gpu: 0` the chart renders either way is what stops a GPU cluster
+# space's LimitRange from defaulting a card into this pod — a pod holding the card this way is
+# a pod the generation engine cannot then be scheduled beside.
+resources: {}
+
+podSecurityContext: {}
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  capabilities:
+    drop: [ALL]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

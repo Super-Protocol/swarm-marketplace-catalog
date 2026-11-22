@@ -1,0 +1,1704 @@
+---
+# Source: confidential-rag/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: confidential-rag-secrets
+  labels:
+    app.kubernetes.io/name: confidential-rag
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+type: Opaque
+stringData:
+  console-password: "ACCESS-PASSWORD-FOR-THE-GOLDEN"
+  console-session-key: "SESSION-SIGNING-KEY-FOR-THE-GOLDEN-0123"
+  inference-api-key: "INFERENCE-KEY-FOR-THE-GOLDEN"
+  embeddings-api-key: "INFERENCE-KEY-FOR-THE-GOLDEN"
+  reranker-api-key: "INFERENCE-KEY-FOR-THE-GOLDEN"
+  vector-store-password: "VECTOR-STORE-PASSWORD-FOR-THE-GOLDEN"
+  # The resolved `corpus` slot. For a gated dataset this carries no credential at all — a local
+  # address, a database name and the literal user `gateway`, which the gate replaces with the
+  # publisher's own before it forwards. For an ungated one it carries the owner's read-only
+  # credentials, which is the other reason it is here.
+  corpus-binding.json: "[{\"dataset\":\"acme-internal-knowledge-base\",\"title\":\"Acme Internal Knowledge Base\", \"interface\":\"clickhouse-http/v1\",\"connection\":{\"host\":\"cr-gatekeeper-egress\",\"port\":9500, \"database\":\"docs\",\"username\":\"gateway\",\"tls\":false}}]"
+---
+# Source: confidential-rag/templates/configmap-app.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: confidential-rag-app
+  labels:
+    app.kubernetes.io/name: confidential-rag
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+data:
+  console.py: |
+    #!/usr/bin/env python3
+    """The deployment's front door: a sign-in form, a session cookie, and a chat over the corpus.
+    
+    Why this exists rather than upstream's playground: upstream's production container proxies the
+    collection and document endpoints to `ingestor-server`, the one service this port has not
+    substituted yet, so shipping it would publish a console whose document panel cannot work. This
+    serves the part that does work — ask a question, read the answer, see its citations — plus the
+    two things upstream has no place for: who is allowed in, and which model and which embedder
+    touched the data.
+    
+    Three things here are not incidental.
+    
+    **The credential is collected with a form and carried in a cookie.** HTTP Basic does not survive
+    a single-page console: the manifest and the icons are fetched in a mode where the browser sends
+    no credentials, so the prompt returns for ever, and ingress-nginx strips `Authorization` when it
+    performs basic auth itself, so the app behind it authenticates nobody.
+    
+    **The session is a signed assertion, not a row.** `HMAC-SHA256(key, "v1|<expiry>")`, verified in
+    constant time. No store to run, no state to lose on a restart, and nothing per-deployment in any
+    rendered object: the key is in a Secret, which the platform lifts out before the evidence
+    snapshot is taken.
+    
+    **Only `/healthz` is outside the session.** It reports liveness and nothing about the corpus,
+    because it is reachable from the public hostname by anyone who finds the name.
+    
+    stdlib plus what the rag-server image already carries (fastapi, httpx) — this runs in that image,
+    from a ConfigMap the cloud digests and signs, so the code serving the door is in the evidence
+    beside the code answering the questions.
+    """
+    
+    from __future__ import annotations
+    
+    import hashlib
+    import hmac
+    import json
+    import logging
+    import os
+    import secrets
+    import time
+    
+    import httpx
+    from fastapi import FastAPI, Form, Request, Response
+    from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+    
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
+    logger = logging.getLogger("console")
+    
+    PASSWORD = os.environ.get("CONSOLE_PASSWORD", "")
+    SESSION_KEY = os.environ.get("CONSOLE_SESSION_KEY", "").encode()
+    SESSION_TTL = int(os.environ.get("CONSOLE_SESSION_TTL_SECONDS", 12 * 3600))
+    COOKIE = "crag_session"
+    
+    RAG_URL = os.environ.get("RAG_SERVER_URL", "http://127.0.0.1:8081").rstrip("/")
+    SYNC_URL = os.environ.get("CORPUS_SYNC_URL", "").rstrip("/")
+    COLLECTION = os.environ.get("COLLECTION_NAME", "documents")
+    UI_DIR = os.environ.get("UI_DIR", "/opt/console")
+    
+    # What the deployment says about itself. Every value is rendered from the listing's own
+    # parameters, so the panel a user reads and the digest the cloud signed describe the same thing.
+    ABOUT = {
+        "title": os.environ.get("CONSOLE_TITLE", "Confidential RAG"),
+        "generationModel": os.environ.get("ABOUT_GENERATION_MODEL", ""),
+        "generationLicence": os.environ.get("ABOUT_GENERATION_LICENCE", ""),
+        "embeddingModel": os.environ.get("ABOUT_EMBEDDING_MODEL", ""),
+        "embeddingLicence": os.environ.get("ABOUT_EMBEDDING_LICENCE", ""),
+        "rerankerModel": os.environ.get("ABOUT_RERANKER_MODEL", ""),
+        "rerankerLicence": os.environ.get("ABOUT_RERANKER_LICENCE", ""),
+        "collection": COLLECTION,
+        "sourceRepo": os.environ.get("ABOUT_SOURCE_REPO", ""),
+        "expectedDigest": os.environ.get("ABOUT_EXPECTED_DIGEST", ""),
+    }
+    
+    if not PASSWORD or not SESSION_KEY:
+        # Refuse to start rather than serve an open door. A console that came up without a
+        # password would pass every probe in the chart and publish the corpus to the internet.
+        raise SystemExit(
+            "console: CONSOLE_PASSWORD and CONSOLE_SESSION_KEY are required; refusing to serve "
+            "an unauthenticated interface on a public hostname"
+        )
+    
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    
+    
+    def issue(ttl: int = SESSION_TTL) -> str:
+        expiry = int(time.time()) + ttl
+        payload = f"v1|{expiry}"
+        mac = hmac.new(SESSION_KEY, payload.encode(), hashlib.sha256).hexdigest()
+        return f"{payload}|{mac}"
+    
+    
+    def valid(token: str | None) -> bool:
+        if not token:
+            return False
+        parts = token.split("|")
+        if len(parts) != 3 or parts[0] != "v1":
+            return False
+        payload, mac = f"{parts[0]}|{parts[1]}", parts[2]
+        expected = hmac.new(SESSION_KEY, payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, mac):
+            return False
+        try:
+            return int(parts[1]) > time.time()
+        except ValueError:
+            return False
+    
+    
+    def signed_in(request: Request) -> bool:
+        return valid(request.cookies.get(COOKIE))
+    
+    
+    def page(name: str) -> str:
+        with open(os.path.join(UI_DIR, name), encoding="utf-8") as handle:
+            return handle.read()
+    
+    
+    LOGIN_PAGE = """<!doctype html>
+    <html lang="en"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>__TITLE__</title>
+    <style>
+     :root{color-scheme:dark}
+     body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0e14;color:#e6e6e6;
+          font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+     form{width:min(92vw,22rem);padding:2rem;background:#141925;border:1px solid #232a3a;border-radius:12px}
+     h1{margin:0 0 .25rem;font-size:1.15rem}
+     p{margin:0 0 1.5rem;color:#8b94a7;font-size:.86rem}
+     label{display:block;margin-bottom:.4rem;font-size:.8rem;color:#8b94a7}
+     input{width:100%;box-sizing:border-box;padding:.6rem .7rem;background:#0b0e14;color:#e6e6e6;
+           border:1px solid #2b3448;border-radius:8px;font-size:.95rem}
+     button{margin-top:1.1rem;width:100%;padding:.65rem;border:0;border-radius:8px;background:#3b82f6;
+            color:#fff;font-size:.95rem;font-weight:600;cursor:pointer}
+     .err{margin:.9rem 0 0;color:#f87171;font-size:.84rem}
+    </style></head>
+    <body><form method="post" action="/login">
+     <h1>__TITLE__</h1>
+     <p>This deployment answers questions over your own documents. Sign in to continue.</p>
+     <label for="password">Access password</label>
+     <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
+     <button type="submit">Sign in</button>
+     __ERROR__
+    </form></body></html>
+    """
+    
+    
+    def login_page(error: str = "") -> HTMLResponse:
+        markup = LOGIN_PAGE.replace("__TITLE__", ABOUT["title"])
+        markup = markup.replace(
+            "__ERROR__", '<p class="err">That password was not accepted.</p>' if error else ""
+        )
+        # 401 on a failed attempt, 200 on a first visit: a monitor should be able to tell the
+        # difference without parsing the body.
+        return HTMLResponse(markup, status_code=401 if error else 200)
+    
+    
+    @app.get("/healthz")
+    async def healthz() -> JSONResponse:
+        """Liveness, and nothing about the corpus. Reachable by anybody who finds the hostname."""
+        return JSONResponse({"status": "ok"})
+    
+    
+    @app.get("/")
+    async def root(request: Request) -> HTMLResponse:
+        if not signed_in(request):
+            return login_page()
+        return HTMLResponse(page("index.html"))
+    
+    
+    @app.post("/login")
+    async def login(response: Response, password: str = Form("")) -> Response:
+        # Constant-time, so a wrong answer takes as long as a right one.
+        if not hmac.compare_digest(password.encode(), PASSWORD.encode()):
+            # A deliberate, fixed delay. Not rate limiting — one process cannot do that honestly —
+            # but enough that an online guess against this door is not free.
+            time.sleep(0.5)
+            return login_page(error="bad")
+        redirect = RedirectResponse("/", status_code=303)
+        redirect.set_cookie(
+            COOKIE,
+            issue(),
+            max_age=SESSION_TTL,
+            httponly=True,
+            # The deployment is served over TLS by the cloud's gateway and on no other scheme.
+            secure=True,
+            samesite="lax",
+            path="/",
+        )
+        return redirect
+    
+    
+    @app.post("/logout")
+    async def logout() -> Response:
+        redirect = RedirectResponse("/", status_code=303)
+        redirect.delete_cookie(COOKIE, path="/")
+        return redirect
+    
+    
+    @app.get("/api/about")
+    async def about(request: Request) -> JSONResponse:
+        if not signed_in(request):
+            return JSONResponse({"error": "not signed in"}, status_code=401)
+        return JSONResponse(ABOUT)
+    
+    
+    @app.get("/api/status")
+    async def status(request: Request) -> JSONResponse:
+        """What the corpus and the pipeline are doing, as the deployment itself sees it."""
+        if not signed_in(request):
+            return JSONResponse({"error": "not signed in"}, status_code=401)
+    
+        out: dict[str, object] = {}
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            if SYNC_URL:
+                try:
+                    answer = await client.get(f"{SYNC_URL}/status")
+                    out["corpus"] = answer.json()
+                except Exception as error:  # noqa: BLE001 — the panel reports, it does not fail
+                    out["corpus"] = {"error": str(error)}
+            try:
+                # `check_dependencies` is what makes this answer about the four endpoints rather
+                # than about the server's own process — without it the report is three empty
+                # lists, which is a panel that always says nothing.
+                answer = await client.get(
+                    f"{RAG_URL}/v1/health", params={"check_dependencies": "true"}
+                )
+                out["pipeline"] = answer.json()
+            except Exception as error:  # noqa: BLE001
+                out["pipeline"] = {"error": str(error)}
+        return JSONResponse(out)
+    
+    
+    @app.post("/api/ask")
+    async def ask(request: Request) -> Response:
+        """Put a question to the ported pipeline: retrieve, rerank, generate, cite.
+    
+        Proxied rather than called from the browser, for one reason that matters: the rag-server is
+        on no Ingress and has no authentication of its own, so the only thing standing between the
+        retriever and the internet is this session check. A browser-side call would need the
+        rag-server published.
+        """
+        if not signed_in(request):
+            return JSONResponse({"error": "not signed in"}, status_code=401)
+    
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return JSONResponse({"error": "expected a JSON body"}, status_code=400)
+    
+        question = (body.get("question") or "").strip()
+        if not question:
+            return JSONResponse({"error": "question is required"}, status_code=400)
+        if len(question) > 8000:
+            return JSONResponse({"error": "question is too long"}, status_code=413)
+    
+        payload = {
+            "messages": [{"role": "user", "content": question}],
+            "use_knowledge_base": True,
+            "collection_names": [COLLECTION],
+            "enable_citations": True,
+            "stream": True,
+        }
+    
+        async def relay():
+            timeout = httpx.Timeout(10.0, read=300.0)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream("POST", f"{RAG_URL}/v1/generate", json=payload) as answer:
+                    if answer.status_code != 200:
+                        detail = (await answer.aread()).decode("utf-8", "replace")[:2000]
+                        yield f"data: {json.dumps({'error': detail})}\n\n".encode()
+                        return
+                    async for chunk in answer.aiter_raw():
+                        yield chunk
+    
+        return StreamingResponse(
+            relay(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+    
+    
+    # A nonce is generated per process and is not used for anything a reader should trust; it exists
+    # so a restarted console is distinguishable in its own logs.
+    logger.info("console up (instance %s)", secrets.token_hex(4))
+    
+  index.html: |
+    <!doctype html>
+    <!--
+      The console, behind the session cookie.
+    
+      Three panes, and the two on the right are the point of the listing as much as the chat is:
+      "Who touched your data" names the generation model, the embedder and the reranker with their
+      licences, and "Your corpus" shows the gate's own verdict on the last read. When a data owner
+      withdraws approval, this is where it is visible — the corpus pane turns red and quotes the
+      refusal, rather than questions silently getting worse.
+    
+      No build step, no dependency, no network except this deployment: the whole interface is this
+      file, and it is rendered into a ConfigMap the cloud digests and signs.
+    -->
+    <html lang="en"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Confidential RAG</title>
+    <style>
+     :root{color-scheme:dark}
+     *{box-sizing:border-box}
+     body{margin:0;height:100vh;display:flex;flex-direction:column;background:#0b0e14;color:#e6e6e6;
+          font:15px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+     header{display:flex;align-items:center;gap:1rem;padding:.8rem 1.2rem;border-bottom:1px solid #1d2432;
+            background:#0f1320}
+     header h1{margin:0;font-size:1rem;font-weight:650;letter-spacing:.01em}
+     header .spacer{flex:1}
+     header form{margin:0}
+     header button{background:none;border:1px solid #2b3448;color:#8b94a7;border-radius:7px;
+                   padding:.3rem .7rem;font-size:.8rem;cursor:pointer}
+     main{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 20rem;min-height:0}
+     @media (max-width:860px){main{grid-template-columns:1fr}aside{display:none}}
+     #chat{display:flex;flex-direction:column;min-height:0}
+     #log{flex:1;overflow-y:auto;padding:1.2rem;display:flex;flex-direction:column;gap:1rem}
+     .msg{max-width:52rem}
+     .msg.you{align-self:flex-end;background:#1b2436;border:1px solid #273349;
+              border-radius:12px 12px 2px 12px;padding:.6rem .9rem;white-space:pre-wrap}
+     .msg.answer{white-space:pre-wrap}
+     .cites{margin-top:.7rem;border-top:1px solid #1d2432;padding-top:.6rem}
+     .cites h3{margin:0 0 .4rem;font-size:.74rem;text-transform:uppercase;letter-spacing:.07em;color:#8b94a7}
+     .cite{margin-bottom:.5rem;font-size:.84rem}
+     .cite .src{color:#60a5fa;word-break:break-all}
+     .cite .txt{color:#9aa4b8;display:block;max-height:4.6em;overflow:hidden}
+     .err{color:#f87171;font-size:.88rem;white-space:pre-wrap}
+     form#askbox{display:flex;gap:.6rem;padding:1rem 1.2rem;border-top:1px solid #1d2432;background:#0f1320}
+     form#askbox input{flex:1;padding:.7rem .8rem;background:#0b0e14;color:#e6e6e6;border:1px solid #2b3448;
+                       border-radius:9px;font-size:.95rem}
+     form#askbox button{padding:.7rem 1.2rem;border:0;border-radius:9px;background:#3b82f6;color:#fff;
+                        font-weight:600;cursor:pointer}
+     form#askbox button[disabled]{background:#2b3448;cursor:default}
+     aside{border-left:1px solid #1d2432;overflow-y:auto;padding:1.1rem;background:#0d111b}
+     aside section{margin-bottom:1.6rem}
+     aside h2{margin:0 0 .6rem;font-size:.74rem;text-transform:uppercase;letter-spacing:.07em;color:#8b94a7}
+     .row{display:flex;justify-content:space-between;gap:.6rem;font-size:.84rem;padding:.25rem 0;
+          border-bottom:1px solid #161c28}
+     .row span:first-child{color:#8b94a7;flex:0 0 auto}
+     .row span:last-child{text-align:right;word-break:break-word}
+     .lic{font-size:.74rem;color:#6b7488}
+     .pill{display:inline-block;padding:.1rem .45rem;border-radius:999px;font-size:.7rem;font-weight:650}
+     .ok{background:#143324;color:#4ade80}
+     .bad{background:#3a1620;color:#f87171}
+     .wait{background:#2a2410;color:#fbbf24}
+     code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.8rem}
+    </style></head>
+    <body>
+    <header>
+      <h1 id="title">Confidential RAG</h1>
+      <span class="spacer"></span>
+      <form method="post" action="/logout"><button type="submit">Sign out</button></form>
+    </header>
+    <main>
+      <div id="chat">
+        <div id="log">
+          <div class="msg answer" style="color:#8b94a7">
+            Ask a question about the documents this deployment is bound to. Answers are generated
+            only from what the retriever found, and every one carries its citations.
+          </div>
+        </div>
+        <form id="askbox" autocomplete="off">
+          <input id="q" name="q" placeholder="Ask a question about your documents…" required>
+          <button id="send" type="submit">Ask</button>
+        </form>
+      </div>
+      <aside>
+        <section>
+          <h2>Who touched your data</h2>
+          <div id="about"></div>
+        </section>
+        <section>
+          <h2>Your corpus</h2>
+          <div id="corpus"></div>
+        </section>
+        <section>
+          <h2>Pipeline</h2>
+          <div id="pipeline"></div>
+        </section>
+      </aside>
+    </main>
+    <script>
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const row = (k, v) => `<div class="row"><span>${esc(k)}</span><span>${v}</span></div>`;
+    
+    async function about() {
+      const r = await fetch("/api/about");
+      if (!r.ok) { location.reload(); return; }
+      const a = await r.json();
+      $("title").textContent = a.title || "Confidential RAG";
+      document.title = a.title || "Confidential RAG";
+      const model = (name, licence) => name
+        ? `${esc(name)}<br><span class="lic">${esc(licence || "licence not declared")}</span>`
+        : "<span class='lic'>not configured</span>";
+      $("about").innerHTML =
+        row("Generation", model(a.generationModel, a.generationLicence)) +
+        row("Embedding", model(a.embeddingModel, a.embeddingLicence)) +
+        row("Reranking", model(a.rerankerModel, a.rerankerLicence)) +
+        row("Collection", `<code>${esc(a.collection)}</code>`) +
+        (a.expectedDigest ? row("Listing digest", `<code>${esc(a.expectedDigest.slice(0, 16))}…</code>`) : "");
+    }
+    
+    function corpusPane(c) {
+      if (!c || c.error) {
+        return `<div class="err">${esc((c && c.error) || "no corpus service")}</div>`;
+      }
+      const verdictPill = { admitted: "ok", refused: "bad", pending: "wait" }[c.verdict] || "wait";
+      let html = row("Last read", `<span class="pill ${verdictPill}">${esc(c.verdict || "pending")}</span>`);
+      if (c.message) html += row("", `<span class="lic">${esc(c.message)}</span>`);
+      html += row("Indexed chunks", esc(c.chunks ?? "—"));
+      html += row("Documents", esc(c.documents ?? "—"));
+      if (c.lastSuccessAt) html += row("Last success", esc(c.lastSuccessAt));
+      for (const s of c.sources || []) {
+        html += row(s.dataset || "source",
+          `<code>${esc(s.database)}.${esc(s.table)}</code><br><span class="lic">${
+            s.gated ? "through the gatekeeper" : "direct credentials"}</span>`);
+      }
+      return html;
+    }
+    
+    function pipelinePane(p) {
+      if (!p || p.error) return `<div class="err">${esc((p && p.error) || "unavailable")}</div>`;
+      const services = [].concat(p.nim || [], p.databases || [], p.object_storage || []);
+      if (!services.length) return row("Health", `<span class="pill ok">reachable</span>`);
+      return services.map((s) => {
+        const good = String(s.status || "").toLowerCase() === "healthy";
+        return row(s.service || "service",
+          `<span class="pill ${good ? "ok" : "bad"}">${esc(s.status || "?")}</span>`);
+      }).join("");
+    }
+    
+    async function status() {
+      try {
+        const r = await fetch("/api/status");
+        if (!r.ok) return;
+        const s = await r.json();
+        $("corpus").innerHTML = corpusPane(s.corpus);
+        $("pipeline").innerHTML = pipelinePane(s.pipeline);
+      } catch (e) { /* the panel reports, it does not break the chat */ }
+    }
+    
+    function citations(cites) {
+      if (!cites || !cites.length) return "";
+      const items = cites.map((c) => {
+        const src = c.source || c.document_name || "document";
+        const txt = (c.content || (c.metadata && c.metadata.description) || "").slice(0, 320);
+        return `<div class="cite"><span class="src">${esc(src)}</span>
+                <span class="txt">${esc(txt)}</span></div>`;
+      }).join("");
+      return `<div class="cites"><h3>Citations</h3>${items}</div>`;
+    }
+    
+    $("askbox").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const question = $("q").value.trim();
+      if (!question) return;
+      $("q").value = "";
+      $("send").disabled = true;
+    
+      const mine = document.createElement("div");
+      mine.className = "msg you";
+      mine.textContent = question;
+      $("log").appendChild(mine);
+    
+      const answer = document.createElement("div");
+      answer.className = "msg answer";
+      answer.textContent = "…";
+      $("log").appendChild(answer);
+      $("log").scrollTop = $("log").scrollHeight;
+    
+      let text = "";
+      let cites = null;
+      try {
+        const response = await fetch("/api/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question }),
+        });
+        if (response.status === 401) { location.reload(); return; }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          // Server-sent events: one event per blank-line-delimited block.
+          let cut;
+          while ((cut = buffer.indexOf("\n\n")) >= 0) {
+            const block = buffer.slice(0, cut);
+            buffer = buffer.slice(cut + 2);
+            for (const line of block.split("\n")) {
+              if (!line.startsWith("data:")) continue;
+              const body = line.slice(5).trim();
+              if (!body || body === "[DONE]") continue;
+              let event;
+              try { event = JSON.parse(body); } catch (e) { continue; }
+              if (event.error) {
+                answer.className = "msg err";
+                answer.textContent = typeof event.error === "string"
+                  ? event.error : JSON.stringify(event.error);
+                continue;
+              }
+              const choice = (event.choices || [])[0] || {};
+              const piece = (choice.message && choice.message.content) ||
+                            (choice.delta && choice.delta.content) || "";
+              if (piece) { text += piece; answer.textContent = text; }
+              if (event.citations && event.citations.results) cites = event.citations.results;
+              $("log").scrollTop = $("log").scrollHeight;
+            }
+          }
+        }
+        if (!text && answer.className === "msg answer") {
+          answer.className = "msg err";
+          answer.textContent = "The pipeline returned no answer. The corpus panel on the right " +
+            "says whether the documents are reachable.";
+        } else if (cites) {
+          answer.insertAdjacentHTML("beforeend", citations(cites));
+        }
+      } catch (error) {
+        answer.className = "msg err";
+        answer.textContent = String(error);
+      } finally {
+        $("send").disabled = false;
+        $("q").focus();
+        status();
+      }
+    });
+    
+    about();
+    status();
+    // Every refresh probes the four endpoints behind the pipeline, so this is a
+    // slower cadence than a cosmetic poll would want.
+    setInterval(status, 30000);
+    </script>
+    </body></html>
+    
+  corpus_sync.py: |
+    #!/usr/bin/env python3
+    """Index the bound document source into the vector store, and report what the gate decided.
+    
+    This is the half of the listing that the gatekeeper story actually runs through, so it is worth
+    being explicit about what it is and is not.
+    
+    **What it is.** A loop. Read the document rows from whatever the deployment's `corpus` slot is
+    bound to, chunk them, embed them with the deployment's own embedder, and write them into the
+    collection the rag-server retrieves from. Then wait, re-read the source's own count and
+    high-water mark, and re-index only when those moved.
+    
+    **Why it reads ClickHouse over HTTP and not object storage.** Because that is the only thing
+    the marketplace gatekeeper can carry. The gate injects `x-clickhouse-user` / `x-clickhouse-key`
+    into every request it forwards and rewrites the database the caller named, so a gated dataset
+    reaches this deployment as a plain local address with no credential in it at all — which is the
+    whole point: a consumer who reads every object in their own namespace learns the shape of the
+    data and no way to reach it outside the gate. A document corpus in a bucket is not gateable
+    today, whatever a dataset's `access.mode` says.
+    
+    **Why the verdict is a first-class output and not a log line.** Withdrawing approval is the
+    thing the gate exists to do, and from inside the deployment it looks like an HTTP error on the
+    next read. If that only reached the log, a tenant whose access was cut would see answers quietly
+    get worse. So every attempt's verdict — `admitted`, `refused`, or `pending` — is served on
+    `/status`, with the gate's own message, and the console shows it.
+    
+    **Why the collection is created through the rag-server's own code.** `MilvusVDB` and its
+    `get_langchain_vectorstore` decide the field names, the index parameters, the token derivation
+    and the search parameters. Writing the collection with anything else would mean this file and
+    the retriever agreeing about the schema by coincidence; importing the retriever's own path means
+    they cannot disagree. It is also what keeps `nv-ingest` out of the picture: upstream's
+    `create_collection` needs `nv_ingest_client`, and `langchain_milvus` creating the collection
+    from the first batch is the documented alternative the rag-server's citation code already
+    handles ("if langchain is used for ingestion, the source is a string").
+    """
+    
+    from __future__ import annotations
+    
+    import json
+    import logging
+    import os
+    import threading
+    import time
+    import urllib.parse
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from typing import Any
+    
+    import requests
+    from langchain_core.documents import Document
+    
+    from nvidia_rag.utils.configuration import NvidiaRAGConfig
+    from nvidia_rag.utils.embedding import get_embedding_model
+    from nvidia_rag.utils.vdb.milvus.milvus_vdb import MilvusVDB
+    
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    logger = logging.getLogger("corpus-sync")
+    
+    COLLECTION = os.environ.get("COLLECTION_NAME", "documents")
+    BINDING_PATH = os.environ.get("CORPUS_BINDING_FILE", "/etc/corpus/binding.json")
+    TABLE = os.environ.get("CORPUS_TABLE", "documents")
+    COL_ID = os.environ.get("CORPUS_ID_COLUMN", "doc_id")
+    COL_TITLE = os.environ.get("CORPUS_TITLE_COLUMN", "title")
+    COL_TEXT = os.environ.get("CORPUS_TEXT_COLUMN", "text")
+    COL_UPDATED = os.environ.get("CORPUS_UPDATED_COLUMN", "updated_at")
+    CHUNK_CHARS = int(os.environ.get("CORPUS_CHUNK_CHARS", 1800))
+    CHUNK_OVERLAP = int(os.environ.get("CORPUS_CHUNK_OVERLAP_CHARS", 200))
+    ROW_LIMIT = int(os.environ.get("CORPUS_ROW_LIMIT", 20000))
+    POLL_SECONDS = int(os.environ.get("CORPUS_POLL_SECONDS", 60))
+    BATCH = int(os.environ.get("CORPUS_EMBED_BATCH", 16))
+    STATUS_PORT = int(os.environ.get("CORPUS_STATUS_PORT", 8085))
+    HTTP_TIMEOUT = float(os.environ.get("CORPUS_HTTP_TIMEOUT", 60))
+    
+    # Everything `/status` reports, replaced wholesale under the lock after each attempt.
+    STATE: dict[str, Any] = {
+        "verdict": "pending",
+        "message": "no read attempted yet",
+        "sources": [],
+        "documents": None,
+        "chunks": None,
+        "lastAttemptAt": None,
+        "lastSuccessAt": None,
+        "collection": COLLECTION,
+    }
+    STATE_LOCK = threading.Lock()
+    
+    
+    def publish(**fields: Any) -> None:
+        with STATE_LOCK:
+            STATE.update(fields)
+    
+    
+    def now() -> str:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    
+    
+    # --------------------------------------------------------------------------------------
+    # The bound source
+    # --------------------------------------------------------------------------------------
+    
+    
+    def bindings() -> list[dict[str, Any]]:
+        """The resolved `corpus` slot, as the marketplace wrote it into the Secret.
+    
+        A slot with `multiple: true` resolves to a list. An empty or absent file is a supported
+        state and not an error: a deployment with nothing attached is a deployment waiting for its
+        data owner to approve it, which is exactly the state the gate is for.
+        """
+        try:
+            with open(BINDING_PATH, encoding="utf-8") as handle:
+                raw = handle.read().strip()
+        except FileNotFoundError:
+            return []
+        if not raw:
+            return []
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            # A single binding, or the `{count, items}` shape — accept both rather than guess.
+            if "items" in parsed and isinstance(parsed["items"], list):
+                return [item for item in parsed["items"] if isinstance(item, dict)]
+            return [parsed]
+        if isinstance(parsed, list):
+            return [item for item in parsed if isinstance(item, dict)]
+        return []
+    
+    
+    def connection(binding: dict[str, Any]) -> dict[str, Any]:
+        return binding.get("connection") or {}
+    
+    
+    def is_gated(binding: dict[str, Any]) -> bool:
+        """A gated binding carries no password, because the gate holds the publisher's own.
+    
+        `connection.host` is `<releasePrefix>-gatekeeper-egress` and `username` is the literal
+        `gateway`, which the gate replaces before it forwards. So the absence of a password is the
+        reliable signal, not the hostname.
+        """
+        return not connection(binding).get("password")
+    
+    
+    def endpoint(binding: dict[str, Any]) -> str:
+        conn = connection(binding)
+        scheme = "https" if conn.get("tls") else "http"
+        return f"{scheme}://{conn.get('host')}:{int(conn.get('port') or 8123)}/"
+    
+    
+    def query(binding: dict[str, Any], sql: str) -> list[dict[str, Any]]:
+        """One ClickHouse HTTP query, through the gate when the dataset is gated.
+    
+        The database is passed as a query parameter rather than written into the SQL: the gate
+        rewrites the database the caller named, and a name baked into the statement is a name it
+        cannot rewrite.
+        """
+        conn = connection(binding)
+        params = {"database": conn.get("database") or "default", "default_format": "JSONEachRow"}
+        headers: dict[str, str] = {"Content-Type": "text/plain; charset=utf-8"}
+        if not is_gated(binding):
+            # An ungated dataset hands over the owner's own read-only credentials.
+            headers["x-clickhouse-user"] = str(conn.get("username") or "")
+            headers["x-clickhouse-key"] = str(conn.get("password") or "")
+    
+        url = endpoint(binding) + "?" + urllib.parse.urlencode(params)
+        response = requests.post(url, data=sql.encode("utf-8"), headers=headers, timeout=HTTP_TIMEOUT)
+        if response.status_code != 200:
+            # ClickHouse and the gate both answer with a readable body. It is the most useful thing
+            # a tenant whose access was just withdrawn can be shown, so it is carried, trimmed.
+            raise RuntimeError(
+                f"{response.status_code} from {conn.get('host')}: "
+                f"{response.text.strip()[:400] or 'no message'}"
+            )
+        rows = []
+        for line in response.text.splitlines():
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+        return rows
+    
+    
+    def quote(identifier: str) -> str:
+        """A ClickHouse identifier, back-quoted. Refuses anything that is not one."""
+        if not identifier.replace("_", "").isalnum():
+            raise ValueError(
+                f"{identifier!r} is not an identifier: the table and column names come from the "
+                "listing's parameters and are not a place to build SQL from"
+            )
+        return f"`{identifier}`"
+    
+    
+    def watermark(binding: dict[str, Any]) -> tuple[int, str]:
+        """How many rows the source has and how recently it changed — two numbers, one query.
+    
+        Re-reading these is what makes the loop cheap: a corpus that has not moved is not
+        re-embedded, and a corpus that has is picked up without anybody triggering anything.
+        """
+        sql = (
+            f"SELECT count() AS rows, max({quote(COL_UPDATED)}) AS high "
+            f"FROM {quote(TABLE)}"
+        )
+        rows = query(binding, sql)
+        if not rows:
+            return 0, ""
+        return int(rows[0].get("rows") or 0), str(rows[0].get("high") or "")
+    
+    
+    def documents(binding: dict[str, Any]) -> list[dict[str, Any]]:
+        sql = (
+            f"SELECT {quote(COL_ID)} AS id, {quote(COL_TITLE)} AS title, {quote(COL_TEXT)} AS text "
+            f"FROM {quote(TABLE)} "
+            f"ORDER BY {quote(COL_UPDATED)} DESC "
+            f"LIMIT {int(ROW_LIMIT)}"
+        )
+        return query(binding, sql)
+    
+    
+    # --------------------------------------------------------------------------------------
+    # Chunking and indexing
+    # --------------------------------------------------------------------------------------
+    
+    
+    def chunks(text: str) -> list[str]:
+        """Fixed-width character chunks with an overlap, split on a boundary where one is near.
+    
+        Deliberately not a token splitter. The embedder truncates anything over its own window
+        server-side (`--auto-truncate`), the chunk width here is set from the model's window in the
+        listing, and a character split needs no tokenizer in this container — which is one fewer
+        thing that has to agree with the model being served.
+        """
+        text = (text or "").strip()
+        if not text:
+            return []
+        out: list[str] = []
+        start = 0
+        while start < len(text):
+            end = min(start + CHUNK_CHARS, len(text))
+            if end < len(text):
+                # Prefer a paragraph, then a sentence, then a word — but only if one is in the
+                # last fifth of the window, so a document without them still makes progress.
+                window = text[start:end]
+                floor = int(CHUNK_CHARS * 0.8)
+                for marker in ("\n\n", ". ", "\n", " "):
+                    cut = window.rfind(marker)
+                    if cut >= floor:
+                        end = start + cut + len(marker)
+                        break
+            out.append(text[start:end].strip())
+            if end >= len(text):
+                break
+            start = max(end - CHUNK_OVERLAP, start + 1)
+        return [chunk for chunk in out if chunk]
+    
+    
+    def vector_store():
+        """The retriever's own vector store, built through the retriever's own code path."""
+        config = NvidiaRAGConfig()
+        embedder = get_embedding_model(
+            model=config.embeddings.model_name,
+            url=config.embeddings.server_url,
+            config=config,
+        )
+        vdb = MilvusVDB(
+            collection_name=COLLECTION,
+            milvus_uri=config.vector_store.url,
+            embedding_model=embedder,
+            config=config,
+            dense_dim=config.embeddings.dimensions,
+            # CPU Milvus. GPU_CAGRA needs a card this pod does not have and must not take.
+            gpu_index=False,
+            gpu_search=False,
+            username=config.vector_store.username,
+            password=(
+                config.vector_store.password.get_secret_value()
+                if config.vector_store.password is not None
+                else ""
+            ),
+        )
+        return vdb, vdb.get_langchain_vectorstore(COLLECTION)
+    
+    
+    def index(rows: list[dict[str, Any]], binding: dict[str, Any]) -> int:
+        """Rebuild the collection from these rows. Returns the number of chunks written.
+    
+        A rebuild rather than an update, and the reason is the gate: a document the owner deleted
+        has to leave the index, and a diff against a source we may be refused access to tomorrow is
+        a diff we cannot trust. Dropping and rewriting a corpus of this size costs a minute.
+        """
+        vdb, store = vector_store()
+        conn = connection(binding)
+        dataset = binding.get("dataset") or "corpus"
+        database = conn.get("database") or "default"
+    
+        if vdb.check_collection_exists(COLLECTION):
+            logger.info("dropping the previous %s collection before the rebuild", COLLECTION)
+            vdb.delete_collections([COLLECTION])
+            # The store was built against the old collection; build it again so langchain
+            # re-creates the collection from the first batch.
+            vdb, store = vector_store()
+    
+        pending: list[Document] = []
+        written = 0
+        for row in rows:
+            doc_id = str(row.get("id") or "")
+            title = str(row.get("title") or "")
+            pieces = chunks(str(row.get("text") or ""))
+            for position, piece in enumerate(pieces):
+                pending.append(
+                    Document(
+                        page_content=piece,
+                        metadata={
+                            # A string, which is the shape the rag-server's citation code reads
+                            # when langchain did the ingestion. It names where the chunk came
+                            # from in a form a reader can act on.
+                            "source": f"{dataset}:{database}.{TABLE}#{doc_id}",
+                            "title": title,
+                            "content_metadata": {
+                                "type": "text",
+                                # Rows have no pages. Zero is what the citation model defaults
+                                # to and what the console then does not display.
+                                "page_number": 0,
+                                "chunk": position,
+                            },
+                        },
+                    )
+                )
+            if len(pending) >= BATCH:
+                store.add_documents(pending)
+                written += len(pending)
+                pending = []
+        if pending:
+            store.add_documents(pending)
+            written += len(pending)
+        return written
+    
+    
+    # --------------------------------------------------------------------------------------
+    # The loop and the status endpoint
+    # --------------------------------------------------------------------------------------
+    
+    
+    class Status(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+    
+        def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's own naming
+            if self.path.split("?")[0] not in ("/status", "/healthz"):
+                self.send_error(404)
+                return
+            with STATE_LOCK:
+                body = json.dumps(STATE).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+    
+        def log_message(self, fmt: str, *args: Any) -> None:
+            logger.debug("status %s", fmt % args)
+    
+    
+    def describe(bound: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "dataset": binding.get("dataset"),
+                "title": binding.get("title"),
+                "interface": binding.get("interface"),
+                "database": connection(binding).get("database"),
+                "table": TABLE,
+                "gated": is_gated(binding),
+            }
+            for binding in bound
+        ]
+    
+    
+    def loop() -> None:
+        last: tuple[int, str] | None = None
+        while True:
+            bound = bindings()
+            publish(sources=describe(bound), lastAttemptAt=now())
+    
+            if not bound:
+                publish(
+                    verdict="pending",
+                    message=(
+                        "no dataset is attached to the corpus slot — attach one and this "
+                        "deployment indexes it without being restarted"
+                    ),
+                    documents=0,
+                    chunks=0,
+                )
+                time.sleep(POLL_SECONDS)
+                continue
+    
+            # One source today. The slot accepts several and the loop would index each into the
+            # same collection; indexing the first is what is measured, so it is what is done.
+            binding = bound[0]
+            try:
+                mark = watermark(binding)
+            except Exception as error:  # noqa: BLE001 — the verdict is the product here
+                logger.warning("the source refused the read: %s", error)
+                publish(verdict="refused", message=str(error))
+                time.sleep(POLL_SECONDS)
+                continue
+    
+            if mark == last:
+                publish(
+                    verdict="admitted",
+                    message=f"{mark[0]} rows, unchanged since the last read",
+                    lastSuccessAt=now(),
+                )
+                time.sleep(POLL_SECONDS)
+                continue
+    
+            try:
+                rows = documents(binding)
+                written = index(rows, binding)
+            except Exception as error:  # noqa: BLE001
+                logger.exception("indexing failed")
+                publish(verdict="refused" if "clickhouse" in str(error).lower() else "pending",
+                        message=str(error)[:400])
+                time.sleep(POLL_SECONDS)
+                continue
+    
+            last = mark
+            logger.info("indexed %d chunks from %d documents", written, len(rows))
+            publish(
+                verdict="admitted",
+                message=f"{mark[0]} rows read and indexed",
+                documents=len(rows),
+                chunks=written,
+                lastSuccessAt=now(),
+            )
+            time.sleep(POLL_SECONDS)
+    
+    
+    def main() -> None:
+        server = HTTPServer(("0.0.0.0", STATUS_PORT), Status)
+        threading.Thread(target=server.serve_forever, name="status", daemon=True).start()
+        logger.info("status on :%d, polling every %ds", STATUS_PORT, POLL_SECONDS)
+        loop()
+    
+    
+    if __name__ == "__main__":
+        main()
+---
+# Source: confidential-rag/templates/configmap-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: confidential-rag-config
+  labels:
+    app.kubernetes.io/name: confidential-rag
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+data:
+  # --- the vector store ---
+  APP_VECTORSTORE_NAME: milvus
+  APP_VECTORSTORE_URL: "http://confidential-rag-vectors:19530"
+  APP_VECTORSTORE_USERNAME: "root"
+  APP_VECTORSTORE_INDEXTYPE: "HNSW"
+  APP_VECTORSTORE_SEARCHTYPE: dense
+  APP_VECTORSTORE_ENABLEGPUINDEX: "False"
+  APP_VECTORSTORE_ENABLEGPUSEARCH: "False"
+  APP_VECTORSTORE_EF: "100"
+  COLLECTION_NAME: "documents"
+  VECTOR_DB_TOPK: "40"
+  APP_RETRIEVER_SCORETHRESHOLD: "0.25"
+  APP_RETRIEVER_TOPK: "6"
+
+  # --- generation, on the open-inference component ---
+  APP_LLM_MODELENGINE: openai
+  APP_LLM_MODELNAME: "llama-3.2-3b-instruct"
+  APP_LLM_SERVERURL: "http://swarm-model-server:8000/v1"
+  LLM_MAX_TOKENS: "1024"
+  LLM_TEMPERATURE: "0"
+  LLM_TOP_P: "1"
+  # Nemotron's reasoning budget, written through `chat_template_kwargs` an open checkpoint does
+  # not read. Off, so no deployment of this listing sends it.
+  LLM_ENABLE_THINKING: "false"
+
+  # The three auxiliary LLM clients are built at start-up whether or not the features that use
+  # them are switched on — `NvidiaRAG.__init__` constructs the query rewriter's and the filter
+  # generator's unconditionally — so each one needs an endpoint or the process raises before it
+  # serves anything. It is the same endpoint: one engine, one card.
+  #
+  # Found by deploying, which is the only way it shows up: every one of these is absent from
+  # the compose file's "disabled" path, and the failure is a RuntimeError in the constructor,
+  # not a degraded feature.
+  APP_QUERYREWRITER_MODELNAME: "llama-3.2-3b-instruct"
+  APP_QUERYREWRITER_SERVERURL: "http://swarm-model-server:8000/v1"
+  APP_FILTEREXPRESSIONGENERATOR_MODELNAME: "llama-3.2-3b-instruct"
+  APP_FILTEREXPRESSIONGENERATOR_SERVERURL: "http://swarm-model-server:8000/v1"
+  SUMMARY_LLM: "llama-3.2-3b-instruct"
+  SUMMARY_LLM_SERVERURL: "http://swarm-model-server:8000/v1"
+
+  # --- embedding, on an open checkpoint ---
+  APP_EMBEDDINGS_MODELENGINE: openai
+  APP_EMBEDDINGS_MODELNAME: "bge-large-en-v1.5"
+  APP_EMBEDDINGS_SERVERURL: "http://confidential-rag-embeddings/v1"
+  APP_EMBEDDINGS_DIMENSIONS: "1024"
+
+  # --- reranking, on an open cross-encoder ---
+  ENABLE_RERANKER: "True"
+  APP_RANKING_MODELENGINE: tei
+  APP_RANKING_MODELNAME: "bge-reranker-v2-m3"
+  APP_RANKING_SERVERURL: "http://confidential-rag-reranker"
+  RERANKER_SCORE_THRESHOLD: "0"
+  ENABLE_VLM_RERANKER_IMAGE_INPUT: "False"
+
+  # --- what this deployment does not run ---
+  ENABLE_QUERYREWRITER: "False"
+  ENABLE_FILTER_GENERATOR: "False"
+  ENABLE_REFLECTION: "False"
+  ENABLE_QUERY_DECOMPOSITION: "False"
+  ENABLE_AGENTIC_RAG: "False"
+  ENABLE_VLM_INFERENCE: "False"
+  ENABLE_GUARDRAILS: "False"
+  ENABLE_CITATIONS: "True"
+
+  # --- the object store, which is a directory ---
+  # `filesystem`, so this listing does not stand up an S3-compatible store to hold the little a
+  # text corpus puts here.
+  OBJECTSTORE_BACKEND: filesystem
+  OBJECTSTORE_LOCAL_PATH: /data/objects
+
+  # --- the summary-status store ---
+  REDIS_HOST: "confidential-rag-cache"
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+
+  LOGLEVEL: "INFO"
+  LOG_LEVEL: "INFO"
+---
+# Source: confidential-rag/templates/cache.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: confidential-rag-cache
+  labels:
+    app.kubernetes.io/name: confidential-rag
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: "1Gi"
+---
+# Source: confidential-rag/templates/server.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: confidential-rag-objects
+  labels:
+    app.kubernetes.io/name: confidential-rag
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: server
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: "5Gi"
+---
+# Source: confidential-rag/templates/cache.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: confidential-rag-cache
+  labels:
+    app.kubernetes.io/name: confidential-rag
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: cache
+spec:
+  type: ClusterIP
+  ports:
+    - name: valkey
+      port: 6379
+      targetPort: valkey
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: confidential-rag
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/component: cache
+---
+# Source: confidential-rag/templates/console.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: confidential-rag-console
+  labels:
+    app.kubernetes.io/name: confidential-rag
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: console
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: confidential-rag
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/component: console
+---
+# Source: confidential-rag/templates/corpus.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: confidential-rag-corpus
+  labels:
+    app.kubernetes.io/name: confidential-rag
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: corpus
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8085
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: confidential-rag
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/component: corpus
+---
+# Source: confidential-rag/templates/server.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: confidential-rag-server
+  labels:
+    app.kubernetes.io/name: confidential-rag
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: server
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: confidential-rag
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/component: server
+---
+# Source: confidential-rag/templates/cache.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: confidential-rag-cache
+  labels:
+    app.kubernetes.io/name: confidential-rag
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: cache
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: confidential-rag
+      app.kubernetes.io/instance: rag
+      app.kubernetes.io/component: cache
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: confidential-rag
+        app.kubernetes.io/instance: rag
+        app.kubernetes.io/component: cache
+    spec:
+      containers:
+        - name: cache
+          image: "docker.io/valkey/valkey@sha256:e706d1213aaba6896c162bb6a3a9e1894e1a435f28f8f856d14fab2e10aa098b"
+          imagePullPolicy: IfNotPresent
+          args:
+            - --dir
+            - /data
+            - --protected-mode
+            - "yes"
+            # One hundred megabytes of status keys is already far more than this holds; past it,
+            # the oldest go rather than the process growing until the kubelet kills it.
+            - --maxmemory
+            - 100mb
+            - --maxmemory-policy
+            - allkeys-lru
+            # Status keys are rebuildable by asking for the summary again, so an fsync per write
+            # buys nothing. A periodic snapshot keeps a restart from losing an in-flight one.
+            - --appendonly
+            - "no"
+            - --save
+            - 300 1
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+          ports:
+            - name: valkey
+              containerPort: 6379
+              protocol: TCP
+          startupProbe:
+            tcpSocket: { port: valkey }
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            tcpSocket: { port: valkey }
+            periodSeconds: 20
+          livenessProbe:
+            tcpSocket: { port: valkey }
+            periodSeconds: 30
+            failureThreshold: 4
+          resources:
+            limits:
+              cpu: 500m
+              memory: 1Gi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: 500m
+              memory: 1Gi
+              nvidia.com/gpu: "0"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: confidential-rag-cache
+---
+# Source: confidential-rag/templates/console.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: confidential-rag-console
+  labels:
+    app.kubernetes.io/name: confidential-rag
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: console
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: confidential-rag
+      app.kubernetes.io/instance: rag
+      app.kubernetes.io/component: console
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: confidential-rag
+        app.kubernetes.io/instance: rag
+        app.kubernetes.io/component: console
+    spec:
+      containers:
+        - name: console
+          image: "ghcr.io/super-protocol/confidential-rag/rag-server@sha256:c68adc9c963a623256e4fe1db6be35ae6ac15fe95589504ff5b7b663ad2e06f9"
+          imagePullPolicy: IfNotPresent
+          command: [uvicorn]
+          args:
+            - console:app
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8080"
+            # One worker: the session is a signed assertion rather than a stored row, so more
+            # would be free — and a console in front of one pipeline pod has nothing to gain.
+            - --workers
+            - "1"
+          env:
+            - name: PYTHONPATH
+              value: /opt/console
+            - name: CONSOLE_TITLE
+              value: "Confidential RAG"
+            - name: CONSOLE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: confidential-rag-secrets, key: console-password }
+            - name: CONSOLE_SESSION_KEY
+              valueFrom:
+                secretKeyRef: { name: confidential-rag-secrets, key: console-session-key }
+            - name: CONSOLE_SESSION_TTL_SECONDS
+              value: "43200"
+            - name: RAG_SERVER_URL
+              value: "http://confidential-rag-server:8081"
+            - name: CORPUS_SYNC_URL
+              value: "http://confidential-rag-corpus:8085"
+            - name: COLLECTION_NAME
+              value: "documents"
+            - name: UI_DIR
+              value: /opt/console
+            # What the console tells a user about the deployment they are using. Plain
+            # configuration, not a credential, and attested with everything else.
+            - name: ABOUT_GENERATION_MODEL
+              value: "llama-3.2-3b-instruct"
+            - name: ABOUT_GENERATION_LICENCE
+              value: "Llama 3.2 Community License Agreement"
+            - name: ABOUT_EMBEDDING_MODEL
+              value: "bge-large-en-v1.5"
+            - name: ABOUT_EMBEDDING_LICENCE
+              value: "MIT"
+            - name: ABOUT_RERANKER_MODEL
+              value: "bge-reranker-v2-m3"
+            - name: ABOUT_RERANKER_LICENCE
+              value: "Apache-2.0"
+            - name: ABOUT_SOURCE_REPO
+              value: "https://github.com/Super-Protocol/confidential-rag"
+            - name: ABOUT_EXPECTED_DIGEST
+              value: "4c5bb0e9b5f78a7a04ba54de3c0e9a0b2b3d1cb0ba0e4b3b57a3d7bd6cbe95c7"
+            - name: LOG_LEVEL
+              value: "INFO"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          # The one route outside the session, and it reports liveness and nothing about the
+          # corpus — it is reachable from the public hostname by anybody who finds the name.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 4
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: 500m
+              memory: 512Mi
+              nvidia.com/gpu: "0"
+          volumeMounts:
+            - name: app
+              mountPath: /opt/console
+              readOnly: true
+      volumes:
+        - name: app
+          configMap:
+            name: confidential-rag-app
+---
+# Source: confidential-rag/templates/corpus.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: confidential-rag-corpus
+  labels:
+    app.kubernetes.io/name: confidential-rag
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: corpus
+spec:
+  replicas: 1
+  # Two indexers rebuilding one collection would race. `Recreate` costs one gap of a few
+  # seconds in the status panel on an upgrade and removes that entirely.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: confidential-rag
+      app.kubernetes.io/instance: rag
+      app.kubernetes.io/component: corpus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: confidential-rag
+        app.kubernetes.io/instance: rag
+        app.kubernetes.io/component: corpus
+    spec:
+      containers:
+        - name: corpus
+          image: "ghcr.io/super-protocol/confidential-rag/rag-server@sha256:c68adc9c963a623256e4fe1db6be35ae6ac15fe95589504ff5b7b663ad2e06f9"
+          imagePullPolicy: IfNotPresent
+          command: [python3, /opt/app/corpus_sync.py]
+          # The pipeline's own configuration, so the embedder, the vector store and the
+          # collection this writes are by construction the ones the retriever reads.
+          envFrom:
+            - configMapRef:
+                name: confidential-rag-config
+          env:
+            - name: APP_EMBEDDINGS_APIKEY
+              valueFrom:
+                secretKeyRef: { name: confidential-rag-secrets, key: embeddings-api-key }
+            - name: APP_VECTORSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: confidential-rag-secrets, key: vector-store-password }
+            - name: CORPUS_BINDING_FILE
+              value: /etc/corpus/corpus-binding.json
+            - name: CORPUS_TABLE
+              value: "documents"
+            - name: CORPUS_ID_COLUMN
+              value: "doc_id"
+            - name: CORPUS_TITLE_COLUMN
+              value: "title"
+            - name: CORPUS_TEXT_COLUMN
+              value: "text"
+            - name: CORPUS_UPDATED_COLUMN
+              value: "updated_at"
+            - name: CORPUS_CHUNK_CHARS
+              value: "1800"
+            - name: CORPUS_CHUNK_OVERLAP_CHARS
+              value: "200"
+            - name: CORPUS_ROW_LIMIT
+              value: "20000"
+            - name: CORPUS_POLL_SECONDS
+              value: "60"
+            - name: CORPUS_EMBED_BATCH
+              value: "16"
+            - name: CORPUS_STATUS_PORT
+              value: "8085"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+          ports:
+            - name: http
+              containerPort: 8085
+              protocol: TCP
+          # `/healthz` answers as soon as the status server is up — which is before the first
+          # read of the source, deliberately: a deployment whose data owner has not approved it
+          # yet is a healthy deployment waiting, not a broken one.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 4
+          resources:
+            limits:
+              cpu: "1"
+              memory: 2Gi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: "1"
+              memory: 2Gi
+              nvidia.com/gpu: "0"
+          volumeMounts:
+            - name: app
+              mountPath: /opt/app
+              readOnly: true
+            - name: binding
+              mountPath: /etc/corpus
+              readOnly: true
+            - name: scratch
+              mountPath: /tmp-data
+      volumes:
+        - name: app
+          configMap:
+            name: confidential-rag-app
+        - name: binding
+          secret:
+            secretName: confidential-rag-secrets
+            items:
+              - key: corpus-binding.json
+                path: corpus-binding.json
+        - name: scratch
+          emptyDir: {}
+---
+# Source: confidential-rag/templates/server.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: confidential-rag-server
+  labels:
+    app.kubernetes.io/name: confidential-rag
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  # The object store is a directory on a ReadWriteOnce volume held open by the running pod, so a
+  # second pod cannot come up beside the first and a rolling update would leave the new one
+  # Pending for ever while the old one serves.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: confidential-rag
+      app.kubernetes.io/instance: rag
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: confidential-rag
+        app.kubernetes.io/instance: rag
+        app.kubernetes.io/component: server
+    spec:
+      containers:
+        - name: server
+          image: "ghcr.io/super-protocol/confidential-rag/rag-server@sha256:c68adc9c963a623256e4fe1db6be35ae6ac15fe95589504ff5b7b663ad2e06f9"
+          imagePullPolicy: IfNotPresent
+          args:
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8081"
+            - --workers
+            - "2"
+          envFrom:
+            - configMapRef:
+                name: confidential-rag-config
+          env:
+            # Every credential by reference. An env *value* is rendered into the manifests and
+            # published in the evidence snapshot; a `secretKeyRef` is a pointer to something the
+            # platform sealed.
+            - name: APP_LLM_APIKEY
+              valueFrom:
+                secretKeyRef: { name: confidential-rag-secrets, key: inference-api-key }
+            - name: APP_EMBEDDINGS_APIKEY
+              valueFrom:
+                secretKeyRef: { name: confidential-rag-secrets, key: embeddings-api-key }
+            - name: APP_RANKING_APIKEY
+              valueFrom:
+                secretKeyRef: { name: confidential-rag-secrets, key: reranker-api-key }
+            - name: APP_VECTORSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: confidential-rag-secrets, key: vector-store-password }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+          ports:
+            - name: http
+              containerPort: 8081
+              protocol: TCP
+          # `/v1/health` without `check_dependencies` answers from the process alone, which is
+          # the right question for a probe: the pipeline's four endpoints come up in their own
+          # time and a readiness gate on all of them would hold this pod down for the slowest.
+          # The console's status panel is where the dependencies are reported.
+          startupProbe:
+            httpGet: { path: /v1/health, port: http }
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /v1/health, port: http }
+            periodSeconds: 15
+            timeoutSeconds: 10
+          livenessProbe:
+            httpGet: { path: /v1/health, port: http }
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
+          resources:
+            limits:
+              cpu: "2"
+              memory: 4Gi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: "2"
+              memory: 4Gi
+              nvidia.com/gpu: "0"
+          volumeMounts:
+            - name: objects
+              mountPath: /data/objects
+            # The text splitter and the HF cache write here, and the image's own /tmp-data is
+            # not on a volume.
+            - name: scratch
+              mountPath: /tmp-data
+      volumes:
+        - name: objects
+          persistentVolumeClaim:
+            claimName: confidential-rag-objects
+        - name: scratch
+          emptyDir: {}
+---
+# Source: confidential-rag/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: confidential-rag
+  labels:
+    app.kubernetes.io/name: confidential-rag
+    app.kubernetes.io/instance: rag
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    # Declared on the object as well as in the listing's `evidence.exclude`. The annotation is
+    # what the cloud reads when it digests the namespace; the definition's copy is what the
+    # listing page shows. A digest displayed beside "no exclusions" answers the only question
+    # that matters about it wrongly.
+    swarm.io/exclude-evidence-fields: "/spec/rules/0/host"
+    # An answer streams token by token over server-sent events. Without this, nginx buffers the
+    # whole response and the console shows nothing for thirty seconds and then everything.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+spec:
+  ingressClassName: "nginx"
+  rules:
+    - host: "rag.conf-apps.superprotocol.dev"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: confidential-rag-console
+                port:
+                  number: 80

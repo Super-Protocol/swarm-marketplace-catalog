@@ -1,0 +1,20 @@
+{{- /*
+ClusterIP, and no Ingress anywhere in this chart. `9091` — health and metrics, unauthenticated
+— is deliberately not in this Service: it is reached by the kubelet's probes on the pod IP and
+by nothing else.
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "milvus.name" . }}
+  labels:
+    {{- include "milvus.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: grpc
+      port: {{ .Values.service.port }}
+      targetPort: grpc
+      protocol: TCP
+  selector:
+    {{- include "milvus.selectorLabels" . | nindent 4 }}

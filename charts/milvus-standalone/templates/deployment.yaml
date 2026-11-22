@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "milvus.name" . }}
+  labels:
+    {{- include "milvus.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # The write-ahead log and the embedded etcd's data directory are held open by the running
+  # process on a ReadWriteOnce volume, so a second pod cannot come up beside the first. A
+  # rolling update would leave the new pod Pending on the volume for ever and the old one
+  # running, which looks like a successful rollout and is not one.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "milvus.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "milvus.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: milvus
+          image: {{ include "milvus.imageRef" .Values.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [milvus, run, standalone]
+          env:
+            # The standalone-embedded shape, from upstream's own
+            # `scripts/standalone_embed.sh`: etcd in-process against a config file, and
+            # segments on the local volume instead of an S3-compatible store.
+            - name: ETCD_USE_EMBED
+              value: "true"
+            - name: ETCD_DATA_DIR
+              value: /var/lib/milvus/etcd
+            - name: ETCD_CONFIG_PATH
+              value: /milvus/configs/embedEtcd.yaml
+            - name: COMMON_STORAGETYPE
+              value: local
+            - name: DEPLOY_MODE
+              value: STANDALONE
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: grpc
+              containerPort: 19530
+              protocol: TCP
+            - name: metrics
+              containerPort: 9091
+              protocol: TCP
+          # `/healthz` on the metrics port answers only once the metastore, the write-ahead log
+          # and the query node are up. The start period is generous because a cold volume means
+          # the embedded etcd is initialised first.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/milvus
+            # Two files into one directory from two sources, so `subPath` rather than a
+            # directory mount: the image ships `/milvus/configs/milvus.yaml` and replacing
+            # that directory wholesale would remove the defaults these two override.
+            - name: etcd-config
+              mountPath: /milvus/configs/embedEtcd.yaml
+              subPath: embedEtcd.yaml
+              readOnly: true
+            - name: user-config
+              mountPath: /milvus/configs/user.yaml
+              subPath: user.yaml
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "milvus.name" . }}-data
+        - name: etcd-config
+          configMap:
+            name: {{ include "milvus.name" . }}-etcd
+        - name: user-config
+          secret:
+            secretName: {{ include "milvus.name" . }}-config
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

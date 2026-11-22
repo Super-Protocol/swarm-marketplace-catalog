@@ -1,0 +1,76 @@
+# Milvus standalone, and deliberately not the upstream Helm chart.
+#
+# `milvus-io/milvus-helm` brings etcd, an S3-compatible object store and a message queue as
+# subcharts — five pods and two more PVCs before a single vector is written, each one more
+# object in the evidence snapshot and more quota a cluster space has to be given. Milvus itself
+# supports a standalone mode that embeds etcd and keeps segments on a local volume
+# (`scripts/standalone_embed.sh` upstream), which is what this chart runs: one Deployment, one
+# PVC, one Service.
+#
+# What that costs, stated: no horizontal scale, and the volume is the whole of the durability
+# story. For an index built from a tenant's own document corpus — rebuildable from the source in
+# minutes — that is the right trade. A deployment that outgrows it wants the upstream chart and a
+# real object store, and this chart is not the thing to grow into it.
+
+name: milvus
+
+image:
+  registry: docker.io
+  repository: milvusdb/milvus
+  digest: sha256:fb57464669737ee9a9c43c6faa891527adab601241b0b488091c5f4eb4a13178
+  tag: v2.6.5
+  pullPolicy: IfNotPresent
+
+auth:
+  # Milvus ships with authorization OFF and a documented root password. Inside one namespace
+  # that is still a vector store any other workload in the namespace can read, rewrite or drop
+  # — including, once a deployment mounts gated data, the marketplace's own egress sidecar's
+  # network neighbours. So it is on here, and the password is required rather than defaulted:
+  # a chart that quietly fell back to `Milvus` would be worse than one that refuses to render.
+  #
+  # The password lands in a Secret, mounted as `user.yaml`, and never in the ConfigMap beside
+  # it. A credential in a ConfigMap travels in the deployment bundle in clear and is published
+  # in the evidence snapshot.
+  rootPassword: ""
+
+service:
+  type: ClusterIP
+  # The gRPC port every client speaks, and the only one in the Service. `9091` is Milvus's
+  # metrics and health port: it is unauthenticated, so it is a container port used by the
+  # probes and is not published.
+  port: 19530
+
+persistence:
+  enabled: true
+  # Segments, the write-ahead log and the embedded etcd's data directory all live here.
+  size: 20Gi
+  storageClass: ""
+  accessMode: ReadWriteOnce
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: "2"
+    memory: 8Gi
+    nvidia.com/gpu: "0"
+  limits:
+    cpu: "2"
+    memory: 8Gi
+    nvidia.com/gpu: "0"
+
+# Milvus loads a collection into memory to search it, and the CPU build of the index is what
+# this runs; `KNOWHERE_GPU_MEM_POOL_SIZE` and the GPU_CAGRA index type have no place here. The
+# explicit `nvidia.com/gpu: 0` above is what stops a GPU cluster space's LimitRange from
+# defaulting a card into this pod — a card the engine then cannot have.
+
+podSecurityContext: {}
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  capabilities:
+    drop: [ALL]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

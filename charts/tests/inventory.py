@@ -30,6 +30,51 @@ import yaml
 # Keyed by chart. Subchart objects are included: they are applied too, and a
 # dependency that stops rendering its Service is the same failure.
 EXPECTED = {
+    # Confidential RAG (SUP-840). Three charts, and the object list of the pipeline chart is
+    # the one worth naming: four Deployments, four Services, two ConfigMaps, one Secret, two
+    # PersistentVolumeClaims and one Ingress, in one chart, with every `---` between them
+    # written by hand. A lost separator there glues two objects into one document, the golden
+    # is regenerated from the same broken render, and the cluster silently applies one and
+    # drops the other.
+    "text-embeddings-server": {
+        ("ConfigMap", "confidential-rag-embeddings-weights"),
+        ("Deployment", "confidential-rag-embeddings"),
+        ("PersistentVolumeClaim", "confidential-rag-embeddings-weights"),
+        ("Secret", "confidential-rag-embeddings-auth"),
+        ("Service", "confidential-rag-embeddings"),
+    },
+    "text-embeddings-server:rerank": {
+        ("ConfigMap", "confidential-rag-reranker-weights"),
+        ("Deployment", "confidential-rag-reranker"),
+        ("PersistentVolumeClaim", "confidential-rag-reranker-weights"),
+        ("Secret", "confidential-rag-reranker-auth"),
+        ("Service", "confidential-rag-reranker"),
+    },
+    "milvus-standalone": {
+        ("ConfigMap", "confidential-rag-vectors-etcd"),
+        ("Deployment", "confidential-rag-vectors"),
+        ("PersistentVolumeClaim", "confidential-rag-vectors-data"),
+        # `user.yaml` carries the root password, so it is a Secret and not the ConfigMap
+        # beside it.
+        ("Secret", "confidential-rag-vectors-config"),
+        ("Service", "confidential-rag-vectors"),
+    },
+    "confidential-rag": {
+        ("ConfigMap", "confidential-rag-app"),
+        ("ConfigMap", "confidential-rag-config"),
+        ("Deployment", "confidential-rag-cache"),
+        ("Deployment", "confidential-rag-console"),
+        ("Deployment", "confidential-rag-corpus"),
+        ("Deployment", "confidential-rag-server"),
+        ("Ingress", "confidential-rag"),
+        ("PersistentVolumeClaim", "confidential-rag-cache"),
+        ("PersistentVolumeClaim", "confidential-rag-objects"),
+        ("Secret", "confidential-rag-secrets"),
+        ("Service", "confidential-rag-cache"),
+        ("Service", "confidential-rag-console"),
+        ("Service", "confidential-rag-corpus"),
+        ("Service", "confidential-rag-server"),
+    },
     "patroni-postgresql": {
         ("ConfigMap", "patroni-postgresql-etcd"),
         ("ConfigMap", "patroni-postgresql-router"),

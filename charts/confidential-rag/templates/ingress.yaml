@@ -1,0 +1,40 @@
+{{- $name := include "crag.name" . -}}
+{{- /*
+The one public address, and the one object in this chart that carries it — which is what makes
+a single evidence exclusion enough to turn the digest into a property of the version rather than
+of the deployment. Nothing else in the chart is rendered from the hostname.
+
+`ingressClassName` is set and validated: an Ingress without one is created, its hostname is
+registered with the cloud, DNS is written for it, and nothing serves it. It reads as a DNS fault
+for an hour.
+*/ -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "crag.labels" . | nindent 4 }}
+  annotations:
+    # Declared on the object as well as in the listing's `evidence.exclude`. The annotation is
+    # what the cloud reads when it digests the namespace; the definition's copy is what the
+    # listing page shows. A digest displayed beside "no exclusions" answers the only question
+    # that matters about it wrongly.
+    swarm.io/exclude-evidence-fields: "/spec/rules/0/host"
+    # An answer streams token by token over server-sent events. Without this, nginx buffers the
+    # whole response and the console shows nothing for thirty seconds and then everything.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  rules:
+    - host: {{ .Values.hostname | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}-console
+                port:
+                  number: 80

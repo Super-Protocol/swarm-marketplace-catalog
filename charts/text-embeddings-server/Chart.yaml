@@ -1,0 +1,11 @@
+apiVersion: v2
+name: text-embeddings-server
+description: >-
+  An open embedding or reranking checkpoint served inside the deployment's own namespace over
+  Text Embeddings Inference, from weights pinned by sha256. CPU only, no public hostname, and
+  authenticated even so.
+type: application
+version: 0.1.0
+# Text Embeddings Inference. Bumping it is a chart change, not an image bump: the backend
+# selection, the flags and the pooling behaviour move with it.
+appVersion: "1.8"

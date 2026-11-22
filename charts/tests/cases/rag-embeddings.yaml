@@ -1,0 +1,7 @@
+# The Confidential RAG listing's embedder: the English 512-token checkpoint, which is the
+# default the listing offers and the only preset whose sequence length lets the backend take
+# the wide batch budget.
+name: confidential-rag-embeddings
+model:
+  preset: bge-large-en-v1.5
+apiKey: EMBEDDINGS-KEY-FOR-THE-GOLDEN

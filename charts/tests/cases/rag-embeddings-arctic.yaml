@@ -1,0 +1,9 @@
+# The other embedder the listing offers. Here for one reason: it is an 8192-token
+# checkpoint, so its measured sizing differs from the default's in both the batch ceiling
+# and the memory limit — and a golden that only ever rendered the default would not notice a
+# preset losing its `sizing` block, which is the shape of mistake that OOMKills a component
+# three seconds into start-up.
+name: confidential-rag-embeddings
+model:
+  preset: arctic-embed-l-v2.0
+apiKey: EMBEDDINGS-KEY-FOR-THE-GOLDEN

@@ -1,0 +1,216 @@
+# Confidential RAG — the listing's own half of the deployment.
+#
+# What is NOT here, because it is a component of its own: the generation endpoint
+# (charts/swarm-model-server), the embedder and the reranker (charts/text-embeddings-server),
+# and the vector store (charts/milvus-standalone). This chart is the pipeline, the front door
+# and the corpus indexer, and it reaches those four by Service name.
+#
+# Service names, not namespaced FQDNs, on purpose: everything is in one cluster space, and a
+# name carrying the namespace is a value that differs between two deployments of one version —
+# which is a digest that is a property of the deployment rather than of the version.
+
+name: confidential-rag
+
+# The one public address. The only object it appears in is the Ingress, which is what makes a
+# single evidence exclusion enough.
+hostname: ""
+
+ingress:
+  # Without this the Ingress is created, its hostname registered, its DNS written — and nothing
+  # serves it. It looks like a DNS fault for an hour.
+  className: nginx
+
+image:
+  registry: ghcr.io
+  repository: super-protocol/confidential-rag/rag-server
+  digest: sha256:c68adc9c963a623256e4fe1db6be35ae6ac15fe95589504ff5b7b663ad2e06f9
+  tag: 2.6.2-sp.6ae0f54
+  pullPolicy: IfNotPresent
+
+# ---------------------------------------------------------------------------------------------
+# The front door
+# ---------------------------------------------------------------------------------------------
+console:
+  title: Confidential RAG
+  # Required. The console refuses to start without it rather than publish an open door.
+  password: ""
+  # Signs the session cookie. Generated per deployment, lives in a Secret, and therefore costs
+  # the attested digest nothing.
+  sessionKey: ""
+  sessionTtlSeconds: 43200
+  # What the console tells a user about the deployment they are using. Every value is rendered
+  # from the listing's own parameters, so the panel and the signed evidence describe the same
+  # thing.
+  about:
+    sourceRepo: https://github.com/Super-Protocol/confidential-rag
+    expectedDigest: ""
+  # Request equals limit, in both dimensions, and neither is below 100m / 128Mi. A cluster
+  # space's LimitRange sets `maxLimitRequestRatio: 1` and those floors, and a container
+  # breaking either is refused at admission — so the pod never exists, and nothing an
+  # operator looks at says why (SUP-238). The public door of the Conversational Analyst
+  # deployment was not admitted for exactly this reason.
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+      nvidia.com/gpu: "0"
+    limits:
+      cpu: 500m
+      memory: 512Mi
+      nvidia.com/gpu: "0"
+
+# ---------------------------------------------------------------------------------------------
+# The pipeline
+# ---------------------------------------------------------------------------------------------
+server:
+  # uvicorn workers. Each one holds its own clients to the four endpoints, so this is a memory
+  # multiplier as much as a concurrency one.
+  workers: 2
+  collection: documents
+  # Candidates out of the vector store, which is what the reranker then orders. Must not exceed
+  # `ef` below — Milvus refuses a search whose top-k is larger than its candidate list.
+  topK: 40
+  ef: 100
+  # What survives reranking and reaches the prompt.
+  rerankerTopK: 6
+  # Vector-distance floor, before reranking.
+  scoreThreshold: 0.25
+  # A cross-encoder's score is a probability in [0, 1] here, not the unbounded logit a NeMo
+  # Retriever reranker returns — so a threshold carried over from a NIM deployment means
+  # something else. Zero: let the reranker order, and let `rerankerTopK` do the cutting.
+  rerankerScoreThreshold: 0.0
+  maxTokens: 1024
+  temperature: 0
+  topP: 1.0
+  resources:
+    requests:
+      cpu: "2"
+      memory: 4Gi
+      nvidia.com/gpu: "0"
+    limits:
+      cpu: "2"
+      memory: 4Gi
+      nvidia.com/gpu: "0"
+  persistence:
+    # The filesystem object store. Multimodal content would live here; a text corpus writes
+    # almost nothing, and the backend is `filesystem` precisely so that this listing does not
+    # have to stand up an S3-compatible store to hold nothing.
+    enabled: true
+    size: 5Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+
+# ---------------------------------------------------------------------------------------------
+# What this chart composes, by Service name
+# ---------------------------------------------------------------------------------------------
+inference:
+  # charts/swarm-model-server, ingress disabled, in this namespace.
+  url: http://swarm-model-server:8000/v1
+  model: ""
+  licence: ""
+  apiKey: ""
+
+embeddings:
+  url: http://confidential-rag-embeddings/v1
+  model: ""
+  licence: ""
+  # The width the embedder really returns. The collection's vector field is created from it.
+  dimensions: 1024
+  apiKey: ""
+
+reranker:
+  enabled: true
+  # No `/v1`: Text Embeddings Inference serves reranking at `/rerank`, at the root.
+  url: http://confidential-rag-reranker
+  model: ""
+  licence: ""
+  apiKey: ""
+
+vectorStore:
+  url: http://milvus:19530
+  username: root
+  password: ""
+  # HNSW, not GPU_CAGRA: the card belongs to the generation engine, and a vector store that
+  # claimed it would leave the engine Pending on a GPU quota of one for ever.
+  indexType: HNSW
+
+# ---------------------------------------------------------------------------------------------
+# The summary-status store
+# ---------------------------------------------------------------------------------------------
+cache:
+  # Valkey, BSD-3-Clause, in place of Redis Stack — which is under RSALv2/SSPL and is therefore
+  # not something this listing may deploy. It holds document-summarisation status keys with a
+  # 24-hour expiry and nothing else.
+  #
+  # It runs without a credential, and that is upstream's constraint rather than a choice: the
+  # client in `nvidia_rag.utils.summary_status_handler` constructs its connection pool from a
+  # host, a port and a database number, and takes no password. So it is ClusterIP, on no
+  # Ingress, in protected mode. Giving it `requirepass` would mean the rag-server could not
+  # reach it at all.
+  enabled: true
+  image:
+    registry: docker.io
+    repository: valkey/valkey
+    digest: sha256:e706d1213aaba6896c162bb6a3a9e1894e1a435f28f8f856d14fab2e10aa098b
+    tag: 8.1.4-alpine
+    pullPolicy: IfNotPresent
+  # Request equals limit: `maxLimitRequestRatio: 1` in the space's LimitRange.
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+      nvidia.com/gpu: "0"
+    limits:
+      cpu: 500m
+      memory: 1Gi
+      nvidia.com/gpu: "0"
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+
+# ---------------------------------------------------------------------------------------------
+# The gated document source
+# ---------------------------------------------------------------------------------------------
+corpus:
+  # The resolved `corpus` data slot, as JSON. A Secret and nowhere else: for an ungated dataset
+  # it carries the owner's own credentials, and it is the one value that differs between two
+  # deployments of this version — both of which are reasons for it to be in the one place the
+  # platform lifts out before the snapshot is taken.
+  bindingJson: ""
+  table: documents
+  idColumn: doc_id
+  titleColumn: title
+  textColumn: text
+  updatedColumn: updated_at
+  # Characters, not tokens: the embedder truncates server-side and this container has no
+  # tokenizer that has to agree with whichever checkpoint is being served. Set from the
+  # embedder's own window by the listing.
+  chunkChars: 1800
+  chunkOverlapChars: 200
+  rowLimit: 20000
+  pollSeconds: 60
+  embedBatch: 16
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+      nvidia.com/gpu: "0"
+    limits:
+      cpu: "1"
+      memory: 2Gi
+      nvidia.com/gpu: "0"
+
+logLevel: INFO
+
+podSecurityContext: {}
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  capabilities:
+    drop: [ALL]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

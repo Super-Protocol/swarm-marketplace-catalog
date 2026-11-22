@@ -70,6 +70,14 @@ apps:
   # does not exist, and the container's own licence forbids implying one (§4(d)).
   - path: apps/confidential-single-cell-analysis
     organization: platform-team
+  # Ported from NVIDIA's open RAG reference architecture (SUP-840), and the first
+  # listing in that epic that needed real licence substitution rather than a
+  # repackaging: the two NeMo Retriever NIMs, the generation NIM, Elasticsearch
+  # and Redis Stack are all replaced. Published by the platform team for the same
+  # reason as the rest of the ported family — what this listing stands behind is
+  # the port, the pins and the confidential execution, not somebody else's brand.
+  - path: apps/confidential-rag
+    organization: platform-team
   - path: apps/conversational-analyst
     organization: aivo
     secrets:
@@ -185,7 +193,7 @@ datasets:
 grants:
   - dataset: acme-internal-knowledge-base
     organizations: [acme-corp]
-    apps: [rag-agent]
+    apps: [rag-agent, confidential-rag]
   - dataset: retail-transactions
     organizations: [acme-corp]
     apps: [rag-agent]

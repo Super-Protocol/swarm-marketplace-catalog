@@ -54,3 +54,14 @@ single-cell-component	rapids-singlecell-notebook
 doc-ingest-component	swarm-doc-ingest		
 doc-ingest-no-ocr	swarm-doc-ingest		
 doc-ingest-millicores	swarm-doc-ingest		
+# Confidential RAG (SUP-840), ported from NVIDIA's open RAG reference architecture.
+# Five components, three charts of this repository's own. The two text-embeddings cases
+# differ only in the preset, and that is the point: the preset carries the measured batch
+# ceiling and memory limit, and those differ by a factor of eight between a 512-token and an
+# 8192-token checkpoint.
+rag-embeddings	text-embeddings-server		
+rag-embeddings-arctic	text-embeddings-server		
+rag-reranker	text-embeddings-server		
+rag-vectors	milvus-standalone		
+rag-stack	confidential-rag		
+rag-stack-unbound	confidential-rag		
