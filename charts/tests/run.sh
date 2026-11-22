@@ -313,6 +313,16 @@ fi
 # env value, a ConfigMap or an argument would make the declared digest a property
 # of whether somebody attached data, and the gate would then refuse exactly the
 # deployments that mounted gated data.
+# The defect that CrashLoopBackOff'd the first real deployment of this chart,
+# with its whole attested environment already installed. See the file.
+note "the workspace loader survives every binding shape the marketplace renders"
+if output=$(python3 charts/tests/single_cell_workspace.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/single_cell_workspace.py"
+fi
+
 note "attaching a dataset changes nothing outside the Secret"
 strip_secret() {
   python3 - "$1" <<'PYEOF'

@@ -34,7 +34,12 @@ cp -n /opt/sc-notebooks/*.md    /workspace/notebooks/ 2>/dev/null || true
 cp -n /opt/sc-notebooks/LICENSE /workspace/notebooks/ 2>/dev/null || true
 cp -n /opt/sc/sc_workspace.py   /workspace/notebooks/ 2>/dev/null || true
 
-python3 - <<'PY'
+# What this deployment is bound to, in the log, where somebody debugging a
+# deployment will look first. Deliberately NOT fatal: a workspace whose loader
+# cannot read its binding is still a usable JupyterLab a tenant can fix from
+# inside, and `set -e` turning this line into a CrashLoopBackOff is exactly what
+# it did on the first real deployment of this chart (2026-11-22).
+python3 - <<'PY' || echo "[bootstrap] could not read the dataset binding; the workspace starts anyway"
 import sys
 sys.path.insert(0, "/opt/sc")
 import sc_workspace as scw

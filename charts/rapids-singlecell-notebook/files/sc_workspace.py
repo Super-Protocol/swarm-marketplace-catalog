@@ -48,19 +48,40 @@ LABEL_KEY = os.environ.get('SC_LABEL_KEY', 'cell_type')
 # The binding
 # ---------------------------------------------------------------------------
 
-def binding() -> dict:
-    """The marketplace's resolved `data.matrices`, or an empty slot."""
+def binding():
+    """Whatever the marketplace wrote into the Secret, parsed, or None.
+
+    The shape is not ours to choose. `{{ data.matrices | json }}` renders the
+    bound datasets as a JSON **array** — one object per dataset, which is also
+    how the Conversational Analyst listing consumes it — and an empty slot
+    renders as `[]`. It is read defensively anyway: an object carrying a
+    `datasets` key is the other plausible shape (the platform's own `SlotBinding`
+    type has one), and a workspace that crashed on the wrong guess is a
+    deployment that CrashLoopBackOffs with the environment already installed.
+    Verified against a real deployment on 2026-11-22, which is how the array
+    shape is known rather than assumed.
+    """
     if not BINDING_PATH.exists():
-        return {'multiple': True, 'datasets': []}
+        return None
     text = BINDING_PATH.read_text().strip()
     if not text:
-        return {'multiple': True, 'datasets': []}
-    return json.loads(text)
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
 
 
 def datasets() -> list[dict]:
     """One entry per dataset the operator bound, in the order they chose."""
-    return list(binding().get('datasets') or [])
+    parsed = binding()
+    if isinstance(parsed, list):
+        entries = parsed
+    elif isinstance(parsed, dict):
+        entries = parsed.get('datasets') or []
+    else:
+        entries = []
+    return [entry for entry in entries if isinstance(entry, dict)]
 
 
 def describe_binding() -> str:

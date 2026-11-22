@@ -108,9 +108,9 @@ resources:
 
 # Where the tenant's own data comes from.
 #
-# `bindingJson` is the marketplace's resolved `data.<slot>` document — which
-# carries the dataset's credentials — so the chart renders it into a Secret and
-# nowhere else. The notebooks read it through `sc_workspace.py`, which is the
+# `bindingJson` is the marketplace's resolved `data.<slot>` document — a JSON
+# ARRAY of bound datasets, one object each, carrying the dataset owner's
+# credentials — so the chart renders it into a Secret and nowhere else. The notebooks read it through `sc_workspace.py`, which is the
 # only thing in this chart that knows the shape of a binding.
 #
 # Empty is a supported deployment: the workspace then reads whatever the tenant

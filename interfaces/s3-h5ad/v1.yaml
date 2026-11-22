@@ -1,3 +1,20 @@
+# NOT YET IN THE PLATFORM REGISTRY, and therefore not yet nameable in a
+# listing's `accepts`. Written here because `apps/confidential-single-cell-analysis`
+# implements it and `.h5ad` is the format single-cell matrices actually exist in.
+#
+# This directory is a copy, not the registry. The registry a marketplace matches
+# against is `BUNDLED_INTERFACES` in the platform's `marketplace-spec` library,
+# mirrored from the specification repository — and a definition naming a contract
+# the registry does not hold is refused at submission with "Unknown data
+# interface(s) … Add the contract to the registry first."
+#
+# Registering it is three changes, in this order: the contract into
+# Super-Protocol/swarm-marketplace-spec, the mirror into swarm-cloud's
+# `libs/marketplace-spec/src/registry/interfaces/` plus `bundled-interfaces.ts`,
+# and then this copy and the listing's `accepts` entry. Until then the workspace
+# reads `.h5ad` from a file a tenant uploads, and `sc_workspace._read_h5ad_from_s3`
+# is tested and waiting.
+
 apiVersion: swarm.cloud/v1alpha1
 kind: DataInterface
 

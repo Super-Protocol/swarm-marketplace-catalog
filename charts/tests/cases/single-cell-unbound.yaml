@@ -6,6 +6,7 @@
 hostname: sc-7f2a.conf-apps.superprotocol.dev
 token: Vd81kQ2mRt6pYs0ZaBn4LcXwEjHu9Gf3
 data:
-  bindingJson: ""
+  # An empty slot renders as `[]`, not as an empty string.
+  bindingJson: "[]"
   batchKey: batch
   labelKey: cell_type

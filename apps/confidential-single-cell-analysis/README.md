@@ -57,15 +57,21 @@ One slot, `matrices`, optional, and two interfaces behind it:
   deployment and the data stops being served. The matrix is assembled from
   long-form `sc_counts` (`cell_id`, `gene`, `count`) plus `sc_cells` and,
   optionally, `sc_genes`.
-- **`s3-h5ad/v1`** — the direct one, added by this listing
-  (`interfaces/s3-h5ad/v1.yaml`), because `.h5ad` is the format a lab's matrices
-  already exist in. The dataset owner hands out credentials for it, so it is the
-  right interface for data inside the tenant's own perimeter and the wrong one
-  for data they may not release.
-
 Attaching nothing is supported and useful: upload an `.h5ad` into
 `/workspace/data` through the browser and the data is never registered with a
-marketplace at all.
+marketplace at all. That is also, today, the only way to work from an `.h5ad`.
+
+**Why there is no `.h5ad` slot yet.** `.h5ad` is the format a lab's matrices
+already exist in, the contract is written in `interfaces/s3-h5ad/v1.yaml`, and
+`sc_workspace` reads it (tested against object storage by prefix and by name) —
+but this repository is not the interface registry. A marketplace matches against
+`BUNDLED_INTERFACES` in the platform's `marketplace-spec` library, mirrored from
+the specification repository, and `AppPublishingService.submit()` refuses any
+definition naming a contract the registry does not hold. Naming it would make
+this listing unpublishable everywhere. Registering it is a change to the
+specification repository, then to swarm-cloud's mirror, then to this copy and
+this listing's `accepts` — and worth doing, because every S3-shaped dataset in
+this catalogue has the same problem one format along.
 
 **The gatekeeper caveat, stated plainly.** The gate speaks ClickHouse over HTTP
 and only that — it injects `x-clickhouse-user` / `x-clickhouse-key` into every

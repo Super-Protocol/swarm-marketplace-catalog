@@ -6,6 +6,10 @@ token: Vd81kQ2mRt6pYs0ZaBn4LcXwEjHu9Gf3
 data:
   # A gated ClickHouse dataset, as the gatekeeper hands it over: a plain
   # listener in this namespace, and no credentials in the connection.
-  bindingJson: '{"multiple":true,"datasets":[{"dataset":"example-cohort","title":"Example cohort","interface":"clickhouse-http/v1","connection":{"host":"sc-gatekeeper-egress","port":9501,"database":"marketplace","username":"","password":""},"secretProperties":["username","password"]}]}'
+  # The shape `{{ data.matrices | json }}` actually renders: an ARRAY of bound
+  # datasets, one object each. Taken from a real deployment rather than from the
+  # platform's `SlotBinding` type, which reads like an object and is not what
+  # reaches the chart.
+  bindingJson: '[{"dataset":"example-cohort","title":"Example cohort","interface":"clickhouse-http/v1","connection":{"host":"sc-gatekeeper-egress","port":9501,"database":"marketplace","username":"","password":""},"secretProperties":["username","password"]}]'
   batchKey: batch
   labelKey: cell_type

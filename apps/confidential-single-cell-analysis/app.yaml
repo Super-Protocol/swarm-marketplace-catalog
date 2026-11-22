@@ -187,11 +187,16 @@ data:
     # reaches this deployment through a plain listener in its own namespace, and
     # every read is admitted against the evidence this deployment published.
     #
-    # `s3-h5ad/v1` is the direct one, and it is here because `.h5ad` is the
-    # format a lab's matrices already exist in. The dataset owner hands out
-    # credentials for it, so it is the right interface for data inside the
-    # tenant's own perimeter and the wrong one for data they are not allowed to
-    # release.
+    # `s3-h5ad/v1` is NOT in `accepts`, and the reason is worth recording.
+    # `.h5ad` is the format a lab's matrices already exist in, the contract is
+    # written (`interfaces/s3-h5ad/v1.yaml`) and the workspace reads it — but the
+    # interface registry is not this repository. It is `BUNDLED_INTERFACES` in
+    # the platform's own `marketplace-spec` library, mirrored from the
+    # specification repository, and `AppPublishingService.submit()` refuses any
+    # definition naming a contract the registry does not hold:
+    # "Unknown data interface(s) … Add the contract to the registry first."
+    # Naming it here would make this listing unpublishable on every marketplace
+    # until the platform ships the contract. It goes back in the moment it does.
     #
     # Not required. A deployment with nothing attached is a supported and useful
     # one: the tenant drops an `.h5ad` into /workspace/data through the browser
@@ -202,15 +207,14 @@ data:
     - name: matrices
       title: Single-cell matrices
       description: >-
-        The expression matrices the notebooks work on. An `.h5ad` dataset is read as it is; a
-        ClickHouse dataset is assembled from long-form `sc_counts` plus `sc_cells` and, optionally,
-        `sc_genes`. Attach more than one and the notebooks read the first — `00_dataset.ipynb` lists
-        them all.
+        The expression matrices the notebooks work on, assembled from long-form `sc_counts`
+        (`cell_id`, `gene`, `count`) plus `sc_cells` and, optionally, `sc_genes`. Attach more than
+        one and the notebooks read the first — `00_dataset.ipynb` lists them all. Nothing attached
+        is also supported: upload an `.h5ad` into /workspace/data instead.
       required: false
       multiple: true
       accepts:
         - interface: clickhouse-http/v1
-        - interface: s3-h5ad/v1
       schema:
         tables:
           - columns:

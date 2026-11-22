@@ -14,7 +14,7 @@ metadata:
 type: Opaque
 stringData:
   token: "Vd81kQ2mRt6pYs0ZaBn4LcXwEjHu9Gf3"
-  binding.json: "{\"multiple\":true,\"datasets\":[{\"dataset\":\"example-cohort\",\"title\":\"Example cohort\",\"interface\":\"clickhouse-http/v1\",\"connection\":{\"host\":\"sc-gatekeeper-egress\",\"port\":9501,\"database\":\"marketplace\",\"username\":\"\",\"password\":\"\"},\"secretProperties\":[\"username\",\"password\"]}]}"
+  binding.json: "[{\"dataset\":\"example-cohort\",\"title\":\"Example cohort\",\"interface\":\"clickhouse-http/v1\",\"connection\":{\"host\":\"sc-gatekeeper-egress\",\"port\":9501,\"database\":\"marketplace\",\"username\":\"\",\"password\":\"\"},\"secretProperties\":[\"username\",\"password\"]}]"
 ---
 # Source: rapids-singlecell-notebook/templates/configmap.yaml
 apiVersion: v1
@@ -66,7 +66,12 @@ data:
     cp -n /opt/sc-notebooks/LICENSE /workspace/notebooks/ 2>/dev/null || true
     cp -n /opt/sc/sc_workspace.py   /workspace/notebooks/ 2>/dev/null || true
   
-    python3 - <<'PY'
+    # What this deployment is bound to, in the log, where somebody debugging a
+    # deployment will look first. Deliberately NOT fatal: a workspace whose loader
+    # cannot read its binding is still a usable JupyterLab a tenant can fix from
+    # inside, and `set -e` turning this line into a CrashLoopBackOff is exactly what
+    # it did on the first real deployment of this chart (2026-11-22).
+    python3 - <<'PY' || echo "[bootstrap] could not read the dataset binding; the workspace starts anyway"
     import sys
     sys.path.insert(0, "/opt/sc")
     import sc_workspace as scw
@@ -243,19 +248,40 @@ data:
     # The binding
     # ---------------------------------------------------------------------------
   
-    def binding() -> dict:
-        """The marketplace's resolved `data.matrices`, or an empty slot."""
+    def binding():
+        """Whatever the marketplace wrote into the Secret, parsed, or None.
+  
+        The shape is not ours to choose. `{{ data.matrices | json }}` renders the
+        bound datasets as a JSON **array** — one object per dataset, which is also
+        how the Conversational Analyst listing consumes it — and an empty slot
+        renders as `[]`. It is read defensively anyway: an object carrying a
+        `datasets` key is the other plausible shape (the platform's own `SlotBinding`
+        type has one), and a workspace that crashed on the wrong guess is a
+        deployment that CrashLoopBackOffs with the environment already installed.
+        Verified against a real deployment on 2026-11-22, which is how the array
+        shape is known rather than assumed.
+        """
         if not BINDING_PATH.exists():
-            return {'multiple': True, 'datasets': []}
+            return None
         text = BINDING_PATH.read_text().strip()
         if not text:
-            return {'multiple': True, 'datasets': []}
-        return json.loads(text)
+            return None
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return None
   
   
     def datasets() -> list[dict]:
         """One entry per dataset the operator bound, in the order they chose."""
-        return list(binding().get('datasets') or [])
+        parsed = binding()
+        if isinstance(parsed, list):
+            entries = parsed
+        elif isinstance(parsed, dict):
+            entries = parsed.get('datasets') or []
+        else:
+            entries = []
+        return [entry for entry in entries if isinstance(entry, dict)]
   
   
     def describe_binding() -> str:
@@ -464,7 +490,8 @@ data:
         "\n",
         "Run them before anything else: every question that makes\n",
         "`01_preprocessing.ipynb` fail halfway through is answered here in under a minute.\n"
-       ]
+       ],
+       "id": "sc000"
       },
       {
        "cell_type": "markdown",
@@ -476,7 +503,8 @@ data:
         "others: a dataset the operator attached to the **Single-cell matrices** slot, or\n",
         "a file dropped into `/workspace/data` with the file browser on the left. Nothing\n",
         "in this workspace downloads a corpus from the internet.\n"
-       ]
+       ],
+       "id": "sc001"
       },
       {
        "cell_type": "code",
@@ -489,7 +517,8 @@ data:
         "print(scw.describe_binding())\n",
         "for entry in scw.datasets():\n",
         "    print(f\"  {entry.get('dataset')}  {entry.get('interface')}  {entry.get('title') or ''}\")\n"
-       ]
+       ],
+       "id": "sc002"
       },
       {
        "cell_type": "markdown",
@@ -500,7 +529,8 @@ data:
         "`load_matrix()` resolves whichever source is present. An `.h5ad` is read as it\n",
         "is; a ClickHouse dataset served through the gatekeeper is assembled from its\n",
         "long-form `sc_counts` / `sc_cells` / `sc_genes` tables.\n"
-       ]
+       ],
+       "id": "sc003"
       },
       {
        "cell_type": "code",
@@ -510,7 +540,8 @@ data:
        "source": [
         "adata = scw.load_matrix()\n",
         "print(adata)\n"
-       ]
+       ],
+       "id": "sc004"
       },
       {
        "cell_type": "code",
@@ -524,7 +555,8 @@ data:
         "print(\"obs columns:\", list(adata.obs.columns))\n",
         "print(\"batch column:\", scw.batch_key(adata))\n",
         "print(\"annotation column:\", scw.label_key(adata))\n"
-       ]
+       ],
+       "id": "sc005"
       },
       {
        "cell_type": "markdown",
@@ -535,7 +567,8 @@ data:
         "This is the cell worth running on a new deployment. RAPIDS-singlecell computes on\n",
         "the card; if the card is not reachable from inside the enclave, everything below\n",
         "is a CPU-only notebook server and the listing is not doing its job.\n"
-       ]
+       ],
+       "id": "sc006"
       },
       {
        "cell_type": "code",
@@ -551,7 +584,8 @@ data:
         "properties = cp.cuda.runtime.getDeviceProperties(0)\n",
         "print(f\"{properties['name'].decode()}  {total / 2**30:.1f} GiB total, {free / 2**30:.1f} GiB free\")\n",
         "print(\"rapids_singlecell\", rsc.__version__)\n"
-       ]
+       ],
+       "id": "sc007"
       },
       {
        "cell_type": "code",
@@ -565,12 +599,13 @@ data:
         "\n",
         "start = time.time()\n",
         "rsc.get.anndata_to_GPU(adata)\n",
-        "rsc.pp.filter_genes(adata, min_count=1)\n",
+        "rsc.pp.filter_genes(adata, min_cells=3)\n",
         "rsc.pp.normalize_total(adata, target_sum=1e4)\n",
         "rsc.pp.log1p(adata)\n",
         "print(f\"normalised {adata.n_obs} x {adata.n_vars} on the GPU in {time.time() - start:.1f}s\")\n",
         "rsc.get.anndata_to_CPU(adata)\n"
-       ]
+       ],
+       "id": "sc008"
       },
       {
        "cell_type": "markdown",
@@ -585,7 +620,8 @@ data:
         "Nothing written here leaves the deployment. There is no egress path out of this\n",
         "workspace for the data: what you export, you export yourself, by downloading it\n",
         "through the browser.\n"
-       ]
+       ],
+       "id": "sc009"
       },
       {
        "cell_type": "code",
@@ -596,7 +632,8 @@ data:
         "path = scw.derived(\"as_loaded.h5ad\")\n",
         "adata.write(path)\n",
         "print(\"wrote\", path)\n"
-       ]
+       ],
+       "id": "sc010"
       },
       {
        "cell_type": "markdown",
@@ -611,7 +648,8 @@ data:
         "| `03_pearson_residuals.ipynb` | the same workflow as 01 with Pearson residuals instead of log-normalisation. |\n",
         "\n",
         "`PROVENANCE.md` says exactly what was changed in each of them and why.\n"
-       ]
+       ],
+       "id": "sc011"
       }
      ],
      "metadata": {
@@ -636,7 +674,8 @@ data:
        "metadata": {},
        "source": [
         "> **Ported for confidential execution.** This is NVIDIA's [Single-Cell Analysis Blueprint](https://github.com/NVIDIA-AI-Blueprints/single-cell-analysis-blueprint) notebook, Apache-2.0, with its download step replaced by `sc_workspace.load_matrix()` and its hard-coded `obs` column names replaced by this deployment's own. Nothing else is changed. `PROVENANCE.md` lists every edit.\n"
-       ]
+       ],
+       "id": "sc000"
       },
       {
        "cell_type": "markdown",
@@ -660,7 +699,8 @@ data:
         "We then take our output file to do further decoupling analysis in **[GPU Demo Part 2 - Decoupler-GPU: Accelerated Transcriptional Regulatory Analysis](02_scRNA_analysis_extended.ipynb)**\n",
         "\n",
         "**Let's begin!**"
-       ]
+       ],
+       "id": "sc001"
       },
       {
        "cell_type": "code",
@@ -679,7 +719,8 @@ data:
         "import warnings\n",
         "\n",
         "warnings.filterwarnings(\"ignore\")"
-       ]
+       ],
+       "id": "sc002"
       },
       {
        "cell_type": "code",
@@ -696,21 +737,24 @@ data:
         "    devices=0,  # GPU device IDs to register. By default registers only GPU 0.\n",
         ")\n",
         "cp.cuda.set_allocator(rmm_cupy_allocator)"
-       ]
+       ],
+       "id": "sc003"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "## Load and Prepare Data"
-       ]
+       ],
+       "id": "sc004"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "Let's start by creating our dataset."
-       ]
+       ],
+       "id": "sc005"
       },
       {
        "cell_type": "code",
@@ -734,14 +778,16 @@ data:
         "batch = scw.batch_key(adata)\n",
         "label = scw.label_key(adata)\n",
         "print(f\"batch column: {batch!r}; annotation column: {label!r}; {adata.n_obs} cells x {adata.n_vars} genes\")\n"
-       ]
+       ],
+       "id": "sc006"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "We load the sparse count matrix from an `h5ad` file using Scanpy. The sparse count matrix will then be placed on the GPU. "
-       ]
+       ],
+       "id": "sc007"
       },
       {
        "cell_type": "code",
@@ -750,7 +796,8 @@ data:
        "outputs": [],
        "source": [
         "data_load_start = time.time()"
-       ]
+       ],
+       "id": "sc008"
       },
       {
        "cell_type": "code",
@@ -762,7 +809,8 @@ data:
         "# dataset this deployment is bound to. Upstream re-read the file it had just\n",
         "# downloaded.\n",
         "adata\n"
-       ]
+       ],
+       "id": "sc009"
       },
       {
        "cell_type": "code",
@@ -774,7 +822,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.get.anndata_to_GPU(adata)"
-       ]
+       ],
+       "id": "sc010"
       },
       {
        "cell_type": "code",
@@ -784,14 +833,16 @@ data:
        "source": [
         "data_load_time = time.time()\n",
         "print(\"Total data load and format time: %s\" % (data_load_time - data_load_start))"
-       ]
+       ],
+       "id": "sc011"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "## Preprocessing"
-       ]
+       ],
+       "id": "sc012"
       },
       {
        "cell_type": "code",
@@ -800,7 +851,8 @@ data:
        "outputs": [],
        "source": [
         "preprocess_start = time.time()"
-       ]
+       ],
+       "id": "sc013"
       },
       {
        "cell_type": "code",
@@ -812,14 +864,16 @@ data:
         "# a tenant's own matrix is already indexed by gene name more often than not.\n",
         "if \"feature_name\" in adata.var:\n",
         "    adata.var_names = adata.var.feature_name.astype(str).to_numpy()\n"
-       ]
+       ],
+       "id": "sc014"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "### Quality Control"
-       ]
+       ],
+       "id": "sc015"
       },
       {
        "cell_type": "markdown",
@@ -837,7 +891,8 @@ data:
         "  - Number of cells expressing each gene  \n",
         "\n",
         "These metrics help identify low-quality or stressed cells and ensure a meaningful feature set for downstream analysis."
-       ]
+       ],
+       "id": "sc016"
       },
       {
        "cell_type": "code",
@@ -847,7 +902,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.flag_gene_family(adata, gene_family_name=\"MT\", gene_family_prefix=\"MT\")"
-       ]
+       ],
+       "id": "sc017"
       },
       {
        "cell_type": "code",
@@ -857,7 +913,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.flag_gene_family(adata, gene_family_name=\"RIBO\", gene_family_prefix=\"RPS\")"
-       ]
+       ],
+       "id": "sc018"
       },
       {
        "cell_type": "code",
@@ -867,7 +924,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.calculate_qc_metrics(adata, qc_vars=[\"MT\", \"RIBO\"])"
-       ]
+       ],
+       "id": "sc019"
       },
       {
        "cell_type": "markdown",
@@ -896,7 +954,8 @@ data:
         "   - High mitochondrial content could be a sign of cell stress or apoptosis.\n",
         "\n",
         "These visualizations help assess dataset quality and guide decisions on filtering low-quality cells."
-       ]
+       ],
+       "id": "sc020"
       },
       {
        "cell_type": "code",
@@ -908,7 +967,8 @@ data:
        "source": [
         "sc.pl.scatter(adata, x=\"total_counts\", y=\"pct_counts_MT\")\n",
         "sc.pl.scatter(adata, x=\"total_counts\", y=\"n_genes_by_counts\")"
-       ]
+       ],
+       "id": "sc021"
       },
       {
        "cell_type": "code",
@@ -919,14 +979,16 @@ data:
         "sc.pl.violin(adata, \"n_genes_by_counts\", jitter=0.4, groupby=scw.BATCH_KEY)\n",
         "sc.pl.violin(adata, \"total_counts\", jitter=0.4, groupby=scw.BATCH_KEY)\n",
         "sc.pl.violin(adata, \"pct_counts_MT\", jitter=0.4, groupby=scw.BATCH_KEY)"
-       ]
+       ],
+       "id": "sc022"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "### Filter"
-       ]
+       ],
+       "id": "sc023"
       },
       {
        "cell_type": "markdown",
@@ -934,7 +996,8 @@ data:
        "source": [
         "We filter the count matrix to remove cells with an extreme number of genes expressed.\n",
         "We also filter out cells with a mitchondrial content of more than 20%."
-       ]
+       ],
+       "id": "sc024"
       },
       {
        "cell_type": "code",
@@ -945,14 +1008,16 @@ data:
         "%%time\n",
         "adata = adata[adata.obs[\"n_genes_by_counts\"] < 5000]\n",
         "adata = adata[adata.obs[\"pct_counts_MT\"] < 20]"
-       ]
+       ],
+       "id": "sc025"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "We also filter out genes that are expressed in less than 3 cells."
-       ]
+       ],
+       "id": "sc026"
       },
       {
        "cell_type": "code",
@@ -964,14 +1029,16 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.filter_genes(adata, min_cells=3)"
-       ]
+       ],
+       "id": "sc027"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "The size of our count matrix is now reduced."
-       ]
+       ],
+       "id": "sc028"
       },
       {
        "cell_type": "code",
@@ -980,21 +1047,24 @@ data:
        "outputs": [],
        "source": [
         "adata.shape"
-       ]
+       ],
+       "id": "sc029"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "### Normalize"
-       ]
+       ],
+       "id": "sc030"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "We normalize the count matrix so that the total counts in each cell sum to 1e4. This will help remove some technical variability due to sequencing depth."
-       ]
+       ],
+       "id": "sc031"
       },
       {
        "cell_type": "code",
@@ -1004,14 +1074,16 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.normalize_total(adata, target_sum=1e4)"
-       ]
+       ],
+       "id": "sc032"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "Next, we data transform the count matrix."
-       ]
+       ],
+       "id": "sc033"
       },
       {
        "cell_type": "code",
@@ -1021,14 +1093,16 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.log1p(adata)"
-       ]
+       ],
+       "id": "sc034"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "### Select Most Variable Genes"
-       ]
+       ],
+       "id": "sc035"
       },
       {
        "cell_type": "markdown",
@@ -1038,7 +1112,8 @@ data:
         "As in Scanpy, you can either filter based on variance cutoffs or select the `n_top_genes`. Additionally, you can use a `batch_key` to correct for batch effects.  \n",
         "\n",
         "In this example, we use the `cell_ranger` method, which selects highly variable genes based on the log-normalized counts stored in `.X`.\n"
-       ]
+       ],
+       "id": "sc036"
       },
       {
        "cell_type": "code",
@@ -1048,14 +1123,16 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.highly_variable_genes(adata, n_top_genes=5000, flavor=\"cell_ranger\")"
-       ]
+       ],
+       "id": "sc037"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "Now we save this version of the AnnData as adata.raw. "
-       ]
+       ],
+       "id": "sc038"
       },
       {
        "cell_type": "code",
@@ -1065,7 +1142,8 @@ data:
        "source": [
         "%%time\n",
         "adata.raw = adata"
-       ]
+       ],
+       "id": "sc039"
       },
       {
        "cell_type": "markdown",
@@ -1073,7 +1151,8 @@ data:
        "source": [
         "We now restrict our AnnData object to only the highly variable genes.  \n",
         "This step reduces the number of features, focusing the analysis on the most informative genes while improving computational efficiency."
-       ]
+       ],
+       "id": "sc040"
       },
       {
        "cell_type": "code",
@@ -1083,7 +1162,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.filter_highly_variable(adata)"
-       ]
+       ],
+       "id": "sc041"
       },
       {
        "cell_type": "markdown",
@@ -1095,7 +1175,8 @@ data:
         "As in Scanpy, you can regress out any numerical column from `.obs`, allowing for the correction of batch effects, sequencing depth, or other confounding factors.\n",
         "\n",
         "For more complex data sets, these steps may overcorrect and remove potentially useful information and need to be carefully used."
-       ]
+       ],
+       "id": "sc042"
       },
       {
        "cell_type": "code",
@@ -1105,14 +1186,16 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.regress_out(adata, keys=[\"total_counts\", \"pct_counts_MT\"])"
-       ]
+       ],
+       "id": "sc043"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "### Scale"
-       ]
+       ],
+       "id": "sc044"
       },
       {
        "cell_type": "markdown",
@@ -1121,7 +1204,8 @@ data:
         "Finally, we scale the count matrix to obtain a z-score transformation, standardizing gene expression across cells.  \n",
         "To prevent extreme values from dominating the analysis, we apply a cutoff of 10 standard deviations.  \n",
         "This ensures that highly expressed genes do not disproportionately influence downstream computations."
-       ]
+       ],
+       "id": "sc045"
       },
       {
        "cell_type": "code",
@@ -1131,7 +1215,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.scale(adata, max_value=10)"
-       ]
+       ],
+       "id": "sc046"
       },
       {
        "cell_type": "markdown",
@@ -1139,7 +1224,8 @@ data:
        "source": [
         "### Total Preprocessing Time\n",
         "Now let's see how long the total preprocesssing time takes"
-       ]
+       ],
+       "id": "sc047"
       },
       {
        "cell_type": "code",
@@ -1149,21 +1235,24 @@ data:
        "source": [
         "preprocess_time = time.time()\n",
         "print(\"Total Preprocessing time: %s\" % (preprocess_time - preprocess_start))"
-       ]
+       ],
+       "id": "sc048"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "## Clustering and Visualization"
-       ]
+       ],
+       "id": "sc049"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "### Principal component analysis"
-       ]
+       ],
+       "id": "sc050"
       },
       {
        "cell_type": "markdown",
@@ -1173,7 +1262,8 @@ data:
         "This step captures the most important sources of variation in the data while reducing computational complexity.  \n",
         "\n",
         "We use the GPU-accelerated PCA implementation from cuML, which significantly speeds up computation compared to CPU-based methods."
-       ]
+       ],
+       "id": "sc051"
       },
       {
        "cell_type": "code",
@@ -1183,14 +1273,16 @@ data:
        "source": [
         "%%time\n",
         "rsc.tl.pca(adata, n_comps=100)"
-       ]
+       ],
+       "id": "sc052"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "We can use scanpy `pca_variance_ratio` plot to inspect the contribution of single PCs to the total variance in the data."
-       ]
+       ],
+       "id": "sc053"
       },
       {
        "cell_type": "code",
@@ -1199,7 +1291,8 @@ data:
        "outputs": [],
        "source": [
         "sc.pl.pca_variance_ratio(adata, log=True, n_pcs=100)"
-       ]
+       ],
+       "id": "sc054"
       },
       {
        "cell_type": "markdown",
@@ -1209,7 +1302,8 @@ data:
         "\n",
         "Since some downstream analyses or visualizations may not require GPU acceleration, this step helps optimize memory usage,  \n",
         "preventing unnecessary GPU load while still keeping the processed data accessible for further analysis."
-       ]
+       ],
+       "id": "sc055"
       },
       {
        "cell_type": "code",
@@ -1218,14 +1312,16 @@ data:
        "outputs": [],
        "source": [
         "rsc.get.anndata_to_CPU(adata)"
-       ]
+       ],
+       "id": "sc056"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "### Computing the neighborhood graph and UMAP"
-       ]
+       ],
+       "id": "sc057"
       },
       {
        "cell_type": "markdown",
@@ -1243,7 +1339,8 @@ data:
         "- **`nn_descent`**: A graph-based method that incrementally refines the nearest neighbor search and works well for large, high-dimensional datasets.  \n",
         "\n",
         "Since our dataset is relatively small, we will use the default **brute-force (`brute`)** search underneath neighbors to ensure exact results."
-       ]
+       ],
+       "id": "sc058"
       },
       {
        "cell_type": "code",
@@ -1253,7 +1350,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.neighbors(adata, n_neighbors=15, n_pcs=40)"
-       ]
+       ],
+       "id": "sc059"
       },
       {
        "cell_type": "markdown",
@@ -1263,7 +1361,8 @@ data:
         "\n",
         "UMAP (Uniform Manifold Approximation and Projection) is a dimensionality reduction technique that preserves local and global structure in the data.  \n",
         "The RAPIDS implementation accelerates UMAP computation on GPUs, making it significantly faster than the standard CPU version."
-       ]
+       ],
+       "id": "sc060"
       },
       {
        "cell_type": "code",
@@ -1273,14 +1372,16 @@ data:
        "source": [
         "%%time\n",
         "rsc.tl.umap(adata)"
-       ]
+       ],
+       "id": "sc061"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "### Clustering"
-       ]
+       ],
+       "id": "sc062"
       },
       {
        "cell_type": "markdown",
@@ -1293,7 +1394,8 @@ data:
         "- **Leiden**: An improved version of Louvain that guarantees well-connected, more stable clusters.  \n",
         "\n",
         "Using RAPIDS accelerates the clustering process on GPUs, making it significantly faster than traditional CPU implementations."
-       ]
+       ],
+       "id": "sc063"
       },
       {
        "cell_type": "code",
@@ -1303,7 +1405,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.tl.louvain(adata, resolution=0.6)"
-       ]
+       ],
+       "id": "sc064"
       },
       {
        "cell_type": "code",
@@ -1313,7 +1416,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.tl.leiden(adata, resolution=0.6)"
-       ]
+       ],
+       "id": "sc065"
       },
       {
        "cell_type": "code",
@@ -1323,7 +1427,8 @@ data:
        "source": [
         "%%time\n",
         "sc.pl.umap(adata, color=[\"louvain\", \"leiden\"], legend_loc=\"on data\")"
-       ]
+       ],
+       "id": "sc066"
       },
       {
        "cell_type": "code",
@@ -1335,7 +1440,8 @@ data:
         "ax = fig.axes[0]\n",
         "ax.legend_.set_title(scw.LABEL_KEY)\n",
         "ax.legend_.set_bbox_to_anchor((-0.2, -0.4))\n"
-       ]
+       ],
+       "id": "sc067"
       },
       {
        "cell_type": "markdown",
@@ -1352,7 +1458,8 @@ data:
         "- **Graph-based clustering** to identify cell populations without batch-driven artifacts  \n",
         "\n",
         "This ensures that batch effects do not drive clustering results while retaining meaningful biological structure.\n"
-       ]
+       ],
+       "id": "sc068"
       },
       {
        "cell_type": "code",
@@ -1362,7 +1469,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.harmony_integrate(adata, key=scw.BATCH_KEY, dtype=cp.float32)"
-       ]
+       ],
+       "id": "sc069"
       },
       {
        "cell_type": "code",
@@ -1381,7 +1489,8 @@ data:
         "rsc.tl.leiden(\n",
         "    adata, resolution=0.6, neighbors_key=\"harmony\", key_added=\"leiden_harmony\"\n",
         ")"
-       ]
+       ],
+       "id": "sc070"
       },
       {
        "cell_type": "code",
@@ -1396,7 +1505,8 @@ data:
         "    color=[\"louvain_harmony\", \"leiden_harmony\"],\n",
         "    legend_loc=\"on data\",\n",
         ")"
-       ]
+       ],
+       "id": "sc071"
       },
       {
        "cell_type": "code",
@@ -1410,14 +1520,16 @@ data:
         "ax = fig.axes[0]\n",
         "ax.legend_.set_title(scw.LABEL_KEY)\n",
         "ax.legend_.set_bbox_to_anchor((-0.2, -0.4))"
-       ]
+       ],
+       "id": "sc072"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "### TSNE"
-       ]
+       ],
+       "id": "sc073"
       },
       {
        "cell_type": "markdown",
@@ -1429,7 +1541,8 @@ data:
         "We leverage the RAPIDS GPU implementation of t-SNE, which is significantly faster than CPU-based methods.  \n",
         "This allows us to efficiently process large datasets while maintaining high-quality embeddings.  \n",
         "\n"
-       ]
+       ],
+       "id": "sc074"
       },
       {
        "cell_type": "code",
@@ -1446,7 +1559,8 @@ data:
         "    learning_rate=200,\n",
         "    use_rep=\"X_pca_harmony\",\n",
         ")"
-       ]
+       ],
+       "id": "sc075"
       },
       {
        "cell_type": "code",
@@ -1458,14 +1572,16 @@ data:
         "ax = fig.axes[0]\n",
         "ax.legend_.set_title(scw.LABEL_KEY)\n",
         "ax.legend_.set_bbox_to_anchor((-0.2, -0.4))"
-       ]
+       ],
+       "id": "sc076"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "## Differential expression analysis"
-       ]
+       ],
+       "id": "sc077"
       },
       {
        "cell_type": "markdown",
@@ -1476,7 +1592,8 @@ data:
         "while accounting for all genes simultaneously, making it more robust for complex datasets.  \n",
         "\n",
         "We rank the top 50 genes that best distinguish each **cell type**, helping to characterize biological differences between clusters.  "
-       ]
+       ],
+       "id": "sc078"
       },
       {
        "cell_type": "code",
@@ -1486,7 +1603,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.tl.rank_genes_groups(adata, groupby=scw.LABEL_KEY, method  = \"wilcoxon_binned\", use_raw=False)"
-       ]
+       ],
+       "id": "sc079"
       },
       {
        "cell_type": "code",
@@ -1495,7 +1613,8 @@ data:
        "outputs": [],
        "source": [
         "sc.pl.rank_genes_groups(adata)"
-       ]
+       ],
+       "id": "sc080"
       },
       {
        "cell_type": "code",
@@ -1504,7 +1623,8 @@ data:
        "outputs": [],
        "source": [
         "post_time = time.time()"
-       ]
+       ],
+       "id": "sc081"
       },
       {
        "cell_type": "code",
@@ -1513,7 +1633,8 @@ data:
        "outputs": [],
        "source": [
         "print(\"Total Postprocessing time: %s\" % (post_time - preprocess_time))"
-       ]
+       ],
+       "id": "sc082"
       },
       {
        "cell_type": "markdown",
@@ -1525,7 +1646,8 @@ data:
         "Unlike UMAP and t-SNE, Diffusion Maps are well-suited for capturing **trajectory-like** relationships in single-cell data.  \n",
         "\n",
         "We use the batch-corrected neighborhood graph (`neighbors_key=\"harmony\"`) to ensure that the embedding is not influenced by batch effects.  "
-       ]
+       ],
+       "id": "sc083"
       },
       {
        "cell_type": "code",
@@ -1537,7 +1659,8 @@ data:
         "rsc.tl.diffmap(adata, neighbors_key=\"harmony\")\n",
         "# Due to an issue with plotting in Scanpy, we need to shift the first component of the diffusion map by removing the first column:\n",
         "adata.obsm[\"X_diffmap\"] = adata.obsm[\"X_diffmap\"][:, 1:]"
-       ]
+       ],
+       "id": "sc084"
       },
       {
        "cell_type": "code",
@@ -1546,7 +1669,8 @@ data:
        "outputs": [],
        "source": [
         "sc.pl.diffmap(adata, color=scw.LABEL_KEY)"
-       ]
+       ],
+       "id": "sc085"
       },
       {
        "cell_type": "code",
@@ -1555,7 +1679,8 @@ data:
        "outputs": [],
        "source": [
         "print(\"Total Processing time: %s\" % (time.time() - preprocess_start))"
-       ]
+       ],
+       "id": "sc086"
       },
       {
        "cell_type": "code",
@@ -1567,7 +1692,8 @@ data:
         "# /workspace/derived is the volume that survives a restart, and is where\n",
         "# 02_regulatory_activity.ipynb reads this file from.\n",
         "adata.write(scw.derived(\"preprocessed.h5ad\"))\n"
-       ]
+       ],
+       "id": "sc087"
       },
       {
        "cell_type": "markdown",
@@ -1576,7 +1702,8 @@ data:
         "## Next steps\n",
         "\n",
         "The preprocessed matrix is now at `/workspace/derived/preprocessed.h5ad`. **[02_regulatory_activity.ipynb](02_regulatory_activity.ipynb)** picks it up from there.\n"
-       ]
+       ],
+       "id": "sc088"
       },
       {
        "cell_type": "code",
@@ -1593,14 +1720,16 @@ data:
         "import IPython\n",
         "\n",
         "IPython.Application.instance().kernel.do_shutdown(True)"
-       ]
+       ],
+       "id": "sc089"
       },
       {
        "cell_type": "code",
        "execution_count": null,
        "metadata": {},
        "outputs": [],
-       "source": []
+       "source": [],
+       "id": "sc090"
       }
      ],
      "metadata": {
@@ -1633,7 +1762,8 @@ data:
        "metadata": {},
        "source": [
         "> **Ported for confidential execution.** This is NVIDIA's [Single-Cell Analysis Blueprint](https://github.com/NVIDIA-AI-Blueprints/single-cell-analysis-blueprint) notebook, Apache-2.0, with its download step replaced by `sc_workspace.load_matrix()` and its hard-coded `obs` column names replaced by this deployment's own. Nothing else is changed. `PROVENANCE.md` lists every edit.\n"
-       ]
+       ],
+       "id": "sc000"
       },
       {
        "cell_type": "markdown",
@@ -1649,7 +1779,8 @@ data:
         "In this notebook, we explore the updated [**Decoupler**](https://decoupler-py.readthedocs.io/en/latest/) functions for inferring transcriptional regulatory activity, leveraging the **GPU-accelerated** implementation from **rapids-singlecell**.  \n",
         "\n",
         "By running these analyses on GPUs, we achieve **faster computation** and **scalability** for large single-cell datasets. We will apply **Decoupler** methods to estimate **transcription factor (TF) activity** and **pathway activity**, utilizing curated regulatory networks such as **Dorothea** and **PROGENy**."
-       ]
+       ],
+       "id": "sc001"
       },
       {
        "cell_type": "code",
@@ -1670,7 +1801,8 @@ data:
         "    pool_allocator=True, # default is False\n",
         ")\n",
         "cp.cuda.set_allocator(rmm_cupy_allocator)"
-       ]
+       ],
+       "id": "sc002"
       },
       {
        "cell_type": "code",
@@ -1685,7 +1817,8 @@ data:
         "\n",
         "adata = scw.load_matrix(path=scw.derived(\"preprocessed.h5ad\"))\n",
         "adata\n"
-       ]
+       ],
+       "id": "sc003"
       },
       {
        "cell_type": "code",
@@ -1694,7 +1827,8 @@ data:
        "outputs": [],
        "source": [
         "adata = adata.raw.to_adata()"
-       ]
+       ],
+       "id": "sc004"
       },
       {
        "cell_type": "code",
@@ -1703,7 +1837,8 @@ data:
        "outputs": [],
        "source": [
         "rsc.get.anndata_to_GPU(adata)"
-       ]
+       ],
+       "id": "sc005"
       },
       {
        "cell_type": "markdown",
@@ -1714,7 +1849,8 @@ data:
         "We start by retrieving the **Dorothea** gene regulatory network, which provides curated transcription factor (TF) target interactions.  \n",
         "Dorothea assigns confidence levels (`A`, `B`, `C`, `D`, `E`), where `A` represents the highest confidence interactions.  \n",
         "Here, we filter for **high-confidence** (`A`, `B`, `C`) interactions in human data:  "
-       ]
+       ],
+       "id": "sc006"
       },
       {
        "cell_type": "code",
@@ -1723,7 +1859,8 @@ data:
        "outputs": [],
        "source": [
         "collectri = dc.op.collectri(organism=\"human\",license=\"commercial\")"
-       ]
+       ],
+       "id": "sc007"
       },
       {
        "cell_type": "markdown",
@@ -1735,7 +1872,8 @@ data:
         "ULM estimates the regulatory influence of TFs on gene expression by fitting a linear model for each TF-gene interaction.  \n",
         "\n",
         "We apply **ULM** using the **Dorothea** regulatory network retrieved earlier. "
-       ]
+       ],
+       "id": "sc008"
       },
       {
        "cell_type": "code",
@@ -1747,7 +1885,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.dcg.ulm(adata, collectri, verbose=True, raw = False, pre_load=True)"
-       ]
+       ],
+       "id": "sc009"
       },
       {
        "cell_type": "code",
@@ -1756,7 +1895,8 @@ data:
        "outputs": [],
        "source": [
         "acts = dc.pp.get_obsm(adata=adata, key=\"score_ulm\")"
-       ]
+       ],
+       "id": "sc010"
       },
       {
        "cell_type": "code",
@@ -1766,7 +1906,8 @@ data:
        "source": [
         "sc.pl.embedding(acts,basis=\"X_umap_harmony\", color=[scw.LABEL_KEY, \"GATA3\"], cmap='RdBu_r',ncols=1)\n",
         "sc.pl.violin(acts, keys=['GATA3'], groupby=scw.LABEL_KEY, rotation=90, size = 0)\n"
-       ]
+       ],
+       "id": "sc011"
       },
       {
        "cell_type": "markdown",
@@ -1777,7 +1918,8 @@ data:
         "Next, we infer transcription factor (TF) activity using the **Multivariate Linear Model (MLM)** from **Decoupler**.  \n",
         "Unlike **ULM**, which considers each TF independently, **MLM** accounts for multiple TFs simultaneously,  \n",
         "providing a more comprehensive estimation of regulatory influences. "
-       ]
+       ],
+       "id": "sc012"
       },
       {
        "cell_type": "code",
@@ -1790,7 +1932,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.dcg.mlm(adata, collectri, verbose=True, raw = False, pre_load=True)"
-       ]
+       ],
+       "id": "sc013"
       },
       {
        "cell_type": "markdown",
@@ -1801,7 +1944,8 @@ data:
         "Next, we infer transcription factor (TF) activity using **AUCell** from **Decoupler**.  \n",
         "AUCell estimates TF activity based on the **enrichment of TF target genes within the top-expressed genes** in each cell.  \n",
         "Unlike regression-based methods (**ULM**, **MLM**), AUCell is a **rank-based approach** that does not assume linear relationships. "
-       ]
+       ],
+       "id": "sc014"
       },
       {
        "cell_type": "code",
@@ -1814,7 +1958,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.dcg.aucell(adata, collectri, verbose=True, raw = False, pre_load=True)"
-       ]
+       ],
+       "id": "sc015"
       },
       {
        "cell_type": "code",
@@ -1823,7 +1968,8 @@ data:
        "outputs": [],
        "source": [
         "acts = dc.pp.get_obsm(adata=adata, key=\"score_aucell\")"
-       ]
+       ],
+       "id": "sc016"
       },
       {
        "cell_type": "code",
@@ -1833,7 +1979,8 @@ data:
        "source": [
         "sc.pl.embedding(acts,basis=\"X_umap_harmony\", color=[scw.LABEL_KEY, \"GATA3\"], cmap='RdBu_r',ncols=1)\n",
         "sc.pl.violin(acts, keys=['GATA3'], groupby=scw.LABEL_KEY, rotation=90, size = 0)\n"
-       ]
+       ],
+       "id": "sc017"
       },
       {
        "cell_type": "code",
@@ -1850,7 +1997,8 @@ data:
         "import IPython\n",
         "\n",
         "IPython.Application.instance().kernel.do_shutdown(True)"
-       ]
+       ],
+       "id": "sc018"
       }
      ],
      "metadata": {
@@ -1883,7 +2031,8 @@ data:
        "metadata": {},
        "source": [
         "> **Ported for confidential execution.** This is NVIDIA's [Single-Cell Analysis Blueprint](https://github.com/NVIDIA-AI-Blueprints/single-cell-analysis-blueprint) notebook, Apache-2.0, with its download step replaced by `sc_workspace.load_matrix()` and its hard-coded `obs` column names replaced by this deployment's own. Nothing else is changed. `PROVENANCE.md` lists every edit.\n"
-       ]
+       ],
+       "id": "sc000"
       },
       {
        "cell_type": "markdown",
@@ -1898,7 +2047,8 @@ data:
         "As with the original End to End workflow notebooks, this tutorial showcases how to leverage GPU computing to significantly speed up your analysis workflow.\n",
         "\n",
         "This method makes high-performance single-cell analysis accessible through straightforward GPU integration, transforming traditionally time-consuming analyses into rapid workflows."
-       ]
+       ],
+       "id": "sc001"
       },
       {
        "cell_type": "code",
@@ -1917,7 +2067,8 @@ data:
         "import warnings\n",
         "\n",
         "warnings.filterwarnings(\"ignore\")"
-       ]
+       ],
+       "id": "sc002"
       },
       {
        "cell_type": "code",
@@ -1934,21 +2085,24 @@ data:
         "    devices=0,  # GPU device IDs to register. By default registers only GPU 0.\n",
         ")\n",
         "cp.cuda.set_allocator(rmm_cupy_allocator)"
-       ]
+       ],
+       "id": "sc003"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "## Load and Prepare Data"
-       ]
+       ],
+       "id": "sc004"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "Let's start by creating our dataset."
-       ]
+       ],
+       "id": "sc005"
       },
       {
        "cell_type": "code",
@@ -1970,14 +2124,16 @@ data:
         "batch = scw.batch_key(adata)\n",
         "label = scw.label_key(adata)\n",
         "print(f\"batch column: {batch!r}; annotation column: {label!r}; {adata.n_obs} cells x {adata.n_vars} genes\")\n"
-       ]
+       ],
+       "id": "sc006"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "We load the sparse count matrix from an `h5ad` file using Scanpy. The sparse count matrix will then be placed on the GPU. "
-       ]
+       ],
+       "id": "sc007"
       },
       {
        "cell_type": "code",
@@ -1986,7 +2142,8 @@ data:
        "outputs": [],
        "source": [
         "data_load_start = time.time()"
-       ]
+       ],
+       "id": "sc008"
       },
       {
        "cell_type": "code",
@@ -1998,7 +2155,8 @@ data:
         "# dataset this deployment is bound to. Upstream re-read the file it had just\n",
         "# downloaded.\n",
         "adata\n"
-       ]
+       ],
+       "id": "sc009"
       },
       {
        "cell_type": "code",
@@ -2010,7 +2168,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.get.anndata_to_GPU(adata)"
-       ]
+       ],
+       "id": "sc010"
       },
       {
        "cell_type": "code",
@@ -2020,14 +2179,16 @@ data:
        "source": [
         "data_load_time = time.time()\n",
         "print(\"Total data load and format time: %s\" % (data_load_time - data_load_start))"
-       ]
+       ],
+       "id": "sc011"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "## Preprocessing"
-       ]
+       ],
+       "id": "sc012"
       },
       {
        "cell_type": "code",
@@ -2036,7 +2197,8 @@ data:
        "outputs": [],
        "source": [
         "preprocess_start = time.time()"
-       ]
+       ],
+       "id": "sc013"
       },
       {
        "cell_type": "code",
@@ -2047,14 +2209,16 @@ data:
         "# Ported: guarded, as in 01_preprocessing.ipynb.\n",
         "if \"feature_name\" in adata.var:\n",
         "    adata.var_names = adata.var.feature_name\n"
-       ]
+       ],
+       "id": "sc014"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "### Quality Control"
-       ]
+       ],
+       "id": "sc015"
       },
       {
        "cell_type": "markdown",
@@ -2072,7 +2236,8 @@ data:
         "  - Number of cells expressing each gene  \n",
         "\n",
         "These metrics help identify low-quality or stressed cells and ensure a meaningful feature set for downstream analysis."
-       ]
+       ],
+       "id": "sc016"
       },
       {
        "cell_type": "code",
@@ -2082,7 +2247,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.flag_gene_family(adata, gene_family_name=\"MT\", gene_family_prefix=\"MT\")"
-       ]
+       ],
+       "id": "sc017"
       },
       {
        "cell_type": "code",
@@ -2092,7 +2258,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.flag_gene_family(adata, gene_family_name=\"RIBO\", gene_family_prefix=\"RPS\")"
-       ]
+       ],
+       "id": "sc018"
       },
       {
        "cell_type": "code",
@@ -2102,7 +2269,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.calculate_qc_metrics(adata, qc_vars=[\"MT\", \"RIBO\"])"
-       ]
+       ],
+       "id": "sc019"
       },
       {
        "cell_type": "markdown",
@@ -2131,7 +2299,8 @@ data:
         "   - High mitochondrial content could be a sign of cell stress or apoptosis.\n",
         "\n",
         "These visualizations help assess dataset quality and guide decisions on filtering low-quality cells."
-       ]
+       ],
+       "id": "sc020"
       },
       {
        "cell_type": "code",
@@ -2143,7 +2312,8 @@ data:
        "source": [
         "sc.pl.scatter(adata, x=\"total_counts\", y=\"pct_counts_MT\")\n",
         "sc.pl.scatter(adata, x=\"total_counts\", y=\"n_genes_by_counts\")"
-       ]
+       ],
+       "id": "sc021"
       },
       {
        "cell_type": "code",
@@ -2154,14 +2324,16 @@ data:
         "sc.pl.violin(adata, \"n_genes_by_counts\", jitter=0.4, groupby=scw.BATCH_KEY)\n",
         "sc.pl.violin(adata, \"total_counts\", jitter=0.4, groupby=scw.BATCH_KEY)\n",
         "sc.pl.violin(adata, \"pct_counts_MT\", jitter=0.4, groupby=scw.BATCH_KEY)"
-       ]
+       ],
+       "id": "sc022"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "### Filter"
-       ]
+       ],
+       "id": "sc023"
       },
       {
        "cell_type": "markdown",
@@ -2169,7 +2341,8 @@ data:
        "source": [
         "We filter the count matrix to remove cells with an extreme number of genes expressed.\n",
         "We also filter out cells with a mitchondrial countent of more than 20%."
-       ]
+       ],
+       "id": "sc024"
       },
       {
        "cell_type": "code",
@@ -2180,14 +2353,16 @@ data:
         "%%time\n",
         "adata = adata[adata.obs[\"n_genes_by_counts\"] < 5000]\n",
         "adata = adata[adata.obs[\"pct_counts_MT\"] < 20]"
-       ]
+       ],
+       "id": "sc025"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "We also filter out genes that are expressed in less than 3 cells."
-       ]
+       ],
+       "id": "sc026"
       },
       {
        "cell_type": "code",
@@ -2197,14 +2372,16 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.filter_genes(adata, min_cells=3)"
-       ]
+       ],
+       "id": "sc027"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "The size of our count matrix is now reduced."
-       ]
+       ],
+       "id": "sc028"
       },
       {
        "cell_type": "code",
@@ -2213,14 +2390,16 @@ data:
        "outputs": [],
        "source": [
         "adata.shape"
-       ]
+       ],
+       "id": "sc029"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "### Normalize"
-       ]
+       ],
+       "id": "sc030"
       },
       {
        "cell_type": "markdown",
@@ -2228,7 +2407,8 @@ data:
        "source": [
         "Before performing further transformations on the data, we store the **raw count matrix** in the `.layers` attribute.  \n",
         "This ensures that the original unnormalized expression values remain accessible for later analyses.  \n"
-       ]
+       ],
+       "id": "sc031"
       },
       {
        "cell_type": "code",
@@ -2237,14 +2417,16 @@ data:
        "outputs": [],
        "source": [
         "adata.layers[\"counts\"] = adata.X.copy()"
-       ]
+       ],
+       "id": "sc032"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "We normalize the count matrix so that the total counts in each cell sum to 1e4."
-       ]
+       ],
+       "id": "sc033"
       },
       {
        "cell_type": "code",
@@ -2254,14 +2436,16 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.normalize_total(adata, target_sum=1e4)"
-       ]
+       ],
+       "id": "sc034"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "Next, we data transform the count matrix."
-       ]
+       ],
+       "id": "sc035"
       },
       {
        "cell_type": "code",
@@ -2271,7 +2455,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.log1p(adata)"
-       ]
+       ],
+       "id": "sc036"
       },
       {
        "cell_type": "code",
@@ -2280,7 +2465,8 @@ data:
        "outputs": [],
        "source": [
         "adata.raw = adata"
-       ]
+       ],
+       "id": "sc037"
       },
       {
        "cell_type": "markdown",
@@ -2292,7 +2478,8 @@ data:
         "These genes are selected based on their variance, helping to reduce noise and focus on meaningful signals.  \n",
         "\n",
         "We use the **Pearson residuals** method to detect HVGs while preserving statistical robustness\n"
-       ]
+       ],
+       "id": "sc038"
       },
       {
        "cell_type": "code",
@@ -2304,14 +2491,16 @@ data:
         "rsc.pp.highly_variable_genes(\n",
         "    adata, n_top_genes=5000, flavor=\"pearson_residuals\", layer=\"counts\"\n",
         ")"
-       ]
+       ],
+       "id": "sc039"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "Now we restrict our AnnData object to the highly variable genes."
-       ]
+       ],
+       "id": "sc040"
       },
       {
        "cell_type": "code",
@@ -2321,7 +2510,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.filter_highly_variable(adata)"
-       ]
+       ],
+       "id": "sc041"
       },
       {
        "cell_type": "code",
@@ -2330,7 +2520,8 @@ data:
        "outputs": [],
        "source": [
         "adata.shape"
-       ]
+       ],
+       "id": "sc042"
       },
       {
        "cell_type": "markdown",
@@ -2342,7 +2533,8 @@ data:
         "\n",
         "This transformation enhances the detection of biological variation while reducing noise.  \n",
         "We store the **Pearson residuals** in a separate layer to preserve the original data:  "
-       ]
+       ],
+       "id": "sc043"
       },
       {
        "cell_type": "code",
@@ -2354,7 +2546,8 @@ data:
         "adata.layers[\"pearson_residuals\"] = rsc.pp.normalize_pearson_residuals(\n",
         "    adata, layer=\"counts\", inplace=False\n",
         ")"
-       ]
+       ],
+       "id": "sc044"
       },
       {
        "cell_type": "markdown",
@@ -2367,7 +2560,8 @@ data:
         "This approach ensures that **technical noise is minimized**, allowing better downstream analysis.  \n",
         "\n",
         "We compute **100 principal components (PCs)** from the normalized data"
-       ]
+       ],
+       "id": "sc045"
       },
       {
        "cell_type": "code",
@@ -2377,7 +2571,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.pp.pca(adata, n_comps=100, layer=\"pearson_residuals\")"
-       ]
+       ],
+       "id": "sc046"
       },
       {
        "cell_type": "code",
@@ -2386,14 +2581,16 @@ data:
        "outputs": [],
        "source": [
         "sc.pl.pca_variance_ratio(adata, log=True, n_pcs=100)"
-       ]
+       ],
+       "id": "sc047"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "Now we move `.X` and `.layers` out of the GPU."
-       ]
+       ],
+       "id": "sc048"
       },
       {
        "cell_type": "code",
@@ -2403,7 +2600,8 @@ data:
        "source": [
         "%%time\n",
         "rsc.get.anndata_to_CPU(adata, convert_all=True)"
-       ]
+       ],
+       "id": "sc049"
       },
       {
        "cell_type": "code",
@@ -2413,14 +2611,16 @@ data:
        "source": [
         "preprocess_time = time.time()\n",
         "print(\"Total Preprocessing time: %s\" % (preprocess_time - preprocess_start))"
-       ]
+       ],
+       "id": "sc050"
       },
       {
        "cell_type": "markdown",
        "metadata": {},
        "source": [
         "We have now finished the preprocessing of the data."
-       ]
+       ],
+       "id": "sc051"
       },
       {
        "cell_type": "code",
@@ -2437,7 +2637,8 @@ data:
         "import IPython\n",
         "\n",
         "IPython.Application.instance().kernel.do_shutdown(True)"
-       ]
+       ],
+       "id": "sc052"
       }
      ],
      "metadata": {
@@ -2695,7 +2896,9 @@ data:
   
     ## What was changed, and why
   
-    Four edits, applied mechanically. Each is marked `# Ported:` in the cell it
+    Four edits, applied mechanically by `scripts/port-single-cell-notebooks.py` in
+    this repository — these three notebooks are generated by it and are not edited
+    by hand. Each is marked `# Ported:` in the cell it
     touches, so the diff against upstream is readable from inside the notebook.
   
     1. **The download is gone.** Upstream's first data cell fetches
@@ -2811,7 +3014,7 @@ spec:
       annotations:
         # The environment lock and the notebooks are mounted, not baked, so a
         # change to either has to roll the pod for anything to notice.
-        checksum/workspace: 6e2503482effb61846c942264979624fc88711b0b3a892622b989aabf031c81f
+        checksum/workspace: 8ed33c1ba37047d5efcb2a461d6ae924acefd214bbe5edd697a223a53eb34fa4
       labels:
         app.kubernetes.io/name: rapids-singlecell-notebook
         app.kubernetes.io/instance: sc
