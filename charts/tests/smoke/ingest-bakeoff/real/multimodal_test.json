@@ -1,0 +1,73 @@
+{
+ "paragraphs": [
+  "This is a placeholder document that can be used for any purpose. It contains some headings and some placeholder text to fill the space. The text is not important and contains no real value, but it is useful for testing. Below, we will have some simple tables and charts that we can use to confirm Ingest is working as expected.",
+  "This is the conclusion of the document. It has some more placeholder text, but the most important thing is that this is the conclusion. As we end this document, we should have been able to extract 2 tables, 2 charts, and some text including 3 bullet points."
+ ],
+ "tables": [
+  [
+   [
+    "Animal",
+    "Activity",
+    "Place"
+   ],
+   [
+    "Giraffe",
+    "Driving a car",
+    "At the beach"
+   ],
+   [
+    "Lion",
+    "Putting on sunscreen",
+    "At the park"
+   ],
+   [
+    "Cat",
+    "Jumping onto a laptop",
+    "In a home office"
+   ],
+   [
+    "Dog",
+    "Chasing a squirrel",
+    "In the front yard"
+   ]
+  ],
+  [
+   [
+    "Car",
+    "Color1",
+    "Color2",
+    "Color3"
+   ],
+   [
+    "Coupe",
+    "White",
+    "Silver",
+    "Flat Gray"
+   ],
+   [
+    "Sedan",
+    "White",
+    "Metallic Gray",
+    "Matte Gray"
+   ],
+   [
+    "Minivan",
+    "Gray",
+    "Beige",
+    "Black"
+   ],
+   [
+    "Truck",
+    "Dark Gray",
+    "Titanium Gray",
+    "Charcoal"
+   ],
+   [
+    "Convertible",
+    "Light Gray",
+    "Graphite",
+    "Slate Gray"
+   ]
+  ]
+ ]
+}
