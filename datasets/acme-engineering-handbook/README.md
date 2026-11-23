@@ -53,12 +53,43 @@ Concretely, so that whoever finds this table down can bring it back:
 | Listener | `10.10.1.10:8123` only. Not the host's public address and not `0.0.0.0`: the NSG does not open 8123, and binding the subnet address rather than every address is the second reason the corpus is not on the internet |
 | Data | Docker volume `sup840-handbook-data` on `/var/lib/clickhouse` — a named volume, so it is identifiable, backed up and not something `docker system prune` collects |
 | Reader account | `handbook_reader`, defined in `/opt/marketplace/sup840-ch/users.xml`, bind-mounted read-only onto `/etc/clickhouse-server/users.d/sup840.xml`. Read-only profile, `allow_databases: handbook`, and the subnet in `networks` |
+| `default` | **loopback only** — `127.0.0.1` and `::1`, declared in the same `users.xml`. It has every grant `WITH GRANT OPTION` and no password, so an address restriction is the whole of its security |
 | Consumers | the gate on `10.10.1.11` reads it as this account and serves it on port 9507; nothing else has a credential for it |
 
 It is a plain `docker run` rather than part of `/opt/marketplace/compose.yaml` because it belongs
 to a dataset in this catalogue, not to the marketplace service: the stand's compose file is the
 marketplace, and a corpus that comes and goes with a listing should not be able to take the API
 down with it.
+
+### What actually protects the corpus, and what does not
+
+Three things, and it is worth being exact about which does what, because the read-only reader
+account is the one people name and the weakest of the three on its own:
+
+1. **The NSG**, which does not open 8123 at all. Nothing outside the stand's subnet reaches this
+   server.
+2. **The listener**, bound to `10.10.1.10` rather than every address.
+3. **`default` confined to loopback.** Inside the subnet, ClickHouse's own `default` user is the
+   thing worth attacking: it holds every grant `WITH GRANT OPTION` and has no password, so
+   reaching it from any host in `10.10.1.0/24` is a `DROP TABLE` and not merely a read. It is
+   restricted to `127.0.0.1` and `::1`, verified by asking for it over the subnet address and
+   getting `516 Authentication failed` back.
+
+The reader account matters once a caller is already a legitimate one: it is what makes the gate's
+credential useless for anything but `SELECT` on this one database — checked by asking it to
+`truncate` the table and getting `164 Cannot execute query in readonly mode`. It is not what
+keeps the subnet out.
+
+The trap is in the image, and it is quiet. `clickhouse/clickhouse-server` ships `default` as
+`<ip>::/0</ip>` and its entrypoint narrows that to loopback on startup — **unless
+`CLICKHOUSE_SKIP_USER_SETUP=1` is set**, which this container was originally run with. Nothing
+says so: the server starts healthy, the reader account works exactly as documented, and the
+dataset serves correctly, with `default` wide open to every host on the subnet the whole time.
+The container therefore no longer sets that variable, and the restriction is also written into
+`users.xml` so it does not depend on remembering. Either one is enough on its own; note that the
+entrypoint's own step stands down (silently) when it sees that `users.default` has already been
+changed by a `users.d` file, so **the way back to the bad state is both the flag and a container
+without that file.**
 
 ### Restarting it
 
@@ -71,7 +102,20 @@ docker start sup840-handbook-ch                 # or: docker restart sup840-hand
 docker exec sup840-handbook-ch clickhouse-client -q 'select count() from handbook.documents'
 ```
 
-64 is the answer. Both paths it mounts — the volume and `/opt/marketplace/sup840-ch/users.xml`
+64 is the answer. Two more lines are worth running after any re-create, because both failures
+they catch are silent:
+
+```bash
+# `default` must NOT answer over the subnet address. `Code: 516` back is the pass
+curl -s "http://10.10.1.10:8123/?user=default" --data-binary 'select 1'
+
+# and the accounts must read as: `default` with no host_ip at all (loopback is reported
+# under host_names as `localhost`), `handbook_reader` with the subnet
+docker exec sup840-handbook-ch clickhouse-client -q \
+  "select name, host_ip, host_names from system.users order by name"
+```
+
+Both paths it mounts — the volume and `/opt/marketplace/sup840-ch/users.xml`
 — are durable, which is the whole point of them being where they are: an earlier incarnation
 kept the users file under `/tmp`, where a reboot would have left Docker creating an empty
 *directory* in its place and ClickHouse starting with no reader account and no error anyone
@@ -86,9 +130,9 @@ is the same data rather than similar data:
 
 ```bash
 # 1. the container, on the two durable paths
+# No CLICKHOUSE_SKIP_USER_SETUP here — see "What actually protects the corpus" above
 docker run -d --name sup840-handbook-ch --restart unless-stopped \
   -p 10.10.1.10:8123:8123 \
-  -e CLICKHOUSE_SKIP_USER_SETUP=1 \
   -v sup840-handbook-data:/var/lib/clickhouse \
   -v /opt/marketplace/sup840-ch/users.xml:/etc/clickhouse-server/users.d/sup840.xml:ro \
   clickhouse/clickhouse-server:24.8
