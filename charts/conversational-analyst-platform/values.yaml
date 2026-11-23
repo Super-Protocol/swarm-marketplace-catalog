@@ -55,7 +55,7 @@ postgresql:
       password: ""
       extensions: [vector, pg_trgm]
     # The identity service has had a database of its own since agent 1.14
-    # (AIV-1294) and 1.17 will not start without the `db` block that names it.
+    # (AIV-1294) and the agent will not start without the `db` block that names it.
     - name: retail_ai_identity
       owner: identity_user
       password: ""

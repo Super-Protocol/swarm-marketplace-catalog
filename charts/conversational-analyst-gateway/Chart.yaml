@@ -16,8 +16,11 @@ type: application
 # And one that is a defect fix: the proxy asked for 50m CPU and 64Mi of memory, both UNDER
 # a cluster space's LimitRange floor of 100m / 128Mi — which refuses the pod. The public
 # door of the deployment was not admitted.
-version: 0.4.0
-appVersion: "1.17.0"
+# 0.4.1 declares the agent release this gateway fronts — 1.22.1 — and nothing
+# else moves. 1.22 adds no route, no websocket and no cookie this proxy has to
+# know about (SUP-896).
+version: 0.4.1
+appVersion: "1.22.1"
 dependencies:
   # Aliased without the hyphen, which is not cosmetic: a listing reaches a subchart value
   # through a patch path, and the specification's path pattern is

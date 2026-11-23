@@ -23,8 +23,22 @@ type: application
 # Quarkus augmentation `start-dev` runs at every boot — measured, not guessed —
 # and a deployment with no identity provider is a deployment with no agent
 # (SUP-711).
-version: 0.6.1
-appVersion: "1.17.0"
+# 0.7.0 is the move to agent 1.22.1, and it carries one change of its own:
+# Keycloak's JVM now runs with `-XX:-UseBASE64Intrinsics`, the mitigation for
+# CVE-2026-114938 — a pre-auth RCE against Keycloak in its default configuration,
+# for which no fixed JDK build exists. Upstream fixed this in their own Keycloak
+# chart, which this listing does not use, so the flag is carried in `values.yaml`
+# here; the reasoning and the verification are beside it (SUP-896).
+#
+# The 1.22.1 realm contract is unchanged: `org-admin` / `org-member` still come
+# from membership of `/org/{orgId}/admins` and `/org/{orgId}/members`, and
+# installation administration still from the client role `admin` in the `identity`
+# client's role namespace. 1.22 adds a second, INN-derived group path source
+# (`local.derivedGroups`, on by default upstream) — it lives under the `local`
+# identity provider and this deployment runs `keycloak`, so it is not reachable
+# here and the bootstrap needs nothing for it.
+version: 0.7.0
+appVersion: "1.22.1"
 dependencies:
   - name: keycloak
     version: 24.4.10

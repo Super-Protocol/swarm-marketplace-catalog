@@ -20,9 +20,30 @@ type: application
 # EISDIR on the kubelet's own `..data` / timestamp entries, so `agent-config`
 # never started and the five services that wait for it restarted behind it
 # (SUP-711).
-version: 0.5.1
-appVersion: "1.17.0"
+# 0.6.0 is the 1.22.1 agent. Only the image tags move, and that is the finding
+# rather than the change: the 51 commits between 1.17.0 and 1.22.1 are additive
+# everywhere this chart touches the product (SUP-896).
+#
+#   * The platform configuration contract is unchanged. `conf/local/services.yaml.tpl`
+#     gains six commented lines for the new `mcp-weather` connector and nothing
+#     else; the api's own config schema gains four `dashboardRefresh` keys, all
+#     with defaults, and removes none. So every key this chart writes is still
+#     read, and no key it omits is now required.
+#   * `identity.provider` stays `keycloak`, which is what makes 1.22's new
+#     `local.derivedGroups` block — on by default upstream, deriving group paths
+#     from an employer INN claim — unreachable here rather than merely inert.
+#   * No new workload. 1.22's additions are dashboards, the semantic layer, the
+#     library, billing UI and the signals widget, all inside the api, the worker
+#     and the frontend this chart already runs. `apps/mcp-weather` ships as a
+#     separate connector and is deliberately not deployed: it is an outbound
+#     channel to Open-Meteo, which is the one thing this listing claims it does
+#     not have.
+#   * The api still has no migrations — the schema arrives through TypeORM
+#     `synchronize` under an advisory lock — so a fresh deployment builds the
+#     1.22.1 schema directly.
+version: 0.6.0
+appVersion: "1.22.1"
 dependencies:
   - name: aivo
-    version: 0.1.1
+    version: 0.1.2
     repository: "file://../vendor/aivo"

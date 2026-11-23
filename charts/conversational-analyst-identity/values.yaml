@@ -105,3 +105,32 @@ keycloak:
     enabled: false
   # The hostname-derived setting, out of the pod spec — see templates/keycloak-env.yaml.
   extraEnvVarsSecret: analyst-keycloak-env
+  # CVE-2026-114938 ("Java4Shell"): an out-of-bounds write in the HotSpot x86-64 Base64
+  # intrinsic on AVX-512 VBMI processors, demonstrated as a PRE-AUTH remote code execution
+  # against Keycloak in its default configuration. There is no fixed JDK build — this image
+  # carries OpenJDK 21.0.6 and the current Keycloak release ships the same one — so the
+  # mitigation is to turn the intrinsic off, which is what upstream's own Keycloak chart does
+  # (aivoagent/helm-charts `915eb81`, chart 0.3.1). That chart is not the one this listing
+  # runs; the mitigation has to be carried here instead.
+  #
+  # `_JAVA_OPTIONS` rather than `JAVA_OPTS_APPEND`, which is the variable upstream uses: the
+  # vendored bitnami chart already writes `JAVA_OPTS_APPEND` into its env ConfigMap with the
+  # jgroups DNS query (`cache.enabled` is true by default), and a second definition of the
+  # same name would silently drop one of the two. `_JAVA_OPTIONS` is read by the JVM itself,
+  # so it adds the flag to every java process in the container — including the Quarkus
+  # augmentation `start-dev` runs before the server comes up — without touching the chart's
+  # own variable.
+  #
+  # Verified on this exact image (`bitnamilegacy/keycloak:26.1.2-debian-12-r0`,
+  # sha256:5a480d09…): the JVM logs «Picked up _JAVA_OPTIONS», starts, and
+  # `-XX:+PrintFlagsFinal` then reports `UseBASE64Intrinsics = false {environment}`, against
+  # `= true {default}` without it. A constant, so it does not move the attested digest.
+  #
+  # ANYTHING THAT SETS THIS KEY MUST REPEAT THIS ENTRY. Helm replaces a list rather than
+  # merging it, so a definition or a `-f` that supplies `keycloak.extraEnvVars` for its own
+  # variables drops this one with it, and the deployment then renders, boots and serves
+  # sign-in with the intrinsic back on. The conversational-analyst listing supplies four
+  # variables here, so it carries a fifth copy of this entry.
+  extraEnvVars:
+    - name: _JAVA_OPTIONS
+      value: -XX:-UseBASE64Intrinsics

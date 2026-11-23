@@ -256,7 +256,8 @@ mutation ($id: ID!) { adminSetDefaultLlmModel(id: $id) { id name isDefault } }
 # The dialect, not the company: with `baseURL` set, the client talks to whatever
 # OpenAI-compatible endpoint it names — which is the whole point of this deployment, where
 # that endpoint is the operator's own. UPPER CASE because `LlmProvider` is a GraphQL enum on
-# agent 1.17 and its values are upper case; the lower-case spelling is refused with
+# every agent release this listing has run — 1.17.0 and now 1.22.1, where the enum is
+# unchanged — and its values are upper case; the lower-case spelling is refused with
 # «Value "openai" does not exist in "LlmProvider" enum. Did you mean the enum value
 # "OPENAI"?», which is the second thing that stopped this Job from ever finishing (SUP-711).
 # Note the two annotation enums next to it are LOWER case (`SchemaAnnotationTarget` takes

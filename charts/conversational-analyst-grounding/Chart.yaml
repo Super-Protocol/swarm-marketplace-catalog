@@ -33,5 +33,13 @@ type: application
 # other half. Its lower-case neighbour `SchemaAnnotationTarget` stays as it is.
 # The Job's name now keys off the whole policy rather than `thresholds` alone, so a
 # changed context window, memory budget or summarisation threshold re-runs it.
-version: 0.5.1
-appVersion: "1.17.0"
+# 0.6.0 is the move to agent 1.22.1 and the Job's work is unchanged, which was
+# checked rather than assumed (SUP-896). Every one of the 18 admin operations
+# `ground.py` issues has a byte-identical signature in 1.22.1's
+# `apps/api/schema.graphql`, as do all eight of its input types, `PaginationInput`
+# (still `limit`/`offset`), `LlmProvider` (still UPPER case `OPENAI`) and
+# `SchemaAnnotationTarget` (still lower case `table`/`column`). The schema diff
+# across the 51 commits is additive apart from two dashboard field signatures the
+# Job does not call.
+version: 0.6.0
+appVersion: "1.22.1"

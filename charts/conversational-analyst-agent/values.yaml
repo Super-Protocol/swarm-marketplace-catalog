@@ -55,7 +55,7 @@ aivo:
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: IfNotPresent
-      tag: "1.17.0"
+      tag: "1.22.1"
     imagePullSecrets:
       - name: regcred
 
@@ -98,7 +98,7 @@ aivo:
           # `api.authClaims.trust: jwks`; the chart refuses the half-configured pair.
           provider: keycloak
           # New in this listing, and not optional: the identity service has had a database of
-          # its own since AIV-1294 and agent 1.17 does not start without the block that names
+          # its own since AIV-1294 and the agent does not start without the block that names
           # it. It holds the tenants, the group-mapping rules and the local copies of the
           # people who have signed in.
           db:
@@ -190,7 +190,7 @@ aivo:
 
           # `llmSmart` is what the vendor's own 1.x delivery profile still writes, and it is
           # where a reader of the evidence looks for "which model does this deployment talk
-          # to". What actually serves a dialog in 1.17 is a row in the installation's model
+          # to". What actually serves a dialog is a row in the installation's model
           # registry — the api's schema does not carry a model any more — and the grounding
           # component creates that row from the SAME parameters, so the two cannot disagree.
           # Kept here because the alternative is a signed configuration that says nothing
@@ -310,7 +310,7 @@ aivo:
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: IfNotPresent
-      tag: "1.17.0"
+      tag: "1.22.1"
     imagePullSecrets:
       - name: regcred
 
@@ -329,7 +329,7 @@ aivo:
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: IfNotPresent
-      tag: "1.17.0"
+      tag: "1.22.1"
     imagePullSecrets:
       - name: regcred
 
@@ -346,7 +346,7 @@ aivo:
     image:
       repository: registry.aggregion.com/gh/aivoagent/agent/backend
       pullPolicy: IfNotPresent
-      tag: "1.17.0"
+      tag: "1.22.1"
     imagePullSecrets:
       - name: regcred
 
@@ -432,7 +432,7 @@ aivo:
       image:
         repository: registry.aggregion.com/gh/aivoagent/agent/backend
         pullPolicy: IfNotPresent
-        tag: "1.17.0"
+        tag: "1.22.1"
 
     # The background queues: autopilot runs, signal evaluation, the schema-catalog refresh
     # that reads a newly registered data source, reference-book sync and the knowledge index.
@@ -483,4 +483,4 @@ aivo:
       image:
         repository: registry.aggregion.com/gh/aivoagent/agent/frontend
         pullPolicy: IfNotPresent
-        tag: "1.17.0"
+        tag: "1.22.1"

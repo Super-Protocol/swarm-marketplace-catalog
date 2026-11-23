@@ -4,12 +4,26 @@
 |---|---|
 | Upstream | `aivoagent/helm-charts`, directory `aivo/` |
 | Commit | `8a6df6a513419b71ac8025c4e848a84624ae2686` (2026-11-06) |
-| Serves | aivo agent **1.17.0** (released 2026-11-10) |
+| Serves | aivo agent **1.22.1** (released 2026-11-22) |
+| Re-checked | 2026-11-23 against upstream `915eb81` — the tip, and the last commit before 1.22.1 (SUP-896) |
 
-`8a6df6a` is the last upstream commit before 1.17.0 was tagged. The pin is deliberate:
-chart and platform move together upstream — the distribution builder gates the pair in both
-directions — so the chart that belongs to 1.17.0 is the one that existed when 1.17.0 shipped,
-not the current tip, which has since carried 1.18 work (`mcp-weather`, among others).
+`8a6df6a` was the last upstream commit before 1.17.0 was tagged, and it is still the pin after
+the move to 1.22.1. That is a decision, not an omission: upstream has made exactly two changes
+to `aivo/` since, and neither belongs in this deployment.
+
+  * `1a64403` adds the **`mcp-weather` subchart** — `aivo/charts/mcp-weather`, three lines of
+    `Chart.yaml` dependency and `mcp-weather.enabled: false` in `values.yaml`. Off by default,
+    so taking it would change no rendered manifest; not taken anyway, because a connector whose
+    whole function is calling `api.open-meteo.com` is one more image to pin, one more thing in
+    the quota, and an outbound channel in a listing whose claim is that it has none. The
+    existing `mcp-telegram` and `mcp-email` subcharts are vendored and off for the same reason;
+    this one is not vendored at all, which is the stronger statement.
+  * `915eb81` is in `charts/keycloak`, a chart this listing does not use — it runs the vendored
+    bitnami Keycloak. The CVE it mitigates applies to that one too; the mitigation is therefore
+    carried in `conversational-analyst-identity` instead. See that chart's `Chart.yaml`.
+
+The pin stays an upstream commit the chart's own platform version shipped against, so chart and
+platform still move together the way the distribution builder expects.
 
 ## What was dropped
 
@@ -21,12 +35,13 @@ namespace would be two more images to pin and two more things in the quota.
 
 Each one is marked `LOCAL DEVIATION` in the file it touches, so a re-vendoring notices it.
 
-### `appVersion: 1.16.0` → `1.17.0`
+### `appVersion: 1.16.0` → `1.22.1`
 
 Not cosmetic: `retail-ai` uses `.Chart.AppVersion` as the default image tag, so this is the
 version the chart serves when the listing does not say otherwise. The listing does say
 otherwise — every image is pinned there and declared by digest — but a chart whose declared
-app version is not the one it runs is a chart that will mislead somebody.
+app version is not the one it runs is a chart that will mislead somebody. It read `1.17.0`
+while this listing ran agent 1.17 and reads `1.22.1` now (SUP-896).
 
 ### `charts/config`: the configuration document is split
 
