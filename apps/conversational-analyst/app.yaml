@@ -1327,46 +1327,38 @@ outputs:
 # kind — they ARE configuration, so what this deployment may reach cannot be widened without
 # the digest saying so.
 evidence:
-  # THE DIGEST FOR 5.0.0 IS NOT MEASURED YET, AND IS THEREFORE NOT DECLARED.
+  # THE REFERENCE CONFIGURATION'S DIGEST — not a value every deployment reproduces, and the
+  # listing page should say so (option 2, decided on SUP-711; the presentation change is
+  # SUP-871).
   #
-  # This is deliberate and it is why `apps/tests/run.sh` fails on this version: the guard
-  # added in 4.0.6 refuses a definition that has a data slot and no digest, and that red
-  # check is exactly the right state for a listing whose number has not been measured.
-  # 4.0.6's value is NOT carried over — the agent images move in this version, so it is a
-  # digest of different manifests, and declaring it would assert something false. An absent
-  # value stops gated data from flowing; a wrong one makes the gate refuse a deployment that
-  # is correct, and tells a verifier the wrong thing about what is running.
+  # Measured, not derived. Two deployments of this definition on `azure-test`, 2026-11-23
+  # (SUP-896): different namespaces, different hostnames and three separately generated
+  # credentials each, same parameter set. Both attested 63 resources — 13 ConfigMaps, 10
+  # Deployments, 1 Ingress, 15 Secrets, 19 Services, 5 StatefulSets — and their canonical
+  # snapshots were BYTE-IDENTICAL: same SHA-256 over the document, and a field-by-field
+  # comparison as JSON Pointers found zero differing fields and no object present on one side
+  # only. That is what makes the exclusion set below complete and this number declarable.
   #
-  # The measurement cannot be done before this version's charts are in the chart repository,
-  # which is a merge to `main` (GitHub Pages refuses a deployment from any other branch), so
-  # the order is fixed:
+  # The exclusion set was re-derived rather than carried over from 4.0.6, in both directions:
   #
-  #   1. merge the charts — `feature/SUP-896-analyst-charts-1-22-1`, which changes no
-  #      definition and publishes chart versions no published listing yet pins;
-  #   2. seed this definition to the stand WITHOUT a digest, create two deployments of the
-  #      reference parameter set below on `azure-test`, and read
-  #      `GET <cloud>/api/v1/deployments/<id>/evidence` for each;
-  #   3. require the two snapshots to be byte-identical — that is what makes the exclusion
-  #      set below complete and the number declarable, and it is the step that caught 4.0.0's
-  #      `match.name` naming an object no deployment renders (SUP-823);
-  #   4. declare the digest here and merge. `expectedDigest` reaches no manifest, so the
-  #      deployments measured in step 2 attest exactly what a deployment of the merged
-  #      version does.
+  #   * nothing is MISSING — the diff of the two snapshots turned up no field at all, so there
+  #     is no per-deployment value left attested that would need excluding or fixing;
+  #   * nothing is OBSOLETE — every one of the ten entries was resolved against a real
+  #     snapshot: each `match` names an object that is among the 63, and each pointer is
+  #     absent from that object, which is what an exclusion that fired looks like. An entry
+  #     naming an object no deployment renders is the 4.0.0 bug that made two deployments
+  #     attest different snapshots (SUP-823), and an entry still declared for a field that is
+  #     no longer rendered would be a disclosure of something that is not happening.
   #
-  # The number remains THE REFERENCE CONFIGURATION'S — not a value every deployment
-  # reproduces, and the listing page should say so (option 2, decided on SUP-711; the
-  # presentation change is SUP-871).
-  #
-  # What it will be a function of, all three of which have to match for a deployment to
+  # What the number is a function of, all three of which have to match for a deployment to
   # reproduce it:
   #
   #   1. this definition and the chart versions it pins;
   #   2. THE COLLECTING CLOUD'S BUILD. `azure-test` runs the signed `build-477-release`,
-  #      whose collector gathered six kinds and 63 resources for 4.0.5. The destroyed
-  #      `sup823a` (`build-448-release`) gathered 71 for the same definition: ServiceAccount,
-  #      Role, RoleBinding and PodDisruptionBudget entered the collector later. A cloud on
-  #      another build therefore attests a different digest, and that is expected — not
-  #      tampering;
+  #      whose collector gathers six kinds and 63 resources here. The destroyed `sup823a`
+  #      (`build-448-release`) gathered 71 for the 4.0.x definition: ServiceAccount, Role,
+  #      RoleBinding and PodDisruptionBudget entered the collector later. A cloud on another
+  #      build therefore attests a different digest, and that is expected — not tampering;
   #   3. THE PARAMETER SET, because the operator's choices are attested on purpose. The model
   #      endpoint, the model id, the embedding endpoint and model, the MCP and signal
   #      settings, the result policy and the product name are all in the snapshot, and a
@@ -1374,8 +1366,8 @@ evidence:
   #      the trade this listing makes deliberately: the fact a verifier most needs — where
   #      this deployment sends data — is IN the signed bundle rather than excluded from it.
   #
-  # The reference parameter set to measure it with, unchanged from 4.0.6 so that the only
-  # thing moving between the two numbers is the software:
+  # The reference parameter set this value was measured with, unchanged from 4.0.6 so that the
+  # only thing moving between the two numbers is the software:
   #
   #   modelBaseUrl          https://api.router.superprotocol.com/v1
   #   modelId               qwen/qwen3-coder-next
@@ -1387,10 +1379,24 @@ evidence:
   #   modelContextWindow    262144
   #   data slot `datasets`  cypressbay-digestive-health
   #
-  # Everything else at this definition's defaults, and the three generated credentials
-  # (`internalSecret`, `modelApiKey`, `embeddingsApiKey`) are in Secrets and reach no attested
-  # object. The organisation names are not in the snapshot either — they travel in a Secret
-  # and in a Job's name, and a Job is not collected.
+  # Everything else was left at this definition's defaults, and the three generated
+  # credentials (`internalSecret`, `modelApiKey`, `embeddingsApiKey`) are in Secrets and reach
+  # no attested object. The organisation names are not in the snapshot either — they travel in
+  # a Secret and in a Job's name, and a Job is not collected. Both measurement deployments were
+  # destroyed and their DNS withdrawn once the number was read.
+  #
+  # One thing the snapshot now says that 4.0.6's did not, and it is worth knowing it is there:
+  # the Keycloak StatefulSet's attested env carries `_JAVA_OPTIONS: -XX:-UseBASE64Intrinsics`.
+  # The CVE-2026-114938 mitigation is a constant, so it is attested rather than excluded, and a
+  # data owner reading the signed bundle can see for themselves that the intrinsic is off
+  # rather than taking it on trust.
+  #
+  # Declaring it is not optional for this listing: the marketplace admits a deployment to the
+  # gatekeeper only when its version declares a digest (`clientsFor` skips one with none —
+  # "nothing to hold it to, or nowhere to check"), so an absent value leaves every deployment
+  # of a listing with a data slot unable to receive gated data at all. `apps/tests/run.sh`
+  # fails a definition that has a slot and no digest, so this cannot go missing again.
+  expectedDigest: "c6a1709f33317262c1a115fd0f8cc2f9e8cb37ae7a9982e0f5ccaf264e2ba11c"
   exclude:
     # Every deployment lives in a namespace of its own. The platform strips this itself; it is
     # declared because the listing page shows the exclusions from the definition only, and a
