@@ -1,13 +1,24 @@
 #!/usr/bin/env python3
-"""Index the bound document source into the vector store, and report what the gate decided.
+"""Index what this deployment is allowed to read, and report what the gate decided.
 
-This is the half of the listing that the gatekeeper story actually runs through, so it is worth
-being explicit about what it is and is not.
+Two sources, two collections, one indexer. That shape is the first thing to know, and it is not
+tidiness:
 
-**What it is.** A loop. Read the document rows from whatever the deployment's `corpus` slot is
-bound to, chunk them, embed them with the deployment's own embedder, and write them into the
-collection the rag-server retrieves from. Then wait, re-read the source's own count and
-high-water mark, and re-index only when those moved.
+* the **gated source** — a ClickHouse document table the data owner approved — is REBUILT on
+  every change: dropped and rewritten, because a document the owner deleted has to leave the
+  index and a diff against a source we may be refused tomorrow is a diff we cannot trust;
+* **uploaded documents** — a file a person put through the console, extracted by
+  `swarm-doc-ingest` — are ADDITIVE and live in a collection of their own.
+
+One collection for both would mean every refresh of the gated corpus silently deleted every
+uploaded file. The rag-server retrieves from both collections in one query, so the split costs
+nothing a reader of the answers can see.
+
+**What it is.** A loop plus a small HTTP service. Read the document rows from whatever the
+deployment's `corpus` slot is bound to, chunk them, embed them with the deployment's own embedder,
+and write them into the collection the rag-server retrieves from. Then wait, re-read the source's
+own count and high-water mark, and re-index only when those moved. Beside that, serve the console's
+document management: submit a file, list what has been submitted, remove one.
 
 **Why it reads ClickHouse over HTTP and not object storage.** Because that is the only thing
 the marketplace gatekeeper can carry. The gate injects `x-clickhouse-user` / `x-clickhouse-key`
@@ -31,17 +42,34 @@ they cannot disagree. It is also what keeps `nv-ingest` out of the picture: upst
 `create_collection` needs `nv_ingest_client`, and `langchain_milvus` creating the collection
 from the first batch is the documented alternative the rag-server's citation code already
 handles ("if langchain is used for ingestion, the source is a string").
+
+**Why every chunk carries the same metadata keys, including the empty ones.**
+`langchain_milvus` creates the collection's fields from the FIRST batch it is given, so a key
+that appears only on a later document is a key the collection has no field for. A table chunk
+therefore carries an empty `image_metadata` and a text chunk carries an empty `table_metadata`,
+and that is load-bearing rather than sloppy.
+
+**What an uploaded document gets indexed, and what it does not.** `swarm-doc-ingest` returns
+nv-ingest elements: text, tables as cell grids and Markdown, and pictures with their bounding
+boxes. Text and tables are indexed and searchable — a table as its Markdown, split on row
+boundaries with its header repeated, because a table cut in half mid-grid is a chunk no model can
+read. A **picture is located, not transcribed**: this stack reads no chart data, so a chart is
+indexed by its caption and its position, and a chart with no caption is counted and not indexed
+at all. Writing a chunk that claimed to be a chart's contents would be the same kind of lie as
+the reranker scores this listing's previous version shipped.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import re
 import threading
 import time
 import urllib.parse
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import requests
@@ -58,6 +86,23 @@ logging.basicConfig(
 logger = logging.getLogger("corpus-sync")
 
 COLLECTION = os.environ.get("COLLECTION_NAME", "documents")
+# Uploaded files, in a collection of their own. The gated corpus is rebuilt from
+# scratch whenever it moves, so one collection for both would mean a refresh of
+# the corpus deleting every file anybody submitted.
+UPLOAD_COLLECTION = os.environ.get("UPLOAD_COLLECTION_NAME", "")
+INGEST_URL = os.environ.get("INGEST_URL", "").rstrip("/")
+INGEST_API_KEY = os.environ.get("INGEST_API_KEY", "")
+# Extraction is CPU work on a pod that does one document at a time and queues the
+# rest: a 15-page 200-dpi scan through OCR is 52.6 s measured, and a queue in
+# front of it makes that a wait rather than a failure.
+INGEST_TIMEOUT = float(os.environ.get("INGEST_TIMEOUT_SECONDS", 900))
+UPLOAD_MAX_BYTES = int(os.environ.get("UPLOAD_MAX_BYTES", 64 * 1024 * 1024))
+# How many chunk rows the listing and the delete will read in one query. A document of a
+# hundred pages is a few hundred chunks, so this is two hundred such documents.
+UPLOAD_LIST_LIMIT = int(os.environ.get("UPLOAD_LIST_LIMIT", 16384))
+# What this service issues as a document identifier, and therefore all it will accept: the
+# value is interpolated into a Milvus filter expression.
+UPLOAD_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 BINDING_PATH = os.environ.get("CORPUS_BINDING_FILE", "/etc/corpus/binding.json")
 TABLE = os.environ.get("CORPUS_TABLE", "documents")
 COL_ID = os.environ.get("CORPUS_ID_COLUMN", "doc_id")
@@ -89,8 +134,22 @@ STATE: dict[str, Any] = {
     "lastAttemptAt": None,
     "lastSuccessAt": None,
     "collection": COLLECTION,
+    # Whether this deployment accepts a file at all, so the console can say
+    # "not configured" rather than offering a button that answers 503.
+    "uploads": {
+        "enabled": bool(UPLOAD_COLLECTION and INGEST_URL),
+        "collection": UPLOAD_COLLECTION,
+        "maxBytes": UPLOAD_MAX_BYTES,
+    },
 }
 STATE_LOCK = threading.Lock()
+
+# One embedder, two cores, and two things that want it: the gated corpus rebuild
+# and an upload. They write different collections, so they do not race over the
+# index — but a batch that holds the embedder for half a minute is a batch its
+# own health endpoint cannot answer during, which is how an earlier version of
+# this file turned a reindex into a loop that never finished. So they take turns.
+INDEX_LOCK = threading.Lock()
 
 
 def publish(**fields: Any) -> None:
@@ -257,8 +316,9 @@ def chunks(text: str) -> list[str]:
     return [chunk for chunk in out if chunk]
 
 
-def vector_store():
+def vector_store(collection: str = ""):
     """The retriever's own vector store, built through the retriever's own code path."""
+    collection = collection or COLLECTION
     config = NvidiaRAGConfig()
     embedder = get_embedding_model(
         model=config.embeddings.model_name,
@@ -274,7 +334,7 @@ def vector_store():
         except Exception:  # noqa: BLE001 — an older client may not carry the field
             logger.warning("could not set %s on the embedding client", attribute)
     vdb = MilvusVDB(
-        collection_name=COLLECTION,
+        collection_name=collection,
         milvus_uri=config.vector_store.url,
         embedding_model=embedder,
         config=config,
@@ -289,7 +349,56 @@ def vector_store():
             else ""
         ),
     )
-    return vdb, vdb.get_langchain_vectorstore(COLLECTION)
+    return vdb, vdb.get_langchain_vectorstore(collection)
+
+
+def write_batch(store: Any, batch: list[Document]) -> None:
+    """One batch, in a thread, so a wedged client is a reported stall and not a silence.
+
+    `add_documents` embeds and inserts. Either half can hang — the embedding client on a
+    saturated endpoint, the insert on a flush — and both held this loop with `/status` frozen
+    at the attempt that started it, which is the one state an operator cannot act on. Observed
+    on the gpu-blueprints cloud: twelve minutes inside one rebuild with the embedder idle and
+    nothing published.
+    """
+    error: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            store.add_documents(batch)
+        except BaseException as problem:  # noqa: BLE001 — re-raised on the caller's thread
+            error.append(problem)
+
+    worker = threading.Thread(target=run, name="embed-batch", daemon=True)
+    worker.start()
+    worker.join(BATCH_TIMEOUT)
+    if worker.is_alive():
+        raise TimeoutError(
+            f"a batch of {len(batch)} chunks did not finish embedding and writing within "
+            f"{BATCH_TIMEOUT:.0f}s — the endpoint is saturated or the index is not accepting"
+        )
+    if error:
+        raise error[0]
+
+
+def write_all(store: Any, documents: list[Document], progress=None) -> int:
+    """Embed and write every document, in batches, reporting after each one."""
+    pending: list[Document] = []
+    written = 0
+    for document in documents:
+        pending.append(document)
+        if len(pending) >= BATCH:
+            write_batch(store, pending)
+            written += len(pending)
+            pending = []
+            if progress is not None:
+                progress(written)
+    if pending:
+        write_batch(store, pending)
+        written += len(pending)
+        if progress is not None:
+            progress(written)
+    return written
 
 
 def index(rows: list[dict[str, Any]], binding: dict[str, Any]) -> int:
@@ -311,42 +420,12 @@ def index(rows: list[dict[str, Any]], binding: dict[str, Any]) -> int:
         # re-creates the collection from the first batch.
         vdb, store = vector_store()
 
-    def write(batch: list[Document]) -> None:
-        """One batch, in a thread, so a wedged client is a reported stall and not a silence.
-
-        `add_documents` embeds and inserts. Either half can hang — the embedding client on a
-        saturated endpoint, the insert on a flush — and both held this loop with `/status`
-        frozen at the attempt that started it, which is the one state an operator cannot
-        act on. Observed on the gpu-blueprints cloud: twelve minutes inside one rebuild with
-        the embedder idle and nothing published.
-        """
-        error: list[BaseException] = []
-
-        def run() -> None:
-            try:
-                store.add_documents(batch)
-            except BaseException as problem:  # noqa: BLE001 — re-raised on the caller's thread
-                error.append(problem)
-
-        worker = threading.Thread(target=run, name="embed-batch", daemon=True)
-        worker.start()
-        worker.join(BATCH_TIMEOUT)
-        if worker.is_alive():
-            raise TimeoutError(
-                f"a batch of {len(batch)} chunks did not finish embedding and writing within "
-                f"{BATCH_TIMEOUT:.0f}s — the endpoint is saturated or the index is not accepting"
-            )
-        if error:
-            raise error[0]
-
-    pending: list[Document] = []
-    written = 0
+    documents: list[Document] = []
     for row in rows:
         doc_id = str(row.get("id") or "")
         title = str(row.get("title") or "")
-        pieces = chunks(str(row.get("text") or ""))
-        for position, piece in enumerate(pieces):
-            pending.append(
+        for position, piece in enumerate(chunks(str(row.get("text") or ""))):
+            documents.append(
                 Document(
                     page_content=piece,
                     metadata={
@@ -365,18 +444,407 @@ def index(rows: list[dict[str, Any]], binding: dict[str, Any]) -> int:
                     },
                 )
             )
-        if len(pending) >= BATCH:
-            write(pending)
-            written += len(pending)
-            pending = []
-            # Published per batch, not at the end. A rebuild of a real corpus takes minutes,
-            # and a status that only moves when it finishes is a status that says nothing
-            # while the only interesting thing is happening.
-            publish(chunks=written, message=f"indexing: {written} chunks written")
-    if pending:
-        write(pending)
-        written += len(pending)
-    return written
+
+    # Published per batch, not at the end. A rebuild of a real corpus takes minutes, and a
+    # status that only moves when it finishes is a status that says nothing while the only
+    # interesting thing is happening.
+    def progress(written: int) -> None:
+        publish(chunks=written, message=f"indexing: {written} chunks written")
+
+    return write_all(store, documents, progress)
+
+
+# --------------------------------------------------------------------------------------
+# Uploaded documents
+# --------------------------------------------------------------------------------------
+#
+# A file a person submits through the console, extracted by `swarm-doc-ingest` — layout,
+# table structure and OCR on open components, CPU-only, no NIM and no NGC credential — and
+# indexed into a collection of its own.
+#
+# `swarm-doc-ingest` answers `POST /v1/extract` with nv-ingest `MetadataSchema` elements, and
+# the three kinds are not treated alike:
+#
+#   text        indexed as text, chunked like any prose;
+#   structured  a table. Indexed as the Markdown rendering, which is what a model reads well,
+#               split on ROW boundaries with the header repeated — a table cut mid-grid is a
+#               chunk nothing can read. `table_metadata.table_location` carries the box;
+#   image       a picture or a chart. LOCATED, NOT TRANSCRIBED: this stack reads no chart
+#               data, so what is indexed is the caption and the position, and a picture with
+#               no caption is counted and not indexed at all. A chunk claiming to hold a
+#               chart's numbers would be a lie of exactly the kind this version exists to fix.
+
+
+def uploads_enabled() -> bool:
+    return bool(UPLOAD_COLLECTION and INGEST_URL)
+
+
+def safe_name(name: str) -> str:
+    """A submitted filename, reduced to something that can be stored and displayed.
+
+    The name arrives from a browser. It reaches a Milvus field, a log line and the console's
+    citation list, so the path is dropped, control characters go, and the length is bounded.
+    Refused rather than silently renamed if nothing is left: a document stored as `_` is a
+    document nobody can find again.
+    """
+    base = os.path.basename((name or "").replace("\\", "/")).strip()
+    base = "".join(character for character in base if character.isprintable())
+    base = base.replace('"', "'")
+    if not base or base in (".", ".."):
+        raise ValueError(f"{name!r} is not a usable file name")
+    return base[:200]
+
+
+def extract(filename: str, blob: bytes) -> dict[str, Any]:
+    """One document through `swarm-doc-ingest`, returning its elements.
+
+    The key is a bearer token even though the service answers only inside this namespace: a
+    namespace is not a trust boundary once a second workload is in it.
+    """
+    headers = {}
+    if INGEST_API_KEY:
+        headers["Authorization"] = f"Bearer {INGEST_API_KEY}"
+    response = requests.post(
+        f"{INGEST_URL}/v1/extract",
+        files={"file": (filename, blob, "application/octet-stream")},
+        headers=headers,
+        timeout=INGEST_TIMEOUT,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"{response.status_code} from the extraction service: "
+            f"{response.text.strip()[:400] or 'no message'}"
+        )
+    body = response.json()
+    if not isinstance(body, dict) or not isinstance(body.get("elements"), list):
+        raise RuntimeError(
+            "the extraction service answered something that is not "
+            "{source_id, source_name, elements, stats}"
+        )
+    return body
+
+
+def table_chunks(markdown: str) -> list[str]:
+    """A Markdown table, in pieces a model can still read.
+
+    The header and its separator go onto every piece. Without that, the second half of a
+    twenty-row table is a grid of numbers with no column names — which embeds, retrieves and
+    answers questions wrongly rather than failing.
+    """
+    lines = [line for line in (markdown or "").splitlines() if line.strip()]
+    if len(lines) <= 2:
+        return [markdown.strip()] if markdown.strip() else []
+    header, separator, rows = lines[0], lines[1], lines[2:]
+    preamble = f"{header}\n{separator}\n"
+    if len(markdown) <= CHUNK_CHARS:
+        return [markdown.strip()]
+
+    out: list[str] = []
+    current = preamble
+    for row in rows:
+        if len(current) + len(row) + 1 > CHUNK_CHARS and current != preamble:
+            out.append(current.rstrip())
+            current = preamble
+        current += row + "\n"
+    if current != preamble:
+        out.append(current.rstrip())
+    return out
+
+
+def element_documents(
+    elements: list[dict[str, Any]], upload_id: str, filename: str
+) -> tuple[list[Document], dict[str, int]]:
+    """nv-ingest elements to chunks, and a count of what became of each kind.
+
+    Every chunk carries the same metadata KEYS, empty ones included: `langchain_milvus`
+    creates the collection's fields from the first batch, so a key that first appears on a
+    later document has no field to go into.
+    """
+    counts = {
+        "text": 0,
+        "tables": 0,
+        "charts": 0,
+        "chartsIndexed": 0,
+        "chunks": 0,
+    }
+    documents: list[Document] = []
+
+    def add(
+        content: str,
+        *,
+        kind: str,
+        subtype: str,
+        page: int,
+        position: int,
+        table_metadata: dict[str, Any],
+        image_metadata: dict[str, Any],
+        searchable: bool,
+    ) -> None:
+        documents.append(
+            Document(
+                page_content=content,
+                metadata={
+                    # A string, which is the shape the rag-server's citation code reads when
+                    # langchain did the ingestion.
+                    "source": f"upload:{filename}#{upload_id}",
+                    "title": filename,
+                    # Scalars, so the listing and the delete can filter on them.
+                    "upload_id": upload_id,
+                    "document_name": filename,
+                    "content_metadata": {
+                        # `text`, because that is the branch of the rag-server's citation
+                        # code that cites content it already has. The real kind of the
+                        # element is beside it, and the console shows that.
+                        "type": "text",
+                        "page_number": page,
+                        "chunk": position,
+                        "element_type": kind,
+                        "subtype": subtype,
+                        # False for a picture: what is indexed is its caption, not the data
+                        # drawn in it. The console and the listing both say so.
+                        "searchable_content": searchable,
+                    },
+                    "table_metadata": table_metadata,
+                    "image_metadata": image_metadata,
+                },
+            )
+        )
+
+    position = 0
+    for element in elements:
+        if not isinstance(element, dict):
+            continue
+        content_metadata = element.get("content_metadata") or {}
+        kind = str(content_metadata.get("type") or "")
+        page = int(content_metadata.get("page_number") or 0)
+        table_metadata = element.get("table_metadata") or {}
+        image_metadata = element.get("image_metadata") or {}
+        content = str(element.get("content") or "")
+
+        if kind == "structured":
+            counts["tables"] += 1
+            for piece in table_chunks(table_metadata.get("table_content") or content):
+                add(
+                    piece,
+                    kind="structured",
+                    subtype=str(content_metadata.get("subtype") or "table"),
+                    page=page,
+                    position=position,
+                    table_metadata={
+                        "table_location": list(table_metadata.get("table_location") or []),
+                        "table_location_max_dimensions": list(
+                            table_metadata.get("table_location_max_dimensions") or []
+                        ),
+                        "caption": str(table_metadata.get("caption") or ""),
+                    },
+                    image_metadata={},
+                    searchable=True,
+                )
+                position += 1
+            continue
+
+        if kind == "image":
+            counts["charts"] += 1
+            # `content` for a picture is a base64 crop when the extractor is asked for one,
+            # and is never text. The caption is the only thing here that can be embedded.
+            caption = str(
+                image_metadata.get("caption") or content_metadata.get("description") or ""
+            ).strip()
+            if not caption:
+                continue
+            counts["chartsIndexed"] += 1
+            add(
+                caption,
+                kind="image",
+                subtype="",
+                page=page,
+                position=position,
+                table_metadata={},
+                image_metadata={
+                    "image_location": list(image_metadata.get("image_location") or []),
+                    "image_location_max_dimensions": list(
+                        image_metadata.get("image_location_max_dimensions") or []
+                    ),
+                    "caption": caption,
+                },
+                searchable=False,
+            )
+            position += 1
+            continue
+
+        if not content.strip():
+            continue
+        counts["text"] += 1
+        for piece in chunks(content):
+            add(
+                piece,
+                kind="text",
+                subtype="",
+                page=page,
+                position=position,
+                table_metadata={},
+                image_metadata={},
+                searchable=True,
+            )
+            position += 1
+
+    counts["chunks"] = len(documents)
+    return documents, counts
+
+
+def store_upload(filename: str, blob: bytes) -> dict[str, Any]:
+    """Extract, chunk and index one submitted file. Returns what became of it.
+
+    Under `INDEX_LOCK`: this and the gated rebuild share one embedder with two cores, and a
+    batch that holds them both for half a minute is a batch its own health endpoint cannot
+    answer during.
+    """
+    if not uploads_enabled():
+        raise RuntimeError(
+            "this deployment has no extraction service configured, so it reads documents "
+            "from its gated source only"
+        )
+    if len(blob) > UPLOAD_MAX_BYTES:
+        raise ValueError(
+            f"{filename} is {len(blob)} bytes and the limit is {UPLOAD_MAX_BYTES}"
+        )
+
+    # The identifier is the NAME's hash and not the content's, so submitting a corrected
+    # version of a document replaces it instead of leaving two copies of nearly the same
+    # text competing in every search. The extractor's own `source_id` is a per-request
+    # uuid and would make every resubmission a new document.
+    upload_id = hashlib.sha256(filename.encode("utf-8")).hexdigest()[:32]
+    extracted = extract(filename, blob)
+    documents, counts = element_documents(
+        extracted.get("elements") or [], upload_id, filename
+    )
+    if not documents:
+        raise ValueError(
+            f"nothing in {filename} could be indexed: the extractor found "
+            f"{counts['charts']} picture(s) with no caption and no text or tables at all"
+        )
+
+    with INDEX_LOCK:
+        # Replace rather than add to: submitting the same file twice should leave one copy,
+        # not two sets of chunks competing in every search.
+        removed = remove_upload(upload_id)
+        _, store = vector_store(UPLOAD_COLLECTION)
+        written = write_all(store, documents)
+
+    logger.info(
+        "indexed %s: %d chunks (%d text, %d tables, %d pictures of which %d captioned)%s",
+        filename,
+        written,
+        counts["text"],
+        counts["tables"],
+        counts["charts"],
+        counts["chartsIndexed"],
+        f", replacing {removed} chunks of an earlier submission" if removed else "",
+    )
+    return {
+        "id": upload_id,
+        "name": filename,
+        "chunks": written,
+        "replaced": removed,
+        "elements": counts,
+        "stats": extracted.get("stats") or {},
+        "at": now(),
+    }
+
+
+def upload_client():
+    """The Milvus client for the uploads collection, or None if there is not one yet.
+
+    `MilvusVDB.get_documents` is not used for the listing below: it reads a document-info
+    collection that upstream's ingestor writes and this listing never does, so it would
+    answer an empty list for documents that are in the index.
+    """
+    vdb, _ = vector_store(UPLOAD_COLLECTION)
+    if not vdb.check_collection_exists(UPLOAD_COLLECTION):
+        return None
+    return vdb
+
+
+def uploaded_documents() -> list[dict[str, Any]]:
+    """What has been submitted, read back out of the index itself.
+
+    The index is the registry on purpose: a list held in this pod's memory would be empty
+    after a restart while the chunks were still being searched, which is a console that
+    disagrees with the answers beside it.
+    """
+    if not uploads_enabled():
+        return []
+    try:
+        vdb = upload_client()
+        if vdb is None:
+            return []
+        rows = vdb._client.query(  # noqa: SLF001 — see upload_client
+            collection_name=UPLOAD_COLLECTION,
+            filter='upload_id != ""',
+            output_fields=["upload_id", "document_name"],
+            limit=UPLOAD_LIST_LIMIT,
+        )
+    except Exception as error:  # noqa: BLE001 — the panel reports, it does not fail
+        logger.warning("could not list the uploaded documents: %s", error)
+        return []
+
+    counted: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = str(row.get("upload_id") or "")
+        if not key:
+            continue
+        entry = counted.setdefault(
+            key, {"id": key, "name": str(row.get("document_name") or ""), "chunks": 0}
+        )
+        entry["chunks"] += 1
+    return sorted(counted.values(), key=lambda entry: entry["name"].lower())
+
+
+def remove_upload(upload_id: str) -> int:
+    """Drop every chunk of one submitted document. Returns how many went.
+
+    The identifier is checked rather than escaped: it is interpolated into a Milvus filter
+    expression, and a filter is as much a query language as SQL is.
+    """
+    if not UPLOAD_ID_PATTERN.match(upload_id or ""):
+        raise ValueError(
+            f"{upload_id!r} is not a document identifier — 1 to 64 characters of "
+            "[A-Za-z0-9_-], which is what this service issues"
+        )
+    vdb = upload_client()
+    if vdb is None:
+        return 0
+    before = vdb._client.query(  # noqa: SLF001 — see upload_client
+        collection_name=UPLOAD_COLLECTION,
+        filter=f'upload_id == "{upload_id}"',
+        output_fields=["upload_id"],
+        limit=UPLOAD_LIST_LIMIT,
+    )
+    if not before:
+        return 0
+    vdb._client.delete(  # noqa: SLF001
+        collection_name=UPLOAD_COLLECTION, filter=f'upload_id == "{upload_id}"'
+    )
+    vdb._client.flush(collection_name=UPLOAD_COLLECTION)  # noqa: SLF001
+    return len(before)
+
+
+def live_collections() -> list[str]:
+    """The collections that exist, which is what a query may name.
+
+    The rag-server refuses a question naming a collection that does not exist — with a 400
+    for the whole query, not a skipped collection — so the console asks here first. A
+    deployment whose corpus has never indexed and which has no uploads has neither.
+    """
+    out: list[str] = []
+    try:
+        vdb, _ = vector_store()
+        for collection in (COLLECTION, UPLOAD_COLLECTION):
+            if collection and vdb.check_collection_exists(collection):
+                out.append(collection)
+    except Exception as error:  # noqa: BLE001
+        logger.warning("could not list the collections: %s", error)
+    return out
 
 
 # --------------------------------------------------------------------------------------
@@ -384,21 +852,139 @@ def index(rows: list[dict[str, Any]], binding: dict[str, Any]) -> int:
 # --------------------------------------------------------------------------------------
 
 
+class Service(ThreadingHTTPServer):
+    """Threaded, because indexing one upload must not block the status panel.
+
+    `HTTPServer` serves one request at a time, and an upload holds its request for as long
+    as extraction takes — 52.6 s measured for a fifteen-page scan through OCR. On a
+    single-threaded server that is a minute in which `/status` does not answer, which is a
+    readiness probe failing and the pod being restarted mid-upload.
+    """
+
+    daemon_threads = True
+
+
 class Status(BaseHTTPRequestHandler):
+    """The console's only way in. No authentication of its own, and that is deliberate.
+
+    This is a ClusterIP Service on no Ingress. The console is the whole of the
+    authentication in front of it and it is the only caller — the same arrangement as the
+    rag-server, which also answers this namespace without a credential. What a second
+    workload in the namespace could reach is the reason the EXTRACTION service, which this
+    one calls, does carry a key.
+    """
+
     protocol_version = "HTTP/1.1"
 
-    def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's own naming
-        if self.path.split("?")[0] not in ("/status", "/healthz"):
-            self.send_error(404)
-            return
-        with STATE_LOCK:
-            body = json.dumps(STATE).encode()
-        self.send_response(200)
+    def respond(self, status: int, payload: dict[str, Any]) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def route(self) -> str:
+        return self.path.split("?")[0].rstrip("/") or "/"
+
+    def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's own naming
+        route = self.route()
+        if route in ("/status", "/healthz"):
+            with STATE_LOCK:
+                payload = dict(STATE)
+            if route == "/status":
+                payload["uploadedDocuments"] = uploaded_documents()
+            self.respond(200, payload)
+            return
+        if route == "/collections":
+            # Which collections a query may name. Cheap: two existence checks, no embedding.
+            self.respond(200, {"collections": live_collections()})
+            return
+        if route == "/documents":
+            self.respond(200, {"documents": uploaded_documents()})
+            return
+        self.send_error(404)
+
+    def do_POST(self) -> None:  # noqa: N802
+        """`POST /documents` — one file, raw, with its name in `X-Document-Name`.
+
+        Raw bytes and a header rather than a multipart body: the console has already parsed
+        the browser's multipart form, and parsing it a second time here would mean a
+        multipart parser in a `BaseHTTPRequestHandler`, which is a place to put a bug rather
+        than a feature.
+        """
+        if self.route() != "/documents":
+            self.send_error(404)
+            return
+        if not uploads_enabled():
+            self.respond(
+                503,
+                {
+                    "error": "this deployment has no extraction service, so it reads "
+                    "documents from its gated source only"
+                },
+            )
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self.respond(400, {"error": "Content-Length is required"})
+            return
+        if length <= 0:
+            self.respond(400, {"error": "an empty document has nothing to index"})
+            return
+        if length > UPLOAD_MAX_BYTES:
+            self.respond(
+                413,
+                {
+                    "error": f"{length} bytes; this deployment accepts up to "
+                    f"{UPLOAD_MAX_BYTES}"
+                },
+            )
+            return
+        try:
+            name = safe_name(self.headers.get("X-Document-Name") or "")
+        except ValueError as error:
+            self.respond(400, {"error": str(error)})
+            return
+
+        blob = self.rfile.read(length)
+        try:
+            result = store_upload(name, blob)
+        except ValueError as error:
+            self.respond(400, {"error": str(error)})
+            return
+        except TimeoutError as error:
+            self.respond(504, {"error": str(error)})
+            return
+        except Exception as error:  # noqa: BLE001 — the caller is told, the pod stays up
+            logger.exception("indexing the submitted document failed")
+            self.respond(502, {"error": str(error)[:400]})
+            return
+        self.respond(201, result)
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        """`DELETE /documents/<id>` — every chunk of one submitted document."""
+        route = self.route()
+        if not route.startswith("/documents/"):
+            self.send_error(404)
+            return
+        upload_id = route[len("/documents/") :]
+        try:
+            with INDEX_LOCK:
+                removed = remove_upload(upload_id)
+        except ValueError as error:
+            self.respond(400, {"error": str(error)})
+            return
+        except Exception as error:  # noqa: BLE001
+            logger.exception("removing the submitted document failed")
+            self.respond(502, {"error": str(error)[:400]})
+            return
+        if not removed:
+            self.respond(404, {"error": "no such document"})
+            return
+        self.respond(200, {"id": upload_id, "chunks": removed})
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.debug("status %s", fmt % args)
@@ -459,7 +1045,10 @@ def loop() -> None:
 
         try:
             rows = documents(binding)
-            written = index(rows, binding)
+            # The same lock an upload takes: one embedder, two cores, and two kinds of work
+            # that would otherwise saturate it together.
+            with INDEX_LOCK:
+                written = index(rows, binding)
         except TimeoutError as error:
             # Said apart from a refusal: the source served the documents and the index did not
             # take them. An operator reading this needs to look at the embedder, not the gate.
@@ -487,7 +1076,7 @@ def loop() -> None:
 
 
 def main() -> None:
-    server = HTTPServer(("0.0.0.0", STATUS_PORT), Status)
+    server = Service(("0.0.0.0", STATUS_PORT), Status)
     threading.Thread(target=server.serve_forever, name="status", daemon=True).start()
     logger.info("status on :%d, polling every %ds", STATUS_PORT, POLL_SECONDS)
     loop()

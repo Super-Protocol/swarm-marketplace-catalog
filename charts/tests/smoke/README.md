@@ -1,11 +1,12 @@
 # Smoke
 
-Three scripts. Two are per listing — `run.sh` for confidential-router, `confidential-s3.sh`
-for confidential-s3 — and build the images from a checkout of the application's repository,
-install the chart into a throwaway kind cluster with an ingress controller in front of it,
-and then ask the deployment for the things it exists to do, through the Ingress objects the
-chart renders rather than through a port-forward that would prove the pods work and leave
-the routing untried.
+Four scripts. Three are per listing — `run.sh` for confidential-router,
+`confidential-s3.sh` for confidential-s3, `confidential-rag.sh` for Confidential RAG — and
+the first two build the images from a checkout of the application's repository, install the
+chart into a throwaway kind cluster with an ingress controller in front of it, and then ask
+the deployment for the things it exists to do, through the Ingress objects the chart renders
+rather than through a port-forward that would prove the pods work and leave the routing
+untried.
 
 The third, `patroni.sh`, is per chart rather than per listing, because what it tests is not
 a request path: it is whether `patroni-postgresql` elects a leader, promotes a standby when
@@ -16,6 +17,37 @@ It also runs with **pod → kube-apiserver blocked**, which is what a cluster sp
 its tenant pods and what the 0.1.0 chart could not bootstrap behind (SUP-215). Behind that
 block the Kubernetes-DCS version sits at 0/3 forever; this run is the evidence that the
 etcd version does not.
+
+## confidential-rag
+
+```bash
+charts/tests/smoke/confidential-rag.sh
+KEEP=1 charts/tests/smoke/confidential-rag.sh      # leave it up to poke at
+```
+
+Docker rather than kind, and no Ingress, because what this asks is not a routing question:
+it is whether the pipeline reports what it is doing. Every expensive defect in that listing's
+history was a CPU component failing quietly while the deployment looked healthy — `topK`
+above the reranker's batch ceiling, thread pools sized from the host instead of the cgroup,
+a probe that killed the embedder mid-index — and each one was found by deploying to the
+epic's single H100 and reading a citation. None of them needed the card.
+
+So this raises Milvus, the embedder, the reranker, the extraction service, the pipeline, its
+indexer and its console on one Docker network, from **the digests the charts pin** and the
+configuration they render — the application code is unpacked out of the rendered `-app`
+ConfigMap, not read from `files/`, because the ConfigMap is what a deployment runs and what
+the cloud signs. Then it submits a document, asks a question through `/v1/search`, and
+reproduces the 0.1.5 reranker defect on purpose by asking for more candidates than
+`--max-client-batch-size` allows. The run is green only if the degradation reaches the
+answer's citations, `/v1/health` and the console's status panel, with the retriever's own
+non-zero scores on the citations it degraded.
+
+**Generation is not covered.** vLLM needs the card and nothing in this half changes it;
+`/v1/search` is the endpoint that retrieves, reranks and cites without a model writing prose.
+
+First run fetches about 3.5 GiB of embedding and reranking weights from Hugging Face into a
+Docker volume and keeps them for later runs. The extraction image carries its own models and
+fetches nothing at all.
 
 ## patroni-postgresql
 

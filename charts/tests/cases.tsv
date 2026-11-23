@@ -65,5 +65,6 @@ rag-reranker	text-embeddings-server
 rag-vectors	milvus-standalone		
 rag-stack	confidential-rag		
 rag-stack-unbound	confidential-rag		
+rag-stack-no-uploads	confidential-rag		
 vuln-analysis-engine	swarm-model-server		
 vuln-analysis-stack	confidential-vulnerability-analysis		

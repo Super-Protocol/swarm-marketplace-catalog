@@ -78,4 +78,18 @@ time — which reads as "the answers stopped being grounded" rather than as a mi
 {{- if not (hasSuffix "/v1" .Values.embeddings.url) }}
 {{- fail "confidential-rag: embeddings.url must end in /v1 — the OpenAI client appends /embeddings to it" }}
 {{- end }}
+{{- if and .Values.ingest.enabled .Values.server.uploadCollection }}
+{{- if not .Values.ingest.url }}
+{{- fail "confidential-rag: ingest.url is required while ingest.enabled is true and server.uploadCollection is set — the console would offer a control that cannot reach an extractor" }}
+{{- end }}
+{{- if not .Values.ingest.apiKey }}
+{{- fail "confidential-rag: ingest.apiKey is required — the extraction service authenticates, because a namespace is not a trust boundary once a second workload is in it, and an unauthenticated extractor in this namespace would take a document from anything that can reach it" }}
+{{- end }}
+{{- if eq .Values.server.uploadCollection .Values.server.collection }}
+{{- fail (printf "confidential-rag: server.uploadCollection and server.collection are both %q — the gated corpus is DROPPED and rewritten whenever it moves, so one collection for both would delete every uploaded document on the next refresh of the corpus, silently and without anything in the console saying so" .Values.server.collection) }}
+{{- end }}
+{{- if le (.Values.ingest.maxUploadMb | int) 0 }}
+{{- fail "confidential-rag: ingest.maxUploadMb must be a positive number of megabytes" }}
+{{- end }}
+{{- end }}
 {{- end -}}

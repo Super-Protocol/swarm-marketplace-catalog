@@ -2,6 +2,46 @@ apiVersion: swarm.cloud/v1alpha1
 kind: AppDefinition
 
 # ---------------------------------------------------------------------------
+# 0.1.8 is two things the pilot shipped without, done as ONE change because
+# either one on its own moves `expectedDigest` and a re-measure costs two gated
+# deployments on the epic's single card (SUP-889 + SUP-890, parked as a pair and
+# dispatched as a pair).
+#
+# **The reranker says when it is not working.** 0.1.6 found a `413` and 0.1.7
+# found a timeout, and BOTH were found by deploying, reading a citation and
+# noticing the score was 0.0 — because the adapter's fallback returned the
+# retriever's documents with no score and told nobody. The fallback is right;
+# the silence was the defect. Now a fallback keeps the retriever's own
+# similarity as the score, `citations.reranker` carries `degraded`, the reason
+# and `score_source` into the answer, `/v1/health` reports the reranker
+# `degraded` with the endpoint's own message instead of the `healthy` its probe
+# sees, and the console's panel shows that beside the reranker's name. The
+# instrument is the deliverable here as much as the fix is: what this listing
+# lacked was not a working reranker but any way to tell that it was not one.
+#
+# **Documents can be submitted, not only read from a table.** The ingestion
+# component this listing has reserved 4 CPU and 4Gi for since 0.1.0 is now
+# composed: `swarm-doc-ingest` 0.2.0 (SUP-874) — Docling, TableFormer and
+# RapidOCR, CPU-only, no NIM and no NGC credential — with the console gaining
+# the submit / list / remove that upstream's `ingestor-server` would have
+# provided. Submitted files are indexed into a SECOND collection, because the
+# gated corpus is dropped and rewritten whenever it moves and one collection for
+# both would delete every uploaded document on the next refresh.
+#
+# What the copy must not claim, and the reason it is written out in the outputs
+# below: **a chart is located, not transcribed.** This extraction stack reads no
+# chart data — transcribing a chart needs a vision-language model on a GPU the
+# generation engine holds — so a chart is cited as an image at a position on a
+# page, by its caption, and its contents are not searchable. Tables are
+# different and are the point of the component: extracted as structure and
+# indexed as Markdown, never flattened into prose.
+#
+# `resources.min` does NOT move, and that was verified off the real render
+# rather than assumed: 0.1.0 reserved exactly this component's 4 CPU / 4Gi
+# against the day it was composed, and `charts/tests/max_pod.py` and the
+# arithmetic below now count it as rendered instead of reserved.
+#
+# ---------------------------------------------------------------------------
 # 0.1.7 is the rest of that reranker story, found by deploying 0.1.6 and reading
 # its citations: with `topK` at 12 and no 413 anywhere, the scores were still
 # 0.0 and `context_reranker_time_ms` came back as 60 058 — the adapter's
@@ -128,7 +168,7 @@ metadata:
     deployment publishes cryptographic proof of which embedder and which model touch your data, and
     the data owner can withdraw access the moment that changes. Based on the open-source NVIDIA RAG
     reference architecture (Apache-2.0), rebuilt on open components.
-  version: "0.1.7"
+  version: "0.1.8"
   category: ai-inference
   # Our fork — the code the image is built from — and not the upstream repository.
   sourceRepo: https://github.com/Super-Protocol/confidential-rag
@@ -173,7 +213,9 @@ ui:
       description: >-
         Which table the documents are in, and which columns hold them. The defaults match the
         shape most document tables already have; the console says what it read and how many rows,
-        so a wrong answer here is a message on the status panel rather than silence.
+        so a wrong answer here is a message on the status panel rather than silence. Files can
+        also be submitted in the console once this is deployed — PDF, Office, HTML, Markdown,
+        text and scans — and nothing here has to be answered for that to work.
       fields:
         - parameterId: documentTable
           widget: text
@@ -205,6 +247,8 @@ ui:
         rotating one — leave a field blank on a reconfigure and the existing value is kept.
       fields:
         - parameterId: inferenceKey
+          widget: password
+        - parameterId: ingestKey
           widget: password
         - parameterId: sessionKey
           widget: password
@@ -375,6 +419,17 @@ parameters:
     sensitive: true
     generated: true
 
+  - id: ingestKey
+    type: string
+    title: Extraction endpoint key
+    description: >-
+      Authenticates the pipeline to the document-extraction service inside this deployment. It
+      is on no public address and a namespace is not a trust boundary once a second workload is
+      in it — an unauthenticated extractor would take a document from anything that could reach
+      it.
+    sensitive: true
+    generated: true
+
   - id: sessionKey
     type: string
     title: Session signing key
@@ -415,17 +470,18 @@ resources:
   #   reranker — open cross-encoder, CPU         2       6Gi      3Gi
   #   reranker — weights fetcher (init)         (1)    (512Mi)     —     not summed
   #   vectors — Milvus standalone                2       8Gi     20Gi
+  #   ingest — document extraction, CPU          4       4Gi      1Gi
   #   server — the ported pipeline               2       4Gi      5Gi
   #   corpus — the gated-source indexer          1       2Gi       —
   #   cache — Valkey                           0.5       1Gi      1Gi
   #   console — the authenticating front door  0.5     512Mi       —
   #   ---------------------------------------- ----    ------   ------
-  #   sum of rendered pods                      18     59.5Gi     64Gi
-  #   ingestion — reserved, see below            4       4Gi      1Gi
+  #   sum of rendered pods                      22     63.5Gi     65Gi
   #   one surge pod of the console              0.5    512Mi       —
+  #   one surge pod of ingest                     4       4Gi       —
   #   marketplace egress sidecar (gated data)  0.25    128Mi       —
   #   ---------------------------------------- ----    ------   ------
-  #   total                                  22.75  64.125Gi     65Gi
+  #   total                                  26.75  68.125Gi     65Gi
   #
   # The four:
   #
@@ -437,34 +493,44 @@ resources:
   #    embedder (6Gi). A tenant who picks the small model simply does not use the
   #    room; a quota sized for the small one is a deployment refused the first
   #    time somebody picks the big one.
-  # 3. Only ONE pod here surges, and it is the smallest. Every Deployment holding
-  #    a ReadWriteOnce volume — the engine, both model servers, Milvus, the
-  #    pipeline, Valkey — is `Recreate`, because a rolling update would leave the
-  #    replacement Pending on a volume the running pod holds, for ever. The
-  #    console holds nothing, so it is the only rolling one.
+  # 3. TWO pods surge, and the second one is why this quota moved in 0.1.8. Every
+  #    Deployment holding a ReadWriteOnce volume — the engine, both model servers,
+  #    Milvus, the pipeline, Valkey — is `Recreate`, because a rolling update
+  #    would leave the replacement Pending on a volume the running pod holds, for
+  #    ever. The console holds nothing and rolls; and `swarm-doc-ingest` holds no
+  #    device and no claim either, so its chart rolls with `maxSurge: 1` and
+  #    offers no value to change that. A quota that did not cover its surge pod
+  #    would leave the replacement Pending on the quota during an upgrade, which
+  #    reads as "the upgrade hung" and not as a resource declaration that was
+  #    wrong. Its own README says to count it; it is counted.
   # 4. The marketplace adds its own egress sidecar to any deployment that mounts
   #    GATED data (limits 250m / 128Mi), and a quota sized for the application
   #    alone refuses it. This listing exists to mount gated data, so it is in.
   #
-  # The 4 CPU / 4Gi for ingestion is RESERVED and nothing renders it yet.
-  # `charts/swarm-doc-ingest` — Docling, TableFormer and RapidOCR, CPU-only,
-  # measured on SUP-874 — landed on `main` while this listing's digest was being
-  # measured, so the component exists; composing it needs the `ingestor-server`
-  # that owns collection and document management, and a place in the console to
-  # submit a file. Until then this listing reads documents from a table.
+  # ---------------------------------------------------------------------------
+  # What moved in 0.1.8, and what did not.
   #
-  # The room is held now because a cluster space's quota is fixed at creation and
-  # a reconfigure re-renders the version the deployment was created from: a
-  # deployment of this version can take the ingestion component when the listing
-  # composes it, and one whose quota was sized exactly cannot.
-  # 25 and 66Gi against a measured 22.75 and 64.125: a little over two cores and
-  # two gigabytes of headroom, which is deliberate rather than rounding. A quota
-  # is fixed when the cluster space is created and a reconfigure re-renders the
-  # version the deployment was created from, so the room a later version needs
-  # has to be asked for now or not at all.
+  # The ingestion component's own 4 CPU / 4Gi / 1Gi was RESERVED from 0.1.0
+  # against the day it was composed, and composing it does not move the floor —
+  # which was the thing to verify rather than assume, and it holds off the real
+  # render. What does move is its SURGE pod: 0.1.0 reserved the component and not
+  # the rolling update it performs, so 4 CPU and 4Gi are added here and nowhere
+  # else. 29 and 70Gi against a measured 26.75 and 68.125, which keeps the same
+  # little over two cores and two gigabytes of headroom 0.1.7 had.
+  #
+  # That headroom is deliberate rather than rounding, for the reason that applies
+  # to this whole block: a cluster space's quota is fixed when the space is
+  # created and a reconfigure re-renders the version the deployment was created
+  # from, so the room a later version needs has to be asked for now or not at
+  # all.
+  #
+  # A deployment of 0.1.7 (25 / 66Gi) therefore CANNOT be reconfigured into this
+  # version's shape — it has neither the component nor the room for it — and that
+  # is the ordinary way a listing version works here rather than a regression:
+  # new versions reach new deployments.
   #
   # ---------------------------------------------------------------------------
-  # Why this is 25 / 66Gi / 80Gi and not the 21 / 52Gi / 64Gi prescribed for
+  # Why this is 29 / 70Gi / 80Gi and not the 21 / 52Gi / 64Gi prescribed for
   # this listing's shape in `docs/open-inference-component.md`.
   #
   # That table is right for the shape it describes and this listing is a
@@ -476,25 +542,25 @@ resources:
   #     (it predates this listing having one). A quota is declared for the worst
   #     option a parameter allows, or it refuses the deployment the first time
   #     somebody picks it.
-  #   * It assumes `ingest` is the surge pod at 4 CPU / 4Gi. In this listing
-  #     ingestion is reserved and not rendered, and every Deployment holding a
-  #     ReadWriteOnce volume is `Recreate`, so the only pod that surges is the
-  #     console at 0.5 / 512Mi. That is the one place this listing needs LESS.
+  #   * It carries no separate indexer, no Valkey and no console. This listing
+  #     has all three, and TWO surge pods rather than one: `ingest`, which rolls,
+  #     and the console. Every other Deployment here holds a ReadWriteOnce volume
+  #     and is `Recreate`.
   #
   # Both numbers were then measured off the real renders of the worst option the
   # parameters allow, and a deployment was created at exactly this quota and
   # evicted nothing (`charts/tests/max_pod.py` holds the per-pod half). The CTO
   # accepted the difference on that basis; the arithmetic is the table above.
   min:
-    cpu: "25"
-    memory: "66Gi"
+    cpu: "29"
+    memory: "70Gi"
     # Not the 65Gi sum: a storage quota equal to it fails at the last volume
     # rather than the first, which reads as one broken service rather than as a
     # quota.
     storage: "80Gi"
   # The heaviest SINGLE pod, which is a different quantity from the quota and the
   # one a node has to be able to hold. Without it the cloud assumes the whole
-  # 25/66Gi lands on one pod and refuses the listing on any cloud whose nodes are
+  # 29/70Gi lands on one pod and refuses the listing on any cloud whose nodes are
   # smaller than its entire quota (SUP-824).
   maxPod:
     cpu: "8"
@@ -731,7 +797,63 @@ components:
             value: "{{ params.vectorStorePassword }}"
 
   # ---------------------------------------------------------------------------
-  # 5. The pipeline itself, its console, its corpus indexer and the summary-status
+  # 5. Document extraction, so a tenant can submit a file and not only point at a
+  #    table. Replaces `nv-ingest` and the four extraction NIMs — Nemotron Page
+  #    Elements, Table Structure, Graphic Elements and Nemotron OCR — with
+  #    Docling, TableFormer and RapidOCR. CPU-only: the card belongs to the
+  #    generation engine, and a component that claimed it would leave the engine
+  #    Pending on a GPU quota of one for ever.
+  #
+  #    Cluster-internal, and the chart has no Ingress template at all. It still
+  #    authenticates: a namespace is not a trust boundary once a second workload
+  #    is in it.
+  #
+  #    What it does NOT do is transcribe a chart, and that is a property of the
+  #    component rather than a gap in this listing — see `whatIsSearchable`
+  #    below, where it is said in the words a reader needs.
+  # ---------------------------------------------------------------------------
+  - name: ingest
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: swarm-doc-ingest
+      version: "0.2.0"
+    images:
+      - name: ghcr.io/super-protocol/swarm-doc-ingest/ingest
+        digest: sha256:a114f3df285a9c0f30e96e3bf2b31b04184ba5d956b007e8df81cc4a4db704d1
+    deployment:
+      values:
+        base:
+          apiKey: ""
+          extraction:
+            # Changing either of these changes what the component reads out of a
+            # tenant's documents while the measured table and cell scores still
+            # claim the old behaviour, so the chart refuses a preset it does not
+            # bake. Written out here rather than left to the chart's defaults
+            # because this is the document a verifier reads.
+            layoutPreset: layout_heron_default
+            tableMode: accurate
+            ocrEngine: rapidocr
+          # Measured, not estimated: a fifteen-page PDF with a text layer peaks
+          # at 1.96 GiB in 13.1 s, the same pages as a 200-dpi scan through OCR
+          # at 2.34 GiB in 52.6 s, and the highest figure in the whole sweep is
+          # 2.46 GiB. On CPU: 8 cores 51.7 s, 4 cores 59.4 s — four cores give up
+          # 15% for half the quota, which is why this is 4 and not 8.
+          #
+          # `OMP_NUM_THREADS` is NOT set here: the chart derives it from this
+          # quota in whole cores, which is the convention since
+          # `text-embeddings-server` 0.1.5 and the reason 0.1.7 of this listing
+          # exists. Setting it by hand would be the one way to break that.
+          resources:
+            cpu: "4"
+            memory: 4Gi
+        patches:
+          - op: replace
+            path: apiKey
+            value: "{{ params.ingestKey }}"
+
+  # ---------------------------------------------------------------------------
+  # 6. The pipeline itself, its console, its corpus indexer and the summary-status
   #    store. The image is built from our fork; the console and the indexer are
   #    rendered into a ConfigMap the cloud digests, so the code that decides who
   #    may read the corpus is in the evidence rather than inside a second image
@@ -742,10 +864,13 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-rag
-      version: "0.1.6"
+      version: "0.2.0"
     images:
       - name: ghcr.io/super-protocol/confidential-rag/rag-server
-        digest: sha256:c68adc9c963a623256e4fe1db6be35ae6ac15fe95589504ff5b7b663ad2e06f9
+        # Built from `confidential/2.6.2` at 5285f52, the commit that carries the
+        # reported reranker fallback. `scripts/verify-pins` traces this digest to
+        # that commit through the build's own attestation.
+        digest: sha256:cd54accbf4d946835aabf8664486cf1fc02ec63818baf5e7b175c6607dbf2413
       - name: docker.io/valkey/valkey
         digest: sha256:e706d1213aaba6896c162bb6a3a9e1894e1a435f28f8f856d14fab2e10aa098b
     deployment:
@@ -774,6 +899,10 @@ components:
             url: http://confidential-rag-reranker
             model: bge-reranker-v2-m3
             licence: Apache-2.0
+            apiKey: ""
+          ingest:
+            enabled: true
+            url: http://swarm-doc-ingest:8080
             apiKey: ""
           vectorStore:
             url: http://confidential-rag-vectors:19530
@@ -856,6 +985,14 @@ components:
             path: reranker.apiKey
             value: "{{ params.inferenceKey }}"
 
+          # The extraction service's own key, and NOT `inferenceKey`: the three
+          # model endpoints and the extractor are different components with
+          # different blast radii, and one key for all four would mean rotating
+          # the extractor's credential signed everybody out of the models.
+          - op: replace
+            path: ingest.apiKey
+            value: "{{ params.ingestKey }}"
+
           - op: replace
             path: vectorStore.password
             value: "{{ params.vectorStorePassword }}"
@@ -923,12 +1060,41 @@ outputs:
     title: What touches your data
     type: string
     value: >-
-      Generation runs on vLLM inside this deployment; embedding and reranking run on open
-      checkpoints on CPU inside it. No request leaves the cluster space at inference time, and no
-      component here needs an NVIDIA AI Enterprise entitlement, an NGC credential or any other
-      vendor account. The model weights are fetched once, at first boot, against a manifest that
-      names every file by sha256 — and that manifest is inside the deployment's own signed
-      evidence, so what was admitted and the rule that admitted it are both verifiable.
+      Generation runs on vLLM inside this deployment; embedding, reranking and document
+      extraction run on open components on CPU inside it. No request leaves the cluster space at
+      inference time, nothing is fetched while a document is being read — the extraction models
+      are baked into their image and the hub is switched off, so a missing weight is a refusal
+      at boot rather than a download — and no component here needs an NVIDIA AI Enterprise
+      entitlement, an NGC credential or any other vendor account. The generation and embedding
+      weights are fetched once, at first boot, against a manifest that names every file by
+      sha256, and that manifest is inside the deployment's own signed evidence, so what was
+      admitted and the rule that admitted it are both verifiable.
+
+  - id: whatIsSearchable
+    title: What is searchable in a document you submit
+    type: string
+    value: >-
+      Text and TABLES. A table is extracted as structure and indexed as its grid, never
+      flattened into prose — which is the whole reason this extraction stage exists, because a
+      text-only extractor reads prose perfectly and loses every table. CHARTS AND IMAGES ARE
+      CITED AS IMAGES: they are located on the page and cited by their caption and position, and
+      their contents are NOT read and NOT searchable. Transcribing a chart needs a
+      vision-language model on a GPU, and the card in this deployment belongs to the model
+      writing your answers. A chart with no caption is counted in the console's report of what
+      was extracted and is not indexed at all — the alternative would be a chunk claiming to
+      hold numbers nothing here has read.
+
+  - id: howReliableIsTheRanking
+    title: If a component stops working, how you find out
+    type: string
+    value: >-
+      The console's panel reports each model with its licence and whether it is actually doing
+      its job, and an answer says so too. The case that matters is reranking: a reranker can
+      answer its health check and refuse every real request, and when that happens the pipeline
+      keeps the retriever's own ordering rather than failing the question. The panel then reads
+      "degraded" with the endpoint's own message, and the citation list under the affected
+      answer says its scores are the retriever's similarities rather than the reranker's. A
+      degraded answer is still an answer; what it is not is indistinguishable from a good one.
 
   - id: corpusGating
     title: What the gatekeeper can and cannot protect
@@ -967,6 +1133,8 @@ outputs:
       A dataset is attached. The console's status panel names it, says how many rows were read and
       how many chunks are in the index, and shows the gatekeeper's verdict on the last read — so a
       withdrawn approval is visible as a refusal rather than as answers quietly getting worse.
+      Files submitted through the console are indexed beside it, in a collection of their own, and
+      a refresh of the gated corpus does not touch them.
     when: "data.corpus.count > 0"
 
   - id: corpusUnbound
@@ -975,7 +1143,8 @@ outputs:
     value: >-
       No dataset is attached, which is a supported state: the deployment is up and waiting. Attach
       one to the "Document corpus" slot with a reconfigure and it is indexed within a minute,
-      without a restart.
+      without a restart. You can also submit documents directly in the console without attaching
+      anything — that is the whole of what a deployment with no dataset can answer about.
     when: "data.corpus.count == 0"
 
 evidence:

@@ -2,11 +2,19 @@
 <!--
   The console, behind the session cookie.
 
-  Three panes, and the two on the right are the point of the listing as much as the chat is:
+  The panes on the right are the point of the listing as much as the chat is:
   "Who touched your data" names the generation model, the embedder and the reranker with their
-  licences, and "Your corpus" shows the gate's own verdict on the last read. When a data owner
-  withdraws approval, this is where it is visible — the corpus pane turns red and quotes the
-  refusal, rather than questions silently getting worse.
+  licences AND whether each of them is actually doing its job, and "Your corpus" shows the
+  gate's own verdict on the last read. When a data owner withdraws approval, this is where it is
+  visible — the corpus pane turns red and quotes the refusal, rather than questions silently
+  getting worse. The same applies to the reranker: a reranker that answers its health probe and
+  refuses every actual rerank reads "degraded" here with the reason, because the previous
+  version of this listing shipped exactly that and the only trace was citations reading 0.0.
+
+  "Your documents" is the document management half: submit a file, see what the extractor made
+  of it, remove it. Tables are extracted as structure and are searchable; a chart is LOCATED,
+  not transcribed — it is cited as an image at a position on a page, and the panel says so,
+  because implying a chart's numbers are searchable would be a promise this stack cannot keep.
 
   No build step, no dependency, no network except this deployment: the whole interface is this
   file, and it is rendered into a ConfigMap the cloud digests and signs.
@@ -59,6 +67,19 @@
  .bad{background:#3a1620;color:#f87171}
  .wait{background:#2a2410;color:#fbbf24}
  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.8rem}
+ .note{font-size:.76rem;color:#6b7488;margin:.5rem 0 0}
+ .doc{display:flex;align-items:baseline;gap:.5rem;font-size:.82rem;padding:.3rem 0;
+      border-bottom:1px solid #161c28}
+ .doc .nm{flex:1;word-break:break-word}
+ .doc .ct{color:#6b7488;font-size:.74rem;white-space:nowrap}
+ .doc button{background:none;border:1px solid #2b3448;color:#8b94a7;border-radius:6px;
+             padding:.1rem .4rem;font-size:.7rem;cursor:pointer}
+ .doc button:hover{color:#f87171;border-color:#3a1620}
+ #droplabel{display:block;margin-top:.6rem;padding:.6rem;border:1px dashed #2b3448;
+            border-radius:8px;text-align:center;font-size:.8rem;color:#8b94a7;cursor:pointer}
+ #droplabel:hover{border-color:#3b82f6;color:#e6e6e6}
+ #upfile{display:none}
+ .cite .meta{color:#6b7488;font-size:.74rem}
 </style></head>
 <body>
 <header>
@@ -88,6 +109,18 @@
       <h2>Your corpus</h2>
       <div id="corpus"></div>
     </section>
+    <section id="docsec">
+      <h2>Your documents</h2>
+      <div id="docs"></div>
+      <label id="droplabel" for="upfile">Submit a document</label>
+      <input id="upfile" type="file"
+             accept=".pdf,.docx,.pptx,.xlsx,.html,.htm,.md,.txt,.png,.jpg,.jpeg,.tiff,.tif,.bmp">
+      <p class="note" id="upnote">
+        PDF, Office, HTML, Markdown, text and scans. Tables are extracted as structure and are
+        searchable; charts are cited as images at their position on the page — their data is not
+        read and not searchable.
+      </p>
+    </section>
     <section>
       <h2>Pipeline</h2>
       <div id="pipeline"></div>
@@ -96,6 +129,7 @@
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
+let ABOUT = {};
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const row = (k, v) => `<div class="row"><span>${esc(k)}</span><span>${v}</span></div>`;
@@ -109,12 +143,35 @@ async function about() {
   const model = (name, licence) => name
     ? `${esc(name)}<br><span class="lic">${esc(licence || "licence not declared")}</span>`
     : "<span class='lic'>not configured</span>";
+  ABOUT = a;
   $("about").innerHTML =
     row("Generation", model(a.generationModel, a.generationLicence)) +
     row("Embedding", model(a.embeddingModel, a.embeddingLicence)) +
     row("Reranking", model(a.rerankerModel, a.rerankerLicence)) +
+    `<div id="rerankstate"></div>` +
+    (a.extractionStack
+      ? row("Extraction", model(a.extractionStack, a.extractionLicence)) : "") +
     row("Collection", `<code>${esc(a.collection)}</code>`) +
+    (a.uploadCollection
+      ? row("Uploads", `<code>${esc(a.uploadCollection)}</code>`) : "") +
     (a.expectedDigest ? row("Listing digest", `<code>${esc(a.expectedDigest.slice(0, 16))}…</code>`) : "");
+  if (!a.uploadsEnabled) {
+    $("docsec").innerHTML = `<h2>Your documents</h2><p class="note">This deployment has no
+      extraction service, so it answers from its gated document source only.</p>`;
+  }
+}
+
+// The reranker's own verdict, beside the model that is supposed to be doing the work. A red
+// pill here is the thing nothing reported in 0.1.7: the component was reachable, attested and
+// reserved two cores, and did nothing on any query.
+function rerankPane(r) {
+  if (!r || !r.degraded) {
+    if (!r || r.source === "none") return "";
+    return row("", `<span class="pill ok">reranking</span>`);
+  }
+  return row("", `<span class="pill bad">degraded</span>`) +
+    row("", `<span class="lic">${esc(r.reason || "the last rerank fell back to the " +
+      "retriever's own order; citation scores are retriever similarities")}</span>`);
 }
 
 function corpusPane(c) {
@@ -153,18 +210,74 @@ async function status() {
     const s = await r.json();
     $("corpus").innerHTML = corpusPane(s.corpus);
     $("pipeline").innerHTML = pipelinePane(s.pipeline);
+    const state = $("rerankstate");
+    if (state) state.innerHTML = rerankPane(s.reranker);
+    if (ABOUT.uploadsEnabled) docsPane((s.corpus && s.corpus.uploadedDocuments) || []);
   } catch (e) { /* the panel reports, it does not break the chat */ }
 }
 
-function citations(cites) {
+function docsPane(documents) {
+  const target = $("docs");
+  if (!target) return;
+  if (!documents.length) {
+    target.innerHTML = `<p class="note">No document submitted yet.</p>`;
+    return;
+  }
+  target.innerHTML = documents.map((d) =>
+    `<div class="doc"><span class="nm">${esc(d.name)}</span>
+     <span class="ct">${esc(d.chunks)} chunks</span>
+     <button data-id="${esc(d.id)}" title="Remove from the index">remove</button></div>`
+  ).join("");
+  for (const button of target.querySelectorAll("button")) {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        const r = await fetch(`/api/documents/${encodeURIComponent(button.dataset.id)}`,
+                              { method: "DELETE" });
+        if (!r.ok) note((await r.json()).error || "could not remove that document", true);
+      } catch (error) { note(String(error), true); }
+      status();
+    });
+  }
+}
+
+function note(message, bad) {
+  const target = $("upnote");
+  if (!target) return;
+  target.textContent = message;
+  target.style.color = bad ? "#f87171" : "#8b94a7";
+}
+
+// A citation names its document, what KIND of thing it was and where on the page it sat.
+// The kind matters here more than in most consoles: a table is extracted as structure and its
+// content is what was searched, while an image is cited by its caption and position and its
+// contents were never read. A reader has to be able to tell those apart.
+function citations(cites, reranking) {
   if (!cites || !cites.length) return "";
   const items = cites.map((c) => {
     const src = c.source || c.document_name || "document";
     const txt = (c.content || (c.metadata && c.metadata.description) || "").slice(0, 320);
+    const meta = (c.metadata && c.metadata.content_metadata) || {};
+    const kind = { structured: "table", image: "image (located, not read)" }[meta.element_type]
+      || "";
+    const page = (c.metadata && c.metadata.page_number) || 0;
+    const box = (c.metadata && c.metadata.location) || [];
+    const where = [
+      kind,
+      page ? `p. ${esc(page)}` : "",
+      box.length === 4 ? `at ${box.map((v) => Math.round(v)).join(", ")}` : "",
+      typeof c.score === "number" ? `score ${c.score.toFixed(3)}` : "",
+    ].filter(Boolean).join(" · ");
     return `<div class="cite"><span class="src">${esc(src)}</span>
+            ${where ? `<span class="meta">${where}</span>` : ""}
             <span class="txt">${esc(txt)}</span></div>`;
   }).join("");
-  return `<div class="cites"><h3>Citations</h3>${items}</div>`;
+  const caveat = reranking && reranking.degraded
+    ? `<p class="note" style="color:#f87171">Reranking did not run for this answer, so these
+       scores are the retriever's own similarities and this order is the retriever's.
+       ${esc(reranking.reason || "")}</p>`
+    : "";
+  return `<div class="cites"><h3>Citations</h3>${caveat}${items}</div>`;
 }
 
 $("askbox").addEventListener("submit", async (event) => {
@@ -187,6 +300,7 @@ $("askbox").addEventListener("submit", async (event) => {
 
   let text = "";
   let cites = null;
+  let reranking = null;
   try {
     const response = await fetch("/api/ask", {
       method: "POST",
@@ -223,6 +337,7 @@ $("askbox").addEventListener("submit", async (event) => {
                         (choice.delta && choice.delta.content) || "";
           if (piece) { text += piece; answer.textContent = text; }
           if (event.citations && event.citations.results) cites = event.citations.results;
+          if (event.citations && event.citations.reranker) reranking = event.citations.reranker;
           $("log").scrollTop = $("log").scrollHeight;
         }
       }
@@ -232,7 +347,7 @@ $("askbox").addEventListener("submit", async (event) => {
       answer.textContent = "The pipeline returned no answer. The corpus panel on the right " +
         "says whether the documents are reachable.";
     } else if (cites) {
-      answer.insertAdjacentHTML("beforeend", citations(cites));
+      answer.insertAdjacentHTML("beforeend", citations(cites, reranking));
     }
   } catch (error) {
     answer.className = "msg err";
@@ -243,6 +358,45 @@ $("askbox").addEventListener("submit", async (event) => {
     status();
   }
 });
+
+// Submitting a document. One at a time by construction — the extraction service does one and
+// queues the rest — so the control is disabled while it runs rather than queueing here too.
+const upload = $("upfile");
+if (upload) {
+  upload.addEventListener("change", async () => {
+    const file = upload.files && upload.files[0];
+    if (!file) return;
+    const label = $("droplabel");
+    label.textContent = `Extracting ${file.name}…`;
+    upload.disabled = true;
+    note("One document is extracted at a time. A fifteen-page scan through OCR is about a " +
+         "minute on the cores this deployment gives it.");
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const r = await fetch("/api/documents", { method: "POST", body: form });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        note(body.error || `the indexer answered ${r.status}`, true);
+      } else {
+        const e = body.elements || {};
+        const charts = e.charts
+          ? `, ${e.charts} chart/image${e.charts === 1 ? "" : "s"} located (${e.chartsIndexed}` +
+            ` with a caption; their data is not searchable)`
+          : "";
+        note(`${body.name}: ${body.chunks} chunks indexed — ${e.text || 0} text, ` +
+             `${e.tables || 0} table${e.tables === 1 ? "" : "s"}${charts}.`);
+      }
+    } catch (error) {
+      note(String(error), true);
+    } finally {
+      upload.value = "";
+      upload.disabled = false;
+      label.textContent = "Submit a document";
+      status();
+    }
+  });
+}
 
 about();
 status();

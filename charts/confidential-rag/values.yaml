@@ -23,8 +23,8 @@ ingress:
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-rag/rag-server
-  digest: sha256:c68adc9c963a623256e4fe1db6be35ae6ac15fe95589504ff5b7b663ad2e06f9
-  tag: 2.6.2-sp.6ae0f54
+  digest: sha256:cd54accbf4d946835aabf8664486cf1fc02ec63818baf5e7b175c6607dbf2413
+  tag: 2.6.2-sp.5285f52
   pullPolicy: IfNotPresent
 
 # ---------------------------------------------------------------------------------------------
@@ -64,8 +64,21 @@ console:
 server:
   # uvicorn workers. Each one holds its own clients to the four endpoints, so this is a memory
   # multiplier as much as a concurrency one.
+  #
+  # It is also why the reranker's verdict is written to a file the whole pod shares
+  # (`RERANKER_STATUS_PATH` below): the worker that answers `/v1/health` is usually not the
+  # worker that served the query, so a per-process record would report a degradation on a coin
+  # flip.
   workers: 2
   collection: documents
+  # Uploaded documents, in a collection of their own. The gated corpus is DROPPED and rewritten
+  # whenever it moves — a document its owner deleted has to leave the index — so one collection
+  # for both would mean every corpus refresh deleting every file anybody submitted. The
+  # rag-server retrieves from both in one query, so the split costs an answer nothing.
+  #
+  # Empty switches uploads off: the console says the deployment reads its gated source only,
+  # rather than offering a button that answers 503.
+  uploadCollection: documents_uploads
   # ---------------------------------------------------------------------------------------------
   # Candidates out of the vector store, which is what the reranker then orders.
   #
@@ -149,6 +162,31 @@ reranker:
   # is duplicated here only so this chart can refuse the render instead; the two are held equal
   # by `charts/tests/rag_reranker_budget.py`, which reads the preset.
   maxClientBatchSize: 32
+
+# ---------------------------------------------------------------------------------------------
+# Document extraction, for files submitted through the console
+# ---------------------------------------------------------------------------------------------
+ingest:
+  # charts/swarm-doc-ingest (SUP-874): Docling, TableFormer and RapidOCR, CPU-only, no NIM and
+  # no NGC credential. Cluster-internal, no Ingress of its own, and it authenticates — a
+  # namespace is not a trust boundary once a second workload is in it.
+  enabled: true
+  url: http://swarm-doc-ingest:8080
+  apiKey: ""
+  # What the component is, for the console's "who touched your data" panel. A tenant should not
+  # have to read the listing page to know what read their documents.
+  stack: Docling + TableFormer + RapidOCR
+  licence: Apache-2.0 (models MIT / Apache-2.0 / CDLA-Permissive-2.0)
+  # Megabytes. Mirrored into the console and the indexer so a file too large is refused in the
+  # browser rather than after it has crossed the namespace. The extractor's own ceiling is
+  # 256 MiB; this is the console's, and it is lower because the console holds the whole document
+  # in 512Mi of memory while it hands it over.
+  maxUploadMb: 64
+  # Seconds for one extraction. Measured on four cores: 2.6 s for HTML or DOCX, 13.1 s for a
+  # fifteen-page PDF with a text layer, 52.6 s for the same pages as a 200-dpi scan through OCR.
+  # The budget is long because ONE document is extracted at a time and the rest queue, so this
+  # has to cover a queue and not just a document.
+  timeoutSeconds: 900
 
 vectorStore:
   url: http://milvus:19530

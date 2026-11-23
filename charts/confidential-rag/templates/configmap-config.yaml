@@ -75,6 +75,12 @@ data:
   APP_RANKING_SERVERURL: {{ .Values.reranker.url | quote }}
   RERANKER_SCORE_THRESHOLD: {{ .Values.server.rerankerScoreThreshold | quote }}
   ENABLE_VLM_RERANKER_IMAGE_INPUT: "False"
+  # Where the reranker writes what its last rerank actually did, so `/v1/health` reports a
+  # reranker that answers its probe and refuses every batch as `degraded` with the reason.
+  # A path and not a toggle: it is in /tmp of the one container, shared by that container's
+  # uvicorn workers, which is the whole point — the worker answering a health request is not
+  # the worker that served the query. Nothing outside the pod reads it (SUP-889).
+  RERANKER_STATUS_PATH: /tmp-data/reranker-status.json
 
   # --- what this deployment does not run ---
   ENABLE_QUERYREWRITER: "False"

@@ -3,8 +3,9 @@ name: confidential-rag
 description: >-
   The ported RAG pipeline — retrieval, reranking and grounded generation over a tenant's own
   documents — with its own authenticating console, the indexer that reads the gated document
-  source, and the summary-status store. Composes an embedder, a reranker, a vector store and a
-  generation endpoint deployed beside it.
+  source and indexes submitted files, and the summary-status store. Composes an embedder, a
+  reranker, a vector store, a document-extraction stage and a generation endpoint deployed
+  beside it.
 type: application
 # 0.1.1 is one fix, found by deploying: the Valkey pod runs as the image's own uid.
 # Its entrypoint starts as root and drops privileges with `setpriv`, which needs CAP_SETUID —
@@ -29,6 +30,30 @@ type: application
 # nothing published. Each batch now runs under a timeout, progress is published per batch, and a
 # stall is its own verdict rather than a refusal: the source served the documents, the index did
 # not take them, and those want different people looking.
+# 0.2.0 is two things the pilot shipped without, and the minor bump is because the second one
+# adds a component and a collection rather than correcting a number.
+#
+# The reranker SAYS when it is not working. 0.1.6 stopped the 413 and 0.1.7 stopped the
+# timeout, and both were found by reading citations and noticing the scores were 0.0 — because
+# `TEIRerank`'s fallback returned the retriever's documents with no score and told nobody. Now
+# a fallback keeps the retriever's own similarity as the score, marks the documents, carries
+# `citations.reranker` into the answer, and writes its verdict where `/v1/health` reads it. The
+# console's "who touched your data" panel shows `degraded` with the reason beside the reranker's
+# own name, and a degraded answer's citation list says the order is the retriever's. The
+# verdict file is `RERANKER_STATUS_PATH` in /tmp-data of the server container, shared by its
+# uvicorn workers: the worker answering a health request is not the worker that reranked.
+#
+# And documents can be SUBMITTED, not only read from a table. `charts/swarm-doc-ingest` does
+# the extraction — Docling, TableFormer and RapidOCR, CPU-only, no NIM — and the indexer writes
+# the elements into a collection of its own, `server.uploadCollection`. Its own collection
+# because the gated corpus is dropped and rewritten whenever it moves, so one collection for
+# both would delete every submitted file on the next refresh; `crag.validate` refuses a render
+# where the two names are equal. The console gains the document management upstream's
+# `ingestor-server` would have provided: submit, list, remove. A table is indexed as Markdown
+# split on row boundaries with its header repeated. A chart is LOCATED, NOT TRANSCRIBED — cited
+# as an image at a position on a page, by its caption, and the console and the listing both say
+# its data is not searchable, because this stack reads no chart data at all.
+#
 # 0.1.6 is the reranker doing its job, and one blocking sleep removed.
 #
 # `server.topK` was 40 against the reranker's `--max-client-batch-size 32`, so Text Embeddings
@@ -41,7 +66,7 @@ type: application
 #
 # And `login()` called `time.sleep(0.5)` on the event loop: every wrong password froze the whole
 # console for half a second, streaming answers included. It awaits now.
-version: 0.1.6
+version: 0.2.0
 # The upstream release this is a port of. The image is built from
 # Super-Protocol/confidential-rag at branch confidential/2.6.2 — see MODIFICATIONS.md there for
 # what differs, which is the open embedding, reranking and generation engines and nothing about

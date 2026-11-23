@@ -45,6 +45,9 @@ CREDENTIALS = {
     "inference-api-key",
     "embeddings-api-key",
     "reranker-api-key",
+    # The extraction service's own, from 0.1.8. A document a person submits goes
+    # through it, so it is the same asset as the corpus and the same rule applies.
+    "ingest-api-key",
     "vector-store-password",
 }
 PROBE_PATHS = {"/healthz"}
