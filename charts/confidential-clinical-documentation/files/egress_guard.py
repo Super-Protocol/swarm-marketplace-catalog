@@ -69,6 +69,9 @@ logger = logging.getLogger("egress-guard")
 STATUS: dict[str, object] = {
     "allowHost": ALLOW_HOST,
     "allowPort": ALLOW_PORT,
+    # Explicit, so a reader of `/_guard/status` does not have to infer a deny-all policy from
+    # an empty string that could equally be a value somebody forgot to set.
+    "policy": "refuse-everything" if not ALLOW_HOST else "allow-one-host",
     "admitted": 0,
     "refused": 0,
     "lastRefused": "",
@@ -238,16 +241,22 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> 
 
 
 async def main() -> None:
+    # Modified by Super Protocol, 2026, for this listing, and the difference from the
+    # vulnerability-analysis copy of this file is one line of policy.
+    #
+    # There, an empty allowlist is a misconfiguration: that deployment needs public
+    # vulnerability intelligence, every lookup would fail with a 403, and the reports would say
+    # "no data" without saying why — so the guard refuses to start and the chart refuses to
+    # render. HERE AN EMPTY ALLOWLIST IS THE CONFIGURATION. This deployment reaches nothing:
+    # its models are in its image, its generation endpoint is a Service in its namespace, and
+    # its transcript corpus arrives through the gatekeeper at a local address. The chart
+    # refuses an allowlist with an ENTRY in it, which is the opposite validation.
+    #
+    # So the guard starts, says what it is, and refuses everything. The alternative — not
+    # running it at all — would leave the deployment's egress claim resting on the absence of a
+    # container rather than on a rule in the signed evidence.
     if not ALLOW_HOST:
-        # Refuse to start rather than run a proxy that admits nothing while the deployment
-        # believes it has vulnerability intelligence: every lookup would fail with a 403 and the
-        # reports would say "no data" without saying why.
-        print(
-            "egress-guard: EGRESS_ALLOW_HOST is required; refusing to start a guard with no "
-            "allowlist",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
+        logger.info("the allowlist is empty: every request will be refused, by design")
 
     server = await asyncio.start_server(handle, LISTEN_ADDRESS, LISTEN_PORT)
     logger.info(

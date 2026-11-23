@@ -106,12 +106,18 @@ card to exactly **one** container — so an LLM server and a GPU ASR service can
 The decision this listing makes, and declares: **the card goes entirely to generation**, and
 recognition and diarization run on the pod's CPU. Measured inside the image on six threads:
 
+Measured on a real deployment of this version, not inferred:
+
 | | |
 |---|---|
-| recognition + speaker separation | **21–23 s of wall clock per minute of audio** |
-| a 15-minute consultation | ≈ 5½ minutes to transcript-with-speakers |
-| a 30-minute consultation | ≈ 11 minutes |
-| note generation on top | well under a minute |
+| recognition + speaker separation | **16–19 s of wall clock per minute of audio** |
+| a 15-minute consultation | ≈ 4½ minutes to transcript-with-speakers |
+| a 30-minute consultation | ≈ 9 minutes |
+| a SOAP or progress note from it | 10–20 s |
+| **the FIRST consultation after a pod start** | **6–8 minutes for a 5-minute recording** — the models load on first use and the generation engine is still warming |
+
+Every transcript carries its own `secondsPerAudioMinute`, so you can check these numbers against
+your own recordings instead of trusting them.
 
 One recording is processed at a time on purpose: both engines are threaded across the whole CPU
 allocation, so a second concurrent job makes both slower rather than one faster.

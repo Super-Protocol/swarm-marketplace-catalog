@@ -116,9 +116,9 @@ spec:
             - name: ASR_COMPUTE_TYPE
               value: {{ .Values.scribe.asr.computeType | quote }}
             - name: ASR_THREADS
-              value: {{ .Values.scribe.threads | quote }}
+              value: {{ .Values.scribe.threads | int64 | quote }}
             - name: ASR_BEAM_SIZE
-              value: {{ .Values.scribe.asr.beamSize | quote }}
+              value: {{ .Values.scribe.asr.beamSize | int64 | quote }}
             - name: ASR_LANGUAGE
               value: {{ .Values.scribe.asr.language | quote }}
             # Diarization, and the floors that decide whether its answer is shown. Upstream has
@@ -145,14 +145,20 @@ spec:
               value: /data/uploads
             - name: STATE_DIR
               value: /data/state
+            # `int64` before `quote`, and it is not cosmetic. Helm parses a large number out of
+            # values.yaml as a float64 and `quote` then renders it in SCIENTIFIC NOTATION —
+            # `"5.24288e+08"` — which pydantic refuses as an integer and the container dies on
+            # import with a validation error. The pod then never becomes ready, and on a cluster
+            # space there is no pod-level visibility to read the reason out of. Found in kind
+            # after fifty minutes of `ready: 0` on a real cloud; the same trap bit SUP-890.
             - name: MAX_FILE_SIZE
-              value: {{ .Values.scribe.maxFileSizeBytes | quote }}
+              value: {{ .Values.scribe.maxFileSizeBytes | int64 | quote }}
             # How long a recording is kept for playback. The transcript's text and timecodes are
             # unaffected; what ages out is the audio, which is the protected health information.
             - name: AUDIO_RETENTION_HOURS
               value: {{ .Values.scribe.audioRetentionHours | quote }}
             - name: RETENTION_SWEEP_SECONDS
-              value: {{ .Values.scribe.retentionSweepSeconds | quote }}
+              value: {{ .Values.scribe.retentionSweepSeconds | int64 | quote }}
             # Empty. The UI is served by this same process, so nothing legitimate is
             # cross-origin — and the console in front of this API carries a session cookie, so a
             # wildcard here would be a cross-site request away from somebody else's page
@@ -180,11 +186,11 @@ spec:
             # thread per host core inside the quota and spends the request being throttled.
             # CTranslate2 and onnxruntime both do exactly that.
             - name: OMP_NUM_THREADS
-              value: {{ .Values.scribe.threads | quote }}
+              value: {{ .Values.scribe.threads | int64 | quote }}
             - name: MKL_NUM_THREADS
-              value: {{ .Values.scribe.threads | quote }}
+              value: {{ .Values.scribe.threads | int64 | quote }}
             - name: NUMEXPR_MAX_THREADS
-              value: {{ .Values.scribe.threads | quote }}
+              value: {{ .Values.scribe.threads | int64 | quote }}
             - name: TOKENIZERS_PARALLELISM
               value: "false"
             - name: PYTHONUNBUFFERED
@@ -262,11 +268,11 @@ spec:
               valueFrom:
                 secretKeyRef: { name: {{ $name }}-secrets, key: console-session-key }
             - name: CONSOLE_SESSION_TTL_SECONDS
-              value: {{ .Values.console.sessionTtlSeconds | quote }}
+              value: {{ .Values.console.sessionTtlSeconds | int64 | quote }}
             - name: SCRIBE_API_URL
               value: {{ printf "http://127.0.0.1:%d" (.Values.scribe.port | int) | quote }}
             - name: PROXY_READ_TIMEOUT_SECONDS
-              value: {{ .Values.console.proxyReadTimeoutSeconds | quote }}
+              value: {{ .Values.console.proxyReadTimeoutSeconds | int64 | quote }}
             {{- if .Values.egress.enabled }}
             - name: EGRESS_GUARD_URL
               value: {{ printf "http://%s:%d" .Values.egress.listenAddress (.Values.egress.port | int) | quote }}
@@ -369,12 +375,12 @@ spec:
             - name: EGRESS_LISTEN_ADDRESS
               value: {{ .Values.egress.listenAddress | quote }}
             - name: EGRESS_LISTEN_PORT
-              value: {{ .Values.egress.port | quote }}
+              value: {{ .Values.egress.port | int64 | quote }}
             # Empty, and `ccd.validate` refuses a value. This deployment reaches nothing.
             - name: EGRESS_ALLOW_HOST
               value: {{ .Values.egress.allowHost | quote }}
             - name: EGRESS_ALLOW_PORT
-              value: {{ .Values.egress.allowPort | quote }}
+              value: {{ .Values.egress.allowPort | int64 | quote }}
             - name: PYTHONUNBUFFERED
               value: "1"
             - name: LOG_LEVEL

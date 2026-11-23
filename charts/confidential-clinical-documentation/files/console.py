@@ -124,7 +124,6 @@ ABOUT: dict[str, Any] = {
     "egressAllowHost": os.environ.get("EGRESS_ALLOW_HOST", ""),
     "sourceRepo": os.environ.get("ABOUT_SOURCE_REPO", ""),
     "upstream": os.environ.get("ABOUT_UPSTREAM", ""),
-    "corpusBound": bool(CORPUS_BINDING.strip()),
     "clinicalReviewRequired": True,
 }
 
@@ -263,7 +262,12 @@ async def logout() -> Response:
 async def about(request: Request) -> JSONResponse:
     if not signed_in(request):
         return JSONResponse({"error": "not signed in"}, status_code=401)
-    return JSONResponse(ABOUT)
+    # `corpusBound` is resolved here rather than at import, and that is not tidiness: the
+    # listing renders an UNBOUND slot as the JSON document `[]`, which is a non-empty string.
+    # Testing the string said "a corpus is attached" on every deployment that had none, while
+    # `/_console/corpus` beside it correctly said `unbound`. A panel that contradicts the thing
+    # it is a summary of is worse than no panel.
+    return JSONResponse({**ABOUT, "corpusBound": bool(_binding())})
 
 
 @app.get("/_console/guard")

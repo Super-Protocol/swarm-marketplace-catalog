@@ -157,7 +157,6 @@ data:
         "egressAllowHost": os.environ.get("EGRESS_ALLOW_HOST", ""),
         "sourceRepo": os.environ.get("ABOUT_SOURCE_REPO", ""),
         "upstream": os.environ.get("ABOUT_UPSTREAM", ""),
-        "corpusBound": bool(CORPUS_BINDING.strip()),
         "clinicalReviewRequired": True,
     }
     
@@ -296,7 +295,12 @@ data:
     async def about(request: Request) -> JSONResponse:
         if not signed_in(request):
             return JSONResponse({"error": "not signed in"}, status_code=401)
-        return JSONResponse(ABOUT)
+        # `corpusBound` is resolved here rather than at import, and that is not tidiness: the
+        # listing renders an UNBOUND slot as the JSON document `[]`, which is a non-empty string.
+        # Testing the string said "a corpus is attached" on every deployment that had none, while
+        # `/_console/corpus` beside it correctly said `unbound`. A panel that contradicts the thing
+        # it is a summary of is worse than no panel.
+        return JSONResponse({**ABOUT, "corpusBound": bool(_binding())})
     
     
     @app.get("/_console/guard")
@@ -575,6 +579,9 @@ data:
     STATUS: dict[str, object] = {
         "allowHost": ALLOW_HOST,
         "allowPort": ALLOW_PORT,
+        # Explicit, so a reader of `/_guard/status` does not have to infer a deny-all policy from
+        # an empty string that could equally be a value somebody forgot to set.
+        "policy": "refuse-everything" if not ALLOW_HOST else "allow-one-host",
         "admitted": 0,
         "refused": 0,
         "lastRefused": "",
@@ -744,16 +751,22 @@ data:
     
     
     async def main() -> None:
+        # Modified by Super Protocol, 2026, for this listing, and the difference from the
+        # vulnerability-analysis copy of this file is one line of policy.
+        #
+        # There, an empty allowlist is a misconfiguration: that deployment needs public
+        # vulnerability intelligence, every lookup would fail with a 403, and the reports would say
+        # "no data" without saying why — so the guard refuses to start and the chart refuses to
+        # render. HERE AN EMPTY ALLOWLIST IS THE CONFIGURATION. This deployment reaches nothing:
+        # its models are in its image, its generation endpoint is a Service in its namespace, and
+        # its transcript corpus arrives through the gatekeeper at a local address. The chart
+        # refuses an allowlist with an ENTRY in it, which is the opposite validation.
+        #
+        # So the guard starts, says what it is, and refuses everything. The alternative — not
+        # running it at all — would leave the deployment's egress claim resting on the absence of a
+        # container rather than on a rule in the signed evidence.
         if not ALLOW_HOST:
-            # Refuse to start rather than run a proxy that admits nothing while the deployment
-            # believes it has vulnerability intelligence: every lookup would fail with a 403 and the
-            # reports would say "no data" without saying why.
-            print(
-                "egress-guard: EGRESS_ALLOW_HOST is required; refusing to start a guard with no "
-                "allowlist",
-                file=sys.stderr,
-            )
-            raise SystemExit(2)
+            logger.info("the allowlist is empty: every request will be refused, by design")
     
         server = await asyncio.start_server(handle, LISTEN_ADDRESS, LISTEN_PORT)
         logger.info(
@@ -784,7 +797,7 @@ spec:
     - "ReadWriteOnce"
   resources:
     requests:
-      storage: "100Gi"
+      storage: "40Gi"
 ---
 # Source: confidential-clinical-documentation/templates/service.yaml
 apiVersion: v1
@@ -844,7 +857,7 @@ spec:
         # expects to create on its first write is a directory it fails to create; making them
         # here is cheaper than discovering it at the first upload.
         - name: prepare
-          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:e1466673ad052b16d61e937c53148507f7e326a9a0a2893dc81429e234444e04"
+          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:e10034864d16fb08cc56d83a16e0894b884cb47d68136a7b0466ca29b7704bbe"
           imagePullPolicy: IfNotPresent
           command: [/bin/sh, -ec]
           args:
@@ -867,7 +880,7 @@ spec:
       containers:
         # -------------------------------------------------------------------
         - name: scribe
-          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:e1466673ad052b16d61e937c53148507f7e326a9a0a2893dc81429e234444e04"
+          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:e10034864d16fb08cc56d83a16e0894b884cb47d68136a7b0466ca29b7704bbe"
           imagePullPolicy: IfNotPresent
           command: [uvicorn]
           args:
@@ -909,7 +922,7 @@ spec:
             - name: ASR_COMPUTE_TYPE
               value: "int8"
             - name: ASR_THREADS
-              value: "6"
+              value: "5"
             - name: ASR_BEAM_SIZE
               value: "1"
             - name: ASR_LANGUAGE
@@ -938,8 +951,14 @@ spec:
               value: /data/uploads
             - name: STATE_DIR
               value: /data/state
+            # `int64` before `quote`, and it is not cosmetic. Helm parses a large number out of
+            # values.yaml as a float64 and `quote` then renders it in SCIENTIFIC NOTATION —
+            # `"5.24288e+08"` — which pydantic refuses as an integer and the container dies on
+            # import with a validation error. The pod then never becomes ready, and on a cluster
+            # space there is no pod-level visibility to read the reason out of. Found in kind
+            # after fifty minutes of `ready: 0` on a real cloud; the same trap bit SUP-890.
             - name: MAX_FILE_SIZE
-              value: "5.24288e+08"
+              value: "524288000"
             # How long a recording is kept for playback. The transcript's text and timecodes are
             # unaffected; what ages out is the audio, which is the protected health information.
             - name: AUDIO_RETENTION_HOURS
@@ -968,11 +987,11 @@ spec:
             # thread per host core inside the quota and spends the request being throttled.
             # CTranslate2 and onnxruntime both do exactly that.
             - name: OMP_NUM_THREADS
-              value: "6"
+              value: "5"
             - name: MKL_NUM_THREADS
-              value: "6"
+              value: "5"
             - name: NUMEXPR_MAX_THREADS
-              value: "6"
+              value: "5"
             - name: TOKENIZERS_PARALLELISM
               value: "false"
             - name: PYTHONUNBUFFERED
@@ -1020,11 +1039,11 @@ spec:
             failureThreshold: 6
           resources:
             limits:
-              cpu: "8"
+              cpu: "6"
               memory: 12Gi
               nvidia.com/gpu: "0"
             requests:
-              cpu: "8"
+              cpu: "6"
               memory: 12Gi
               nvidia.com/gpu: "0"
           volumeMounts:
@@ -1032,7 +1051,7 @@ spec:
               mountPath: /data
         # -------------------------------------------------------------------
         - name: console
-          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:e1466673ad052b16d61e937c53148507f7e326a9a0a2893dc81429e234444e04"
+          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:e10034864d16fb08cc56d83a16e0894b884cb47d68136a7b0466ca29b7704bbe"
           imagePullPolicy: IfNotPresent
           command: [uvicorn]
           args:
@@ -1171,7 +1190,7 @@ spec:
               readOnly: true
         # -------------------------------------------------------------------
         - name: egress
-          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:e1466673ad052b16d61e937c53148507f7e326a9a0a2893dc81429e234444e04"
+          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:e10034864d16fb08cc56d83a16e0894b884cb47d68136a7b0466ca29b7704bbe"
           imagePullPolicy: IfNotPresent
           command: [python3, /opt/app/egress_guard.py]
           env:

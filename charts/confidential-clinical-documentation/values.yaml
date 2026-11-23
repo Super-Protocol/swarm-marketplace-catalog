@@ -33,8 +33,8 @@ ingress:
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-clinical-documentation/scribe-server
-  digest: sha256:e1466673ad052b16d61e937c53148507f7e326a9a0a2893dc81429e234444e04
-  tag: 1.0.0-sp.58767f5
+  digest: sha256:e10034864d16fb08cc56d83a16e0894b884cb47d68136a7b0466ca29b7704bbe
+  tag: 1.0.0-sp.89cdda7
   pullPolicy: IfNotPresent
 
 # ---------------------------------------------------------------------------------------------
@@ -80,9 +80,9 @@ scribe:
   retentionSweepSeconds: 900
   streaming: true
   # The threads CTranslate2 and onnxruntime are allowed, pinned to this container's allocation
-  # rather than the host's core count. Six against a limit of eight: the two spare are the
-  # console, the guard and the event loop relaying a stream while the engines run.
-  threads: 6
+  # rather than the host's core count. Five against a limit of six: the one spare is the console,
+  # the guard and the event loop relaying a stream while the engines run.
+  threads: 5
   systemPrompt: >-
     You are documenting a clinical consultation from its transcript. Write only what the
     transcript supports. Where the transcript does not say something, say that it does not. This
@@ -131,9 +131,17 @@ scribe:
     title: >-
       sherpa-onnx with pyannote segmentation 3.0 and NVIDIA NeMo TitaNet-Large, on the CPU
     licence: Apache-2.0 (sherpa-onnx), MIT (segmentation), CC-BY-4.0 (TitaNet-Large)
+  # Six cores and twelve gigabytes, and the six is a measured ceiling rather than a preference.
+  # The generation engine on this epic's cloud takes eight cores on the node that holds the card,
+  # and a pod asking for 8.75 beside it is a pod that stays Pending — the cloud reports
+  # `ready: 0` with no reason and there is no pod-level visibility to read it out of. The
+  # vulnerability-analysis listing's 6 + 8 is the shape known to be placeable here, so this
+  # listing uses the same. It costs nothing measurable: 21-23 s per minute of audio at five
+  # threads, the same as at six, because CTranslate2's scaling on this work saturates before
+  # then. The eight cores were headroom nobody could place.
   resources:
     requests:
-      cpu: "8"
+      cpu: "6"
       memory: 12Gi
       # Zero, and validated. The device plugin gives the one card to exactly one container, and
       # that container is the generation engine. A GPU request here is not a tuning mistake that
@@ -141,14 +149,17 @@ scribe:
       # cannot start either.
       nvidia.com/gpu: "0"
     limits:
-      cpu: "8"
+      cpu: "6"
       memory: 12Gi
       nvidia.com/gpu: "0"
   persistence:
     enabled: true
-    # Recordings at up to 500 MiB each plus their transcripts and notes. 100Gi is what a pod on
-    # this cloud has actually been given; a claim equal to the namespace quota never binds.
-    size: 100Gi
+    # Recordings at up to 500 MiB each plus their transcripts and notes — about eighty
+    # consultations held at once at the default retention, and the retention is what keeps it
+    # from growing. 40Gi rather than 100: a quota is not capacity, and this listing's engine
+    # already holds a 32Gi volume on the same cloud. A claim the storage class cannot place
+    # leaves the PVC Pending and the pod with it, which reads as "the app is broken".
+    size: 40Gi
     storageClass: ""
     accessMode: ReadWriteOnce
 

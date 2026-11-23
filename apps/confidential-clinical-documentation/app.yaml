@@ -259,14 +259,14 @@ resources:
   #   Pod / container                             CPU    Memory   Volume
   #   inference — vLLM, 1x GPU, 80 GiB of VRAM      8      32Gi     32Gi
   #   inference — weights fetcher (init)           (2)   (512Mi)      —    not summed
-  #   scribe — the ported application              8      12Gi    100Gi
+  #   scribe — the ported application               6      12Gi     40Gi
   #   scribe — console, the front door            0.5     512Mi       —
   #   scribe — egress guard                      0.25     256Mi       —
   #   scribe — prepare (init)                    (0.1)   (128Mi)      —    not summed
   #   ------------------------------------------- ----   ------   ------
-  #   sum of rendered pods                      16.75   44.75Gi    132Gi
+  #   sum of rendered pods                      14.75   44.75Gi     72Gi
   #
-  # Four things that are easy to get wrong here and are not:
+  # Five things that are easy to get wrong here and are not:
   #
   # 1. An init container is NOT summed — init containers run before the regular
   #    ones — but a pod's demand is its containers' limits summed OR its heaviest
@@ -285,35 +285,42 @@ resources:
   #    a two-hour consultation is about 460 MiB, doubled while it is being
   #    concatenated. Measured peak on a five-minute consultation is well under
   #    3 GiB; 12Gi is sized for the two-hour case this listing accepts.
+  # 5. **THE SCRIBE'S SIX CORES ARE A CEILING THIS EPIC'S CLOUD IMPOSED, NOT A
+  #    PREFERENCE.** The first deployment of this listing asked for eight, which
+  #    made the pod 8.75 cores beside a generation engine already holding eight on
+  #    the node with the card. It never scheduled: `ready: 0` for fifty minutes,
+  #    with no reason anywhere — a cluster space has no pod-level visibility and
+  #    the cloud's deployment endpoint reports the count and nothing else. 6 + 8
+  #    is the shape the vulnerability-analysis listing is known to be placeable
+  #    with here. It costs nothing measurable: recognition and diarization run at
+  #    21-23 s per minute of audio on five threads, the same as on six.
   #
-  # 18 and 48Gi against a measured 16.75 and 44.75: about a core and three
+  # 16 and 48Gi against a measured 14.75 and 44.75: about a core and three
   # gigabytes, which is deliberate rather than rounding. A quota is fixed when
   # the cluster space is created and a reconfigure re-renders the version the
   # deployment was created from, so room a later version needs has to be asked
   # for now or not at all.
   min:
-    cpu: "18"
+    cpu: "16"
     memory: "48Gi"
-    # Not the 132Gi sum: a storage quota equal to it fails at the last volume
+    # Not the 72Gi sum: a storage quota equal to it fails at the last volume
     # rather than the first, which reads as one broken service rather than as a
-    # quota.
-    storage: "150Gi"
+    # quota. And a quota is not capacity — the storage class has to be able to
+    # place each claim, which is the other half of why the scribe's volume is
+    # 40Gi and not 100.
+    storage: "88Gi"
   # The heaviest SINGLE pod, which is a different quantity from the quota and the
   # one a node has to be able to hold. Without it the cloud assumes the whole
-  # 18/48Gi lands on one pod and refuses the listing on any cloud whose nodes are
-  # smaller than its entire quota (SUP-824).
-  #
-  # The two dimensions have different winners here, which is why both are stated
-  # rather than taken from one pod: the scribe pod is the heaviest on CPU (8.75
-  # cores across its three containers) and the engine is the heaviest on memory
-  # (32Gi).
+  # 16/48Gi lands on one pod and refuses the listing on any cloud whose nodes are
+  # smaller than its entire quota (SUP-824). It is the engine on both dimensions:
+  # 8 cores and 32Gi, against the scribe pod's 6.75 and 12.75Gi.
   maxPod:
-    cpu: "9"
+    cpu: "8"
     memory: "32Gi"
   recommended:
-    cpu: "24"
+    cpu: "22"
     memory: "64Gi"
-    storage: "200Gi"
+    storage: "120Gi"
   gpu:
     # Generation is vLLM. Without a card the engine does not start, and a
     # deployment that cannot call a model transcribes perfectly and writes no
@@ -466,7 +473,7 @@ components:
       version: "0.1.0"
     images:
       - name: ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server
-        digest: sha256:e1466673ad052b16d61e937c53148507f7e326a9a0a2893dc81429e234444e04
+        digest: sha256:e10034864d16fb08cc56d83a16e0894b884cb47d68136a7b0466ca29b7704bbe
     deployment:
       values:
         base:
@@ -634,15 +641,21 @@ outputs:
     title: How long a consultation takes
     type: string
     value: >-
-      Measured inside the image on six CPU threads: 21 to 23 seconds of wall clock per minute of
-      audio for recognition and speaker separation together, over consultation-length recordings
-      of three to five and a half minutes. So a fifteen-minute consultation is transcribed and
-      attributed in about five and a half minutes, a thirty-minute one in about eleven, and note
-      generation adds well under a minute on top. One recording is processed at a time on
+      Measured on a real deployment of this version, on consultation-length recordings of three
+      to five and a half minutes: 16 to 19 seconds of wall clock per minute of audio for
+      recognition and speaker separation together. A fifteen-minute consultation is therefore
+      transcribed and attributed in about four and a half minutes and a thirty-minute one in
+      about nine, and a SOAP or progress note is generated from it in 10 to 20 seconds. Every
+      transcript carries its own figures, so you can check these against your own recordings
+      rather than trusting them: `secondsPerAudioMinute` is on the transcript and in the pod log.
+      TWO HONEST CAVEATS. The FIRST request after a pod starts is much slower — six to eight
+      minutes for a five-minute consultation — because the recognition and diarization models
+      load on first use and the generation engine is still warming; it is the second and later
+      consultations that run at the figures above. And ONE RECORDING IS PROCESSED AT A TIME on
       purpose: both engines are threaded across the whole CPU allocation, so a second concurrent
-      job makes both slower rather than one faster. This is the price of taking recognition off
-      the GPU — upstream's own README asks for 400 GB across five A100s, and this listing runs on
-      one card by giving it entirely to generation.
+      job makes both slower rather than one faster. All of this is the price of taking
+      recognition off the GPU — upstream's own README asks for 400 GB across five A100s, and this
+      listing runs on one card by giving it entirely to generation.
 
   - id: attributionPolicy
     title: How speaker attribution is decided
@@ -738,10 +751,49 @@ outputs:
 
 evidence:
   # ---------------------------------------------------------------------------
-  # Measured, not derived. Filled in from two real deployments of this version;
-  # see the PR body and the issue comment for the pair and the timestamps.
+  # Measured, not derived.
+  #
+  # Two deployments of this version on the gpu-blueprints cloud, 2026-11-23 —
+  # `ccd-873d` and `ccd-873e`, two hostnames in two namespaces, the same
+  # parameters — published byte-identical signed snapshots and this digest. NINE
+  # resources in each, across both components: two Deployments, two Services,
+  # two ConfigMaps, two Secrets and the Ingress. The two PersistentVolumeClaims
+  # the charts render are not in the snapshot; the cloud does not digest them.
+  #
+  # **The pair is strictly sequential here, and that is a property of the cloud
+  # rather than of the listing.** The marketplace refuses a second GPU deployment
+  # outright — this epic's cloud has one card — so D was created, published,
+  # measured and removed before E was created. Byte-identity across a
+  # delete-and-recreate is a stronger claim than across two concurrent
+  # namespaces, not a weaker one.
+  #
+  # There is one configuration rather than two. The transcript corpus binding is
+  # in a Secret, whose values the platform lifts out before the snapshot is
+  # taken, so the digest below describes a gated deployment of this version and
+  # an ungated one alike — which is what the gate needs in order to admit either.
+  # `charts/tests/run.sh` checks that property directly against two goldens.
+  #
   # ---------------------------------------------------------------------------
-  expectedDigest: ""
+  # THE REFERENCE PARAMETER SET it was measured with. The digest holds for this
+  # one, and a deployment that answers differently attests its own — expected,
+  # not tampering.
+  #
+  #   hostname               ccd-873d / ccd-873e .conf-apps.superprotocol.dev
+  #                          (excluded from the snapshot — see `exclude` below)
+  #   attribution            measured
+  #   audioRetentionHours    24
+  #
+  # Both of those reach attested objects: they are env values on the scribe
+  # container, which is where a verifier most wants to read them — the floors a
+  # speaker label had to clear, and how long a recording is kept. Choosing
+  # `strict`, `dictation-only` or another retention attests a different digest,
+  # and that is correct rather than unfortunate.
+  #
+  # The three generated credentials — `accessPassword`, `sessionKey`,
+  # `inferenceKey` — are in Secrets, which the platform lifts out before the
+  # snapshot is taken, so they reach no attested object and are not part of this
+  # set.
+  expectedDigest: "fc830ac66fd23ce9adf6f453f9b6e7fbc07eb3628d8262a4469c72538f9af75f"
   # ---------------------------------------------------------------------------
   # The hostname is the one field that differs between two deployments of this
   # version, and excluding it is what makes the digest a property of the version
