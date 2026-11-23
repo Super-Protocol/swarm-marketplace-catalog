@@ -313,6 +313,55 @@ commands above name, the `*-runs.json` / `*-signals.json` / `autopilot-*.id` the
 beside itself, the screenshots, the generated corpus and the receiver's own state are all
 ignored.
 
+### Putting a clinic corpus on the server, and its reader beside it
+
+Before a card can be mounted it has to have data behind it and an account that can read exactly
+that and nothing else. Both run **inside `marketplace-api-1`**: that container already holds the
+vault key the storage credential is encrypted with, and it is one of the two hosts that
+ClickHouse answers at all — the data host itself takes no SSH key from the agent host. So the
+owner credential is decrypted and used where it already lives, and nothing prints it.
+
+```bash
+# on the marketplace host, with the corpus extracted to /tmp/corpus/<network>
+ROW=$(docker exec marketplace-postgres-1 psql -U marketplace -d swarm_marketplace -At \
+  -c 'select row_to_json(t) from (select host, port, username, "passwordCipher" from connected_storages limit 1) t')
+KEY=$(sudo sed -n 's/.*encryptionKey: *"\(.*\)"/\1/p' /opt/marketplace/marketplace.yaml)
+
+docker cp harness/load-corpus.js marketplace-api-1:/tmp/
+docker exec -e VAULT_KEY="$KEY" -e STORAGE_ROW="$ROW" \
+  -e CORPUS_DIR=/tmp/corpus/ridgeline -e TABLE_PREFIX=rep_ \
+  -e READER_USER=rep_reader -e READER_PASSWORD="$PASSWORD" \
+  marketplace-api-1 node /tmp/load-corpus.js
+```
+
+`load-corpus.js` applies the generated `schema.sql` one statement per request — ClickHouse's HTTP
+interface runs exactly one, and a whole file answers 400, which reads like a malformed statement
+and is not — then loads each TSV and **compares the row count in the table with the row count in
+the file**, which is the only thing that distinguishes a load from a load that half worked. It
+then creates the reader.
+
+**The reader is created with `SETTINGS readonly = 2` on the account, never by attaching this
+server's shared `readonly` profile, which is `readonly = 1`.** That distinction decides whether
+the stand answers questions at all. The analyst's ClickHouse adapter sends `max_execution_time`
+with every query and `max_result_rows` whenever a row limit applies, and `readonly = 1` refuses a
+settings change as well as a write — so every question comes back `Code: 164` while the gate
+still reports `allowed` and the card still looks connected. That cost SUP-905 a day.
+
+`harness/check-readers.js` is what proves the isolation rather than asserting it:
+
+```bash
+READERS='[{"own":"hpg_","user":"hpg_reader","password":"…"},{"own":"rep_","user":"rep_reader","password":"…"}]'
+docker exec -e VAULT_KEY="$KEY" -e STORAGE_ROW="$ROW" -e READERS="$READERS" \
+  marketplace-api-1 node /tmp/check-readers.js
+```
+
+Per reader: it reads its own tables; it is refused **every other dataset on the server**, derived
+from `system.tables` rather than from a list somebody has to remember to extend, and probed at a
+table that really exists — a probe at one that does not answers `UNKNOWN_TABLE`, which proves
+nothing about the grant; it sees only its own tables in `system.tables`; `INSERT` and
+`DROP TABLE` are refused; and a query carrying `max_result_rows` succeeds, which is the
+`readonly = 2` check and the one that would otherwise be found by a customer.
+
 ### Mounting a different set of dataset cards
 
 Every other script here talks to the application. This one talks to the **marketplace**, because
