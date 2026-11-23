@@ -1,0 +1,35 @@
+# Nothing a run of this stand produces belongs in the repository, and one of
+# the things it produces is a credential. The harness writes beside itself and
+# the README tells people to keep their token files in the working directory,
+# so the safe default here is: ignore the output, ignore the secrets, and let
+# the source be the only thing git sees.
+
+# Credentials. `*.token` and `*.internalSecret` are the two the README names;
+# the rest are what the marketplace and the identity provider hand back.
+*.token
+*.internalSecret
+*.adminpass
+*.apiKey
+*.key
+grants.json
+grants-*.json
+
+# What a run leaves behind.
+*-thread.json
+*-thread.id
+*-runs.json
+*-signals.json
+*-signal-events.json
+*-evidence.json
+*-wellknown.json
+*-configuration.json
+autopilot-*.id
+booker-args*.json
+*.id
+*.meta
+
+# Screenshots, the generated corpus, and the receiver's own state.
+shots/
+corpus/
+data/
+node_modules/

@@ -1,0 +1,11 @@
+The attached file is the signed procedure and pathology report for one of this practice's own colonoscopies. The structured record was keyed in from this document. Reconcile the two.
+
+Do this:
+
+1. Read the document and note the patient, the medical record number and the procedure identifier.
+2. Query the clinic's database for what the record holds for that same procedure — the findings, the pathology, the surveillance recommendation and the recall. Name every table you read.
+3. Compare the document against the record field by field and list any field where they disagree, with the document's value and the record's value side by side.
+4. For each disagreement, say which source you believe and why, and state what the surveillance interval and risk tier should be on the document's facts.
+5. End with one line beginning "ACTION:" naming the single change that should be made to the record, or "ACTION: none" if the record is right.
+
+Do not change anything. You are reading and reporting.

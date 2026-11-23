@@ -1,0 +1,44 @@
+A surveillance-overdue signal has been published and this autopilot acts on it: it books the recall in the clinic's scheduling system.
+
+The signal:
+
+- id: `{{ args.signal.id }}`
+- code: `{{ args.signal.code }}` · priority `{{ args.signal.priority }}` · occurrence {{ args.signal.occurrences }}
+- title: {{ args.signal.title }}
+- site (`scope.store`): `{{ args.signal.scope.store }}`
+- patient medical record number (`scope.sku`): `{{ args.signal.scope.sku }}`
+- card: {{ args.signal.url }}
+
+Act only on code `SURV-01`. For anything else, answer "Not mine: {{ args.signal.code }}" and stop.
+
+**Step 1 — read what the booking needs.** Query the `cypressbay_digestive_health` data source for the live recall of the patient whose `mrn` is `{{ args.signal.scope.sku }}`. A signal's scope value is stored lower-cased, and the clinic's `mrn` column is not, so compare case-insensitively — the query below already does.
+
+```sql
+SELECT r.recall_id, r.due_date, r.days_overdue, r.outreach_attempts,
+       concat(p.family_name, ', ', p.given_name) AS patient_name, p.mrn, p.preferred_language,
+       s.site_name, rec.basis, rec.interval_months
+FROM marketplace.cbdh_recalls AS r
+INNER JOIN marketplace.cbdh_surveillance_recommendations AS rec ON rec.recommendation_id = r.recommendation_id
+INNER JOIN marketplace.cbdh_patients AS p ON p.patient_id = r.patient_id
+INNER JOIN marketplace.cbdh_sites AS s ON s.site_id = p.primary_site_id
+WHERE upper(p.mrn) = upper('{{ args.signal.scope.sku }}')
+  AND rec.superseded_by = ''
+  AND r.recall_status IN ('overdue', 'lost_to_follow_up')
+ORDER BY r.days_overdue DESC, r.recall_id ASC
+LIMIT 1
+```
+
+If it returns no row, call nothing and answer "Nothing to book: no live overdue recall for {{ args.signal.scope.sku }}."
+
+**Step 2 — book it.** Call `mcp_scheduling_schedule_recall` exactly once, with:
+
+- `recall_id`, `mrn`, `patient_name`, `due_date`, `days_overdue` — from the row. Take `mrn` and `patient_name` from the row's own columns, not from the signal's scope: a scope value is stored lower-cased and the clinic's scheduling system records what the chart says.
+- `site` — `site_name` from the row, spelled exactly as it is stored;
+- `reason` — one sentence a coordinator can read: what fell due, when, and how many outreach attempts have failed;
+- `outreach_channel` — `telephone` when `outreach_attempts` is under 3, otherwise `letter`;
+- `requested_by` — `{{ args.signal.code }} · {{ args.signal.id }}`;
+- `signal_url` — `{{ args.signal.url }}`.
+
+That tool is the one thing in this deployment that reaches outside it. It carries the action the clinic authorised, for the patient it authorised, and the clinic admits it only from code the clinic has verified. No record leaves: the arguments above are the whole of what is sent.
+
+**Step 3 — report, in English.** Answer in two or three lines: the appointment identifier and date the scheduling system returned, the patient and site it was booked for, and whether the system answered `booked` or `already_booked`. If the call was refused, say the refusal reason verbatim and do not retry.
