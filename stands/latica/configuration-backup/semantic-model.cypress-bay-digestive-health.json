@@ -1,0 +1,545 @@
+{
+ "version": 1,
+ "datasets": [
+  {
+   "code": "procedures",
+   "displayName": "Endoscopic Procedures",
+   "description": "Colonoscopies and upper endoscopies with procedure quality measures (cecal intubation, prep quality, withdrawal time)",
+   "datasourceId": "cypressbay_digestive_health",
+   "source": {
+    "kind": "table",
+    "schema": "marketplace",
+    "table": "cbdh_procedures"
+   },
+   "timeColumn": "procedure_date",
+   "defaultTimeGrain": "day",
+   "rowFilter": null,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "281bc712-c2c9-4f6c-b771-1e58995e5876",
+    "reason": "Add endoscopic procedures fact dataset for quality and volume analytics as requested by user."
+   }
+  },
+  {
+   "code": "providers",
+   "displayName": "Providers",
+   "description": "Gastroenterologists, endoscopists, pathologists, and coordinators",
+   "datasourceId": "cypressbay_digestive_health",
+   "source": {
+    "kind": "table",
+    "schema": "marketplace",
+    "table": "cbdh_providers"
+   },
+   "timeColumn": null,
+   "defaultTimeGrain": null,
+   "rowFilter": null,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "281bc712-c2c9-4f6c-b771-1e58995e5876",
+    "reason": "Lookup dataset for gastroenterology providers and surveillance staff."
+   }
+  },
+  {
+   "code": "sites",
+   "displayName": "Clinical Sites",
+   "description": "Six-site gastroenterology endoscopy network locations",
+   "datasourceId": "cypressbay_digestive_health",
+   "source": {
+    "kind": "table",
+    "schema": "marketplace",
+    "table": "cbdh_sites"
+   },
+   "timeColumn": null,
+   "defaultTimeGrain": null,
+   "rowFilter": null,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "281bc712-c2c9-4f6c-b771-1e58995e5876",
+    "reason": "Lookup dataset for endoscopy clinical sites."
+   }
+  },
+  {
+   "code": "surveillance_recalls",
+   "displayName": "Surveillance Recalls",
+   "description": "Overdue surveillance colonoscopy recalls",
+   "datasourceId": "cypressbay_digestive_health",
+   "source": {
+    "kind": "table",
+    "schema": "marketplace",
+    "table": "cbdh_recalls"
+   },
+   "timeColumn": "due_date",
+   "defaultTimeGrain": "day",
+   "rowFilter": null,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "e3e8ccfc-5c35-4c44-9382-9216696af8dd",
+    "reason": "Need to enable querying of surveillance colonoscopy recalls by status, particularly overdue ones"
+   }
+  }
+ ],
+ "dimensions": [
+  {
+   "code": "bowel_prep_quality",
+   "displayName": "Bowel Prep Quality",
+   "description": "Quality assessment of colonic bowel preparation (Excellent, Good, Fair, Poor)",
+   "kind": "categorical",
+   "keyType": "string",
+   "memberSource": {
+    "kind": "static",
+    "values": [
+     {
+      "key": "Excellent",
+      "label": "Excellent"
+     },
+     {
+      "key": "Good",
+      "label": "Good"
+     },
+     {
+      "key": "Fair",
+      "label": "Fair"
+     },
+     {
+      "key": "Poor",
+      "label": "Poor"
+     }
+    ],
+    "embed": false
+   },
+   "synonyms": [
+    "prep quality",
+    "cleanliness",
+    "preparation"
+   ],
+   "showInReferences": null,
+   "icon": null,
+   "llmVisibility": "full",
+   "timeRole": null,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "281bc712-c2c9-4f6c-b771-1e58995e5876",
+    "reason": "Bowel preparation quality rating for colonoscopy examinations."
+   }
+  },
+  {
+   "code": "clinical_site",
+   "displayName": "Clinical Site",
+   "description": "Clinical endoscopy facility where the procedure was performed",
+   "kind": "categorical",
+   "keyType": "string",
+   "memberSource": {
+    "kind": "live",
+    "dataset": "sites",
+    "keyExpr": "site_id",
+    "labelExpr": "site_name",
+    "embed": false
+   },
+   "synonyms": [
+    "facility",
+    "endoscopy center",
+    "site",
+    "clinic"
+   ],
+   "showInReferences": null,
+   "icon": null,
+   "llmVisibility": "full",
+   "timeRole": null,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "281bc712-c2c9-4f6c-b771-1e58995e5876",
+    "reason": "Clinical site dimension for facility-level reporting."
+   }
+  },
+  {
+   "code": "date",
+   "displayName": "Date",
+   "description": "Procedure date time dimension",
+   "kind": "time",
+   "keyType": "string",
+   "memberSource": {
+    "kind": "none"
+   },
+   "synonyms": [],
+   "showInReferences": null,
+   "icon": null,
+   "llmVisibility": "full",
+   "timeRole": null,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "f0f2aba5-ec3e-406c-861e-1a8a62551213",
+    "reason": "User asked for monthly procedure volume trajectory grouping by month, which requires a time dimension in the data model."
+   }
+  },
+  {
+   "code": "day",
+   "displayName": "День",
+   "description": "Procedure date time dimension",
+   "kind": "time",
+   "keyType": "string",
+   "memberSource": {
+    "kind": "none"
+   },
+   "synonyms": [],
+   "showInReferences": null,
+   "icon": null,
+   "llmVisibility": "full",
+   "timeRole": null,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "e15fb7c7-f2f6-49db-a799-ba482eef7cd3",
+    "reason": "Необходимо измерение даты для построения динамики и группировки по месяцам на дашборде качества эндоскопии"
+   }
+  },
+  {
+   "code": "endoscopist",
+   "displayName": "Endoscopist",
+   "description": "Performing gastroenterologist or endoscopist",
+   "kind": "categorical",
+   "keyType": "string",
+   "memberSource": {
+    "kind": "live",
+    "dataset": "providers",
+    "keyExpr": "provider_id",
+    "labelExpr": "provider_name",
+    "embed": false
+   },
+   "synonyms": [
+    "physician",
+    "doctor",
+    "provider",
+    "gastroenterologist"
+   ],
+   "showInReferences": null,
+   "icon": null,
+   "llmVisibility": "full",
+   "timeRole": null,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "281bc712-c2c9-4f6c-b771-1e58995e5876",
+    "reason": "Endoscopist / clinician provider dimension for physician scorecards."
+   }
+  },
+  {
+   "code": "procedure_type",
+   "displayName": "Procedure Type",
+   "description": "Type of endoscopic examination performed",
+   "kind": "categorical",
+   "keyType": "string",
+   "memberSource": {
+    "kind": "live",
+    "dataset": "procedures",
+    "keyExpr": "procedure_type",
+    "labelExpr": "procedure_type",
+    "embed": false
+   },
+   "synonyms": [
+    "procedure",
+    "exam type",
+    "colonoscopy type"
+   ],
+   "showInReferences": null,
+   "icon": null,
+   "llmVisibility": "full",
+   "timeRole": null,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "281bc712-c2c9-4f6c-b771-1e58995e5876",
+    "reason": "Procedure type dimension to differentiate screening, surveillance, and diagnostic colonoscopies."
+   }
+  },
+  {
+   "code": "recall_status",
+   "displayName": "Recall Status",
+   "description": "Status of the surveillance recall",
+   "kind": "categorical",
+   "keyType": "string",
+   "memberSource": {
+    "kind": "live",
+    "dataset": "surveillance_recalls",
+    "keyExpr": "recall_status",
+    "labelExpr": "recall_status",
+    "embed": false
+   },
+   "synonyms": [
+    "status",
+    "recall state"
+   ],
+   "showInReferences": null,
+   "icon": null,
+   "llmVisibility": "full",
+   "timeRole": null,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "e3e8ccfc-5c35-4c44-9382-9216696af8dd",
+    "reason": "Need to enable filtering by recall status (overdue, completed, etc.)"
+   }
+  }
+ ],
+ "hierarchies": [
+  {
+   "code": "facility_hierarchy",
+   "displayName": "Facility Hierarchy",
+   "description": null,
+   "showInReferences": null,
+   "icon": null,
+   "levels": [
+    "clinical_site",
+    "endoscopist"
+   ],
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "281bc712-c2c9-4f6c-b771-1e58995e5876",
+    "reason": "Facility hierarchy to drill from clinical site down to endoscopist."
+   }
+  }
+ ],
+ "bindings": [
+  {
+   "dimension": "bowel_prep_quality",
+   "dataset": "procedures",
+   "keyExpr": "bowel_prep_quality",
+   "labelExpr": "bowel_prep_quality",
+   "join": null,
+   "timeGrainExprs": null,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "281bc712-c2c9-4f6c-b771-1e58995e5876",
+    "reason": "Bind bowel_prep_quality to procedures dataset."
+   }
+  },
+  {
+   "dimension": "clinical_site",
+   "dataset": "procedures",
+   "keyExpr": "site_id",
+   "labelExpr": "site_name",
+   "join": {
+    "dataset": "sites",
+    "on": [
+     {
+      "left": "site_id",
+      "right": "site_id"
+     }
+    ]
+   },
+   "timeGrainExprs": null,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "281bc712-c2c9-4f6c-b771-1e58995e5876",
+    "reason": "Bind clinical_site to procedures dataset via site_id join."
+   }
+  },
+  {
+   "dimension": "day",
+   "dataset": "procedures",
+   "keyExpr": "procedure_date",
+   "labelExpr": null,
+   "join": null,
+   "timeGrainExprs": null,
+   "status": "draft",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "f0f2aba5-ec3e-406c-861e-1a8a62551213",
+    "reason": "Bind published time dimension day to dataset procedures"
+   }
+  },
+  {
+   "dimension": "endoscopist",
+   "dataset": "procedures",
+   "keyExpr": "provider_id",
+   "labelExpr": "provider_name",
+   "join": {
+    "dataset": "providers",
+    "on": [
+     {
+      "left": "provider_id",
+      "right": "provider_id"
+     }
+    ]
+   },
+   "timeGrainExprs": null,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "281bc712-c2c9-4f6c-b771-1e58995e5876",
+    "reason": "Bind endoscopist to procedures dataset via provider_id join."
+   }
+  },
+  {
+   "dimension": "procedure_type",
+   "dataset": "procedures",
+   "keyExpr": "procedure_type",
+   "labelExpr": "procedure_type",
+   "join": null,
+   "timeGrainExprs": null,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "281bc712-c2c9-4f6c-b771-1e58995e5876",
+    "reason": "Bind procedure_type to procedures dataset."
+   }
+  },
+  {
+   "dimension": "recall_status",
+   "dataset": "surveillance_recalls",
+   "keyExpr": "recall_status",
+   "labelExpr": null,
+   "join": null,
+   "timeGrainExprs": null,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "e3e8ccfc-5c35-4c44-9382-9216696af8dd",
+    "reason": "Bind the recall_status dimension to the surveillance_recalls dataset"
+   }
+  }
+ ],
+ "metrics": [
+  {
+   "code": "adequate_prep_rate",
+   "displayName": "Adequate Prep Rate",
+   "description": "Proportion of procedures with adequate (Excellent or Good) bowel preparation",
+   "dataset": "procedures",
+   "kind": "aggregate",
+   "expression": "countIf(bowel_prep_quality in ('Excellent', 'Good')) / countIf(bowel_prep_quality != '')",
+   "filter": null,
+   "format": {
+    "kind": "percent"
+   },
+   "polarity": "higher_is_better",
+   "additivity": "non_additive",
+   "defaultTimeGrain": null,
+   "llmVisible": true,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "281bc712-c2c9-4f6c-b771-1e58995e5876",
+    "reason": "Adequate bowel preparation rate (target >= 85%)."
+   }
+  },
+  {
+   "code": "cecal_intubation_rate",
+   "displayName": "Cecal Intubation Rate",
+   "description": "Proportion of colonoscopies with verified cecal intubation",
+   "dataset": "procedures",
+   "kind": "aggregate",
+   "expression": "avg(cecal_intubation)",
+   "filter": null,
+   "format": {
+    "kind": "percent"
+   },
+   "polarity": "higher_is_better",
+   "additivity": "non_additive",
+   "defaultTimeGrain": null,
+   "llmVisible": true,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "281bc712-c2c9-4f6c-b771-1e58995e5876",
+    "reason": "Cecal intubation rate for colonoscopy quality measurement (target >= 95%)."
+   }
+  },
+  {
+   "code": "lost_to_follow_up",
+   "displayName": "Lost to Follow-Up Recalls",
+   "description": "Count of surveillance colonoscopy recalls with status lost_to_follow_up",
+   "dataset": "surveillance_recalls",
+   "kind": "aggregate",
+   "expression": "countIf(recall_status = 'lost_to_follow_up')",
+   "filter": null,
+   "format": {
+    "kind": "number"
+   },
+   "polarity": "higher_is_better",
+   "additivity": "additive",
+   "defaultTimeGrain": null,
+   "llmVisible": true,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "281bc712-c2c9-4f6c-b771-1e58995e5876",
+    "reason": "Track recalls lost to follow up where outreach was exhausted."
+   }
+  },
+  {
+   "code": "mean_withdrawal_time",
+   "displayName": "Mean Withdrawal Time",
+   "description": "Average withdrawal inspection time in minutes for completed examinations",
+   "dataset": "procedures",
+   "kind": "aggregate",
+   "expression": "avgIf(withdrawal_time_min, completion_status = 'Complete to cecum')",
+   "filter": null,
+   "format": {
+    "kind": "number"
+   },
+   "polarity": "higher_is_better",
+   "additivity": "non_additive",
+   "defaultTimeGrain": null,
+   "llmVisible": true,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "281bc712-c2c9-4f6c-b771-1e58995e5876",
+    "reason": "Average negative colonoscopy withdrawal inspection time in minutes."
+   }
+  },
+  {
+   "code": "overdue_recalls",
+   "displayName": "Overdue Recalls",
+   "description": "Count of surveillance colonoscopy recalls with status overdue",
+   "dataset": "surveillance_recalls",
+   "kind": "aggregate",
+   "expression": "countIf(recall_status = 'overdue')",
+   "filter": null,
+   "format": {
+    "kind": "number"
+   },
+   "polarity": "higher_is_better",
+   "additivity": "additive",
+   "defaultTimeGrain": null,
+   "llmVisible": true,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "e3e8ccfc-5c35-4c44-9382-9216696af8dd",
+    "reason": "Create a metric to count overdue surveillance recalls"
+   }
+  },
+  {
+   "code": "procedure_count",
+   "displayName": "Procedure Count",
+   "description": "Total number of endoscopic procedures performed",
+   "dataset": "procedures",
+   "kind": "aggregate",
+   "expression": "count()",
+   "filter": null,
+   "format": {
+    "kind": "number"
+   },
+   "polarity": "higher_is_better",
+   "additivity": "additive",
+   "defaultTimeGrain": null,
+   "llmVisible": true,
+   "status": "published",
+   "proposedBy": {
+    "kind": "agent",
+    "threadId": "281bc712-c2c9-4f6c-b771-1e58995e5876",
+    "reason": "Count of procedures performed for volume tracking."
+   }
+  }
+ ]
+}

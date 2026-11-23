@@ -1,0 +1,533 @@
+[
+ {
+  "id": "2438636b-8e7d-4642-b2a9-969d9a8ef8a4",
+  "title": "Endoscopy Clinical Quality & Safety",
+  "description": null,
+  "about": null,
+  "visibility": "PRIVATE",
+  "layout": {
+   "items": [
+    {
+     "id": "419e5d13-eb44-461f-b760-1d333fe5df7d",
+     "libraryItemId": "5fcf0bb2-44f2-449b-a891-80366714e8a3",
+     "position": {
+      "x": 0,
+      "y": 0,
+      "w": 4,
+      "h": 3
+     },
+     "filterBindingsAdopted": true,
+     "entityBindingsAdopted": true
+    },
+    {
+     "id": "54a9f56e-f54d-43ec-95ba-3e722ab4b9e0",
+     "libraryItemId": "72ee0596-5451-4395-a563-149c897b67d9",
+     "position": {
+      "x": 4,
+      "y": 0,
+      "w": 4,
+      "h": 3
+     },
+     "filterBindingsAdopted": true,
+     "entityBindingsAdopted": true
+    },
+    {
+     "id": "4e53b4c8-1f01-472e-8c70-5a0ed89e9cbc",
+     "libraryItemId": "26daad55-769c-4408-b4c9-faffc1d40246",
+     "position": {
+      "x": 8,
+      "y": 0,
+      "w": 4,
+      "h": 3
+     },
+     "filterBindingsAdopted": true,
+     "entityBindingsAdopted": true
+    },
+    {
+     "id": "3cf7112a-918e-4599-9b5e-45087ad0e6ba",
+     "libraryItemId": "e278969e-0bce-4dc2-88f7-8cea4bbc44d6",
+     "position": {
+      "x": 0,
+      "y": 3,
+      "w": 12,
+      "h": 6
+     },
+     "filterBindingsAdopted": true,
+     "entityBindingsAdopted": true
+    },
+    {
+     "id": "c021fa08-1d1d-4361-af21-7aea7f2848c9",
+     "libraryItemId": "3e17e642-4cd0-4912-978d-dc49838ad983",
+     "position": {
+      "x": 0,
+      "y": 9,
+      "w": 12,
+      "h": 6
+     },
+     "filterBindingsAdopted": true,
+     "entityBindingsAdopted": true
+    },
+    {
+     "id": "adaee01b-7e10-472c-8dca-a52d6fd5205d",
+     "libraryItemId": "0303a2bf-c9af-443f-99ec-9863ad95d139",
+     "position": {
+      "x": 0,
+      "y": 15,
+      "w": 12,
+      "h": 6
+     },
+     "filterBindingsAdopted": true,
+     "entityBindingsAdopted": true
+    },
+    {
+     "id": "454aa2ff-b2ab-4c53-950e-eaead7bb21f8",
+     "libraryItemId": "8c947c87-d018-4c0a-8545-0c4fe8d76bc6",
+     "position": {
+      "x": 0,
+      "y": 21,
+      "w": 12,
+      "h": 8
+     },
+     "filterBindingsAdopted": true,
+     "entityBindingsAdopted": true
+    }
+   ],
+   "version": 2
+  },
+  "refreshTtlSeconds": null,
+  "autoRefreshOnData": true,
+  "periodAnchor": "per_dataset",
+  "tags": null,
+  "ownerId": "0b765d5d-4f65-49f8-9f33-684e63753de1",
+  "createdAt": "2026-11-23T16:08:22.025Z",
+  "updatedAt": "2026-11-23T16:20:56.090Z",
+  "filters": [],
+  "widgetFilterBindings": [
+   {
+    "layoutItemId": "419e5d13-eb44-461f-b760-1d333fe5df7d",
+    "appliedFilterValues": null,
+    "slots": [
+     {
+      "name": "filter_site",
+      "dimension": "clinical_site",
+      "type": "members",
+      "label": null,
+      "dimensionId": "5f99083b-660e-40cd-87f6-f861e6b81e11",
+      "dimensionDisplayName": "Clinical Site",
+      "hierarchy": null,
+      "levels": null
+     },
+     {
+      "name": "filter_endoscopist",
+      "dimension": "endoscopist",
+      "type": "members",
+      "label": null,
+      "dimensionId": "ed4a3725-9552-4659-83f5-cedb0ec3aad1",
+      "dimensionDisplayName": "Endoscopist",
+      "hierarchy": null,
+      "levels": null
+     },
+     {
+      "name": "filter_procedure_type",
+      "dimension": "procedure_type",
+      "type": "members",
+      "label": null,
+      "dimensionId": "688be0e1-5fc5-4e17-91a2-a3b68f4e1d3d",
+      "dimensionDisplayName": "Procedure Type",
+      "hierarchy": null,
+      "levels": null
+     }
+    ],
+    "bindings": []
+   },
+   {
+    "layoutItemId": "54a9f56e-f54d-43ec-95ba-3e722ab4b9e0",
+    "appliedFilterValues": null,
+    "slots": [
+     {
+      "name": "filter_site",
+      "dimension": "clinical_site",
+      "type": "members",
+      "label": null,
+      "dimensionId": "5f99083b-660e-40cd-87f6-f861e6b81e11",
+      "dimensionDisplayName": "Clinical Site",
+      "hierarchy": null,
+      "levels": null
+     },
+     {
+      "name": "filter_endoscopist",
+      "dimension": "endoscopist",
+      "type": "members",
+      "label": null,
+      "dimensionId": "ed4a3725-9552-4659-83f5-cedb0ec3aad1",
+      "dimensionDisplayName": "Endoscopist",
+      "hierarchy": null,
+      "levels": null
+     },
+     {
+      "name": "filter_procedure_type",
+      "dimension": "procedure_type",
+      "type": "members",
+      "label": null,
+      "dimensionId": "688be0e1-5fc5-4e17-91a2-a3b68f4e1d3d",
+      "dimensionDisplayName": "Procedure Type",
+      "hierarchy": null,
+      "levels": null
+     }
+    ],
+    "bindings": []
+   },
+   {
+    "layoutItemId": "4e53b4c8-1f01-472e-8c70-5a0ed89e9cbc",
+    "appliedFilterValues": null,
+    "slots": [
+     {
+      "name": "filter_site",
+      "dimension": "clinical_site",
+      "type": "members",
+      "label": null,
+      "dimensionId": "5f99083b-660e-40cd-87f6-f861e6b81e11",
+      "dimensionDisplayName": "Clinical Site",
+      "hierarchy": null,
+      "levels": null
+     },
+     {
+      "name": "filter_endoscopist",
+      "dimension": "endoscopist",
+      "type": "members",
+      "label": null,
+      "dimensionId": "ed4a3725-9552-4659-83f5-cedb0ec3aad1",
+      "dimensionDisplayName": "Endoscopist",
+      "hierarchy": null,
+      "levels": null
+     },
+     {
+      "name": "filter_procedure_type",
+      "dimension": "procedure_type",
+      "type": "members",
+      "label": null,
+      "dimensionId": "688be0e1-5fc5-4e17-91a2-a3b68f4e1d3d",
+      "dimensionDisplayName": "Procedure Type",
+      "hierarchy": null,
+      "levels": null
+     }
+    ],
+    "bindings": []
+   },
+   {
+    "layoutItemId": "3cf7112a-918e-4599-9b5e-45087ad0e6ba",
+    "appliedFilterValues": null,
+    "slots": [
+     {
+      "name": "filter_site",
+      "dimension": "clinical_site",
+      "type": "members",
+      "label": null,
+      "dimensionId": "5f99083b-660e-40cd-87f6-f861e6b81e11",
+      "dimensionDisplayName": "Clinical Site",
+      "hierarchy": null,
+      "levels": null
+     },
+     {
+      "name": "filter_endoscopist",
+      "dimension": "endoscopist",
+      "type": "members",
+      "label": null,
+      "dimensionId": "ed4a3725-9552-4659-83f5-cedb0ec3aad1",
+      "dimensionDisplayName": "Endoscopist",
+      "hierarchy": null,
+      "levels": null
+     },
+     {
+      "name": "filter_procedure_type",
+      "dimension": "procedure_type",
+      "type": "members",
+      "label": null,
+      "dimensionId": "688be0e1-5fc5-4e17-91a2-a3b68f4e1d3d",
+      "dimensionDisplayName": "Procedure Type",
+      "hierarchy": null,
+      "levels": null
+     }
+    ],
+    "bindings": []
+   },
+   {
+    "layoutItemId": "c021fa08-1d1d-4361-af21-7aea7f2848c9",
+    "appliedFilterValues": null,
+    "slots": [
+     {
+      "name": "filter_site",
+      "dimension": "clinical_site",
+      "type": "members",
+      "label": null,
+      "dimensionId": "5f99083b-660e-40cd-87f6-f861e6b81e11",
+      "dimensionDisplayName": "Clinical Site",
+      "hierarchy": null,
+      "levels": null
+     },
+     {
+      "name": "filter_endoscopist",
+      "dimension": "endoscopist",
+      "type": "members",
+      "label": null,
+      "dimensionId": "ed4a3725-9552-4659-83f5-cedb0ec3aad1",
+      "dimensionDisplayName": "Endoscopist",
+      "hierarchy": null,
+      "levels": null
+     },
+     {
+      "name": "filter_procedure_type",
+      "dimension": "procedure_type",
+      "type": "members",
+      "label": null,
+      "dimensionId": "688be0e1-5fc5-4e17-91a2-a3b68f4e1d3d",
+      "dimensionDisplayName": "Procedure Type",
+      "hierarchy": null,
+      "levels": null
+     }
+    ],
+    "bindings": []
+   },
+   {
+    "layoutItemId": "adaee01b-7e10-472c-8dca-a52d6fd5205d",
+    "appliedFilterValues": null,
+    "slots": [
+     {
+      "name": "filter_site",
+      "dimension": "clinical_site",
+      "type": "members",
+      "label": null,
+      "dimensionId": "5f99083b-660e-40cd-87f6-f861e6b81e11",
+      "dimensionDisplayName": "Clinical Site",
+      "hierarchy": null,
+      "levels": null
+     },
+     {
+      "name": "filter_endoscopist",
+      "dimension": "endoscopist",
+      "type": "members",
+      "label": null,
+      "dimensionId": "ed4a3725-9552-4659-83f5-cedb0ec3aad1",
+      "dimensionDisplayName": "Endoscopist",
+      "hierarchy": null,
+      "levels": null
+     },
+     {
+      "name": "filter_procedure_type",
+      "dimension": "procedure_type",
+      "type": "members",
+      "label": null,
+      "dimensionId": "688be0e1-5fc5-4e17-91a2-a3b68f4e1d3d",
+      "dimensionDisplayName": "Procedure Type",
+      "hierarchy": null,
+      "levels": null
+     }
+    ],
+    "bindings": []
+   },
+   {
+    "layoutItemId": "454aa2ff-b2ab-4c53-950e-eaead7bb21f8",
+    "appliedFilterValues": null,
+    "slots": [
+     {
+      "name": "filter_site",
+      "dimension": "clinical_site",
+      "type": "members",
+      "label": null,
+      "dimensionId": "5f99083b-660e-40cd-87f6-f861e6b81e11",
+      "dimensionDisplayName": "Clinical Site",
+      "hierarchy": null,
+      "levels": null
+     },
+     {
+      "name": "filter_endoscopist",
+      "dimension": "endoscopist",
+      "type": "members",
+      "label": null,
+      "dimensionId": "ed4a3725-9552-4659-83f5-cedb0ec3aad1",
+      "dimensionDisplayName": "Endoscopist",
+      "hierarchy": null,
+      "levels": null
+     },
+     {
+      "name": "filter_procedure_type",
+      "dimension": "procedure_type",
+      "type": "members",
+      "label": null,
+      "dimensionId": "688be0e1-5fc5-4e17-91a2-a3b68f4e1d3d",
+      "dimensionDisplayName": "Procedure Type",
+      "hierarchy": null,
+      "levels": null
+     }
+    ],
+    "bindings": []
+   }
+  ],
+  "eventSubscriptions": [],
+  "items": [
+   {
+    "id": "72ee0596-5451-4395-a563-149c897b67d9",
+    "title": "Cecal Intubation Rate"
+   },
+   {
+    "id": "5fcf0bb2-44f2-449b-a891-80366714e8a3",
+    "title": "Adequate Bowel Prep Rate"
+   },
+   {
+    "id": "26daad55-769c-4408-b4c9-faffc1d40246",
+    "title": "Mean Withdrawal Time"
+   },
+   {
+    "id": "e278969e-0bce-4dc2-88f7-8cea4bbc44d6",
+    "title": "Longitudinal Quality Trends"
+   },
+   {
+    "id": "0303a2bf-c9af-443f-99ec-9863ad95d139",
+    "title": "Bowel Preparation Quality Breakdown"
+   },
+   {
+    "id": "8c947c87-d018-4c0a-8545-0c4fe8d76bc6",
+    "title": "Endoscopist Scorecard & Outlier Analysis"
+   },
+   {
+    "id": "3e17e642-4cd0-4912-978d-dc49838ad983",
+    "title": "Cross-Site Benchmark"
+   }
+  ]
+ },
+ {
+  "id": "ba9a8e3f-cfea-4660-98e4-80c9db6c3da2",
+  "title": "Endoscopy Operational Volume & Provider Productivity",
+  "description": null,
+  "about": null,
+  "visibility": "PRIVATE",
+  "layout": {
+   "items": [
+    {
+     "id": "8f55d9c4-857d-47c0-a63c-cdc100c68543",
+     "libraryItemId": "390824e4-cd31-42c8-a85d-1c6664c069d4",
+     "position": {
+      "x": 0,
+      "y": 0,
+      "w": 12,
+      "h": 3
+     },
+     "filterBindingsAdopted": true,
+     "entityBindingsAdopted": true
+    },
+    {
+     "id": "bab9c0c7-b222-4067-a64b-95a9adcf6c3d",
+     "libraryItemId": "be54c6b4-31e6-410f-8b14-ad6198fb6669",
+     "position": {
+      "x": 0,
+      "y": 10,
+      "w": 6,
+      "h": 6
+     },
+     "filterBindingsAdopted": true,
+     "entityBindingsAdopted": true
+    },
+    {
+     "id": "a4d1e279-98b5-450f-883e-fdce2e426041",
+     "libraryItemId": "a4083d53-8873-4f9e-b7e5-f859416eadfc",
+     "position": {
+      "x": 6,
+      "y": 10,
+      "w": 6,
+      "h": 6
+     },
+     "filterBindingsAdopted": true,
+     "entityBindingsAdopted": true
+    },
+    {
+     "id": "9ffb98dc-40bf-4fef-a5a0-15cfd06dcab5",
+     "libraryItemId": "e72ad25f-1275-4522-8855-dc1641eda6c3",
+     "position": {
+      "x": 0,
+      "y": 16,
+      "w": 12,
+      "h": 8
+     },
+     "filterBindingsAdopted": true,
+     "entityBindingsAdopted": true
+    },
+    {
+     "id": "78acf92d-8fe7-4c01-855a-6ff707bf994c",
+     "libraryItemId": "3d2755c1-884c-4dcc-b42c-efa824842689",
+     "position": {
+      "x": 0,
+      "y": 3,
+      "w": 12,
+      "h": 7
+     },
+     "filterBindingsAdopted": true,
+     "entityBindingsAdopted": true
+    }
+   ],
+   "version": 2
+  },
+  "refreshTtlSeconds": null,
+  "autoRefreshOnData": true,
+  "periodAnchor": "per_dataset",
+  "tags": null,
+  "ownerId": "0b765d5d-4f65-49f8-9f33-684e63753de1",
+  "createdAt": "2026-11-23T16:09:17.636Z",
+  "updatedAt": "2026-11-23T16:19:49.704Z",
+  "filters": [],
+  "widgetFilterBindings": [
+   {
+    "layoutItemId": "8f55d9c4-857d-47c0-a63c-cdc100c68543",
+    "appliedFilterValues": null,
+    "slots": [],
+    "bindings": []
+   },
+   {
+    "layoutItemId": "bab9c0c7-b222-4067-a64b-95a9adcf6c3d",
+    "appliedFilterValues": null,
+    "slots": [],
+    "bindings": []
+   },
+   {
+    "layoutItemId": "a4d1e279-98b5-450f-883e-fdce2e426041",
+    "appliedFilterValues": null,
+    "slots": [],
+    "bindings": []
+   },
+   {
+    "layoutItemId": "9ffb98dc-40bf-4fef-a5a0-15cfd06dcab5",
+    "appliedFilterValues": null,
+    "slots": [],
+    "bindings": []
+   },
+   {
+    "layoutItemId": "78acf92d-8fe7-4c01-855a-6ff707bf994c",
+    "appliedFilterValues": null,
+    "slots": [],
+    "bindings": []
+   }
+  ],
+  "eventSubscriptions": [],
+  "items": [
+   {
+    "id": "390824e4-cd31-42c8-a85d-1c6664c069d4",
+    "title": "Total Procedures (L1Y vs Prev Period)"
+   },
+   {
+    "id": "a4083d53-8873-4f9e-b7e5-f859416eadfc",
+    "title": "Network Site Throughput"
+   },
+   {
+    "id": "be54c6b4-31e6-410f-8b14-ad6198fb6669",
+    "title": "Procedure Mix Breakdown"
+   },
+   {
+    "id": "e72ad25f-1275-4522-8855-dc1641eda6c3",
+    "title": "Facility & Provider Productivity Grid"
+   },
+   {
+    "id": "3d2755c1-884c-4dcc-b42c-efa824842689",
+    "title": "Procedure Volume Trajectory (Monthly)"
+   }
+  ]
+ }
+]

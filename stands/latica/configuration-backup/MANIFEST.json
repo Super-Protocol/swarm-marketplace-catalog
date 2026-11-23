@@ -1,0 +1,49 @@
+{
+ "exportedAt": "2026-11-23T16:50:55.687Z",
+ "stand": "https://analyst-stand.conf-apps.superprotocol.dev",
+ "scopedTo": {
+  "user": "gate-rehearsal@local.test",
+  "note": "dashboards, library and autopilots are this account's tenant and visibility"
+ },
+ "tenants": [
+  {
+   "id": "fc271a44-a3a4-4323-be87-b98042d779b1",
+   "name": "Cypress Bay Digestive Health",
+   "file": "semantic-model.cypress-bay-digestive-health.json",
+   "counts": {
+    "datasets": 4,
+    "dimensions": 7,
+    "metrics": 6,
+    "hierarchies": 1
+   }
+  },
+  {
+   "id": "f49eaf9f-65d2-4401-b9c5-ddbab0520225",
+   "name": "Latica",
+   "file": "semantic-model.latica.json",
+   "counts": {
+    "datasets": 0,
+    "dimensions": 0,
+    "metrics": 0,
+    "hierarchies": 0
+   }
+  },
+  {
+   "id": "6ea639c5-14ea-4d10-9ef7-0be686dd0b17",
+   "name": "Pharma Partner",
+   "file": "semantic-model.pharma-partner.json",
+   "counts": {
+    "datasets": 0,
+    "dimensions": 0,
+    "metrics": 0,
+    "hierarchies": 0
+   }
+  }
+ ],
+ "counts": {
+  "dashboards": 2,
+  "libraryItems": 15,
+  "libraryFolders": 0,
+  "autopilots": 2
+ }
+}

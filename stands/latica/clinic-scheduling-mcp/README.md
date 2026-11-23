@@ -21,8 +21,10 @@ works here works against the product's MCP client.
 |---|---|
 | `POST /mcp` | MCP. `GET` / `DELETE` → `405`: there are no sessions. Needs a grant with scope `mcp`. |
 | `GET /healthz` | open |
-| `GET /appointments` | the diary. Needs a grant with scope `read`. |
-| `GET /journal` | the clinic's own record of every call, accepted or refused. Needs scope `read`. |
+| `GET /appointments` | the diary, as JSON. Needs a grant with scope `read`. |
+| `GET /journal` | the clinic's own record of every call, accepted or refused, as JSON. Needs scope `read`. |
+| `GET /`, `GET /staff/appointments`, `GET /staff/journal` | **the screen** — the same two things, for a coordinator rather than a `curl`. Same scope `read`, through a sign-in form and a session cookie. `?all=1` on the journal shows the whole record. |
+| `POST /staff/session`, `POST /staff/sign-out` | sign in and out |
 
 **One tool, and it writes.** `schedule_recall(recall_id, mrn, patient_name, site, due_date?,
 days_overdue?, reason, outreach_channel, requested_by, signal_url?)`. There is no read tool.
@@ -39,6 +41,52 @@ already made (`already_booked`), which is what keeps a repeating signal out of t
 Both files are append-only. The journal is the clinic's half of the evidence pair: one entry says
 the gate released data to this code, the other says the clinic's own system accepted a recall
 from it. One mechanism, both ends.
+
+## The screen
+
+`src/staff.mjs`. Two views over the same two files, for the practice's own coordinators:
+**Appointments**, the diary — patient, site, how overdue, the appointment, when it was booked and
+by whom, with the digest each booking was accepted from; and **Journal**, every call with its
+attestation verdict, the digest the caller presented and, where they differ, the digest the clinic
+approved. Refusals are in the journal beside the acceptances and coloured as refusals, which is
+the half of the mechanism a screen showing only successes would hide.
+
+The Journal **defaults to the calls the attestation check actually ran on**. A credential-less
+probe is turned away before any code is fetched, and the journal fills with them — every `curl`
+anyone has ever pointed at this hostname — which on a projector buries the two rows the
+demonstration turns on. They are not dropped: the count line links to `?all=1`, and append-only
+is part of what this page is evidence of. `reachedAttestation()` is the predicate, and it keeps a
+refusal that *did* reach the check (`site_outside_grant` as much as a digest mismatch) in the
+default view.
+
+It is **read-only and has no route that writes**. A window that could also book would be a second
+way into the scheduling system, and the demonstration does not need one.
+
+Three decisions worth knowing before changing it:
+
+- **It is not HTTP Basic.** A browser fetches some subresources in a mode where it attaches no
+  credentials, so the prompt returns forever; and ingress-nginx strips `Authorization` when it
+  performs basic auth itself. So the credential is collected once by a form and carried in a
+  session cookie — `HttpOnly`, `SameSite=Strict`, `Secure` when the connection was TLS (read from
+  `X-Forwarded-Proto`, because the TLS ends at Caddy), idle timeout `STAFF_SESSION_TTL_MS`.
+  Sessions are in memory: a restart asks for the token again, which is the safe way to fail.
+- **The credential check is `grants.mjs` and nothing else.** A session is only ever opened from a
+  token that already carries scope `read`, so the screen cannot show anything its holder could not
+  already fetch from the JSON routes, and the deployment's `mcp` token is refused at the form.
+- **Server-rendered, no client JavaScript, no subresources** — the stylesheet is inline. The
+  response carries `default-src 'none'`, `frame-ancestors 'none'`, `no-store` and `no-referrer`,
+  because the pages hold patient names.
+
+A refused sign-in is recorded in the journal as `no_staff_credential`; a successful one is not.
+The journal is the record of *calls*, and page views would bury the entries the demonstration
+turns on.
+
+**What the screen says about its own limits**, because the claim must not outrun the mechanism and
+a screen is where an overclaim does the most damage: the Journal view carries, in the page itself,
+that the check binds the approved code to the **hostname** and the **token** binds the individual
+call; that the code is re-checked **once per 60-second window**, not per call; and that the
+deployment's outbound destinations are **not** all part of its attested configuration today. The
+wording is asserted by `src/staff.spec.mjs` — so is the absence of "nothing leaves".
 
 ## How a call is admitted
 
@@ -88,6 +136,8 @@ its namespace `evidenceToken` (`Secret/swarm-pull`) for the receiver to resolve 
 | `GRANTS_PATH` | `/etc/clinic-scheduling/grants.json` | the tokens the clinic issued, `0400` |
 | `DATA_DIR` | `/var/lib/clinic-scheduling` | the diary and the journal |
 | `ATTESTATION_TTL_MS` | `60000` | how long one verification stands for |
+| `STAFF_SESSION_TTL_MS` | `43200000` | how long a staff screen session survives being idle |
+| `STAFF_JOURNAL_ROWS` | `200` | how many journal lines one page shows, newest first |
 
 `grants.json`:
 
@@ -121,9 +171,16 @@ camera without touching the stand.
 
 ```bash
 npm install
-npm test                       # the refusals, on chains minted by the test
+npm test                       # the refusals, the scopes, the screen — 49 assertions
 GRANTS_PATH=./grants.json DATA_DIR=./data node src/main.mjs
 ```
+
+`npm test` is four files: `attestation.spec.mjs` mints its own certificate chains and asserts
+each refusal; `grants.spec.mjs` covers the three ways a grants file can be wrong; `staff.spec.mjs`
+covers the session, the cookie and what each page is required to say; and `server.spec.mjs` starts
+`main.mjs` as a child on a free port with its own grants file and data directory and asserts the
+scopes end to end — the deployment's token still gets `401` on the read routes, the staff token
+still gets `401` on `/mcp`.
 
 One verification against a live caller, which is also the CI-shaped check:
 
