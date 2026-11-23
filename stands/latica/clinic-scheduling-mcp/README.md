@@ -23,7 +23,7 @@ works here works against the product's MCP client.
 | `GET /healthz` | open |
 | `GET /appointments` | the diary, as JSON. Needs a grant with scope `read`. |
 | `GET /journal` | the clinic's own record of every call, accepted or refused, as JSON. Needs scope `read`. |
-| `GET /`, `GET /staff/appointments`, `GET /staff/journal` | **the screen** — the same two things, for a coordinator rather than a `curl`. Same scope `read`, through a sign-in form and a session cookie. |
+| `GET /`, `GET /staff/appointments`, `GET /staff/journal` | **the screen** — the same two things, for a coordinator rather than a `curl`. Same scope `read`, through a sign-in form and a session cookie. `?all=1` on the journal shows the whole record. |
 | `POST /staff/session`, `POST /staff/sign-out` | sign in and out |
 
 **One tool, and it writes.** `schedule_recall(recall_id, mrn, patient_name, site, due_date?,
@@ -50,6 +50,14 @@ by whom, with the digest each booking was accepted from; and **Journal**, every 
 attestation verdict, the digest the caller presented and, where they differ, the digest the clinic
 approved. Refusals are in the journal beside the acceptances and coloured as refusals, which is
 the half of the mechanism a screen showing only successes would hide.
+
+The Journal **defaults to the calls the attestation check actually ran on**. A credential-less
+probe is turned away before any code is fetched, and the journal fills with them — every `curl`
+anyone has ever pointed at this hostname — which on a projector buries the two rows the
+demonstration turns on. They are not dropped: the count line links to `?all=1`, and append-only
+is part of what this page is evidence of. `reachedAttestation()` is the predicate, and it keeps a
+refusal that *did* reach the check (`site_outside_grant` as much as a digest mismatch) in the
+default view.
 
 It is **read-only and has no route that writes**. A window that could also book would be a second
 way into the scheduling system, and the demonstration does not need one.

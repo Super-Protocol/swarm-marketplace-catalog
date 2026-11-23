@@ -327,10 +327,11 @@ ignored.
    outbound traffic.
 6. The clinic's side, on its own screen: open `https://cypress-bay-scheduling.demo.superprotocol.dev`
    and sign in with the **practice's own staff token**. **Appointments** — the recalls that were
-   booked, each stamped with the evidence digest the call was accepted from; **Journal** — every
-   call, with its attestation verdict, and the refusals in red beside the acceptances. (The same
-   two things are `GET /appointments` and `GET /journal` as JSON, for anyone who prefers a
-   `curl`.) The deployment's token opens none of it: it carries `scopes: ["mcp"]` and these want
+   booked, each stamped with the evidence digest the call was accepted from; **Journal** — the
+   calls that reached the attestation check, with their verdict and the refusals in red beside the
+   acceptances; the credential-less probes anyone has ever aimed at the hostname are one click
+   away behind *Show all*, not dropped. (The same two things are `GET /appointments` and
+   `GET /journal` as JSON, for anyone who prefers a `curl`.) The deployment's token opens none of it: it carries `scopes: ["mcp"]` and these want
    `read`, which is what keeps the one tool it was given from being a way back into the chart —
    paste the deployment's token into the sign-in form and watch it refused.
 

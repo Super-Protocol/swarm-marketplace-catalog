@@ -105,6 +105,7 @@
   "widgetFilterBindings": [
    {
     "layoutItemId": "419e5d13-eb44-461f-b760-1d333fe5df7d",
+    "appliedFilterValues": null,
     "slots": [
      {
       "name": "filter_site",
@@ -136,10 +137,12 @@
       "hierarchy": null,
       "levels": null
      }
-    ]
+    ],
+    "bindings": []
    },
    {
     "layoutItemId": "54a9f56e-f54d-43ec-95ba-3e722ab4b9e0",
+    "appliedFilterValues": null,
     "slots": [
      {
       "name": "filter_site",
@@ -171,10 +174,12 @@
       "hierarchy": null,
       "levels": null
      }
-    ]
+    ],
+    "bindings": []
    },
    {
     "layoutItemId": "4e53b4c8-1f01-472e-8c70-5a0ed89e9cbc",
+    "appliedFilterValues": null,
     "slots": [
      {
       "name": "filter_site",
@@ -206,10 +211,12 @@
       "hierarchy": null,
       "levels": null
      }
-    ]
+    ],
+    "bindings": []
    },
    {
     "layoutItemId": "3cf7112a-918e-4599-9b5e-45087ad0e6ba",
+    "appliedFilterValues": null,
     "slots": [
      {
       "name": "filter_site",
@@ -241,10 +248,12 @@
       "hierarchy": null,
       "levels": null
      }
-    ]
+    ],
+    "bindings": []
    },
    {
     "layoutItemId": "c021fa08-1d1d-4361-af21-7aea7f2848c9",
+    "appliedFilterValues": null,
     "slots": [
      {
       "name": "filter_site",
@@ -276,10 +285,12 @@
       "hierarchy": null,
       "levels": null
      }
-    ]
+    ],
+    "bindings": []
    },
    {
     "layoutItemId": "adaee01b-7e10-472c-8dca-a52d6fd5205d",
+    "appliedFilterValues": null,
     "slots": [
      {
       "name": "filter_site",
@@ -311,10 +322,12 @@
       "hierarchy": null,
       "levels": null
      }
-    ]
+    ],
+    "bindings": []
    },
    {
     "layoutItemId": "454aa2ff-b2ab-4c53-950e-eaead7bb21f8",
+    "appliedFilterValues": null,
     "slots": [
      {
       "name": "filter_site",
@@ -346,7 +359,8 @@
       "hierarchy": null,
       "levels": null
      }
-    ]
+    ],
+    "bindings": []
    }
   ],
   "eventSubscriptions": [],
@@ -463,23 +477,33 @@
   "widgetFilterBindings": [
    {
     "layoutItemId": "8f55d9c4-857d-47c0-a63c-cdc100c68543",
-    "slots": []
+    "appliedFilterValues": null,
+    "slots": [],
+    "bindings": []
    },
    {
     "layoutItemId": "bab9c0c7-b222-4067-a64b-95a9adcf6c3d",
-    "slots": []
+    "appliedFilterValues": null,
+    "slots": [],
+    "bindings": []
    },
    {
     "layoutItemId": "a4d1e279-98b5-450f-883e-fdce2e426041",
-    "slots": []
+    "appliedFilterValues": null,
+    "slots": [],
+    "bindings": []
    },
    {
     "layoutItemId": "9ffb98dc-40bf-4fef-a5a0-15cfd06dcab5",
-    "slots": []
+    "appliedFilterValues": null,
+    "slots": [],
+    "bindings": []
    },
    {
     "layoutItemId": "78acf92d-8fe7-4c01-855a-6ff707bf994c",
-    "slots": []
+    "appliedFilterValues": null,
+    "slots": [],
+    "bindings": []
    }
   ],
   "eventSubscriptions": [],

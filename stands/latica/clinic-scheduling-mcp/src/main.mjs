@@ -263,7 +263,7 @@ function readForm(req, limitBytes = 8 * 1024) {
  * token that already carries scope `read`, so the screen cannot show anything a
  * holder of that token could not already fetch.
  */
-async function handleStaff(req, res, path) {
+async function handleStaff(req, res, path, query) {
   const secure = isSecureRequest(req);
 
   if (req.method === 'POST' && path === '/staff/session') {
@@ -310,7 +310,10 @@ async function handleStaff(req, res, path) {
     return;
   }
   if (path === '/staff/journal') {
-    sendHtml(res, 200, journalPage(store.journal(), session));
+    // Default to the calls the attestation check actually ran on; `?all=1` is
+    // the whole append-only record, which is one link away because
+    // append-only is part of what this page is evidence of.
+    sendHtml(res, 200, journalPage(store.journal(), session, { showAll: query.get('all') === '1' }));
     return;
   }
   if (path === '/staff/appointments') {
@@ -321,7 +324,8 @@ async function handleStaff(req, res, path) {
 }
 
 const server = createServer({ maxHeaderSize: 64 * 1024 }, (req, res) => {
-  const path = (req.url ?? '/').split('?')[0];
+  const url = new URL(req.url ?? '/', 'http://clinic.invalid');
+  const path = url.pathname;
   if (req.method === 'GET' && path === '/healthz') {
     const callers = [...grants.values()].filter((g) => g.scopes.includes('mcp')).length;
     sendJson(res, 200, {
@@ -349,7 +353,7 @@ const server = createServer({ maxHeaderSize: 64 * 1024 }, (req, res) => {
   // The screen. `/` lands here because a person who is handed this hostname
   // types no path, and `/staff` without a view is the diary.
   if (path === '/' || path === '/staff' || path.startsWith('/staff/')) {
-    handleStaff(req, res, path === '/' || path === '/staff' ? '/staff/appointments' : path).catch((error) => {
+    handleStaff(req, res, path === '/' || path === '/staff' ? '/staff/appointments' : path, url.searchParams).catch((error) => {
       log('error', 'request_failed', { error: error?.message ?? 'Error', path });
       if (!res.headersSent) sendHtml(res, 500, loginPage({ error: 'Something went wrong on this system.' }));
       else res.end();

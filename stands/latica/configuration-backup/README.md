@@ -21,7 +21,7 @@ with an empty database. **These files are the only copy.**
 | `semantic-model.latica.json`, `semantic-model.pharma-partner.json` | empty, and recorded as empty on purpose: the two other tenants have no model, and an absent file would leave that ambiguous |
 | `library-items.json` | 15 charts and tables — title, visualization spec, semantic query, custom SQL, bindings, tags |
 | `library-folders.json` | none exist |
-| `dashboards.json` | 2 dashboards — layout, filters, widget filter bindings, event subscriptions, and which items each holds |
+| `dashboards.json` | 2 dashboards — layout and geometry, filters, widget filter bindings, event subscriptions, and which items each holds. Both currently have **no** filters and **no** event subscriptions; the 12 entries under `widgetFilterBindings` are one per widget and their `slots` are *derived* from each library item's own query, not configuration somebody chose. `bindings` beside them — the slot-to-filter wiring, which **is** configuration — is empty for the same reason: with no dashboard filters there is nothing to wire |
 | `autopilots.json` | *Surveillance overdue* and *Book the recall* — prompt templates, schedule, signal mode, tool allowlist, subscriptions |
 | `MANIFEST.json` | provenance, counts, and what the export was scoped to |
 
@@ -35,6 +35,8 @@ with an empty database. **These files are the only copy.**
   `datasets/cypressbay-digestive-health/generate/generate.py`.
 - **No version history.** A library item's and a dashboard's saved versions have no read API that
   returns their full definition; each item is captured at its current version.
+- **No dashboard run results.** A widget's last dataset is behind a token, and the token is a
+  bearer for the rows; the restore re-runs the widgets instead.
 - **Dashboards, library items and autopilots are one account's view.** There is no cross-tenant
   admin read for them, so what was exported is what the installation administrator can see in the
   tenant it belongs to — the clinic's. The semantic model *is* read per tenant, for all three.
@@ -94,15 +96,27 @@ It applies, in this order and for this reason:
 2. **the library items**, with `saveToLibrary` — the export's fields are a superset of
    `SaveToLibraryInput`, so each item is recreated from its own definition. New ids are
    remembered;
-3. **the dashboards**, with `createDashboard`, then `addItemToDashboard` per widget at the exported
-   geometry, then `addDashboardFilter` per filter, then `updateDashboard` for the refresh and
-   period settings. The exported layout is rewritten onto the new item ids rather than replayed:
-   it is the geometry being restored, not the identifiers;
+3. **the dashboards**, with `createDashboard`, then `addItemToDashboard` per widget at its exported
+   `position`, then `addDashboardFilter` (and `updateDashboardFilter` for `order`, which
+   `AddDashboardFilterInput` has no field for), then `setWidgetFilterBinding` for the slot-to-filter
+   wiring, then `updateDashboard` for the refresh and period settings and the event subscriptions.
+   **Every identifier in a dashboard is new on a rebuild** — the library item ids changed in step 2,
+   `addItemToDashboard` mints a fresh layout-item id, `addDashboardFilter` mints a fresh filter id
+   — so each is restored by mapping old to new. It is the arrangement being restored, not the
+   identifiers;
 4. **the autopilots**, with `createAutopilot`. `harness/autopilots.js` is the better path when
    `autopilots/*.njk` is current — it creates the stand's two from their templates, and the
    templates are reviewed; this replays whatever the export captured.
 
-### 2. What the restore cannot do, and you have to
+### 2. What is replayed, what is regenerated, and what is not
+
+| | |
+|---|---|
+| **Replayed** | semantic model (per tenant, by tenant *name*); library items with their specs, queries, custom SQL, bindings and tags; dashboards with their title/description/about/visibility/tags, **widget geometry**, filters (`dimension`, `hierarchy`, `label`, `type`, `defaultValue`, `hidden`, `order`), widget filter bindings (`parameter`, `level`), `refreshTtlSeconds`, `autoRefreshOnData`, `periodAnchor`, event subscriptions; autopilots with prompt, schedule, signal mode, tool allowlist and subscriptions |
+| **Regenerated, not replayed** | a widget's filter **slots** — `addItemToDashboard` derives them from the library item's own query, so replaying them would be writing down an answer the product computes; a library item's `version`, which starts again at 1; a widget's dataset and `lastRefreshedAt`, which come back on the first refresh |
+| **Cannot be restored — do it by hand** | a filter's **`defaultLatest`**: neither `AddDashboardFilterInput` nor `UpdateDashboardFilterInput` has a field for it. The restore prints a line naming each filter that had it. A hierarchy filter's **`levels`** are not settable either, but they follow from the hierarchy the filter names, so they come back on their own. Version history, in either place |
+
+### 3. What the restore cannot do, and you have to
 
 - **Register the MCP server** — it is the clinic tenant's own runtime registration, in the
   deployment's database and not in the signed snapshot: `harness/mcpreg.js`.

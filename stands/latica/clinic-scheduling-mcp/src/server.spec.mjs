@@ -69,6 +69,9 @@ describe('the scheduling system over HTTP', () => {
     writeFileSync(join(data, 'journal.jsonl'), [
       JSON.stringify({ at: '2026-11-23T15:19:02.000Z', outcome: 'accepted', tool: 'schedule_recall', result: 'booked', grant: 'latica-analyst-stand', recall_id: 'RC-0013565', appointment_id: 'APPT-F2B7E9B1', attested: { evidence_digest: 'sha256/05HLhdgiR5f' } }),
       JSON.stringify({ at: '2026-11-23T15:45:00.000Z', outcome: 'refused', reason: 'attestation_digest_mismatch', detail: 'observed sha256/05HLhdgiR5f', grant: 'latica-analyst-stand-previously-approved' }),
+      // A credential-less probe, so the screen's default view has something to
+      // hide and the "show all" link has something to show.
+      JSON.stringify({ at: '2026-11-23T15:50:00.000Z', outcome: 'refused', reason: 'no_read_credential', path: '/appointments', method: 'GET' }),
       '',
     ].join('\n'));
 
@@ -195,6 +198,13 @@ describe('the scheduling system over HTTP', () => {
     const journal = await (await go('/staff/journal', { headers: { cookie } })).text();
     assert.match(journal, /attestation_digest_mismatch/);
     assert.match(journal, /hostname<\/strong> the clinic calls back/);
+    // The default view is the calls the attestation check ran on; the probes
+    // are one link away, not gone.
+    assert.ok(!journal.includes('no_read_credential'));
+    assert.match(journal, /\/staff\/journal\?all=1/);
+    const everything = await (await go('/staff/journal?all=1', { headers: { cookie } })).text();
+    assert.match(everything, /no_read_credential/);
+    assert.match(everything, /attestation_digest_mismatch/);
 
     const signOut = await go('/staff/sign-out', { method: 'POST', headers: { cookie } });
     assert.equal(signOut.status, 303);

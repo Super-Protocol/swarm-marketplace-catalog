@@ -132,6 +132,20 @@ export function attestationVerdict(entry) {
   return { state: 'skipped', text: '—' };
 }
 
+/**
+ * Did this entry reach the attestation check at all?
+ *
+ * A credential-less probe is turned away before any code is fetched, and the
+ * journal is full of them — every `curl` anyone has ever pointed at this
+ * hostname. They belong in an append-only record and they are nobody's
+ * evidence, so the Journal hides them behind "show all" rather than dropping
+ * them: the two rows the demonstration turns on should not be the thirteenth
+ * and the nineteenth on a projector.
+ */
+export function reachedAttestation(entry) {
+  return attestationVerdict(entry).state !== 'skipped';
+}
+
 const shortDigest = (digest) => (digest ? `${String(digest).slice(0, 14)}…` : '—');
 
 /** `2026-11-23T15:29:42.847Z` → `2026-11-23 15:29:42 UTC`, which is what a journal wants. */
@@ -287,9 +301,11 @@ ${rows}
   });
 }
 
-export function journalPage(entries, session) {
-  const shown = [...entries].reverse().slice(0, JOURNAL_PAGE);
-  const refusals = entries.filter((one) => one.outcome === 'refused').length;
+export function journalPage(entries, session, { showAll = false } = {}) {
+  const relevant = showAll ? entries : entries.filter(reachedAttestation);
+  const shown = [...relevant].reverse().slice(0, JOURNAL_PAGE);
+  const refusals = relevant.filter((one) => one.outcome === 'refused').length;
+  const turnedAway = entries.length - entries.filter(reachedAttestation).length;
   const rows = shown.map((one) => {
     const verdict = attestationVerdict(one);
     const pill = verdict.state === 'verified' ? 'ok' : verdict.state === 'refused' ? 'no' : 'idle';
@@ -315,9 +331,13 @@ export function journalPage(entries, session) {
     title: 'Journal',
     who: session.label,
     nav: navFor('journal'),
-    body: `<h2>Every call to this system</h2>
-<p class="count">${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}, ${refusals} of them refused${entries.length > shown.length ? ` &mdash; the newest ${shown.length} are shown` : ''}. Append-only, newest first.</p>
-<div class="card">${shown.length === 0 ? '<p class="empty">No calls recorded yet.</p>' : `<table>
+    body: `<h2>${showAll ? 'Every call to this system' : 'Calls that reached the attestation check'}</h2>
+<p class="count">${relevant.length} entr${relevant.length === 1 ? 'y' : 'ies'}, ${refusals} of them refused${relevant.length > shown.length ? ` &mdash; the newest ${shown.length} are shown` : ''}. Append-only, newest first.${
+  showAll
+    ? ` <a href="/staff/journal">Hide the ${turnedAway} turned away for having no credential.</a>`
+    : (turnedAway > 0 ? ` <a href="/staff/journal?all=1">Show all ${entries.length}</a>, including ${turnedAway} turned away before any code was fetched.` : '')
+}</p>
+<div class="card">${shown.length === 0 ? `<p class="empty">${showAll ? 'No calls recorded yet.' : 'No call has reached the attestation check yet.'}</p>` : `<table>
 <thead><tr><th>When</th><th>Outcome</th><th>Call</th><th>Attestation</th><th>Digest presented</th></tr></thead>
 <tbody>
 ${rows}

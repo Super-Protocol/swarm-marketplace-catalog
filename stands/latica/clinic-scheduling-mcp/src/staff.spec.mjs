@@ -8,7 +8,8 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import {
   StaffSessions, appointmentsPage, attestationVerdict, clearedCookie, esc, isSecureRequest,
-  journalPage, loginPage, overdue, presentedDigest, readCookie, sessionCookie, stamp,
+  journalPage, loginPage, overdue, presentedDigest, readCookie, reachedAttestation, sessionCookie,
+  stamp,
 } from './staff.mjs';
 
 const SESSION = { label: 'cypress-bay-staff' };
@@ -38,7 +39,14 @@ const ACCEPTED = {
 const REFUSED = {
   at: '2026-11-23T15:45:00.000Z', outcome: 'refused', reason: 'attestation_digest_mismatch',
   detail: 'observed sha256/05HLhdgiR5fOaf50fBHQhRUF61GdXh4t9NL602zAvzo',
+  approvedDigest: 'sha256/WITHDRAWNbytheclinic',
   grant: 'latica-analyst-stand-previously-approved',
+};
+
+/** A credential-less probe: turned away before any code was fetched. */
+const TURNED_AWAY = {
+  at: '2026-11-23T16:02:28.000Z', outcome: 'refused', reason: 'no_read_credential',
+  path: '/appointments', method: 'GET',
 };
 
 describe('a staff session', () => {
@@ -189,6 +197,46 @@ describe('the appointments page', () => {
 
   it('says so rather than breaking when the diary is empty', () => {
     assert.match(appointmentsPage([], SESSION), /Nothing booked yet/);
+  });
+});
+
+describe('which calls the journal shows', () => {
+  const all = [ACCEPTED, TURNED_AWAY, REFUSED];
+
+  it('knows a call that reached the check from one turned away before it', () => {
+    assert.equal(reachedAttestation(ACCEPTED), true);
+    assert.equal(reachedAttestation(REFUSED), true);
+    assert.equal(reachedAttestation(TURNED_AWAY), false);
+    assert.equal(reachedAttestation({ outcome: 'refused', reason: 'site_outside_grant' }), true);
+    assert.equal(reachedAttestation({ outcome: 'refused', reason: 'no_staff_credential' }), false);
+  });
+
+  it('defaults to the calls the check ran on, and says how many it is hiding', () => {
+    const html = journalPage(all, SESSION);
+    assert.match(html, /Calls that reached the attestation check/);
+    assert.match(html, /2 entries, 1 of them refused/);
+    assert.ok(!html.includes('no_read_credential'), 'the probe is hidden by default');
+    assert.match(html, /href="\/staff\/journal\?all=1"[^>]*>Show all 3<\/a>, including 1 turned away/);
+  });
+
+  it('shows the whole append-only record on request, and offers the way back', () => {
+    const html = journalPage(all, SESSION, { showAll: true });
+    assert.match(html, /Every call to this system/);
+    assert.match(html, /3 entries, 2 of them refused/);
+    assert.match(html, /no_read_credential/);
+    assert.match(html, /href="\/staff\/journal">Hide the 1 turned away/);
+  });
+
+  it('offers no link when there is nothing hidden behind it', () => {
+    assert.ok(!journalPage([ACCEPTED, REFUSED], SESSION).includes('all=1'));
+  });
+
+  it('keeps the refusal that matters visible in the default view', () => {
+    // The whole point of the default: the digest mismatch must not be the row
+    // a viewer has to scroll past a dozen probes to find.
+    const html = journalPage(all, SESSION);
+    assert.match(html, /attestation_digest_mismatch/);
+    assert.match(html, /approved sha256\/WITHDRA/);
   });
 });
 

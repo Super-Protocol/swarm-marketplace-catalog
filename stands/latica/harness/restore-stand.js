@@ -37,17 +37,28 @@ const SAVE_ITEM = 'mutation ($i: SaveToLibraryInput!) { saveToLibrary(input: $i)
 const SET_TAGS = 'mutation ($id: ID!, $tags: [String!]!) { setLibraryItemTags(id: $id, tags: $tags) { id } }';
 const CREATE_DASHBOARD = 'mutation ($i: CreateDashboardInput!) { createDashboard(input: $i) { id title } }';
 const UPDATE_DASHBOARD = 'mutation ($id: ID!, $i: UpdateDashboardInput!) { updateDashboard(id: $id, input: $i) { id } }';
+// `layout` comes back so the layout-item id this call minted can be picked out:
+// a widget's filter binding is addressed by that id, and it is new every time.
 const ADD_ITEM = `mutation ($d: ID!, $i: ID!, $p: PositionInput!) {
-  addItemToDashboard(dashboardId: $d, libraryItemId: $i, position: $p) { id }
+  addItemToDashboard(dashboardId: $d, libraryItemId: $i, position: $p) { id layout }
 }`;
 const ADD_FILTER = `mutation ($d: ID!, $i: AddDashboardFilterInput!) {
-  addDashboardFilter(dashboardId: $d, input: $i) { id filters { id label dimension } }
+  addDashboardFilter(dashboardId: $d, input: $i) { id filters { id label dimension hierarchy order } }
+}`;
+const UPDATE_FILTER = `mutation ($d: ID!, $f: ID!, $i: UpdateDashboardFilterInput!) {
+  updateDashboardFilter(dashboardId: $d, filterId: $f, input: $i) { id }
+}`;
+const SET_BINDING = `mutation ($d: ID!, $l: ID!, $f: ID!, $p: String, $lv: String) {
+  setWidgetFilterBinding(dashboardId: $d, layoutItemId: $l, filterId: $f, parameter: $p, level: $lv) { id }
 }`;
 const CREATE_AUTOPILOT = 'mutation ($i: CreateAutopilotInput!) { createAutopilot(input: $i) { id name } }';
 
 const read = (dir, name) => JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
 const pick = (source, keys) =>
   Object.fromEntries(keys.filter((k) => source[k] !== null && source[k] !== undefined).map((k) => [k, source[k]]));
+
+/** A dashboard's layout is `{ items: [...], version }`; very early ones were the array itself. */
+const layoutItemsOf = (layout) => (Array.isArray(layout) ? layout : (layout?.items ?? []));
 
 /** The `SaveToLibraryInput` fields, which the export is a superset of. */
 const ITEM_FIELDS = ['title', 'description', 'type', 'visibility', 'visualizationSpec', 'kind', 'query',
@@ -102,37 +113,97 @@ const ITEM_FIELDS = ['title', 'description', 'type', 'visibility', 'visualizatio
     console.log(`  item ${created.title} → ${created.id}`);
   }
 
-  // 3. The dashboards. `addItemToDashboard` places a widget and mints a fresh
-  //    layout item id, so the exported layout is rewritten onto the new ids
-  //    rather than replayed: it is the geometry that is being restored, not the
-  //    identifiers.
+  // 3. The dashboards. Every identifier in a dashboard is new on a rebuild —
+  //    the library item ids changed in step 2, `addItemToDashboard` mints a
+  //    fresh layout-item id, and `addDashboardFilter` mints a fresh filter id —
+  //    so each is restored by MAPPING old to new rather than by replaying the
+  //    exported id. What is replayed, and what is not, is listed in
+  //    `configuration-backup/README.md`; keep the two in step.
   for (const dashboard of read(dir, 'dashboards.json')) {
     const created = (await q(CREATE_DASHBOARD, {
       i: pick(dashboard, ['title', 'description', 'about', 'visibility', 'tags']),
     })).createDashboard;
-    const layout = Array.isArray(dashboard.layout) ? dashboard.layout : (dashboard.layout?.items ?? []);
+    const layout = layoutItemsOf(dashboard.layout);
+
+    // 3a. The widgets, at the geometry they were exported at. A cell carries
+    //     `position: { x, y, w, h }`; older exports had them on the cell
+    //     itself, and both are accepted because a backup outlives its writer.
+    const layoutIdByOld = new Map();
+    // Every layout-item id seen so far, whether or not its cell carried an id
+    // in the export — this is what makes "the one that wasn't there before"
+    // reliable, and `layoutIdByOld.values()` would not be.
+    const placed = new Set();
     for (const cell of layout) {
       const itemId = idByOldId.get(cell.libraryItemId ?? cell.itemId);
       if (!itemId) {
         console.log(`    ! layout cell ${JSON.stringify(cell).slice(0, 80)} names an item not in the export`);
         continue;
       }
-      await q(ADD_ITEM, {
+      const geometry = cell.position ?? cell;
+      const after = layoutItemsOf((await q(ADD_ITEM, {
         d: created.id, i: itemId,
-        p: { x: cell.x ?? 0, y: cell.y ?? 0, w: cell.w ?? 6, h: cell.h ?? 6 },
-      });
+        p: { x: geometry.x ?? 0, y: geometry.y ?? 0, w: geometry.w ?? 6, h: geometry.h ?? 6 },
+      })).addItemToDashboard.layout);
+      const minted = after.map((one) => one.id).find((id) => !placed.has(id));
+      if (!minted) continue;
+      placed.add(minted);
+      if (cell.id) layoutIdByOld.set(cell.id, minted);
     }
+
+    // 3b. The filters. `defaultLatest` has no field on either input type and a
+    //     hierarchy filter's `levels` are derived from the hierarchy, so
+    //     neither is replayed; `order` needs the second call because
+    //     `AddDashboardFilterInput` has no place for it.
+    const filterIdByOld = new Map();
+    const knownFilterIds = new Set();
     for (const filter of dashboard.filters ?? []) {
-      await q(ADD_FILTER, {
+      const filters = (await q(ADD_FILTER, {
         d: created.id,
         i: pick(filter, ['dimension', 'hierarchy', 'label', 'type', 'defaultValue', 'hidden']),
-      });
+      })).addDashboardFilter.filters;
+      const minted = filters.find((one) => !knownFilterIds.has(one.id));
+      if (!minted) {
+        console.log(`    ! filter "${filter.label ?? filter.dimension}" was not created`);
+        continue;
+      }
+      knownFilterIds.add(minted.id);
+      filterIdByOld.set(filter.id, minted.id);
+      if (filter.order !== null && filter.order !== undefined) {
+        await q(UPDATE_FILTER, { d: created.id, f: minted.id, i: { order: filter.order } });
+      }
+      if (filter.defaultLatest) {
+        console.log(`    ! filter "${filter.label ?? filter.dimension}" had defaultLatest; no input accepts it — set it by hand`);
+      }
     }
-    await q(UPDATE_DASHBOARD, {
-      id: created.id,
-      i: pick(dashboard, ['refreshTtlSeconds', 'autoRefreshOnData', 'periodAnchor']),
-    }).catch((error) => console.log(`    ! updateDashboard: ${error.message.slice(0, 160)}`));
-    console.log(`  dashboard ${created.title} → ${created.id} (${layout.length} widgets)`);
+
+    // 3c. The slot-to-filter wiring. `slots` beside it in the export is derived
+    //     — `addItemToDashboard` regenerates it from the library item's own
+    //     query — so only `bindings` is replayed here.
+    for (const widget of dashboard.widgetFilterBindings ?? []) {
+      const layoutItemId = layoutIdByOld.get(widget.layoutItemId);
+      for (const binding of widget.bindings ?? []) {
+        const filterId = filterIdByOld.get(binding.filterId);
+        if (!layoutItemId || !filterId) {
+          console.log(`    ! binding ${binding.parameter ?? binding.filterId} has no counterpart on the rebuilt board`);
+          continue;
+        }
+        await q(SET_BINDING, {
+          d: created.id, l: layoutItemId, f: filterId,
+          p: binding.parameter ?? null, lv: binding.level ?? null,
+        });
+      }
+    }
+
+    // 3d. The board's own settings, including what it is subscribed to.
+    const settings = pick(dashboard, ['refreshTtlSeconds', 'autoRefreshOnData', 'periodAnchor']);
+    if (dashboard.eventSubscriptions?.length) {
+      settings.eventSubscriptions = dashboard.eventSubscriptions.map((one) => pick(one, ['eventId', 'daysOfWeek']));
+    }
+    await q(UPDATE_DASHBOARD, { id: created.id, i: settings })
+      .catch((error) => console.log(`    ! updateDashboard: ${error.message.slice(0, 160)}`));
+
+    console.log(`  dashboard ${created.title} \u2192 ${created.id} (${layoutIdByOld.size}/${layout.length} widgets, `
+      + `${filterIdByOld.size} filters, ${dashboard.eventSubscriptions?.length ?? 0} subscriptions)`);
   }
 
   // 4. The autopilots. `harness/autopilots.js` creates the stand's two from

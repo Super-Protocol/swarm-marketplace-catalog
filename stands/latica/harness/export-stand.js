@@ -23,6 +23,12 @@ const { signIn, graphql } = require('./applogin');
 /** Fields that are a bearer for data, or that move on their own. Not exported. */
 const DROP = new Set(['lastDatasetToken', 'thumbnailUrl', 'thumbnailAt', 'assistantUnread']);
 
+/**
+ * A dashboard whole. Two halves of `widgetFilterBindings` matter differently on
+ * the way back: `slots` is DERIVED — `addItemToDashboard` regenerates it from
+ * the library item's own query — while `bindings` is the slot-to-filter wiring
+ * somebody chose, and is the only part the restore has to replay.
+ */
 const DASHBOARDS = `{
   dashboards {
     id title description about visibility layout refreshTtlSeconds autoRefreshOnData
@@ -30,8 +36,9 @@ const DASHBOARDS = `{
     filters { id dimension hierarchy label type defaultValue defaultLatest hidden order
       dimensionId dimensionDisplayName dimensionKind timeRole hierarchyId hierarchyDisplayName
       levels { dimensionId code displayName } }
-    widgetFilterBindings { layoutItemId
-      slots { name dimension type label dimensionId dimensionDisplayName hierarchy levels } }
+    widgetFilterBindings { layoutItemId appliedFilterValues
+      slots { name dimension type label dimensionId dimensionDisplayName hierarchy levels }
+      bindings { filterId state parameter via level } }
     eventSubscriptions { eventId eventName daysOfWeek }
     items { id title }
   }
@@ -81,7 +88,21 @@ const slug = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^
     username: process.env.APP_USER,
     password: fs.readFileSync(process.env.PASS_FILE, 'utf8').trim(),
   });
-  const q = (query, variables) => graphql({ base, cookie, query, variables });
+  // The stand's gateway answers 502 now and then (the same flake `ask.js`
+  // retries its sign-in for). Every call here is a read, so retrying one is
+  // free; `restore-stand.js` deliberately does NOT retry, because its calls
+  // create things.
+  const q = async (query, variables) => {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await graphql({ base, cookie, query, variables });
+      } catch (error) {
+        if (attempt === 3) throw error;
+        console.log(`  retrying after: ${error.message.slice(0, 120).replace(/\s+/g, ' ')}`);
+        await new Promise((resolve) => { setTimeout(resolve, 4000 * attempt); });
+      }
+    }
+  };
 
   const write = (name, body) => {
     const file = path.join(out, name);
