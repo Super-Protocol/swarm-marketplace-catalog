@@ -1,0 +1,27 @@
+# The generation endpoint Confidential Vulnerability Analysis composes: one open model on one
+# card, no hostname of its own, and the key still demanded on every `/v1` request — a namespace
+# is not a trust boundary once a second workload is in it.
+#
+# Qwen3-Coder 30B A3B Instruct (FP8), Apache-2.0, is the only model this listing serves and it is
+# not a parameter. The pipeline is four tool-calling agents with loops of up to forty iterations;
+# a 3B model fills a card's worth of context with its own retries rather than producing a VEX
+# decision, and a licence-encumbered model is what the port exists to remove. `maxModelLen` is
+# the preset's own measured 65536, which is also the number the pipeline's
+# `context_window_tokens` is set to — those two agreeing is what keeps a prompt from being built
+# and then refused.
+model:
+  preset: qwen3-coder-30b-a3b-instruct-fp8
+  maxModelLen: 65536
+  gpuMemoryUtilization: 0.85
+
+apiKey: TESTKEYtestkey0123456789abcdefAB
+
+ingress:
+  enabled: false
+
+# The preset's own measured sizing for this model. A preset does not apply it — the listing
+# carries it across — and a 30B engine in a 12Gi container is OOMKilled while loading the
+# weights, which reads as a GPU problem.
+resources:
+  cpu: '8'
+  memory: 32Gi

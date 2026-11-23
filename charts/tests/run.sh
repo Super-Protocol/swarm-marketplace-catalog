@@ -21,14 +21,14 @@ cd "$root"
 # only for the label: those charts address one another by `<release>-<subchart>` and the
 # listing resolves the same names through `{{ components.agent.release }}`, so a golden taken
 # under a different release name would not be the deployment anybody gets.
-release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; rapids-singlecell-notebook) printf 'sc' ;; text-embeddings-server|milvus-standalone|confidential-rag) printf 'rag' ;; patroni-postgresql) printf 'pg' ;; swarm-model-server) printf 'ms' ;; swarm-doc-ingest) printf 'di' ;; conversational-analyst-*) printf 'analyst' ;; *) printf 'cr' ;; esac; }
-namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; rapids-singlecell-notebook) printf 'single-cell' ;; text-embeddings-server|milvus-standalone|confidential-rag) printf 'confidential-rag' ;; patroni-postgresql) printf 'patroni' ;; swarm-model-server) printf 'model-server' ;; swarm-doc-ingest) printf 'doc-ingest' ;; conversational-analyst-*) printf 'conversational-analyst' ;; *) printf 'confidential-router' ;; esac; }
+release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; rapids-singlecell-notebook) printf 'sc' ;; text-embeddings-server|milvus-standalone|confidential-rag) printf 'rag' ;; confidential-vulnerability-analysis) printf 'va' ;; patroni-postgresql) printf 'pg' ;; swarm-model-server) printf 'ms' ;; swarm-doc-ingest) printf 'di' ;; conversational-analyst-*) printf 'analyst' ;; *) printf 'cr' ;; esac; }
+namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; rapids-singlecell-notebook) printf 'single-cell' ;; text-embeddings-server|milvus-standalone|confidential-rag) printf 'confidential-rag' ;; confidential-vulnerability-analysis) printf 'vuln-analysis' ;; patroni-postgresql) printf 'patroni' ;; swarm-model-server) printf 'model-server' ;; swarm-doc-ingest) printf 'doc-ingest' ;; conversational-analyst-*) printf 'conversational-analyst' ;; *) printf 'confidential-router' ;; esac; }
 
 RELEASE=cr
 NAMESPACE=confidential-router
 CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ollama confidential-router-ui confidential-s3 patroni-postgresql swarm-model-server rapids-singlecell-notebook swarm-doc-ingest
         conversational-analyst-platform conversational-analyst-embeddings conversational-analyst-identity conversational-analyst-agent conversational-analyst-gateway conversational-analyst-grounding
-        text-embeddings-server milvus-standalone confidential-rag)
+        text-embeddings-server milvus-standalone confidential-rag confidential-vulnerability-analysis)
 
 update="${UPDATE:-}"
 failures=0
@@ -87,6 +87,7 @@ for chart in "${CHARTS[@]}"; do
     text-embeddings-server) values="charts/tests/cases/rag-embeddings.yaml" ;;
     milvus-standalone) values="charts/tests/cases/rag-vectors.yaml" ;;
     confidential-rag) values="charts/tests/cases/rag-stack.yaml" ;;
+    confidential-vulnerability-analysis) values="charts/tests/cases/vuln-analysis-stack.yaml" ;;
   esac
   if output=$(helm lint "charts/$chart" --values "$values" 2>&1); then
     pass "$chart"
@@ -2059,6 +2060,91 @@ if output=$(python3 charts/tests/rag_console.py); then
 else
   printf '%s\n' "$output"
   fail "charts/tests/rag_console.py"
+fi
+
+# ---------------------------------------------------------------------------
+# Confidential Vulnerability Analysis (SUP-843), ported from NVIDIA's open
+# vulnerability-analysis reference architecture. Two components; the listing's
+# own chart renders one pod with three containers, an attested agent
+# configuration and an attested egress allowlist, and each of those is asked for
+# directly below rather than left to a golden diff.
+# ---------------------------------------------------------------------------
+
+note "every image the Confidential Vulnerability Analysis listing renders is declared by its listing"
+cva_images() {
+  if output=$(python3 charts/tests/declared_images.py confidential-vulnerability-analysis "$1" "$2" "charts/tests/cases/$3.yaml"); then
+    printf '%s\n' "$output"
+  else
+    printf '%s\n' "$output"
+    fail "charts/tests/declared_images.py confidential-vulnerability-analysis $1"
+  fi
+}
+cva_images inference swarm-model-server                   vuln-analysis-engine
+cva_images analysis  confidential-vulnerability-analysis  vuln-analysis-stack
+
+note "the heaviest pod the Confidential Vulnerability Analysis listing renders is within its declared maxPod"
+if output=$(python3 charts/tests/max_pod.py confidential-vulnerability-analysis \
+      inference:swarm-model-server:vuln-analysis-engine \
+      analysis:confidential-vulnerability-analysis:vuln-analysis-stack); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/max_pod.py confidential-vulnerability-analysis"
+fi
+
+note "the Confidential Vulnerability Analysis chart defaults every image to a digest"
+if output=$(python3 charts/tests/digests.py confidential-vulnerability-analysis); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/digests.py confidential-vulnerability-analysis"
+fi
+
+note "every object of the Confidential Vulnerability Analysis render is its own document"
+if output=$(python3 charts/tests/inventory.py confidential-vulnerability-analysis charts/tests/cases/vuln-analysis-stack.yaml); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/inventory.py confidential-vulnerability-analysis"
+fi
+
+# The property the listing's `expectedDigest` rests on. This chart has exactly
+# one field that differs between two consumers — the Ingress host — and the
+# engine component has none at all, because it renders no Ingress.
+note "two consumers of Confidential Vulnerability Analysis attest the same snapshot"
+if output=$(python3 charts/tests/evidence_drift.py confidential-vulnerability-analysis \
+      charts/tests/cases/vuln-analysis-stack.yaml confidential-vulnerability-analysis \
+      'hostname={t}.conf-apps.superprotocol.dev' \
+      'console.password=ACCESS-{t}' \
+      'console.sessionKey=SESSION-SIGNING-KEY-FOR-{t}-0123456789'); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/evidence_drift.py confidential-vulnerability-analysis"
+fi
+
+note "the attested agent configuration carries no web tool, and names the engine beside it"
+if output=$(python3 charts/tests/cva_config.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/cva_config.py"
+fi
+
+note "the egress guard admits one host, and the pipeline's clients go through it"
+if output=$(python3 charts/tests/cva_egress.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/cva_egress.py"
+fi
+
+note "the console is the only door, and the analysis API is on loopback behind it"
+if output=$(python3 charts/tests/cva_console.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/cva_console.py"
 fi
 
 note "Result"
