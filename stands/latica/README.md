@@ -434,11 +434,19 @@ mounted — says plainly if it is off the air, and gives the rollback command, o
 was changed. A failure in the middle of a window leaves somebody reading that output with the
 stand down, and a bare message does not tell them which of those two situations they are in.
 
-The recovery file is written **only by `--apply`**, and `--rollback` refuses to run without one —
-restoring the state a stand is already in is not a rollback, and a dry run that overwrote the file
-would replace the pre-window record with the post-window one. A file with no `completedAt` is an
-unfinished window, and the next `--apply` reuses its baseline rather than recording the
-half-finished state as the thing to go back to.
+The recovery file **exists if and only if a window has been started**: it is written on the line
+before the unpublish and nowhere else. That ordering is the whole of its meaning. Writing it when
+the baseline was merely read — which is the obvious place to put it — leaves a file behind
+whenever a run is refused before it touches anything, and then the failure report tells you to
+roll back a stand nothing happened to, the next `--apply` treats the file as an unfinished window
+and reuses its baseline so a digest refusal becomes permanent until somebody deletes the file by
+hand, and a refused card check says "nothing was touched" and is contradicted three lines later.
+
+So: a dry run and every refused run leave no file. A file with no `completedAt` means a window
+really did start and did not finish, and the next `--apply` reuses its baseline rather than
+recording the half-finished state as the thing to go back to. `--rollback` refuses to run without
+a file — restoring the state a stand is already in is not a rollback — and deliberately does not
+rewrite one, because the file is the record of where to go back *to*.
 
 The one check none of this can do for you is the gate's own verdict: the access log belongs to the
 dataset's owner, not to the deploying organisation. The script prints the SQL to run against the
