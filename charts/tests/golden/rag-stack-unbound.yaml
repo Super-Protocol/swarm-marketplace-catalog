@@ -15,6 +15,10 @@ stringData:
   inference-api-key: "INFERENCE-KEY-FOR-THE-GOLDEN"
   embeddings-api-key: "INFERENCE-KEY-FOR-THE-GOLDEN"
   reranker-api-key: "INFERENCE-KEY-FOR-THE-GOLDEN"
+  # The extraction service's own key. Rendered only when there is an extraction service: a
+  # Secret entry for a component this deployment does not run is a credential nobody can
+  # account for.
+  ingest-api-key: "INGEST-KEY-FOR-THE-GOLDEN"
   vector-store-password: "VECTOR-STORE-PASSWORD-FOR-THE-GOLDEN"
   # The resolved `corpus` slot. For a gated dataset this carries no credential at all — a local
   # address, a database name and the literal user `gateway`, which the gate replaces with the
@@ -37,13 +41,14 @@ data:
     """The deployment's front door: a sign-in form, a session cookie, and a chat over the corpus.
     
     Why this exists rather than upstream's playground: upstream's production container proxies the
-    collection and document endpoints to `ingestor-server`, the one service this port has not
-    substituted yet, so shipping it would publish a console whose document panel cannot work. This
-    serves the part that does work — ask a question, read the answer, see its citations — plus the
-    two things upstream has no place for: who is allowed in, and which model and which embedder
-    touched the data.
+    collection and document endpoints to `ingestor-server`, which this port does not deploy —
+    `ingestor_server` needs `nv_ingest_client` and drives four NIM containers, which is the whole
+    licence problem this listing exists to avoid. So this serves the same shape over the open
+    components: ask a question and read the answer with its citations, submit a document and see
+    what the extractor made of it, plus the two things upstream has no place for — who is allowed
+    in, and which model and which embedder touched the data.
     
-    Three things here are not incidental.
+    Four things here are not incidental.
     
     **The credential is collected with a form and carried in a cookie.** HTTP Basic does not survive
     a single-page console: the manifest and the icons are fetched in a mode where the browser sends
@@ -57,6 +62,13 @@ data:
     
     **Only `/healthz` is outside the session.** It reports liveness and nothing about the corpus,
     because it is reachable from the public hostname by anyone who finds the name.
+    
+    **A degraded component is reported, not smoothed over.** The status panel reads the pipeline's
+    own health report, where a reranker that answered its probe and refused every actual rerank now
+    says `degraded` with the reason — and the console also keeps the verdict from the last answer it
+    relayed, because `Citations.reranker` cannot be missed by a worker that did not serve the query.
+    A reranker doing nothing on every query is what the previous version of this listing shipped,
+    and the only trace was citations reading 0.0.
     
     stdlib plus what the rag-server image already carries (fastapi, httpx) — this runs in that image,
     from a ConfigMap the cloud digests and signs, so the code serving the door is in the evidence
@@ -75,7 +87,7 @@ data:
     import time
     
     import httpx
-    from fastapi import FastAPI, Form, Request, Response
+    from fastapi import FastAPI, File, Form, Request, Response, UploadFile
     from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
     
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
@@ -89,7 +101,15 @@ data:
     RAG_URL = os.environ.get("RAG_SERVER_URL", "http://127.0.0.1:8081").rstrip("/")
     SYNC_URL = os.environ.get("CORPUS_SYNC_URL", "").rstrip("/")
     COLLECTION = os.environ.get("COLLECTION_NAME", "documents")
+    UPLOAD_COLLECTION = os.environ.get("UPLOAD_COLLECTION_NAME", "")
     UI_DIR = os.environ.get("UI_DIR", "/opt/console")
+    # What a browser may hand over, mirrored from the indexer's own ceiling so the refusal happens
+    # here rather than after the bytes have crossed the namespace.
+    UPLOAD_MAX_BYTES = int(os.environ.get("UPLOAD_MAX_BYTES", 64 * 1024 * 1024))
+    # Extraction is one document at a time on four CPU cores: 13.1 s for a fifteen-page PDF with a
+    # text layer, 52.6 s for the same pages as a 200-dpi scan through OCR, and a queue in front of
+    # it when somebody submits two.
+    UPLOAD_TIMEOUT_SECONDS = float(os.environ.get("UPLOAD_TIMEOUT_SECONDS", 960))
     
     # What the deployment says about itself. Every value is rendered from the listing's own
     # parameters, so the panel a user reads and the digest the cloud signed describe the same thing.
@@ -102,9 +122,19 @@ data:
         "rerankerModel": os.environ.get("ABOUT_RERANKER_MODEL", ""),
         "rerankerLicence": os.environ.get("ABOUT_RERANKER_LICENCE", ""),
         "collection": COLLECTION,
+        "uploadCollection": UPLOAD_COLLECTION,
+        "extractionStack": os.environ.get("ABOUT_EXTRACTION_STACK", ""),
+        "extractionLicence": os.environ.get("ABOUT_EXTRACTION_LICENCE", ""),
+        "uploadsEnabled": bool(UPLOAD_COLLECTION and SYNC_URL),
+        "uploadMaxBytes": UPLOAD_MAX_BYTES,
         "sourceRepo": os.environ.get("ABOUT_SOURCE_REPO", ""),
         "expectedDigest": os.environ.get("ABOUT_EXPECTED_DIGEST", ""),
     }
+    
+    # The last thing an answer said about its own reranking. One process, one replica, and no
+    # store: a restarted console simply has nothing to say until the next answer or the next
+    # health report, which is the honest state rather than a stale one.
+    LAST_RERANKING: dict[str, object] = {}
     
     if not PASSWORD or not SESSION_KEY:
         # Refuse to start rather than serve an open door. A console that came up without a
@@ -243,6 +273,44 @@ data:
         return JSONResponse(ABOUT)
     
     
+    def reranker_panel(pipeline: object) -> dict[str, object]:
+        """What to say about reranking, out of the two places that know.
+    
+        `degraded` is reported if EITHER the pipeline's health report says so or the last answer
+        this console relayed said so. Not "the most recent of the two": a health report from a
+        worker that has reranked nothing says `healthy` quite correctly, and letting that
+        overwrite a degradation a query actually hit is how this failure stayed invisible in the
+        first place. A recovery clears it, because the next successful answer and the next health
+        report both say so.
+        """
+        panel: dict[str, object] = {"degraded": False, "reason": "", "source": "none"}
+    
+        if isinstance(pipeline, dict):
+            for service in pipeline.get("nim") or []:
+                if not isinstance(service, dict):
+                    continue
+                if str(service.get("service") or "").lower() != "ranking":
+                    continue
+                panel["model"] = service.get("model") or ""
+                panel["status"] = service.get("status") or ""
+                if str(service.get("status") or "").lower() == "degraded":
+                    panel.update(
+                        degraded=True,
+                        reason=str(service.get("message") or ""),
+                        source="health",
+                    )
+                break
+    
+        if LAST_RERANKING.get("degraded") and not panel["degraded"]:
+            panel.update(
+                degraded=True,
+                reason=str(LAST_RERANKING.get("reason") or ""),
+                source="answer",
+                observedAt=LAST_RERANKING.get("at"),
+            )
+        return panel
+    
+    
     @app.get("/api/status")
     async def status(request: Request) -> JSONResponse:
         """What the corpus and the pipeline are doing, as the deployment itself sees it."""
@@ -267,7 +335,91 @@ data:
                 out["pipeline"] = answer.json()
             except Exception as error:  # noqa: BLE001
                 out["pipeline"] = {"error": str(error)}
+        # Two sources for one fact, and both are needed. The health report is the one an operator
+        # can read with no query in flight; the verdict carried by the last answer is the one that
+        # cannot be missed, because `/v1/health` is served by whichever uvicorn worker takes the
+        # request and not necessarily the one that reranked.
+        out["reranker"] = reranker_panel(out.get("pipeline"))
         return JSONResponse(out)
+    
+    
+    def sse_error(message: str) -> StreamingResponse:
+        """One server-sent error event, which is what the console's chat renders.
+    
+        The alternative — a 4xx with a JSON body — reaches a reader as "the pipeline
+        returned no answer", because the page is reading an event stream by then.
+        """
+    
+        async def once():
+            yield f"data: {json.dumps({'error': message})}\n\n".encode()
+    
+        return StreamingResponse(
+            once(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+    
+    
+    async def live_collections() -> list[str] | None:
+        """The collections a question may name, as the indexer sees them.
+    
+        `None` means the indexer could not be asked, which is a different answer
+        from "there are none": the first is a reason to try the gated collection and
+        see, the second is a deployment with nothing indexed, and a question is
+        worth attempting in one case and not the other.
+        """
+        if not SYNC_URL:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                answer = await client.get(f"{SYNC_URL}/collections")
+            return [
+                name
+                for name in (answer.json().get("collections") or [])
+                if isinstance(name, str) and name
+            ]
+        except Exception:  # noqa: BLE001
+            logger.warning("could not ask the indexer which collections exist")
+            return None
+    
+    
+    def reranking_watcher():
+        """A coroutine fed raw SSE bytes, recording what each event said about reranking.
+    
+        Written as a generator rather than a parse-at-the-end because the answer is streamed and
+        the citations arrive in the middle of it. It keeps only the last verdict: one answer, one
+        reranking.
+        """
+        buffer = ""
+        while True:
+            chunk = yield
+            buffer += chunk.decode("utf-8", "replace")
+            while "\n\n" in buffer:
+                block, buffer = buffer.split("\n\n", 1)
+                for line in block.split("\n"):
+                    if not line.startswith("data:"):
+                        continue
+                    body = line[5:].strip()
+                    if not body or body == "[DONE]":
+                        continue
+                    try:
+                        event = json.loads(body)
+                    except ValueError:
+                        continue
+                    citations = event.get("citations") if isinstance(event, dict) else None
+                    report = (citations or {}).get("reranker") if isinstance(citations, dict) else None
+                    if isinstance(report, dict):
+                        LAST_RERANKING.clear()
+                        LAST_RERANKING.update(
+                            degraded=bool(report.get("degraded")),
+                            reason=str(report.get("reason") or ""),
+                            scoreSource=str(report.get("score_source") or ""),
+                            at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        )
+            # A buffer that never completes an event is an answer that never ended; bound it
+            # rather than grow it for the life of the request.
+            if len(buffer) > 1_000_000:
+                buffer = buffer[-4096:]
     
     
     @app.post("/api/ask")
@@ -293,10 +445,29 @@ data:
         if len(question) > 8000:
             return JSONResponse({"error": "question is too long"}, status_code=413)
     
+        # Only collections that EXIST may be named: the rag-server answers 400 for the whole
+        # query if one does not, rather than skipping it. So the indexer is asked, per question —
+        # two existence checks, no embedding — instead of this guessing from configuration, which
+        # would be wrong on a deployment whose corpus has not indexed yet and right again ten
+        # minutes later.
+        collections = await live_collections()
+        if collections is None:
+            # The indexer could not be asked. Try the gated collection, which is the one a
+            # deployment with a dataset attached has.
+            collections = [COLLECTION]
+        elif not collections:
+            # Nothing is indexed at all, and relaying the rag-server's `400 Collection …
+            # does not exist. Ensure a collection is created using POST /collection` would
+            # tell a tenant to call an endpoint this listing does not publish.
+            return sse_error(
+                "There is nothing to search yet: no dataset is attached and no document has "
+                "been submitted. The panels on the right say which."
+            )
+    
         payload = {
             "messages": [{"role": "user", "content": question}],
             "use_knowledge_base": True,
-            "collection_names": [COLLECTION],
+            "collection_names": collections,
             "enable_citations": True,
             "stream": True,
         }
@@ -309,7 +480,17 @@ data:
                         detail = (await answer.aread()).decode("utf-8", "replace")[:2000]
                         yield f"data: {json.dumps({'error': detail})}\n\n".encode()
                         return
+                    # Forwarded byte for byte, and read in passing. The thing being read is
+                    # `citations.reranker`: whether the answer going past was reranked at all.
+                    # Recording it here is what lets the status panel say so between queries,
+                    # which is the one window in which nobody is looking at a citation.
+                    watcher = reranking_watcher()
+                    next(watcher)
                     async for chunk in answer.aiter_raw():
+                        try:
+                            watcher.send(chunk)
+                        except Exception:  # noqa: BLE001 — never spoil an answer to read it
+                            logger.debug("could not read the reranking verdict", exc_info=True)
                         yield chunk
     
         return StreamingResponse(
@@ -317,6 +498,111 @@ data:
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
+    
+    
+    # ---------------------------------------------------------------------------------------------
+    # Documents
+    #
+    # The collection and document management upstream's `ingestor-server` provides, over the
+    # components this port actually deploys: the extraction stage is `swarm-doc-ingest`, and the
+    # indexer beside this console is what writes the chunks. Every one of these is behind the
+    # session, because a document a person submits is the same data the corpus is.
+    # ---------------------------------------------------------------------------------------------
+    
+    
+    @app.get("/api/documents")
+    async def list_documents(request: Request) -> JSONResponse:
+        if not signed_in(request):
+            return JSONResponse({"error": "not signed in"}, status_code=401)
+        if not SYNC_URL:
+            return JSONResponse({"documents": [], "enabled": False})
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                answer = await client.get(f"{SYNC_URL}/documents")
+            return JSONResponse(answer.json(), status_code=answer.status_code)
+        except Exception as error:  # noqa: BLE001
+            return JSONResponse({"error": str(error)}, status_code=502)
+    
+    
+    @app.post("/api/documents")
+    async def submit_document(request: Request, file: UploadFile = File(...)) -> JSONResponse:
+        """Hand one file to the indexer, which extracts it and writes its chunks.
+    
+        The bytes are read into memory here rather than streamed through, and that is a bounded
+        decision rather than an oversight: `UPLOAD_MAX_BYTES` is the bound, this container has
+        512Mi, and the alternative — a chunked relay — would mean this console deciding what to do
+        with half an uploaded document when the indexer refuses the second half.
+        """
+        if not signed_in(request):
+            return JSONResponse({"error": "not signed in"}, status_code=401)
+        if not (SYNC_URL and UPLOAD_COLLECTION):
+            return JSONResponse(
+                {
+                    "error": "this deployment has no extraction service, so it reads documents "
+                    "from its gated source only"
+                },
+                status_code=503,
+            )
+    
+        name = os.path.basename((file.filename or "").replace("\\", "/")).strip()
+        if not name:
+            return JSONResponse({"error": "the file has no name"}, status_code=400)
+    
+        blob = await file.read()
+        if not blob:
+            return JSONResponse(
+                {"error": "an empty document has nothing to index"}, status_code=400
+            )
+        if len(blob) > UPLOAD_MAX_BYTES:
+            return JSONResponse(
+                {
+                    "error": f"{name} is {len(blob)} bytes and this deployment accepts up to "
+                    f"{UPLOAD_MAX_BYTES}"
+                },
+                status_code=413,
+            )
+    
+        try:
+            async with httpx.AsyncClient(timeout=UPLOAD_TIMEOUT_SECONDS) as client:
+                answer = await client.post(
+                    f"{SYNC_URL}/documents",
+                    content=blob,
+                    headers={
+                        "Content-Type": "application/octet-stream",
+                        "X-Document-Name": name.encode("ascii", "replace").decode("ascii"),
+                    },
+                )
+        except httpx.TimeoutException:
+            return JSONResponse(
+                {
+                    "error": "extraction did not finish in time. One document is extracted at a "
+                    "time and the rest queue; the document panel shows it once it lands."
+                },
+                status_code=504,
+            )
+        except Exception as error:  # noqa: BLE001
+            return JSONResponse({"error": str(error)}, status_code=502)
+        try:
+            return JSONResponse(answer.json(), status_code=answer.status_code)
+        except ValueError:
+            return JSONResponse(
+                {"error": answer.text[:400] or "the indexer answered nothing"},
+                status_code=502,
+            )
+    
+    
+    @app.delete("/api/documents/{upload_id}")
+    async def remove_document(request: Request, upload_id: str) -> JSONResponse:
+        if not signed_in(request):
+            return JSONResponse({"error": "not signed in"}, status_code=401)
+        if not SYNC_URL:
+            return JSONResponse({"error": "no indexer to ask"}, status_code=503)
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                answer = await client.delete(f"{SYNC_URL}/documents/{upload_id}")
+            return JSONResponse(answer.json(), status_code=answer.status_code)
+        except Exception as error:  # noqa: BLE001
+            return JSONResponse({"error": str(error)}, status_code=502)
     
     
     # A nonce is generated per process and is not used for anything a reader should trust; it exists
@@ -328,11 +614,19 @@ data:
     <!--
       The console, behind the session cookie.
     
-      Three panes, and the two on the right are the point of the listing as much as the chat is:
+      The panes on the right are the point of the listing as much as the chat is:
       "Who touched your data" names the generation model, the embedder and the reranker with their
-      licences, and "Your corpus" shows the gate's own verdict on the last read. When a data owner
-      withdraws approval, this is where it is visible — the corpus pane turns red and quotes the
-      refusal, rather than questions silently getting worse.
+      licences AND whether each of them is actually doing its job, and "Your corpus" shows the
+      gate's own verdict on the last read. When a data owner withdraws approval, this is where it is
+      visible — the corpus pane turns red and quotes the refusal, rather than questions silently
+      getting worse. The same applies to the reranker: a reranker that answers its health probe and
+      refuses every actual rerank reads "degraded" here with the reason, because the previous
+      version of this listing shipped exactly that and the only trace was citations reading 0.0.
+    
+      "Your documents" is the document management half: submit a file, see what the extractor made
+      of it, remove it. Tables are extracted as structure and are searchable; a chart is LOCATED,
+      not transcribed — it is cited as an image at a position on a page, and the panel says so,
+      because implying a chart's numbers are searchable would be a promise this stack cannot keep.
     
       No build step, no dependency, no network except this deployment: the whole interface is this
       file, and it is rendered into a ConfigMap the cloud digests and signs.
@@ -385,6 +679,19 @@ data:
      .bad{background:#3a1620;color:#f87171}
      .wait{background:#2a2410;color:#fbbf24}
      code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.8rem}
+     .note{font-size:.76rem;color:#6b7488;margin:.5rem 0 0}
+     .doc{display:flex;align-items:baseline;gap:.5rem;font-size:.82rem;padding:.3rem 0;
+          border-bottom:1px solid #161c28}
+     .doc .nm{flex:1;word-break:break-word}
+     .doc .ct{color:#6b7488;font-size:.74rem;white-space:nowrap}
+     .doc button{background:none;border:1px solid #2b3448;color:#8b94a7;border-radius:6px;
+                 padding:.1rem .4rem;font-size:.7rem;cursor:pointer}
+     .doc button:hover{color:#f87171;border-color:#3a1620}
+     #droplabel{display:block;margin-top:.6rem;padding:.6rem;border:1px dashed #2b3448;
+                border-radius:8px;text-align:center;font-size:.8rem;color:#8b94a7;cursor:pointer}
+     #droplabel:hover{border-color:#3b82f6;color:#e6e6e6}
+     #upfile{display:none}
+     .cite .meta{color:#6b7488;font-size:.74rem}
     </style></head>
     <body>
     <header>
@@ -414,6 +721,18 @@ data:
           <h2>Your corpus</h2>
           <div id="corpus"></div>
         </section>
+        <section id="docsec">
+          <h2>Your documents</h2>
+          <div id="docs"></div>
+          <label id="droplabel" for="upfile">Submit a document</label>
+          <input id="upfile" type="file"
+                 accept=".pdf,.docx,.pptx,.xlsx,.html,.htm,.md,.txt,.png,.jpg,.jpeg,.tiff,.tif,.bmp">
+          <p class="note" id="upnote">
+            PDF, Office, HTML, Markdown, text and scans. Tables are extracted as structure and are
+            searchable; charts are cited as images at their position on the page — their data is not
+            read and not searchable.
+          </p>
+        </section>
         <section>
           <h2>Pipeline</h2>
           <div id="pipeline"></div>
@@ -422,6 +741,7 @@ data:
     </main>
     <script>
     const $ = (id) => document.getElementById(id);
+    let ABOUT = {};
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     const row = (k, v) => `<div class="row"><span>${esc(k)}</span><span>${v}</span></div>`;
@@ -435,12 +755,35 @@ data:
       const model = (name, licence) => name
         ? `${esc(name)}<br><span class="lic">${esc(licence || "licence not declared")}</span>`
         : "<span class='lic'>not configured</span>";
+      ABOUT = a;
       $("about").innerHTML =
         row("Generation", model(a.generationModel, a.generationLicence)) +
         row("Embedding", model(a.embeddingModel, a.embeddingLicence)) +
         row("Reranking", model(a.rerankerModel, a.rerankerLicence)) +
+        `<div id="rerankstate"></div>` +
+        (a.extractionStack
+          ? row("Extraction", model(a.extractionStack, a.extractionLicence)) : "") +
         row("Collection", `<code>${esc(a.collection)}</code>`) +
+        (a.uploadCollection
+          ? row("Uploads", `<code>${esc(a.uploadCollection)}</code>`) : "") +
         (a.expectedDigest ? row("Listing digest", `<code>${esc(a.expectedDigest.slice(0, 16))}…</code>`) : "");
+      if (!a.uploadsEnabled) {
+        $("docsec").innerHTML = `<h2>Your documents</h2><p class="note">This deployment has no
+          extraction service, so it answers from its gated document source only.</p>`;
+      }
+    }
+    
+    // The reranker's own verdict, beside the model that is supposed to be doing the work. A red
+    // pill here is the thing nothing reported in 0.1.7: the component was reachable, attested and
+    // reserved two cores, and did nothing on any query.
+    function rerankPane(r) {
+      if (!r || !r.degraded) {
+        if (!r || r.source === "none") return "";
+        return row("", `<span class="pill ok">reranking</span>`);
+      }
+      return row("", `<span class="pill bad">degraded</span>`) +
+        row("", `<span class="lic">${esc(r.reason || "the last rerank fell back to the " +
+          "retriever's own order; citation scores are retriever similarities")}</span>`);
     }
     
     function corpusPane(c) {
@@ -479,18 +822,74 @@ data:
         const s = await r.json();
         $("corpus").innerHTML = corpusPane(s.corpus);
         $("pipeline").innerHTML = pipelinePane(s.pipeline);
+        const state = $("rerankstate");
+        if (state) state.innerHTML = rerankPane(s.reranker);
+        if (ABOUT.uploadsEnabled) docsPane((s.corpus && s.corpus.uploadedDocuments) || []);
       } catch (e) { /* the panel reports, it does not break the chat */ }
     }
     
-    function citations(cites) {
+    function docsPane(documents) {
+      const target = $("docs");
+      if (!target) return;
+      if (!documents.length) {
+        target.innerHTML = `<p class="note">No document submitted yet.</p>`;
+        return;
+      }
+      target.innerHTML = documents.map((d) =>
+        `<div class="doc"><span class="nm">${esc(d.name)}</span>
+         <span class="ct">${esc(d.chunks)} chunks</span>
+         <button data-id="${esc(d.id)}" title="Remove from the index">remove</button></div>`
+      ).join("");
+      for (const button of target.querySelectorAll("button")) {
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          try {
+            const r = await fetch(`/api/documents/${encodeURIComponent(button.dataset.id)}`,
+                                  { method: "DELETE" });
+            if (!r.ok) note((await r.json()).error || "could not remove that document", true);
+          } catch (error) { note(String(error), true); }
+          status();
+        });
+      }
+    }
+    
+    function note(message, bad) {
+      const target = $("upnote");
+      if (!target) return;
+      target.textContent = message;
+      target.style.color = bad ? "#f87171" : "#8b94a7";
+    }
+    
+    // A citation names its document, what KIND of thing it was and where on the page it sat.
+    // The kind matters here more than in most consoles: a table is extracted as structure and its
+    // content is what was searched, while an image is cited by its caption and position and its
+    // contents were never read. A reader has to be able to tell those apart.
+    function citations(cites, reranking) {
       if (!cites || !cites.length) return "";
       const items = cites.map((c) => {
         const src = c.source || c.document_name || "document";
         const txt = (c.content || (c.metadata && c.metadata.description) || "").slice(0, 320);
+        const meta = (c.metadata && c.metadata.content_metadata) || {};
+        const kind = { structured: "table", image: "image (located, not read)" }[meta.element_type]
+          || "";
+        const page = (c.metadata && c.metadata.page_number) || 0;
+        const box = (c.metadata && c.metadata.location) || [];
+        const where = [
+          kind,
+          page ? `p. ${esc(page)}` : "",
+          box.length === 4 ? `at ${box.map((v) => Math.round(v)).join(", ")}` : "",
+          typeof c.score === "number" ? `score ${c.score.toFixed(3)}` : "",
+        ].filter(Boolean).join(" · ");
         return `<div class="cite"><span class="src">${esc(src)}</span>
+                ${where ? `<span class="meta">${where}</span>` : ""}
                 <span class="txt">${esc(txt)}</span></div>`;
       }).join("");
-      return `<div class="cites"><h3>Citations</h3>${items}</div>`;
+      const caveat = reranking && reranking.degraded
+        ? `<p class="note" style="color:#f87171">Reranking did not run for this answer, so these
+           scores are the retriever's own similarities and this order is the retriever's.
+           ${esc(reranking.reason || "")}</p>`
+        : "";
+      return `<div class="cites"><h3>Citations</h3>${caveat}${items}</div>`;
     }
     
     $("askbox").addEventListener("submit", async (event) => {
@@ -513,6 +912,7 @@ data:
     
       let text = "";
       let cites = null;
+      let reranking = null;
       try {
         const response = await fetch("/api/ask", {
           method: "POST",
@@ -549,6 +949,7 @@ data:
                             (choice.delta && choice.delta.content) || "";
               if (piece) { text += piece; answer.textContent = text; }
               if (event.citations && event.citations.results) cites = event.citations.results;
+              if (event.citations && event.citations.reranker) reranking = event.citations.reranker;
               $("log").scrollTop = $("log").scrollHeight;
             }
           }
@@ -558,7 +959,7 @@ data:
           answer.textContent = "The pipeline returned no answer. The corpus panel on the right " +
             "says whether the documents are reachable.";
         } else if (cites) {
-          answer.insertAdjacentHTML("beforeend", citations(cites));
+          answer.insertAdjacentHTML("beforeend", citations(cites, reranking));
         }
       } catch (error) {
         answer.className = "msg err";
@@ -570,6 +971,45 @@ data:
       }
     });
     
+    // Submitting a document. One at a time by construction — the extraction service does one and
+    // queues the rest — so the control is disabled while it runs rather than queueing here too.
+    const upload = $("upfile");
+    if (upload) {
+      upload.addEventListener("change", async () => {
+        const file = upload.files && upload.files[0];
+        if (!file) return;
+        const label = $("droplabel");
+        label.textContent = `Extracting ${file.name}…`;
+        upload.disabled = true;
+        note("One document is extracted at a time. A fifteen-page scan through OCR is about a " +
+             "minute on the cores this deployment gives it.");
+        try {
+          const form = new FormData();
+          form.append("file", file);
+          const r = await fetch("/api/documents", { method: "POST", body: form });
+          const body = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            note(body.error || `the indexer answered ${r.status}`, true);
+          } else {
+            const e = body.elements || {};
+            const charts = e.charts
+              ? `, ${e.charts} chart/image${e.charts === 1 ? "" : "s"} located (${e.chartsIndexed}` +
+                ` with a caption; their data is not searchable)`
+              : "";
+            note(`${body.name}: ${body.chunks} chunks indexed — ${e.text || 0} text, ` +
+                 `${e.tables || 0} table${e.tables === 1 ? "" : "s"}${charts}.`);
+          }
+        } catch (error) {
+          note(String(error), true);
+        } finally {
+          upload.value = "";
+          upload.disabled = false;
+          label.textContent = "Submit a document";
+          status();
+        }
+      });
+    }
+    
     about();
     status();
     // Every refresh probes the four endpoints behind the pipeline, so this is a
@@ -580,15 +1020,26 @@ data:
     
   corpus_sync.py: |
     #!/usr/bin/env python3
-    """Index the bound document source into the vector store, and report what the gate decided.
+    """Index what this deployment is allowed to read, and report what the gate decided.
     
-    This is the half of the listing that the gatekeeper story actually runs through, so it is worth
-    being explicit about what it is and is not.
+    Two sources, two collections, one indexer. That shape is the first thing to know, and it is not
+    tidiness:
     
-    **What it is.** A loop. Read the document rows from whatever the deployment's `corpus` slot is
-    bound to, chunk them, embed them with the deployment's own embedder, and write them into the
-    collection the rag-server retrieves from. Then wait, re-read the source's own count and
-    high-water mark, and re-index only when those moved.
+    * the **gated source** — a ClickHouse document table the data owner approved — is REBUILT on
+      every change: dropped and rewritten, because a document the owner deleted has to leave the
+      index and a diff against a source we may be refused tomorrow is a diff we cannot trust;
+    * **uploaded documents** — a file a person put through the console, extracted by
+      `swarm-doc-ingest` — are ADDITIVE and live in a collection of their own.
+    
+    One collection for both would mean every refresh of the gated corpus silently deleted every
+    uploaded file. The rag-server retrieves from both collections in one query, so the split costs
+    nothing a reader of the answers can see.
+    
+    **What it is.** A loop plus a small HTTP service. Read the document rows from whatever the
+    deployment's `corpus` slot is bound to, chunk them, embed them with the deployment's own embedder,
+    and write them into the collection the rag-server retrieves from. Then wait, re-read the source's
+    own count and high-water mark, and re-index only when those moved. Beside that, serve the console's
+    document management: submit a file, list what has been submitted, remove one.
     
     **Why it reads ClickHouse over HTTP and not object storage.** Because that is the only thing
     the marketplace gatekeeper can carry. The gate injects `x-clickhouse-user` / `x-clickhouse-key`
@@ -612,17 +1063,34 @@ data:
     `create_collection` needs `nv_ingest_client`, and `langchain_milvus` creating the collection
     from the first batch is the documented alternative the rag-server's citation code already
     handles ("if langchain is used for ingestion, the source is a string").
+    
+    **Why every chunk carries the same metadata keys, including the empty ones.**
+    `langchain_milvus` creates the collection's fields from the FIRST batch it is given, so a key
+    that appears only on a later document is a key the collection has no field for. A table chunk
+    therefore carries an empty `image_metadata` and a text chunk carries an empty `table_metadata`,
+    and that is load-bearing rather than sloppy.
+    
+    **What an uploaded document gets indexed, and what it does not.** `swarm-doc-ingest` returns
+    nv-ingest elements: text, tables as cell grids and Markdown, and pictures with their bounding
+    boxes. Text and tables are indexed and searchable — a table as its Markdown, split on row
+    boundaries with its header repeated, because a table cut in half mid-grid is a chunk no model can
+    read. A **picture is located, not transcribed**: this stack reads no chart data, so a chart is
+    indexed by its caption and its position, and a chart with no caption is counted and not indexed
+    at all. Writing a chunk that claimed to be a chart's contents would be the same kind of lie as
+    the reranker scores this listing's previous version shipped.
     """
     
     from __future__ import annotations
     
+    import hashlib
     import json
     import logging
     import os
+    import re
     import threading
     import time
     import urllib.parse
-    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from typing import Any
     
     import requests
@@ -639,6 +1107,23 @@ data:
     logger = logging.getLogger("corpus-sync")
     
     COLLECTION = os.environ.get("COLLECTION_NAME", "documents")
+    # Uploaded files, in a collection of their own. The gated corpus is rebuilt from
+    # scratch whenever it moves, so one collection for both would mean a refresh of
+    # the corpus deleting every file anybody submitted.
+    UPLOAD_COLLECTION = os.environ.get("UPLOAD_COLLECTION_NAME", "")
+    INGEST_URL = os.environ.get("INGEST_URL", "").rstrip("/")
+    INGEST_API_KEY = os.environ.get("INGEST_API_KEY", "")
+    # Extraction is CPU work on a pod that does one document at a time and queues the
+    # rest: a 15-page 200-dpi scan through OCR is 52.6 s measured, and a queue in
+    # front of it makes that a wait rather than a failure.
+    INGEST_TIMEOUT = float(os.environ.get("INGEST_TIMEOUT_SECONDS", 900))
+    UPLOAD_MAX_BYTES = int(os.environ.get("UPLOAD_MAX_BYTES", 64 * 1024 * 1024))
+    # How many chunk rows the listing and the delete will read in one query. A document of a
+    # hundred pages is a few hundred chunks, so this is two hundred such documents.
+    UPLOAD_LIST_LIMIT = int(os.environ.get("UPLOAD_LIST_LIMIT", 16384))
+    # What this service issues as a document identifier, and therefore all it will accept: the
+    # value is interpolated into a Milvus filter expression.
+    UPLOAD_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
     BINDING_PATH = os.environ.get("CORPUS_BINDING_FILE", "/etc/corpus/binding.json")
     TABLE = os.environ.get("CORPUS_TABLE", "documents")
     COL_ID = os.environ.get("CORPUS_ID_COLUMN", "doc_id")
@@ -670,8 +1155,22 @@ data:
         "lastAttemptAt": None,
         "lastSuccessAt": None,
         "collection": COLLECTION,
+        # Whether this deployment accepts a file at all, so the console can say
+        # "not configured" rather than offering a button that answers 503.
+        "uploads": {
+            "enabled": bool(UPLOAD_COLLECTION and INGEST_URL),
+            "collection": UPLOAD_COLLECTION,
+            "maxBytes": UPLOAD_MAX_BYTES,
+        },
     }
     STATE_LOCK = threading.Lock()
+    
+    # One embedder, two cores, and two things that want it: the gated corpus rebuild
+    # and an upload. They write different collections, so they do not race over the
+    # index — but a batch that holds the embedder for half a minute is a batch its
+    # own health endpoint cannot answer during, which is how an earlier version of
+    # this file turned a reindex into a loop that never finished. So they take turns.
+    INDEX_LOCK = threading.Lock()
     
     
     def publish(**fields: Any) -> None:
@@ -838,8 +1337,9 @@ data:
         return [chunk for chunk in out if chunk]
     
     
-    def vector_store():
+    def vector_store(collection: str = ""):
         """The retriever's own vector store, built through the retriever's own code path."""
+        collection = collection or COLLECTION
         config = NvidiaRAGConfig()
         embedder = get_embedding_model(
             model=config.embeddings.model_name,
@@ -855,7 +1355,7 @@ data:
             except Exception:  # noqa: BLE001 — an older client may not carry the field
                 logger.warning("could not set %s on the embedding client", attribute)
         vdb = MilvusVDB(
-            collection_name=COLLECTION,
+            collection_name=collection,
             milvus_uri=config.vector_store.url,
             embedding_model=embedder,
             config=config,
@@ -870,7 +1370,56 @@ data:
                 else ""
             ),
         )
-        return vdb, vdb.get_langchain_vectorstore(COLLECTION)
+        return vdb, vdb.get_langchain_vectorstore(collection)
+    
+    
+    def write_batch(store: Any, batch: list[Document]) -> None:
+        """One batch, in a thread, so a wedged client is a reported stall and not a silence.
+    
+        `add_documents` embeds and inserts. Either half can hang — the embedding client on a
+        saturated endpoint, the insert on a flush — and both held this loop with `/status` frozen
+        at the attempt that started it, which is the one state an operator cannot act on. Observed
+        on the gpu-blueprints cloud: twelve minutes inside one rebuild with the embedder idle and
+        nothing published.
+        """
+        error: list[BaseException] = []
+    
+        def run() -> None:
+            try:
+                store.add_documents(batch)
+            except BaseException as problem:  # noqa: BLE001 — re-raised on the caller's thread
+                error.append(problem)
+    
+        worker = threading.Thread(target=run, name="embed-batch", daemon=True)
+        worker.start()
+        worker.join(BATCH_TIMEOUT)
+        if worker.is_alive():
+            raise TimeoutError(
+                f"a batch of {len(batch)} chunks did not finish embedding and writing within "
+                f"{BATCH_TIMEOUT:.0f}s — the endpoint is saturated or the index is not accepting"
+            )
+        if error:
+            raise error[0]
+    
+    
+    def write_all(store: Any, documents: list[Document], progress=None) -> int:
+        """Embed and write every document, in batches, reporting after each one."""
+        pending: list[Document] = []
+        written = 0
+        for document in documents:
+            pending.append(document)
+            if len(pending) >= BATCH:
+                write_batch(store, pending)
+                written += len(pending)
+                pending = []
+                if progress is not None:
+                    progress(written)
+        if pending:
+            write_batch(store, pending)
+            written += len(pending)
+            if progress is not None:
+                progress(written)
+        return written
     
     
     def index(rows: list[dict[str, Any]], binding: dict[str, Any]) -> int:
@@ -892,42 +1441,12 @@ data:
             # re-creates the collection from the first batch.
             vdb, store = vector_store()
     
-        def write(batch: list[Document]) -> None:
-            """One batch, in a thread, so a wedged client is a reported stall and not a silence.
-    
-            `add_documents` embeds and inserts. Either half can hang — the embedding client on a
-            saturated endpoint, the insert on a flush — and both held this loop with `/status`
-            frozen at the attempt that started it, which is the one state an operator cannot
-            act on. Observed on the gpu-blueprints cloud: twelve minutes inside one rebuild with
-            the embedder idle and nothing published.
-            """
-            error: list[BaseException] = []
-    
-            def run() -> None:
-                try:
-                    store.add_documents(batch)
-                except BaseException as problem:  # noqa: BLE001 — re-raised on the caller's thread
-                    error.append(problem)
-    
-            worker = threading.Thread(target=run, name="embed-batch", daemon=True)
-            worker.start()
-            worker.join(BATCH_TIMEOUT)
-            if worker.is_alive():
-                raise TimeoutError(
-                    f"a batch of {len(batch)} chunks did not finish embedding and writing within "
-                    f"{BATCH_TIMEOUT:.0f}s — the endpoint is saturated or the index is not accepting"
-                )
-            if error:
-                raise error[0]
-    
-        pending: list[Document] = []
-        written = 0
+        documents: list[Document] = []
         for row in rows:
             doc_id = str(row.get("id") or "")
             title = str(row.get("title") or "")
-            pieces = chunks(str(row.get("text") or ""))
-            for position, piece in enumerate(pieces):
-                pending.append(
+            for position, piece in enumerate(chunks(str(row.get("text") or ""))):
+                documents.append(
                     Document(
                         page_content=piece,
                         metadata={
@@ -946,18 +1465,407 @@ data:
                         },
                     )
                 )
-            if len(pending) >= BATCH:
-                write(pending)
-                written += len(pending)
-                pending = []
-                # Published per batch, not at the end. A rebuild of a real corpus takes minutes,
-                # and a status that only moves when it finishes is a status that says nothing
-                # while the only interesting thing is happening.
-                publish(chunks=written, message=f"indexing: {written} chunks written")
-        if pending:
-            write(pending)
-            written += len(pending)
-        return written
+    
+        # Published per batch, not at the end. A rebuild of a real corpus takes minutes, and a
+        # status that only moves when it finishes is a status that says nothing while the only
+        # interesting thing is happening.
+        def progress(written: int) -> None:
+            publish(chunks=written, message=f"indexing: {written} chunks written")
+    
+        return write_all(store, documents, progress)
+    
+    
+    # --------------------------------------------------------------------------------------
+    # Uploaded documents
+    # --------------------------------------------------------------------------------------
+    #
+    # A file a person submits through the console, extracted by `swarm-doc-ingest` — layout,
+    # table structure and OCR on open components, CPU-only, no NIM and no NGC credential — and
+    # indexed into a collection of its own.
+    #
+    # `swarm-doc-ingest` answers `POST /v1/extract` with nv-ingest `MetadataSchema` elements, and
+    # the three kinds are not treated alike:
+    #
+    #   text        indexed as text, chunked like any prose;
+    #   structured  a table. Indexed as the Markdown rendering, which is what a model reads well,
+    #               split on ROW boundaries with the header repeated — a table cut mid-grid is a
+    #               chunk nothing can read. `table_metadata.table_location` carries the box;
+    #   image       a picture or a chart. LOCATED, NOT TRANSCRIBED: this stack reads no chart
+    #               data, so what is indexed is the caption and the position, and a picture with
+    #               no caption is counted and not indexed at all. A chunk claiming to hold a
+    #               chart's numbers would be a lie of exactly the kind this version exists to fix.
+    
+    
+    def uploads_enabled() -> bool:
+        return bool(UPLOAD_COLLECTION and INGEST_URL)
+    
+    
+    def safe_name(name: str) -> str:
+        """A submitted filename, reduced to something that can be stored and displayed.
+    
+        The name arrives from a browser. It reaches a Milvus field, a log line and the console's
+        citation list, so the path is dropped, control characters go, and the length is bounded.
+        Refused rather than silently renamed if nothing is left: a document stored as `_` is a
+        document nobody can find again.
+        """
+        base = os.path.basename((name or "").replace("\\", "/")).strip()
+        base = "".join(character for character in base if character.isprintable())
+        base = base.replace('"', "'")
+        if not base or base in (".", ".."):
+            raise ValueError(f"{name!r} is not a usable file name")
+        return base[:200]
+    
+    
+    def extract(filename: str, blob: bytes) -> dict[str, Any]:
+        """One document through `swarm-doc-ingest`, returning its elements.
+    
+        The key is a bearer token even though the service answers only inside this namespace: a
+        namespace is not a trust boundary once a second workload is in it.
+        """
+        headers = {}
+        if INGEST_API_KEY:
+            headers["Authorization"] = f"Bearer {INGEST_API_KEY}"
+        response = requests.post(
+            f"{INGEST_URL}/v1/extract",
+            files={"file": (filename, blob, "application/octet-stream")},
+            headers=headers,
+            timeout=INGEST_TIMEOUT,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"{response.status_code} from the extraction service: "
+                f"{response.text.strip()[:400] or 'no message'}"
+            )
+        body = response.json()
+        if not isinstance(body, dict) or not isinstance(body.get("elements"), list):
+            raise RuntimeError(
+                "the extraction service answered something that is not "
+                "{source_id, source_name, elements, stats}"
+            )
+        return body
+    
+    
+    def table_chunks(markdown: str) -> list[str]:
+        """A Markdown table, in pieces a model can still read.
+    
+        The header and its separator go onto every piece. Without that, the second half of a
+        twenty-row table is a grid of numbers with no column names — which embeds, retrieves and
+        answers questions wrongly rather than failing.
+        """
+        lines = [line for line in (markdown or "").splitlines() if line.strip()]
+        if len(lines) <= 2:
+            return [markdown.strip()] if markdown.strip() else []
+        header, separator, rows = lines[0], lines[1], lines[2:]
+        preamble = f"{header}\n{separator}\n"
+        if len(markdown) <= CHUNK_CHARS:
+            return [markdown.strip()]
+    
+        out: list[str] = []
+        current = preamble
+        for row in rows:
+            if len(current) + len(row) + 1 > CHUNK_CHARS and current != preamble:
+                out.append(current.rstrip())
+                current = preamble
+            current += row + "\n"
+        if current != preamble:
+            out.append(current.rstrip())
+        return out
+    
+    
+    def element_documents(
+        elements: list[dict[str, Any]], upload_id: str, filename: str
+    ) -> tuple[list[Document], dict[str, int]]:
+        """nv-ingest elements to chunks, and a count of what became of each kind.
+    
+        Every chunk carries the same metadata KEYS, empty ones included: `langchain_milvus`
+        creates the collection's fields from the first batch, so a key that first appears on a
+        later document has no field to go into.
+        """
+        counts = {
+            "text": 0,
+            "tables": 0,
+            "charts": 0,
+            "chartsIndexed": 0,
+            "chunks": 0,
+        }
+        documents: list[Document] = []
+    
+        def add(
+            content: str,
+            *,
+            kind: str,
+            subtype: str,
+            page: int,
+            position: int,
+            table_metadata: dict[str, Any],
+            image_metadata: dict[str, Any],
+            searchable: bool,
+        ) -> None:
+            documents.append(
+                Document(
+                    page_content=content,
+                    metadata={
+                        # A string, which is the shape the rag-server's citation code reads when
+                        # langchain did the ingestion.
+                        "source": f"upload:{filename}#{upload_id}",
+                        "title": filename,
+                        # Scalars, so the listing and the delete can filter on them.
+                        "upload_id": upload_id,
+                        "document_name": filename,
+                        "content_metadata": {
+                            # `text`, because that is the branch of the rag-server's citation
+                            # code that cites content it already has. The real kind of the
+                            # element is beside it, and the console shows that.
+                            "type": "text",
+                            "page_number": page,
+                            "chunk": position,
+                            "element_type": kind,
+                            "subtype": subtype,
+                            # False for a picture: what is indexed is its caption, not the data
+                            # drawn in it. The console and the listing both say so.
+                            "searchable_content": searchable,
+                        },
+                        "table_metadata": table_metadata,
+                        "image_metadata": image_metadata,
+                    },
+                )
+            )
+    
+        position = 0
+        for element in elements:
+            if not isinstance(element, dict):
+                continue
+            content_metadata = element.get("content_metadata") or {}
+            kind = str(content_metadata.get("type") or "")
+            page = int(content_metadata.get("page_number") or 0)
+            table_metadata = element.get("table_metadata") or {}
+            image_metadata = element.get("image_metadata") or {}
+            content = str(element.get("content") or "")
+    
+            if kind == "structured":
+                counts["tables"] += 1
+                for piece in table_chunks(table_metadata.get("table_content") or content):
+                    add(
+                        piece,
+                        kind="structured",
+                        subtype=str(content_metadata.get("subtype") or "table"),
+                        page=page,
+                        position=position,
+                        table_metadata={
+                            "table_location": list(table_metadata.get("table_location") or []),
+                            "table_location_max_dimensions": list(
+                                table_metadata.get("table_location_max_dimensions") or []
+                            ),
+                            "caption": str(table_metadata.get("caption") or ""),
+                        },
+                        image_metadata={},
+                        searchable=True,
+                    )
+                    position += 1
+                continue
+    
+            if kind == "image":
+                counts["charts"] += 1
+                # `content` for a picture is a base64 crop when the extractor is asked for one,
+                # and is never text. The caption is the only thing here that can be embedded.
+                caption = str(
+                    image_metadata.get("caption") or content_metadata.get("description") or ""
+                ).strip()
+                if not caption:
+                    continue
+                counts["chartsIndexed"] += 1
+                add(
+                    caption,
+                    kind="image",
+                    subtype="",
+                    page=page,
+                    position=position,
+                    table_metadata={},
+                    image_metadata={
+                        "image_location": list(image_metadata.get("image_location") or []),
+                        "image_location_max_dimensions": list(
+                            image_metadata.get("image_location_max_dimensions") or []
+                        ),
+                        "caption": caption,
+                    },
+                    searchable=False,
+                )
+                position += 1
+                continue
+    
+            if not content.strip():
+                continue
+            counts["text"] += 1
+            for piece in chunks(content):
+                add(
+                    piece,
+                    kind="text",
+                    subtype="",
+                    page=page,
+                    position=position,
+                    table_metadata={},
+                    image_metadata={},
+                    searchable=True,
+                )
+                position += 1
+    
+        counts["chunks"] = len(documents)
+        return documents, counts
+    
+    
+    def store_upload(filename: str, blob: bytes) -> dict[str, Any]:
+        """Extract, chunk and index one submitted file. Returns what became of it.
+    
+        Under `INDEX_LOCK`: this and the gated rebuild share one embedder with two cores, and a
+        batch that holds them both for half a minute is a batch its own health endpoint cannot
+        answer during.
+        """
+        if not uploads_enabled():
+            raise RuntimeError(
+                "this deployment has no extraction service configured, so it reads documents "
+                "from its gated source only"
+            )
+        if len(blob) > UPLOAD_MAX_BYTES:
+            raise ValueError(
+                f"{filename} is {len(blob)} bytes and the limit is {UPLOAD_MAX_BYTES}"
+            )
+    
+        # The identifier is the NAME's hash and not the content's, so submitting a corrected
+        # version of a document replaces it instead of leaving two copies of nearly the same
+        # text competing in every search. The extractor's own `source_id` is a per-request
+        # uuid and would make every resubmission a new document.
+        upload_id = hashlib.sha256(filename.encode("utf-8")).hexdigest()[:32]
+        extracted = extract(filename, blob)
+        documents, counts = element_documents(
+            extracted.get("elements") or [], upload_id, filename
+        )
+        if not documents:
+            raise ValueError(
+                f"nothing in {filename} could be indexed: the extractor found "
+                f"{counts['charts']} picture(s) with no caption and no text or tables at all"
+            )
+    
+        with INDEX_LOCK:
+            # Replace rather than add to: submitting the same file twice should leave one copy,
+            # not two sets of chunks competing in every search.
+            removed = remove_upload(upload_id)
+            _, store = vector_store(UPLOAD_COLLECTION)
+            written = write_all(store, documents)
+    
+        logger.info(
+            "indexed %s: %d chunks (%d text, %d tables, %d pictures of which %d captioned)%s",
+            filename,
+            written,
+            counts["text"],
+            counts["tables"],
+            counts["charts"],
+            counts["chartsIndexed"],
+            f", replacing {removed} chunks of an earlier submission" if removed else "",
+        )
+        return {
+            "id": upload_id,
+            "name": filename,
+            "chunks": written,
+            "replaced": removed,
+            "elements": counts,
+            "stats": extracted.get("stats") or {},
+            "at": now(),
+        }
+    
+    
+    def upload_client():
+        """The Milvus client for the uploads collection, or None if there is not one yet.
+    
+        `MilvusVDB.get_documents` is not used for the listing below: it reads a document-info
+        collection that upstream's ingestor writes and this listing never does, so it would
+        answer an empty list for documents that are in the index.
+        """
+        vdb, _ = vector_store(UPLOAD_COLLECTION)
+        if not vdb.check_collection_exists(UPLOAD_COLLECTION):
+            return None
+        return vdb
+    
+    
+    def uploaded_documents() -> list[dict[str, Any]]:
+        """What has been submitted, read back out of the index itself.
+    
+        The index is the registry on purpose: a list held in this pod's memory would be empty
+        after a restart while the chunks were still being searched, which is a console that
+        disagrees with the answers beside it.
+        """
+        if not uploads_enabled():
+            return []
+        try:
+            vdb = upload_client()
+            if vdb is None:
+                return []
+            rows = vdb._client.query(  # noqa: SLF001 — see upload_client
+                collection_name=UPLOAD_COLLECTION,
+                filter='upload_id != ""',
+                output_fields=["upload_id", "document_name"],
+                limit=UPLOAD_LIST_LIMIT,
+            )
+        except Exception as error:  # noqa: BLE001 — the panel reports, it does not fail
+            logger.warning("could not list the uploaded documents: %s", error)
+            return []
+    
+        counted: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            key = str(row.get("upload_id") or "")
+            if not key:
+                continue
+            entry = counted.setdefault(
+                key, {"id": key, "name": str(row.get("document_name") or ""), "chunks": 0}
+            )
+            entry["chunks"] += 1
+        return sorted(counted.values(), key=lambda entry: entry["name"].lower())
+    
+    
+    def remove_upload(upload_id: str) -> int:
+        """Drop every chunk of one submitted document. Returns how many went.
+    
+        The identifier is checked rather than escaped: it is interpolated into a Milvus filter
+        expression, and a filter is as much a query language as SQL is.
+        """
+        if not UPLOAD_ID_PATTERN.match(upload_id or ""):
+            raise ValueError(
+                f"{upload_id!r} is not a document identifier — 1 to 64 characters of "
+                "[A-Za-z0-9_-], which is what this service issues"
+            )
+        vdb = upload_client()
+        if vdb is None:
+            return 0
+        before = vdb._client.query(  # noqa: SLF001 — see upload_client
+            collection_name=UPLOAD_COLLECTION,
+            filter=f'upload_id == "{upload_id}"',
+            output_fields=["upload_id"],
+            limit=UPLOAD_LIST_LIMIT,
+        )
+        if not before:
+            return 0
+        vdb._client.delete(  # noqa: SLF001
+            collection_name=UPLOAD_COLLECTION, filter=f'upload_id == "{upload_id}"'
+        )
+        vdb._client.flush(collection_name=UPLOAD_COLLECTION)  # noqa: SLF001
+        return len(before)
+    
+    
+    def live_collections() -> list[str]:
+        """The collections that exist, which is what a query may name.
+    
+        The rag-server refuses a question naming a collection that does not exist — with a 400
+        for the whole query, not a skipped collection — so the console asks here first. A
+        deployment whose corpus has never indexed and which has no uploads has neither.
+        """
+        out: list[str] = []
+        try:
+            vdb, _ = vector_store()
+            for collection in (COLLECTION, UPLOAD_COLLECTION):
+                if collection and vdb.check_collection_exists(collection):
+                    out.append(collection)
+        except Exception as error:  # noqa: BLE001
+            logger.warning("could not list the collections: %s", error)
+        return out
     
     
     # --------------------------------------------------------------------------------------
@@ -965,21 +1873,139 @@ data:
     # --------------------------------------------------------------------------------------
     
     
+    class Service(ThreadingHTTPServer):
+        """Threaded, because indexing one upload must not block the status panel.
+    
+        `HTTPServer` serves one request at a time, and an upload holds its request for as long
+        as extraction takes — 52.6 s measured for a fifteen-page scan through OCR. On a
+        single-threaded server that is a minute in which `/status` does not answer, which is a
+        readiness probe failing and the pod being restarted mid-upload.
+        """
+    
+        daemon_threads = True
+    
+    
     class Status(BaseHTTPRequestHandler):
+        """The console's only way in. No authentication of its own, and that is deliberate.
+    
+        This is a ClusterIP Service on no Ingress. The console is the whole of the
+        authentication in front of it and it is the only caller — the same arrangement as the
+        rag-server, which also answers this namespace without a credential. What a second
+        workload in the namespace could reach is the reason the EXTRACTION service, which this
+        one calls, does carry a key.
+        """
+    
         protocol_version = "HTTP/1.1"
     
-        def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's own naming
-            if self.path.split("?")[0] not in ("/status", "/healthz"):
-                self.send_error(404)
-                return
-            with STATE_LOCK:
-                body = json.dumps(STATE).encode()
-            self.send_response(200)
+        def respond(self, status: int, payload: dict[str, Any]) -> None:
+            body = json.dumps(payload).encode()
+            self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
+    
+        def route(self) -> str:
+            return self.path.split("?")[0].rstrip("/") or "/"
+    
+        def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's own naming
+            route = self.route()
+            if route in ("/status", "/healthz"):
+                with STATE_LOCK:
+                    payload = dict(STATE)
+                if route == "/status":
+                    payload["uploadedDocuments"] = uploaded_documents()
+                self.respond(200, payload)
+                return
+            if route == "/collections":
+                # Which collections a query may name. Cheap: two existence checks, no embedding.
+                self.respond(200, {"collections": live_collections()})
+                return
+            if route == "/documents":
+                self.respond(200, {"documents": uploaded_documents()})
+                return
+            self.send_error(404)
+    
+        def do_POST(self) -> None:  # noqa: N802
+            """`POST /documents` — one file, raw, with its name in `X-Document-Name`.
+    
+            Raw bytes and a header rather than a multipart body: the console has already parsed
+            the browser's multipart form, and parsing it a second time here would mean a
+            multipart parser in a `BaseHTTPRequestHandler`, which is a place to put a bug rather
+            than a feature.
+            """
+            if self.route() != "/documents":
+                self.send_error(404)
+                return
+            if not uploads_enabled():
+                self.respond(
+                    503,
+                    {
+                        "error": "this deployment has no extraction service, so it reads "
+                        "documents from its gated source only"
+                    },
+                )
+                return
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                self.respond(400, {"error": "Content-Length is required"})
+                return
+            if length <= 0:
+                self.respond(400, {"error": "an empty document has nothing to index"})
+                return
+            if length > UPLOAD_MAX_BYTES:
+                self.respond(
+                    413,
+                    {
+                        "error": f"{length} bytes; this deployment accepts up to "
+                        f"{UPLOAD_MAX_BYTES}"
+                    },
+                )
+                return
+            try:
+                name = safe_name(self.headers.get("X-Document-Name") or "")
+            except ValueError as error:
+                self.respond(400, {"error": str(error)})
+                return
+    
+            blob = self.rfile.read(length)
+            try:
+                result = store_upload(name, blob)
+            except ValueError as error:
+                self.respond(400, {"error": str(error)})
+                return
+            except TimeoutError as error:
+                self.respond(504, {"error": str(error)})
+                return
+            except Exception as error:  # noqa: BLE001 — the caller is told, the pod stays up
+                logger.exception("indexing the submitted document failed")
+                self.respond(502, {"error": str(error)[:400]})
+                return
+            self.respond(201, result)
+    
+        def do_DELETE(self) -> None:  # noqa: N802
+            """`DELETE /documents/<id>` — every chunk of one submitted document."""
+            route = self.route()
+            if not route.startswith("/documents/"):
+                self.send_error(404)
+                return
+            upload_id = route[len("/documents/") :]
+            try:
+                with INDEX_LOCK:
+                    removed = remove_upload(upload_id)
+            except ValueError as error:
+                self.respond(400, {"error": str(error)})
+                return
+            except Exception as error:  # noqa: BLE001
+                logger.exception("removing the submitted document failed")
+                self.respond(502, {"error": str(error)[:400]})
+                return
+            if not removed:
+                self.respond(404, {"error": "no such document"})
+                return
+            self.respond(200, {"id": upload_id, "chunks": removed})
     
         def log_message(self, fmt: str, *args: Any) -> None:
             logger.debug("status %s", fmt % args)
@@ -1040,7 +2066,10 @@ data:
     
             try:
                 rows = documents(binding)
-                written = index(rows, binding)
+                # The same lock an upload takes: one embedder, two cores, and two kinds of work
+                # that would otherwise saturate it together.
+                with INDEX_LOCK:
+                    written = index(rows, binding)
             except TimeoutError as error:
                 # Said apart from a refusal: the source served the documents and the index did not
                 # take them. An operator reading this needs to look at the embedder, not the gate.
@@ -1068,7 +2097,7 @@ data:
     
     
     def main() -> None:
-        server = HTTPServer(("0.0.0.0", STATUS_PORT), Status)
+        server = Service(("0.0.0.0", STATUS_PORT), Status)
         threading.Thread(target=server.serve_forever, name="status", daemon=True).start()
         logger.info("status on :%d, polling every %ds", STATUS_PORT, POLL_SECONDS)
         loop()
@@ -1140,6 +2169,12 @@ data:
   APP_RANKING_SERVERURL: "http://confidential-rag-reranker"
   RERANKER_SCORE_THRESHOLD: "0"
   ENABLE_VLM_RERANKER_IMAGE_INPUT: "False"
+  # Where the reranker writes what its last rerank actually did, so `/v1/health` reports a
+  # reranker that answers its probe and refuses every batch as `degraded` with the reason.
+  # A path and not a toggle: it is in /tmp of the one container, shared by that container's
+  # uvicorn workers, which is the whole point — the worker answering a health request is not
+  # the worker that served the query. Nothing outside the pod reads it (SUP-889).
+  RERANKER_STATUS_PATH: /tmp-data/reranker-status.json
 
   # --- what this deployment does not run ---
   ENABLE_QUERYREWRITER: "False"
@@ -1403,7 +2438,7 @@ spec:
     spec:
       containers:
         - name: console
-          image: "ghcr.io/super-protocol/confidential-rag/rag-server@sha256:c68adc9c963a623256e4fe1db6be35ae6ac15fe95589504ff5b7b663ad2e06f9"
+          image: "ghcr.io/super-protocol/confidential-rag/rag-server@sha256:cd54accbf4d946835aabf8664486cf1fc02ec63818baf5e7b175c6607dbf2413"
           imagePullPolicy: IfNotPresent
           command: [uvicorn]
           args:
@@ -1435,6 +2470,21 @@ spec:
               value: "http://confidential-rag-corpus:8085"
             - name: COLLECTION_NAME
               value: "documents"
+            # Set only when this deployment can take a file. Absent, the console says it reads
+            # its gated source only, rather than offering a control that answers 503.
+            - name: UPLOAD_COLLECTION_NAME
+              value: "documents_uploads"
+            - name: UPLOAD_MAX_BYTES
+              value: "67108864"
+            # Longer than the indexer's own extraction budget, because the indexer queues: a
+            # console that gives up first would report a failure for a document that then
+            # appears in the panel, which is worse than waiting.
+            - name: UPLOAD_TIMEOUT_SECONDS
+              value: "960"
+            - name: ABOUT_EXTRACTION_STACK
+              value: "Docling + TableFormer + RapidOCR"
+            - name: ABOUT_EXTRACTION_LICENCE
+              value: "Apache-2.0 (models MIT / Apache-2.0 / CDLA-Permissive-2.0)"
             - name: UI_DIR
               value: /opt/console
             # What the console tells a user about the deployment they are using. Plain
@@ -1538,7 +2588,7 @@ spec:
     spec:
       containers:
         - name: corpus
-          image: "ghcr.io/super-protocol/confidential-rag/rag-server@sha256:c68adc9c963a623256e4fe1db6be35ae6ac15fe95589504ff5b7b663ad2e06f9"
+          image: "ghcr.io/super-protocol/confidential-rag/rag-server@sha256:cd54accbf4d946835aabf8664486cf1fc02ec63818baf5e7b175c6607dbf2413"
           imagePullPolicy: IfNotPresent
           command: [python3, /opt/app/corpus_sync.py]
           # The pipeline's own configuration, so the embedder, the vector store and the
@@ -1577,6 +2627,19 @@ spec:
               value: "4"
             - name: CORPUS_STATUS_PORT
               value: "8085"
+            # Uploaded documents: their own collection, and the extraction service that turns
+            # a file into the elements that go into it.
+            - name: UPLOAD_COLLECTION_NAME
+              value: "documents_uploads"
+            - name: INGEST_URL
+              value: "http://swarm-doc-ingest:8080"
+            - name: INGEST_API_KEY
+              valueFrom:
+                secretKeyRef: { name: confidential-rag-secrets, key: ingest-api-key }
+            - name: INGEST_TIMEOUT_SECONDS
+              value: "900"
+            - name: UPLOAD_MAX_BYTES
+              value: "67108864"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -1670,7 +2733,7 @@ spec:
     spec:
       containers:
         - name: server
-          image: "ghcr.io/super-protocol/confidential-rag/rag-server@sha256:c68adc9c963a623256e4fe1db6be35ae6ac15fe95589504ff5b7b663ad2e06f9"
+          image: "ghcr.io/super-protocol/confidential-rag/rag-server@sha256:cd54accbf4d946835aabf8664486cf1fc02ec63818baf5e7b175c6607dbf2413"
           imagePullPolicy: IfNotPresent
           args:
             - --host

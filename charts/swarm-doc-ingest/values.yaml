@@ -121,6 +121,14 @@ resources:
   # the quota, two give up 80%.
   cpu: "4"
   memory: 4Gi
+  # The device, said out loud. This component is CPU-only and wants no card —
+  # but a cluster space raised WITH a GPU carries a ResourceQuota naming
+  # `nvidia.com/gpu`, and an extended resource a container leaves unsaid is
+  # whatever the namespace defaults it to rather than nothing. Every other
+  # container in the listing that composes this one declares 0; this one did
+  # not, and on a GPU cluster space it was the only pod of that listing that
+  # never became ready (SUP-890). Zero is an answer; silence is not.
+  gpu: "0"
 
 # `OMP_NUM_THREADS`. Empty derives it from `resources.cpu` above — the core
 # count rounded up, never below 1, so `1500m` is 2 threads and not 1500. It is

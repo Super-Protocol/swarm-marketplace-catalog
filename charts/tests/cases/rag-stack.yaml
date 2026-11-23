@@ -1,5 +1,5 @@
-# The Confidential RAG pipeline with a document corpus attached, which is the shape every
-# deployment of this listing is meant to be.
+# The Confidential RAG pipeline with a document corpus attached AND the extraction service
+# composed, which is the shape every deployment of this listing is meant to be.
 #
 # The binding is the resolved GATED shape: a local address, a database, the literal user
 # `gateway` and no password at all — the gate holds the publisher's own credentials and adds
@@ -28,6 +28,10 @@ reranker:
   model: bge-reranker-v2-m3
   licence: Apache-2.0
   apiKey: INFERENCE-KEY-FOR-THE-GOLDEN
+ingest:
+  enabled: true
+  url: http://swarm-doc-ingest:8080
+  apiKey: INGEST-KEY-FOR-THE-GOLDEN
 vectorStore:
   url: http://confidential-rag-vectors:19530
   password: VECTOR-STORE-PASSWORD-FOR-THE-GOLDEN

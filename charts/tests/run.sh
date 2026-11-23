@@ -1963,6 +1963,7 @@ rag_images inference  swarm-model-server      model-server-component
 rag_images embeddings text-embeddings-server  rag-embeddings
 rag_images reranker   text-embeddings-server  rag-reranker
 rag_images vectors    milvus-standalone       rag-vectors
+rag_images ingest     swarm-doc-ingest        doc-ingest-component
 rag_images rag        confidential-rag        rag-stack
 
 # The worst option the model and embedder parameters allow, because that is what
@@ -1975,6 +1976,7 @@ if output=$(python3 charts/tests/max_pod.py confidential-rag \
       embeddings:text-embeddings-server:rag-embeddings-arctic \
       reranker:text-embeddings-server:rag-reranker \
       vectors:milvus-standalone:rag-vectors \
+      ingest:swarm-doc-ingest:doc-ingest-component \
       rag:confidential-rag:rag-stack); then
   printf '%s\n' "$output"
 else
@@ -2006,6 +2008,7 @@ rag_inventory text-embeddings-server rag-reranker text-embeddings-server:rerank
 rag_inventory milvus-standalone      rag-vectors
 rag_inventory confidential-rag       rag-stack
 rag_inventory confidential-rag       rag-stack-unbound
+rag_inventory confidential-rag       rag-stack-no-uploads
 
 # The property the listing's `expectedDigest` rests on. The pipeline chart has
 # exactly one field that differs between two consumers — the Ingress host — and
@@ -2037,6 +2040,19 @@ else
   printf '%s\n' "$output"
   fail "charts/tests/evidence_drift.py milvus-standalone"
 fi
+# The sixth component, composed in 0.1.8. It renders no Ingress at all, so the
+# only thing varying between two consumers is its generated key — which is in a
+# Secret and therefore outside the snapshot. Asked anyway: a key that ever
+# reached an env value or an argument would make this listing's declared digest a
+# property of the deployment.
+if output=$(python3 charts/tests/evidence_drift.py swarm-doc-ingest \
+      charts/tests/cases/doc-ingest-component.yaml confidential-rag \
+      'apiKey=INGEST-KEY-FOR-{t}-0123456789abcd'); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/evidence_drift.py swarm-doc-ingest"
+fi
 
 note "attaching a document corpus changes only the Secret"
 if output=$(python3 charts/tests/rag_binding.py); then
@@ -2061,6 +2077,49 @@ else
   printf '%s\n' "$output"
   fail "charts/tests/rag_console.py"
 fi
+
+# The instrument, not the fix. 0.1.6 and 0.1.7 each corrected a reason the
+# reranker was doing nothing, and each was found by deploying and reading a
+# citation — because the fallback was silent. What 0.1.8 adds is the reporting,
+# and reporting is code in a ConfigMap rather than a value in a render, so it is
+# exercised rather than diffed. Same file for what an uploaded document becomes,
+# because "charts are cited as images" is a promise in the listing's copy and a
+# branch in that code.
+note "a degraded reranker and a submitted document are reported as what they are"
+if output=$(python3 charts/tests/rag_instruments.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/rag_instruments.py"
+fi
+
+# Each of these renders cleanly and then loses a tenant's data or publishes an
+# open door, so the chart refuses it while there is still a human looking.
+note "Confidential RAG refuses the configurations that fail in the cluster"
+base_rag=(helm template rag charts/confidential-rag --namespace confidential-rag --skip-tests
+          --values charts/tests/cases/rag-stack.yaml)
+
+# The one that would be found by a tenant losing documents. The gated corpus is
+# dropped and rewritten whenever it moves; one collection for both would delete
+# every submitted file on the next refresh, with nothing in any log or panel
+# saying it had happened.
+refuses "one collection for the gated corpus and the uploads" "would delete every uploaded document" \
+  "${base_rag[@]}" --set server.uploadCollection=documents
+
+refuses "an extraction service with no key" "a namespace is not a trust boundary" \
+  "${base_rag[@]}" --set ingest.apiKey=
+
+refuses "an extraction service with no address" "ingest.url is required" \
+  "${base_rag[@]}" --set ingest.url=
+
+refuses "a retriever asking for more than the reranker accepts" "maximum allowed batch size" \
+  "${base_rag[@]}" --set server.topK=40 --set server.ef=100
+
+refuses "a console with no password" "the console is the whole of what stands in front" \
+  "${base_rag[@]}" --set console.password=
+
+refuses "an ingress with no class" "served by nothing" \
+  "${base_rag[@]}" --set ingress.className=
 
 # ---------------------------------------------------------------------------
 # Confidential Vulnerability Analysis (SUP-843), ported from NVIDIA's open

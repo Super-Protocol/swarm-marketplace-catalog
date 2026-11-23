@@ -101,13 +101,30 @@ spec:
             `resources.min` in the listing, and it has to cover every
             container's limits at once; a request below the limit would let the
             scheduler place a pod the quota cannot actually hold.
+
+            And the GPU is declared, as zero, which is not decoration. A cluster
+            space raised with a GPU carries a ResourceQuota with
+            `requests.nvidia.com/gpu` and `limits.nvidia.com/gpu` in it, and the
+            device is an extended resource: a container that leaves it unsaid is
+            at the mercy of whatever the namespace defaults it to, and on
+            SUP-868 the recorded constraint for that cloud was that a pod needs
+            an explicit `nvidia.com/gpu` limit equal to its request. Every other
+            container in the Confidential RAG listing says 0 — this was the only
+            one that did not, and it was the only pod of that listing that never
+            became ready on a GPU cluster space (SUP-890).
+
+            `resources.gpu` rather than a literal, because a future component
+            that wants the card should ask for it here rather than fork the
+            template.
             */}}
             requests:
               cpu: {{ .Values.resources.cpu | quote }}
               memory: {{ .Values.resources.memory | quote }}
+              nvidia.com/gpu: {{ .Values.resources.gpu | quote }}
             limits:
               cpu: {{ .Values.resources.cpu | quote }}
               memory: {{ .Values.resources.memory | quote }}
+              nvidia.com/gpu: {{ .Values.resources.gpu | quote }}
           volumeMounts:
             - name: work
               mountPath: /tmp

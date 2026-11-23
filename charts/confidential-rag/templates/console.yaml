@@ -64,6 +64,23 @@ spec:
               value: {{ printf "http://%s-corpus:8085" $name | quote }}
             - name: COLLECTION_NAME
               value: {{ .Values.server.collection | quote }}
+            {{- if and .Values.ingest.enabled .Values.server.uploadCollection }}
+            # Set only when this deployment can take a file. Absent, the console says it reads
+            # its gated source only, rather than offering a control that answers 503.
+            - name: UPLOAD_COLLECTION_NAME
+              value: {{ .Values.server.uploadCollection | quote }}
+            - name: UPLOAD_MAX_BYTES
+              value: {{ mul .Values.ingest.maxUploadMb 1048576 | quote }}
+            # Longer than the indexer's own extraction budget, because the indexer queues: a
+            # console that gives up first would report a failure for a document that then
+            # appears in the panel, which is worse than waiting.
+            - name: UPLOAD_TIMEOUT_SECONDS
+              value: {{ add .Values.ingest.timeoutSeconds 60 | quote }}
+            - name: ABOUT_EXTRACTION_STACK
+              value: {{ .Values.ingest.stack | quote }}
+            - name: ABOUT_EXTRACTION_LICENCE
+              value: {{ .Values.ingest.licence | quote }}
+            {{- end }}
             - name: UI_DIR
               value: /opt/console
             # What the console tells a user about the deployment they are using. Plain

@@ -1,0 +1,47 @@
+# The same pipeline with NO extraction service: a deployment that answers from its gated
+# document source and takes no files.
+#
+# It is a supported shape rather than a legacy one. Document submission needs a second
+# component (`charts/swarm-doc-ingest`, 4 CPU and 4Gi of the cluster space's quota), and a
+# tenant whose corpus is a ClickHouse table does not need it. What this case holds is that
+# switching it off removes the whole of it: no upload collection, no extraction URL, no
+# extraction key on any container, and a console that says it reads its gated source only
+# rather than offering a control that answers 503.
+name: confidential-rag
+hostname: rag.conf-apps.superprotocol.dev
+ingress:
+  className: nginx
+console:
+  password: ACCESS-PASSWORD-FOR-THE-GOLDEN
+  sessionKey: SESSION-SIGNING-KEY-FOR-THE-GOLDEN-0123
+inference:
+  url: http://swarm-model-server:8000/v1
+  model: llama-3.2-3b-instruct
+  licence: Llama 3.2 Community License Agreement
+  apiKey: INFERENCE-KEY-FOR-THE-GOLDEN
+embeddings:
+  url: http://confidential-rag-embeddings/v1
+  model: bge-large-en-v1.5
+  licence: MIT
+  dimensions: 1024
+  apiKey: INFERENCE-KEY-FOR-THE-GOLDEN
+reranker:
+  url: http://confidential-rag-reranker
+  model: bge-reranker-v2-m3
+  licence: Apache-2.0
+  apiKey: INFERENCE-KEY-FOR-THE-GOLDEN
+ingest:
+  enabled: false
+vectorStore:
+  url: http://confidential-rag-vectors:19530
+  password: VECTOR-STORE-PASSWORD-FOR-THE-GOLDEN
+corpus:
+  bindingJson: >-
+    [{"dataset":"acme-internal-knowledge-base","title":"Acme Internal Knowledge Base",
+    "interface":"clickhouse-http/v1","connection":{"host":"cr-gatekeeper-egress","port":9500,
+    "database":"docs","username":"gateway","tls":false}}]
+  table: documents
+  idColumn: doc_id
+  titleColumn: title
+  textColumn: text
+  updatedColumn: updated_at

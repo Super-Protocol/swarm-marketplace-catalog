@@ -82,6 +82,21 @@ spec:
               value: {{ .Values.corpus.embedBatch | quote }}
             - name: CORPUS_STATUS_PORT
               value: "8085"
+            {{- if and .Values.ingest.enabled .Values.server.uploadCollection }}
+            # Uploaded documents: their own collection, and the extraction service that turns
+            # a file into the elements that go into it.
+            - name: UPLOAD_COLLECTION_NAME
+              value: {{ .Values.server.uploadCollection | quote }}
+            - name: INGEST_URL
+              value: {{ .Values.ingest.url | quote }}
+            - name: INGEST_API_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ $name }}-secrets, key: ingest-api-key }
+            - name: INGEST_TIMEOUT_SECONDS
+              value: {{ .Values.ingest.timeoutSeconds | quote }}
+            - name: UPLOAD_MAX_BYTES
+              value: {{ mul .Values.ingest.maxUploadMb 1048576 | quote }}
+            {{- end }}
           {{- with .Values.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}

@@ -28,6 +28,10 @@ reranker:
   model: bge-reranker-v2-m3
   licence: Apache-2.0
   apiKey: INFERENCE-KEY-FOR-THE-GOLDEN
+ingest:
+  enabled: true
+  url: http://swarm-doc-ingest:8080
+  apiKey: INGEST-KEY-FOR-THE-GOLDEN
 vectorStore:
   url: http://confidential-rag-vectors:19530
   password: VECTOR-STORE-PASSWORD-FOR-THE-GOLDEN

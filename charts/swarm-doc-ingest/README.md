@@ -65,7 +65,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: swarm-doc-ingest
-      version: "0.2.0"
+      version: "0.3.0"
     images:
       - name: ghcr.io/super-protocol/swarm-doc-ingest/ingest
         digest: sha256:a114f3df285a9c0f30e96e3bf2b31b04184ba5d956b007e8df81cc4a4db704d1
@@ -84,6 +84,12 @@ components:
           resources:
             cpu: "4"
             memory: 4Gi
+            # Zero, and not optional in a cluster space that HAS a GPU: such a
+            # space carries a ResourceQuota naming `nvidia.com/gpu`, the device
+            # is an extended resource, and a container that leaves it unsaid
+            # does not become ready. 0.2.0 omitted it and the pod sat at 0/1
+            # with every other pod of the composing listing up (SUP-890).
+            gpu: "0"
         patches:
           # One generated, sensitive parameter, patched into this component and
           # into whatever calls it. The marketplace lifts every rendered Secret
@@ -154,6 +160,20 @@ a new `image.digest` and `appVersion` here.
 Re-run `bakeoff/bench.py` in the source repository before moving `tableMode` or
 `ocrEngine`, and before moving the image digest. A render test and a readiness probe both
 pass on a build that extracts nothing.
+
+## The device, declared as zero
+
+This component is CPU-only and wants no card. It says so anyway, in both the request and the
+limit, because a cluster space raised **with** a GPU carries a ResourceQuota naming
+`nvidia.com/gpu`: the device is an extended resource, and a container that leaves it unsaid
+takes whatever the namespace defaults it to rather than nothing. 0.2.0 of this chart omitted it,
+and in the Confidential RAG listing's GPU cluster space its pod never became ready — nine pods
+up, this one at `0/1`, the render perfectly attestable and the component doing nothing (SUP-890).
+Every other container in that listing, including the marketplace's own egress sidecar, already
+declared `0`.
+
+Set `resources.gpu` only if a future build of this component wants the card, which would also
+need `runtimeClassName: nvidia` and a re-run of the bake-off.
 
 `OMP_NUM_THREADS` is not configured, it is derived: the `resources.cpu` quota in whole
 cores, rounded up, never below 1. The quota is a Kubernetes quantity, so `1500m` is one
