@@ -12,7 +12,7 @@ metadata:
     endpoint, including one in your own perimeter — and the embeddings that index your schema
     and documents are served from inside the deployment, so neither your data nor its
     description reaches a third party.
-  version: "5.0.1"
+  version: "5.0.2"
   category: ai-agents
   license: Proprietary
   tags:
@@ -23,6 +23,46 @@ metadata:
     - confidential
 
 # ---------------------------------------------------------------------------
+# 5.0.2 stops this listing INVENTING the model's access key. One parameter flag,
+# no manifest change and the same digest as 5.0.1 (SUP-905).
+#
+# `modelApiKey` was `generated: true`, which means "the operator may leave this
+# empty and never see the value" — right for a credential the deployment's own
+# components share, and wrong for one that authenticates to somebody else's
+# endpoint. Left blank, the marketplace generated a 32-character random string,
+# sealed it into the Secret, wrote it into the model registry, and the deployment
+# came up `running` and `published` with 15/15 workloads, a reproducible digest
+# and the gate admitting it. Every completion was then refused:
+#
+#   AI message  isError: true  errorType: AuthenticationError:invalid_api_key
+#
+# That is how the Latica stand ran for a day on the production Confidential
+# Router with a key the router had never issued. Nothing in the marketplace, the
+# deployment status, the signed evidence or the gate's verdict said so, because
+# none of them is a claim about whether the model answers — the first thing that
+# said it was a person asking a question.
+#
+# So the field is now simply required: a deployment is refused until the operator
+# supplies the key their endpoint will accept. The friction is the point. An
+# endpoint that ignores the key — a model server of one's own, which is the case
+# `generated` was convenient for — still takes any value, and typing one is the
+# cost of never again shipping a deployment that cannot talk to its model.
+#
+# `embeddingsApiKey` stays generated, and that is not an inconsistency: the
+# endpoint it authenticates to is the embedding server inside this deployment,
+# configured from the same parameter, so the two halves are generated together
+# and agree by construction. The exception is an operator who turns
+# `embeddingsInPerimeter` OFF and supplies a foreign endpoint — they are then in
+# the position this version fixes for the model. It is one parameter, not two,
+# because a conditional `generated` is not something the specification can
+# express; a listing that splits the two cases into two parameters is the honest
+# fix, and it is not this change.
+#
+# Nothing else moves. The key rides in a Secret, Secret VALUES are not attested
+# — a snapshot carries a Secret's metadata, type and name and no data, which is
+# also why 5.0.1's two measurement deployments were byte-identical with three
+# separately generated credentials each — so `expectedDigest` below is 5.0.1's
+# number, unchanged and re-measured rather than assumed. See the evidence block.
 # 5.0.1 makes a deployment of this listing RECONFIGURABLE. It is one env entry
 # fewer and nothing else: the same images, the same parameter set, the same
 # question put to the operator — only agent chart 0.6.0 -> 0.6.1 (SUP-899).
@@ -389,7 +429,13 @@ parameters:
       needs a value here — the agent's client requires one and the endpoint will ignore it.
     required: true
     sensitive: true
-    generated: true
+    # NOT `generated`. A generated value is a credential this deployment's own components
+    # share; this one is presented to an endpoint that is somebody else's, and a key nobody
+    # issued is refused by every gateway and hosted provider there is. Generated, it produced
+    # a deployment that was `running`, `published`, reproducible and admitted by the gate, and
+    # answered every question with `AuthenticationError:invalid_api_key` (SUP-905). Blank on a
+    # reconfigure still means "keep the one that is running", which is the platform's rule for
+    # every sealed value and is what it has to mean here.
 
   - id: embeddingsInPerimeter
     type: boolean
@@ -1356,6 +1402,25 @@ evidence:
   # listing page should say so (option 2, decided on SUP-711; the presentation change is
   # SUP-871).
   #
+  # 5.0.2 RE-MEASURED this number rather than carrying it over, because the version changes a
+  # parameter and a parameter is attested. Two deployments of 5.0.2 on `azure-test`,
+  # 2026-11-23 (SUP-905): different namespaces, different hostnames, two separately generated
+  # internal credentials each, and the model access key TYPED rather than generated — the
+  # funded Confidential Router key the Latica stand runs on. Both attested the same 63
+  # resources and the same digest as 5.0.1, and their canonical snapshots were BYTE-IDENTICAL
+  # to each other and to the running 5.0.1 stand, which carried a different key again and a
+  # different `modelLabel`: one SHA-256 over all three documents, zero differing fields as
+  # JSON Pointers.
+  #
+  # That is a fact about what a snapshot contains, and it is worth stating once: a Secret
+  # enters the snapshot as its metadata, type and name, and its DATA does not. So a key is
+  # invisible to the digest whoever supplies it — which is why 5.0.1's two measurements with
+  # three generated credentials each were byte-identical too, and why an operator pointing
+  # this deployment at their own endpoint moves the digest through `modelBaseUrl` and
+  # `modelId`, which ARE attested, and never through the key. `modelLabel` is invisible for a
+  # different reason: it reaches the grounding Job and nothing else, and a Job is not
+  # collected into evidence.
+  #
   # Measured, not derived. Two deployments of this definition on `azure-test`, 2026-11-23
   # (SUP-899): different namespaces, different hostnames and three separately generated
   # credentials each, same reference parameter set, both published so the snapshot is taken
@@ -1411,6 +1476,8 @@ evidence:
   #
   #   modelBaseUrl          https://api.router.superprotocol.com/v1
   #   modelId               qwen/qwen3-coder-next
+  #   modelLabel            Qwen3 Coder Next (FP8)        (not attested — see above)
+  #   modelApiKey           the production router's own key, supplied (not attested)
   #   brandTitle            AI Analyst
   #   embeddingsInPerimeter true   embeddingsModel bge-large-en-v1.5   embeddingsDimensions 1024
   #   embeddingsBaseUrl     http://analyst-embeddings/v1
@@ -1419,9 +1486,9 @@ evidence:
   #   modelContextWindow    262144
   #   data slot `datasets`  cypressbay-digestive-health
   #
-  # Everything else was left at this definition's defaults, and the three generated
-  # credentials (`internalSecret`, `modelApiKey`, `embeddingsApiKey`) are in Secrets and reach
-  # no attested object. The organisation names are not in the snapshot either — they travel in
+  # Everything else was left at this definition's defaults. The two generated credentials
+  # (`internalSecret`, `embeddingsApiKey`) and the supplied `modelApiKey` are in Secrets and
+  # reach no attested object. The organisation names are not in the snapshot either — they travel in
   # a Secret and in a Job's name, and a Job is not collected. Both measurement deployments were
   # destroyed and their DNS withdrawn once the number was read.
   #

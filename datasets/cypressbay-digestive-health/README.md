@@ -177,3 +177,21 @@ substitute for real data in any evaluation that claims clinical validity.
 Served over the ClickHouse HTTP interface, behind the gate. The account behind the card's
 publisher secrets is read-only and confined to this database; write statements are refused by the
 server, not by convention.
+
+**That account must be `readonly = 2`, not `readonly = 1`.** The two differ in one thing:
+`readonly = 1` refuses a SETTINGS CHANGE as well as a write, and a client that sends per-query
+limits is a client that changes settings. Conversational Analyst's ClickHouse adapter sends
+`max_execution_time` with every query and `max_result_rows` + `result_overflow_mode` whenever a
+row limit applies — the result policy always sets one — so under `readonly = 1` every question
+the agent asks of this dataset comes back
+
+```
+Code: 164. DB::Exception: Cannot modify 'max_result_rows' setting in readonly mode. (READONLY)
+```
+
+and the model, having no rows, explains at length that it cannot answer. Nothing else shows it:
+the gate still reports `allowed`, the schema catalogue still builds, the card still looks
+connected. `readonly = 2` is ClickHouse's own "read-only queries, settings may be changed" —
+`INSERT`, `CREATE`, `ALTER` and `TRUNCATE` stay refused, and the account's grants are
+`SELECT`-only on these eleven tables in any case. Found on the Latica stand on 2026-11-23
+(SUP-905), where it had been invisible because no dialog had ever run.
