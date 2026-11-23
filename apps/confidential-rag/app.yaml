@@ -1236,25 +1236,50 @@ evidence:
   # ---------------------------------------------------------------------------
   # Measured, not derived, and it describes the GATED configuration.
   #
-  # Two deployments of 0.1.8 on the gpu-blueprints cloud, 2026-11-23 —
-  # `rag-889c` and `rag-889d`, two hostnames in two namespaces, each with the
-  # `acme-engineering-handbook` dataset attached — published byte-identical
-  # signed snapshots and this digest, and the second read
-  # `matchesExpected: true` against it. Thirty-seven resources in each: ten
-  # Deployments, ten Services, nine ConfigMaps, seven Secrets and the Ingress.
+  # Two deployments of 0.1.9 on the gpu-blueprints cloud, 2026-11-23 —
+  # `rag-895a` and `rag-895b`, two hostnames in two namespaces, each with the
+  # `acme-engineering-handbook` dataset attached — published signed snapshots
+  # that are byte-identical: the same digest and the same 186 386 bytes of
+  # resource JSON, compared field by field rather than by the digest alone.
+  # Thirty-seven resources in each: ten Deployments, ten Services, nine
+  # ConfigMaps, seven Secrets and the Ingress.
   #
-  # Five more than 0.1.7's thirty-two, and they are exactly the extraction
+  # The same thirty-seven as 0.1.8, which is the point of checking: 0.1.9 adds
+  # a Secret KEY (`corpus-api-key`) and an environment entry on two containers,
+  # not an object, so the resource count holds while the digest moves. Five more
+  # than 0.1.7's thirty-two, and those five are exactly the extraction
   # component: its Deployment, its Service, its two ConfigMaps — the
   # configuration and the prose notes — and its Secret.
   #
-  # It was measured seven times over, once per version that changed something
-  # the cloud digests: `69a1160a…` on 0.1.2 (`rag-840a`, `rag-840b`, and again
-  # after a reconfigure of one of them), `6fc8b2bf…` on 0.1.3 (`rag-840c`,
-  # `rag-840d`), `1370c19e…` on 0.1.4 (`rag-840e`, `rag-840f`), `03db53be…` on
-  # 0.1.5 (`rag-840g`, `rag-840h`), `94f3ab09…` on 0.1.6 (`rag-840i` — one
-  # deployment, superseded within the hour by 0.1.7 and never declared),
-  # `9cf45e56…` on 0.1.7 (`rag-840j`, `rag-840k`), and this on 0.1.8. A probe, a
-  # ConfigMap and an environment variable are all fields of objects in the
+  # **One at a time, and the cloud says so.** Creating the second deployment
+  # while the first was live is refused outright — `400 No cluster has a free
+  # GPU of an accepted type: NVIDIA H100 NVL, NVIDIA H200 NVL` — so the pair is
+  # measured in sequence on the one card, not side by side. Worth writing down:
+  # it is a fast, legible refusal rather than a deployment that comes up with a
+  # Pending engine and attests perfectly well anyway.
+  #
+  # **The declared number was checked against the gate, not only against
+  # itself.** `rag-895a` and `rag-895b` were measured while the listing still
+  # declared 0.1.8's digest, so both read `matchesExpected: false` and their
+  # corpus was still `refused` when they were deleted. `rag-895c` is a third
+  # deployment of the same configuration created from the listing with THIS
+  # number in it: `matchesExpected: true`, and the gate admitted the handbook —
+  # 64 documents, 64 chunks, which is what 0.1.8 read. Admission is not
+  # instant: for about eight minutes after publication the corpus reads
+  # `refused` with `502 from confidential-rag-gatekeeper-egress`, because the
+  # gate has not yet been told about the client and the sidecar has nothing
+  # upstream. That window is the reason this is stated for a deployment that
+  # was watched until it flipped rather than one that was read once.
+  #
+  # It has now been measured eight times over, once per version that changed
+  # something the cloud digests: `69a1160a…` on 0.1.2 (`rag-840a`, `rag-840b`,
+  # and again after a reconfigure of one of them), `6fc8b2bf…` on 0.1.3
+  # (`rag-840c`, `rag-840d`), `1370c19e…` on 0.1.4 (`rag-840e`, `rag-840f`),
+  # `03db53be…` on 0.1.5 (`rag-840g`, `rag-840h`), `94f3ab09…` on 0.1.6
+  # (`rag-840i` — one deployment, superseded within the hour by 0.1.7 and never
+  # declared), `9cf45e56…` on 0.1.7 (`rag-840j`, `rag-840k`), `d6abfe09…` on
+  # 0.1.8 (`rag-889c`, `rag-889d`) and this on 0.1.9. A probe, a ConfigMap, an
+  # image pin and an environment variable are all fields of objects in the
   # snapshot, so that is the ordinary reason a digest moves — and the reason it
   # is measured again rather than carried forward. Each pair was
   # byte-identical, which is the property being claimed: the digest is a
@@ -1310,7 +1335,7 @@ evidence:
   # is which model and which embedder touched the documents, so it is inside the
   # signed bundle rather than excluded from it.
   #
-  #   hostname               rag-889c / rag-889d .conf-apps.superprotocol.dev
+  #   hostname               rag-895a / rag-895b .conf-apps.superprotocol.dev
   #                          (excluded from the snapshot — see `exclude` below)
   #   generationModel        llama-3.2-3b-instruct
   #   embeddingModel         bge-large-en-v1.5
@@ -1328,17 +1353,7 @@ evidence:
   # `ingestKey`, `indexerKey`, `sessionKey`, `vectorStorePassword` — are in
   # Secrets, which the platform lifts out before the snapshot is taken, so they
   # reach no attested object and are not part of this set.
-  # !!! NOT RE-MEASURED YET — THIS IS 0.1.8's NUMBER AND THIS PR MUST NOT MERGE
-  # WITH IT. 0.1.9 re-pins the rag-server image and adds an environment entry to
-  # two Deployments, so the snapshot moves and this value is wrong for it. The
-  # re-measure needs two gated deployments on the epic's single `NVIDIA H100
-  # NVL` in `gpu-blueprints`, and when this branch was finished that card was
-  # held by `rag-890a` — a published, live, gated deployment of a Confidential
-  # RAG "0.1.9" that is not this branch and is in no pull request, raised
-  # outside this task at 2026-11-23T05:12Z. The epic's rule is that a deployment
-  # you did not create is not yours to delete, so the measurement is handed over
-  # rather than taken. See SUP-895 for the state of that card.
-  expectedDigest: "d6abfe09887cf1199d1b774b82fa27eb9da02259414546ee3b67d17d60b4db6a"
+  expectedDigest: "1556ad836b9998cb80c118298e290dd76a00368051e97cbcb3cd98694c030233"
   # ---------------------------------------------------------------------------
   # The hostname is the one field that differs between two deployments of this
   # version, and excluding it is what makes the digest a property of the version

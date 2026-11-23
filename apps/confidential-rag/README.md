@@ -204,25 +204,37 @@ the corpus is in the snapshot in full.
 `evidence.expectedDigest` describes the **gated configuration**: a deployment with a dataset
 attached to the `corpus` slot.
 
-> **0.1.9 has not been re-measured.** The number below is 0.1.8's. 0.1.9 re-pins the rag-server
-> image and adds one environment entry to two Deployments, both of which are fields of objects in
-> the snapshot, so it moves — and the two gated deployments it takes could not be made because the
-> epic's single card was held by a deployment this change did not create. Do not read the number
-> below as 0.1.9's.
+`1556ad836b9998cb80c118298e290dd76a00368051e97cbcb3cd98694c030233`, measured on two deployments
+of 0.1.9 on the `gpu-blueprints` cloud on 2026-11-23 — `rag-895a` and `rag-895b`, two hostnames in
+two namespaces, each with the handbook dataset attached — whose signed snapshots are
+byte-identical: the same digest and the same 186 386 bytes of resource JSON, compared field by
+field rather than by the digest alone. 37 resources in each.
 
-`d6abfe09887cf1199d1b774b82fa27eb9da02259414546ee3b67d17d60b4db6a`, measured on two deployments
-of 0.1.8 on the `gpu-blueprints` cloud on 2026-11-23 — `rag-889c` and `rag-889d`, two hostnames in
-two namespaces, each with the handbook dataset attached — which published byte-identical signed
-snapshots of 37 resources, the second reading `matchesExpected: true`. Five more objects than
-0.1.7's 32, and they are exactly the extraction component: a Deployment, a Service, two ConfigMaps
-and a Secret.
+The same 37 as 0.1.8, which is why the count is worth stating: 0.1.9 adds a Secret *key* and an
+environment entry on two containers, not an object, so the count holds while the digest moves.
+Five more objects than 0.1.7's 32, and those five are exactly the extraction component: a
+Deployment, a Service, two ConfigMaps and a Secret.
 
-It was measured once per version, seven times: `69a1160a…` (0.1.2), `6fc8b2bf…` (0.1.3),
+**One at a time, and the cloud says so.** Creating the second deployment while the first was live
+is refused outright — `400 No cluster has a free GPU of an accepted type: NVIDIA H100 NVL, NVIDIA
+H200 NVL` — so a pair is measured in sequence on the one card rather than side by side.
+
+**The number was checked against the gate, not only against itself.** The two measurement
+deployments ran while the listing still declared 0.1.8's digest, so both read
+`matchesExpected: false` and their corpus was still `refused` when they were deleted. A third
+deployment of the same configuration, created from the listing with this number in it, read
+`matchesExpected: true` and the gate admitted the handbook — 64 documents, 64 chunks, the same as
+0.1.8. Admission is not instant: for about eight minutes after publication the corpus reads
+`refused` with `502 from confidential-rag-gatekeeper-egress`, because the gate has not been told
+about the client yet and the sidecar has nothing upstream. Watch it until it flips rather than
+reading it once.
+
+It was measured once per version, eight times: `69a1160a…` (0.1.2), `6fc8b2bf…` (0.1.3),
 `1370c19e…` (0.1.4), `03db53be…` (0.1.5), `94f3ab09…` (0.1.6, one deployment and never declared),
-`9cf45e56…` (0.1.7) and this. Each of those versions changed a probe, a ConfigMap or an
-environment variable, all of which are fields of objects in the snapshot — so a digest is
-re-measured rather than carried forward, and each pair being byte-identical is the property
-actually being claimed.
+`9cf45e56…` (0.1.7), `d6abfe09…` (0.1.8) and this. Each of those versions changed a probe, a
+ConfigMap, an image pin or an environment variable, all of which are fields of objects in the
+snapshot — so a digest is re-measured rather than carried forward, and each pair being
+byte-identical is the property actually being claimed.
 
 **One number from this round is worth more than the digest.** `215b22c0…` was 0.1.8 with the
 extraction component on `swarm-doc-ingest` 0.2.0, and it is a perfectly good digest of a
