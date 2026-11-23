@@ -817,7 +817,13 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: swarm-doc-ingest
-      version: "0.2.0"
+      # 0.3.0 declares `nvidia.com/gpu: 0` on the container. The component is
+      # CPU-only and that changes nothing about what it runs — it changes
+      # whether it runs: a cluster space with a GPU carries a ResourceQuota
+      # naming the device, and this was the only container in this listing that
+      # left it unsaid. It was also the only pod of 0.1.8 that never became
+      # ready on the epic's GPU cloud, with every other pod up (SUP-890).
+      version: "0.3.0"
     images:
       - name: ghcr.io/super-protocol/swarm-doc-ingest/ingest
         digest: sha256:a114f3df285a9c0f30e96e3bf2b31b04184ba5d956b007e8df81cc4a4db704d1
@@ -847,6 +853,11 @@ components:
           resources:
             cpu: "4"
             memory: 4Gi
+            # Zero, said out loud. Not decoration: this listing's cluster space
+            # is raised WITH a GPU, so its ResourceQuota names the device, and a
+            # container that leaves an extended resource unsaid takes whatever
+            # the namespace defaults it to. Every other container here says 0.
+            gpu: "0"
         patches:
           - op: replace
             path: apiKey
@@ -1151,23 +1162,42 @@ evidence:
   # ---------------------------------------------------------------------------
   # Measured, not derived, and it describes the GATED configuration.
   #
-  # Two deployments of 0.1.7 on the gpu-blueprints cloud, 2026-11-22 —
-  # `rag-840j` and `rag-840k`, two hostnames in two namespaces, each with the
+  # Two deployments of 0.1.8 on the gpu-blueprints cloud, 2026-11-23 —
+  # `rag-889c` and `rag-889d`, two hostnames in two namespaces, each with the
   # `acme-engineering-handbook` dataset attached — published byte-identical
-  # signed snapshots and this digest. Thirty-two resources in each: nine
-  # Deployments, nine Services, seven ConfigMaps, six Secrets and the Ingress.
+  # signed snapshots and this digest, and the second read
+  # `matchesExpected: true` against it. Thirty-seven resources in each: ten
+  # Deployments, ten Services, nine ConfigMaps, seven Secrets and the Ingress.
   #
-  # It was measured six times over, once per version that changed something the
-  # cloud digests: `69a1160a…` on 0.1.2 (`rag-840a`, `rag-840b`, and again after
-  # a reconfigure of one of them), `6fc8b2bf…` on 0.1.3 (`rag-840c`,
+  # Five more than 0.1.7's thirty-two, and they are exactly the extraction
+  # component: its Deployment, its Service, its two ConfigMaps — the
+  # configuration and the prose notes — and its Secret.
+  #
+  # It was measured seven times over, once per version that changed something
+  # the cloud digests: `69a1160a…` on 0.1.2 (`rag-840a`, `rag-840b`, and again
+  # after a reconfigure of one of them), `6fc8b2bf…` on 0.1.3 (`rag-840c`,
   # `rag-840d`), `1370c19e…` on 0.1.4 (`rag-840e`, `rag-840f`), `03db53be…` on
   # 0.1.5 (`rag-840g`, `rag-840h`), `94f3ab09…` on 0.1.6 (`rag-840i` — one
-  # deployment, superseded within the hour by 0.1.7 and never declared), and
-  # this on 0.1.7. A probe, a ConfigMap and an environment variable are all
-  # fields of objects in the snapshot, so that is the ordinary reason a digest
-  # moves — and the reason it is measured again rather than carried forward.
-  # Each pair was byte-identical, which is the property being claimed: the
-  # digest is a property of the version.
+  # deployment, superseded within the hour by 0.1.7 and never declared),
+  # `9cf45e56…` on 0.1.7 (`rag-840j`, `rag-840k`), and this on 0.1.8. A probe, a
+  # ConfigMap and an environment variable are all fields of objects in the
+  # snapshot, so that is the ordinary reason a digest moves — and the reason it
+  # is measured again rather than carried forward. Each pair was
+  # byte-identical, which is the property being claimed: the digest is a
+  # property of the version.
+  #
+  # Two numbers from this round are recorded because they are useful and are
+  # NOT this one. `215b22c0…` is 0.1.8 with the extraction component on chart
+  # 0.2.0, which declared no `nvidia.com/gpu` on its container and whose pod
+  # therefore never became ready in a cluster space that has a GPU — the render
+  # was attestable and the component was not running, which is the second time
+  # this listing has had to learn that a healthy-looking deployment proves
+  # nothing (chart 0.3.0 fixes it and moved the digest to the one declared
+  # here). And `6e90568d…` is the final render UNGATED, measured in passing when
+  # a reconfigure that omitted `datasets` dropped the binding and with it the
+  # marketplace's egress sidecar — three fewer objects, a different digest, and
+  # worth knowing before anybody reconfigures a gated deployment of this
+  # listing without naming its datasets again.
   #
   # 0.1.6 is the one version measured from a single deployment, and it is also
   # the one version never declared anywhere: the pair it would have needed was
@@ -1206,7 +1236,7 @@ evidence:
   # is which model and which embedder touched the documents, so it is inside the
   # signed bundle rather than excluded from it.
   #
-  #   hostname               rag-840j / rag-840k .conf-apps.superprotocol.dev
+  #   hostname               rag-889c / rag-889d .conf-apps.superprotocol.dev
   #                          (excluded from the snapshot — see `exclude` below)
   #   generationModel        llama-3.2-3b-instruct
   #   embeddingModel         bge-large-en-v1.5
@@ -1220,11 +1250,11 @@ evidence:
   #   answerMaxTokens        1024
   #   data slot `corpus`     acme-engineering-handbook   (gated)
   #
-  # The four generated credentials — `accessPassword`, `inferenceKey`,
-  # `sessionKey`, `vectorStorePassword` — are in Secrets, which the platform
-  # lifts out before the snapshot is taken, so they reach no attested object and
-  # are not part of this set.
-  expectedDigest: "9cf45e56b96579c497f1b2cbc0ba059ca4ed84c9efe0dd9bbaefde855e0415ed"
+  # The five generated credentials — `accessPassword`, `inferenceKey`,
+  # `ingestKey`, `sessionKey`, `vectorStorePassword` — are in Secrets, which the
+  # platform lifts out before the snapshot is taken, so they reach no attested
+  # object and are not part of this set.
+  expectedDigest: "d6abfe09887cf1199d1b774b82fa27eb9da02259414546ee3b67d17d60b4db6a"
   # ---------------------------------------------------------------------------
   # The hostname is the one field that differs between two deployments of this
   # version, and excluding it is what makes the digest a property of the version

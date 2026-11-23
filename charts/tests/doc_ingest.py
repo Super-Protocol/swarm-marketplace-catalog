@@ -158,8 +158,21 @@ def main() -> int:
     check(container["resources"]["requests"] == container["resources"]["limits"],
           "requests equal limits — a request below the limit lets the scheduler "
           "place a pod the quota cannot hold")
-    check(container["resources"]["limits"] == {"cpu": "4", "memory": "4Gi"},
-          "4 CPU and 4Gi, the measured footprint")
+    check(container["resources"]["limits"] == {"cpu": "4", "memory": "4Gi",
+                                               "nvidia.com/gpu": "0"},
+          "4 CPU and 4Gi, the measured footprint — and the device, said out loud")
+    # Not decoration. A cluster space raised WITH a GPU carries a ResourceQuota
+    # naming `nvidia.com/gpu`, the device is an extended resource, and a
+    # container that leaves it unsaid takes whatever the namespace defaults it
+    # to. This was the only container in the Confidential RAG listing that did
+    # not declare it, and the only pod of that listing that never became ready
+    # on the epic's GPU cloud with every other pod up (SUP-890). Asserted in
+    # both halves because a request without a matching limit is the shape
+    # SUP-868 recorded as refused.
+    check("nvidia.com/gpu" in container["resources"]["requests"]
+          and container["resources"]["requests"]["nvidia.com/gpu"] == "0",
+          "and in the request as well as the limit, which is the shape a GPU "
+          "space accepts")
     check(env_cm["data"]["INGEST_MAX_UPLOAD_BYTES"] == "268435456",
           "maxUploadBytes is an integer, not Helm's float rendering of one")
     check(env_cm["data"]["OMP_NUM_THREADS"] == "4",

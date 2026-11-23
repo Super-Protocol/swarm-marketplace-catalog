@@ -198,8 +198,12 @@ the corpus is in the snapshot in full.
 `evidence.expectedDigest` describes the **gated configuration**: a deployment with a dataset
 attached to the `corpus` slot.
 
-`DIGEST-PENDING-MEASUREMENT`, measured on two deployments of 0.1.8 on the `gpu-blueprints`
-cloud — two hostnames, two namespaces — which published byte-identical signed snapshots.
+`d6abfe09887cf1199d1b774b82fa27eb9da02259414546ee3b67d17d60b4db6a`, measured on two deployments
+of 0.1.8 on the `gpu-blueprints` cloud on 2026-11-23 — `rag-889c` and `rag-889d`, two hostnames in
+two namespaces, each with the handbook dataset attached — which published byte-identical signed
+snapshots of 37 resources, the second reading `matchesExpected: true`. Five more objects than
+0.1.7's 32, and they are exactly the extraction component: a Deployment, a Service, two ConfigMaps
+and a Secret.
 
 It was measured once per version, seven times: `69a1160a…` (0.1.2), `6fc8b2bf…` (0.1.3),
 `1370c19e…` (0.1.4), `03db53be…` (0.1.5), `94f3ab09…` (0.1.6, one deployment and never declared),
@@ -207,6 +211,16 @@ It was measured once per version, seven times: `69a1160a…` (0.1.2), `6fc8b2bf�
 environment variable, all of which are fields of objects in the snapshot — so a digest is
 re-measured rather than carried forward, and each pair being byte-identical is the property
 actually being claimed.
+
+**One number from this round is worth more than the digest.** `215b22c0…` was 0.1.8 with the
+extraction component on `swarm-doc-ingest` 0.2.0, and it is a perfectly good digest of a
+deployment in which that component never ran: 0.2.0 declared no `nvidia.com/gpu` on its
+container, and in a cluster space that has a GPU a container which leaves an extended resource
+unsaid does not become ready. Nine pods up, one at `0/1`, the render attestable and the
+component dead. Chart 0.3.0 declares the device as `0` — every other container in this listing
+already did — and that is the version this digest describes. An attested deployment is a
+deployment whose manifests are known, not one whose pods are working; this listing has now
+learned that twice.
 
 **Which configuration is a decision, not a default.** A deployment that mounts gated data gains
 four objects the marketplace adds itself — the egress sidecar's ConfigMap, Deployment and Service,

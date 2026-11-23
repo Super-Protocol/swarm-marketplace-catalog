@@ -5,7 +5,7 @@ kind: ConfigMap
 metadata:
   name: swarm-doc-ingest-extraction-notes
   labels:
-    helm.sh/chart: swarm-doc-ingest-0.2.0
+    helm.sh/chart: swarm-doc-ingest-0.3.0
     app.kubernetes.io/name: swarm-doc-ingest
     app.kubernetes.io/instance: di
     app.kubernetes.io/version: "0.1.0"
@@ -38,7 +38,7 @@ kind: ConfigMap
 metadata:
   name: swarm-doc-ingest
   labels:
-    helm.sh/chart: swarm-doc-ingest-0.2.0
+    helm.sh/chart: swarm-doc-ingest-0.3.0
     app.kubernetes.io/name: swarm-doc-ingest
     app.kubernetes.io/instance: di
     app.kubernetes.io/version: "0.1.0"
@@ -60,7 +60,7 @@ kind: Service
 metadata:
   name: swarm-doc-ingest
   labels:
-    helm.sh/chart: swarm-doc-ingest-0.2.0
+    helm.sh/chart: swarm-doc-ingest-0.3.0
     app.kubernetes.io/name: swarm-doc-ingest
     app.kubernetes.io/instance: di
     app.kubernetes.io/version: "0.1.0"
@@ -83,7 +83,7 @@ kind: Deployment
 metadata:
   name: swarm-doc-ingest
   labels:
-    helm.sh/chart: swarm-doc-ingest-0.2.0
+    helm.sh/chart: swarm-doc-ingest-0.3.0
     app.kubernetes.io/name: swarm-doc-ingest
     app.kubernetes.io/instance: di
     app.kubernetes.io/version: "0.1.0"
@@ -103,14 +103,14 @@ spec:
   template:
     metadata:
       labels:
-        helm.sh/chart: swarm-doc-ingest-0.2.0
+        helm.sh/chart: swarm-doc-ingest-0.3.0
         app.kubernetes.io/name: swarm-doc-ingest
         app.kubernetes.io/instance: di
         app.kubernetes.io/version: "0.1.0"
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/component: doc-ingest
       annotations:
-        checksum/config: 48eab48a2b5b341db8492f1def27151f07c99a09240f1c156eb466ca70e9f826
+        checksum/config: 0c541ca197177228345abb0d3268ee72237a833776d812c49de2e6a56dcc952f
     spec:
       securityContext:
         fsGroup: 10001
@@ -167,9 +167,11 @@ spec:
             requests:
               cpu: "4"
               memory: "4Gi"
+              nvidia.com/gpu: "0"
             limits:
               cpu: "4"
               memory: "4Gi"
+              nvidia.com/gpu: "0"
           volumeMounts:
             - name: work
               mountPath: /tmp

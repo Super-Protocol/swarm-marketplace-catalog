@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: swarm-doc-ingest
   labels:
-    helm.sh/chart: swarm-doc-ingest-0.2.0
+    helm.sh/chart: swarm-doc-ingest-0.3.0
     app.kubernetes.io/name: swarm-doc-ingest
     app.kubernetes.io/instance: di
     app.kubernetes.io/version: "0.1.0"
@@ -21,7 +21,7 @@ kind: ConfigMap
 metadata:
   name: swarm-doc-ingest-extraction-notes
   labels:
-    helm.sh/chart: swarm-doc-ingest-0.2.0
+    helm.sh/chart: swarm-doc-ingest-0.3.0
     app.kubernetes.io/name: swarm-doc-ingest
     app.kubernetes.io/instance: di
     app.kubernetes.io/version: "0.1.0"
@@ -54,7 +54,7 @@ kind: ConfigMap
 metadata:
   name: swarm-doc-ingest
   labels:
-    helm.sh/chart: swarm-doc-ingest-0.2.0
+    helm.sh/chart: swarm-doc-ingest-0.3.0
     app.kubernetes.io/name: swarm-doc-ingest
     app.kubernetes.io/instance: di
     app.kubernetes.io/version: "0.1.0"
@@ -76,7 +76,7 @@ kind: Service
 metadata:
   name: swarm-doc-ingest
   labels:
-    helm.sh/chart: swarm-doc-ingest-0.2.0
+    helm.sh/chart: swarm-doc-ingest-0.3.0
     app.kubernetes.io/name: swarm-doc-ingest
     app.kubernetes.io/instance: di
     app.kubernetes.io/version: "0.1.0"
@@ -99,7 +99,7 @@ kind: Deployment
 metadata:
   name: swarm-doc-ingest
   labels:
-    helm.sh/chart: swarm-doc-ingest-0.2.0
+    helm.sh/chart: swarm-doc-ingest-0.3.0
     app.kubernetes.io/name: swarm-doc-ingest
     app.kubernetes.io/instance: di
     app.kubernetes.io/version: "0.1.0"
@@ -119,14 +119,14 @@ spec:
   template:
     metadata:
       labels:
-        helm.sh/chart: swarm-doc-ingest-0.2.0
+        helm.sh/chart: swarm-doc-ingest-0.3.0
         app.kubernetes.io/name: swarm-doc-ingest
         app.kubernetes.io/instance: di
         app.kubernetes.io/version: "0.1.0"
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/component: doc-ingest
       annotations:
-        checksum/config: 66315adae41dc98e108e316c7622a4b2d3547dda9e6d90577163b461f57b1f3d
+        checksum/config: dbfb3a527f4e483ccde55bb7bdcb7691e8003c56f065657e18399703adbddfb9
     spec:
       securityContext:
         fsGroup: 10001
@@ -183,9 +183,11 @@ spec:
             requests:
               cpu: "1500m"
               memory: "4Gi"
+              nvidia.com/gpu: "0"
             limits:
               cpu: "1500m"
               memory: "4Gi"
+              nvidia.com/gpu: "0"
           volumeMounts:
             - name: work
               mountPath: /tmp

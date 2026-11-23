@@ -2,7 +2,17 @@ apiVersion: v2
 name: swarm-doc-ingest
 description: Document ingestion — layout, table structure and OCR on open components — emitting the nv-ingest element contract. Cluster-internal, CPU-only, no NIM.
 type: application
-version: 0.2.0
+# 0.3.0 declares `nvidia.com/gpu: 0` on the container, in both requests and
+# limits. The component is CPU-only and this changes nothing about what it runs
+# — what it changes is whether it runs at all in a cluster space that has a GPU:
+# such a space carries a ResourceQuota naming the device, the device is an
+# extended resource, and a container that leaves it unsaid takes whatever the
+# namespace defaults it to. Every other container in the Confidential RAG
+# listing declares 0 and this was the only one that did not; it was also the
+# only pod of that listing that never became ready on the epic's GPU cloud
+# (SUP-890). A minor bump rather than a patch because the rendered pod spec
+# changes, which moves the digest of every listing composing it.
+version: 0.3.0
 # The image, and the extraction behaviour that moves with it. Bumping this is a
 # chart change: the model set, the layout preset and the TableFormer mode are
 # baked, so a new image is a new set of extraction numbers.
