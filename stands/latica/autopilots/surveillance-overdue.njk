@@ -1,0 +1,50 @@
+A patient whose colonoscopy surveillance interval has lapsed is a risk the practice has to act on. Find the worst live case in the clinic's own records and publish it as a signal. Nothing else.
+
+**The condition, as the practice defines it.** A surveillance recall has lapsed when all of these hold at once:
+
+- the recommendation is the current one — `cbdh_surveillance_recommendations.superseded_by` is empty; a recommendation a later colonoscopy already answered cannot be overdue;
+- the recall is still live — `cbdh_recalls.recall_status` is `overdue` or `lost_to_follow_up`; `completed`, `declined`, `moved_away`, `deferred_medical` and `deceased` are closed and are not a finding;
+- the due date has passed;
+- the patient is still the practice's to call — `cbdh_patients.patient_status` is `active`.
+
+**The query that expresses it.** Run exactly this against the `cypressbay_digestive_health` data source and work from its row:
+
+```sql
+SELECT r.recall_id, r.due_date, r.days_overdue, r.recall_status, r.outreach_attempts,
+       r.last_outreach_date, p.mrn, concat(p.family_name, ', ', p.given_name) AS patient_name,
+       p.preferred_language, p.phone, s.site_name, rec.recommendation_id,
+       rec.interval_months, rec.risk_tier, rec.basis
+FROM marketplace.cbdh_recalls AS r
+INNER JOIN marketplace.cbdh_surveillance_recommendations AS rec ON rec.recommendation_id = r.recommendation_id
+INNER JOIN marketplace.cbdh_patients AS p ON p.patient_id = r.patient_id
+INNER JOIN marketplace.cbdh_sites AS s ON s.site_id = p.primary_site_id
+WHERE rec.superseded_by = ''
+  AND r.recall_status IN ('overdue', 'lost_to_follow_up')
+  AND p.patient_status = 'active'
+  AND r.due_date < today(){% if args.site %}
+  AND s.site_name = '{{ args.site }}'{% endif %}
+ORDER BY r.days_overdue DESC, r.recall_id ASC
+LIMIT 1
+```
+
+{% if args.site %}This run is scoped to **{{ args.site }}**.{% else %}This run covers the whole practice.{% endif %}
+
+If it returns no row, publish nothing and answer "No signals: no live recall is past due{% if args.site %} at {{ args.site }}{% endif %}." That is a normal outcome.
+
+If it returns a row, publish **exactly one** signal with `signalEmit`, filled from that row and from nothing else:
+
+- `code`: `SURV-01` — always this code, for every patient and every site. It is what makes a recurring finding update one card instead of opening a new one.
+- `kind`: `risk`
+- `priority`: `P1`
+- `scope`: `store` = `site_name` exactly as the row has it; `sku` = `mrn` exactly as the row has it; `period` = `{ from: <due_date>, to: <today> }`.
+- `scopeLabels`: `store` = `site_name`; `sku` = `patient_name`.
+- `title`: the patient, the site and how far past due, in one line.
+- `evidence`: one entry per number you state — `days_overdue`, `outreach_attempts`, `interval_months` — plus one `query` entry whose `label` is `Query` and whose `value` names the four tables joined and the filter, in under 200 characters. An evidence `value` is capped at 500 characters, so do not paste the SQL into it.
+
+The area of this signal is the clinic site and the patient. That pair is what the practice acts on, and it is why this cannot be done on de-identified data: a recall has to name which patient to call.
+
+`period.to` is **today's date**, which is `{{ now.date }}` — use that value, do not estimate it.
+
+Write the card, the brief and your final answer in **English**: this practice's coordinators read English.
+
+Do not call any external tool and do not book anything. Publishing the signal is the whole of this autopilot's work; acting on it is another autopilot's.

@@ -1,0 +1,9 @@
+The attached document is an outside-records packet that has been scanned into this patient's chart and never abstracted. Read it and abstract it.
+
+Return exactly two things, in this order.
+
+1. A Markdown table titled "Abstracted fields" with one row per field and the columns Field | Value | Where in the document. Cover, in this order: patient name, date of birth, medical record number, procedure identifier, procedure date, performing facility, endoscopist, indication, bowel preparation scale and score, whether the caecum was reached, how far the examination reached, number of polyps, and for each polyp its segment, size in millimetres, morphology, resection method and whether it was piecemeal, then for each specimen its histology, dysplasia grade and margin, then whether any adenoma was found, whether any advanced histology was found, the surveillance interval the performing endoscopist recommended, the date that interval falls due, and the risk tier that interval implies.
+
+2. A fenced ```json block holding the same values as a single object, with the keys patient_name, date_of_birth, mrn, procedure_id, procedure_date, facility, endoscopist, indication, prep_scale, prep_score, caecum_reached, extent_reached, polyp_count, polyps (an array of objects with segment, size_mm, morphology, resection_method, piecemeal), specimens (an array of objects with site, size_mm, histology, dysplasia, margin), adenoma_present, advanced_histology, recommended_interval, due_date, risk_tier.
+
+Take every value from the document. Where the document does not state a field, write "not stated" rather than inferring it. Do not query the database for this task — the structured record is empty for this procedure, which is why the document exists.
