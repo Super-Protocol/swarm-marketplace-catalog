@@ -45,7 +45,7 @@ metadata:
     down to the sha256 of every Python wheel, and the data owner can withdraw access the moment
     that changes. Based on NVIDIA's open-source transaction-foundation-model developer example
     (Apache-2.0), rebuilt as our own image.
-  version: "0.1.0"
+  version: "0.1.2"
   # What an auditor should read: the notebooks, the tokenizer and their licence
   # are upstream's; what we changed is in the chart's
   # files/notebooks/PROVENANCE.md (copied into every deployment's workspace) and
@@ -308,7 +308,7 @@ resources:
   min:
     cpu: "9"
     memory: "58Gi"
-    storage: "200Gi"
+    storage: "100Gi"
   # The heaviest single pod, which is the one the cloud requires ONE node to be
   # able to hold — and the LimitRange max of the space. The sidecar is a pod of
   # its own, and a far smaller one, so this is the workbench container's limits.
@@ -318,7 +318,7 @@ resources:
   recommended:
     cpu: "16"
     memory: "96Gi"
-    storage: "400Gi"
+    storage: "200Gi"
   gpu:
     # The tokenizer is cuDF/cuML and the model is torch. Without a card the
     # notebooks import and then fail on the first frame — a deployment that looks
@@ -399,7 +399,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: transaction-model-notebook
-      version: "0.1.0"
+      version: "0.1.2"
     # Our own image, built by
     # Super-Protocol/confidential-transaction-model from upstream's Apache-2.0
     # source on an anonymously pullable RAPIDS base, with every wheel pinned by
@@ -589,21 +589,30 @@ outputs:
 
 evidence:
   # ---------------------------------------------------------------------------
-  # Measured, not derived — and NOT YET MEASURED. This value is what two
-  # deployments of this version publish, read back from the cloud's own signed
-  # snapshot; it cannot be computed from the chart, because a cluster defaults
-  # fields no template writes.
+  # Measured, not derived. Two deployments of this version on the gpu-blueprints
+  # cloud, 2026-11-23 — `tfm-870e` and `tfm-870f`, two hostnames in two
+  # namespaces with two different sign-in tokens — published byte-identical
+  # signed snapshots: the same digest AND the same 218,066 bytes of resource
+  # JSON, compared field by field rather than by the digest alone. Six resources
+  # in each: two ConfigMaps, the Deployment, the Ingress, the Secret and the
+  # Service — the PVC is not collected into evidence by the cloud. A third
+  # deployment, from a listing carrying this number, answered
+  # `matchesExpected: true`.
   #
-  # Declaring it is not documentation: the marketplace admits a deployment to the
-  # gatekeeper only when its listing version carries one, so a listing with a
-  # data slot and no digest produces deployments the gate has never heard of
-  # (SUP-711, and `apps/tests/gated_digest.py`, which fails until this is a real
-  # digest).
+  # It cannot be computed from the chart, because a cluster defaults fields no
+  # template writes. And declaring it is not documentation: the marketplace
+  # admits a deployment to the gatekeeper only when its listing version carries
+  # one, so a listing with a data slot and no digest produces deployments the
+  # gate has never heard of (SUP-711, and `apps/tests/gated_digest.py`).
   #
-  # The measurement needs the epic's single GPU, which SUP-895 holds. Two
-  # deployments on the gpu-blueprints cloud, two hostnames in two namespaces,
-  # and this line carries their digest.
-  expectedDigest: "__EXPECTED_DIGEST__"
+  # One caveat the measurement cannot cover, and it belongs to the platform
+  # rather than to this listing: a deployment that mounts GATED data gains three
+  # objects the marketplace adds itself — the egress sidecar's ConfigMap,
+  # Deployment and Service — which are part of what the cloud digests. Its
+  # snapshot is therefore not this one. The digest below is the no-dataset
+  # configuration, which is what both measurements were; the first gated
+  # deployment has to re-measure and re-declare.
+  expectedDigest: "8ea5156096c9e17f78fed6c45ec2e22f17180e5472f0e859e40bc8b44bd1cd3e"
   # ---------------------------------------------------------------------------
   # The hostname is the one field that differs between two deployments of this
   # version, and excluding it is what makes the digest a property of the version

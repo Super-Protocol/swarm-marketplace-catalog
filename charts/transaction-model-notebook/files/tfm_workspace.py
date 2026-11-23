@@ -51,13 +51,33 @@ MODEL_DIR = pathlib.Path(os.environ.get('TFM_MODEL_DIR', '/opt/tfm/models/decode
 #: The table (ClickHouse) or object directory (a file drop) holding the transactions.
 TABLE = os.environ.get('TFM_TABLE', 'transactions')
 
+def _whole_number(value, fallback: int) -> int:
+    """An integer out of whatever the platform rendered into the environment.
+
+    `int('2.5e+07')` raises, and `2.5e+07` is exactly what arrives: the listing's
+    `maxRows` is an integer parameter, the marketplace carries it as a JSON
+    number, and a YAML emitter writes a large float in scientific notation. The
+    first real deployment of this chart died on that at *import* time — the
+    whole workspace was unusable, before a single cell ran (SUP-870, measured on
+    the gpu-blueprints cloud rather than found in review).
+    """
+    text = str(value or '').strip()
+    if not text:
+        return fallback
+    try:
+        return int(float(text))
+    except ValueError:
+        print(f'[tfm] TFM_MAX_ROWS={text!r} is not a number; using {fallback:,}')
+        return fallback
+
+
 #: The ceiling on rows read into one frame. A transaction history is the one kind
 #: of table that is routinely larger than host RAM.
-MAX_ROWS = int(os.environ.get('TFM_MAX_ROWS') or 25_000_000)
+MAX_ROWS = _whole_number(os.environ.get('TFM_MAX_ROWS'), 25_000_000)
 
 #: How much of the data has to tokenise into something the shipped vocabulary
 #: contains before the notebooks will extract embeddings from it.
-MIN_COVERAGE = float(os.environ.get('TFM_MIN_COVERAGE') or 0.5)
+MIN_COVERAGE = float(os.environ.get('TFM_MIN_COVERAGE') or 0.5)  # float() already reads 5e-01
 
 # ---------------------------------------------------------------------------
 # The column mapping

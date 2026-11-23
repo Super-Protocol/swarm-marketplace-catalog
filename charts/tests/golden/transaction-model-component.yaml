@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: transaction-model-notebook
   labels:
-    helm.sh/chart: transaction-model-notebook-0.1.0
+    helm.sh/chart: transaction-model-notebook-0.1.2
     app.kubernetes.io/name: transaction-model-notebook
     app.kubernetes.io/instance: tfm
     app.kubernetes.io/version: "0.1.0"
@@ -22,7 +22,7 @@ kind: ConfigMap
 metadata:
   name: transaction-model-notebook
   labels:
-    helm.sh/chart: transaction-model-notebook-0.1.0
+    helm.sh/chart: transaction-model-notebook-0.1.2
     app.kubernetes.io/name: transaction-model-notebook
     app.kubernetes.io/instance: tfm
     app.kubernetes.io/version: "0.1.0"
@@ -153,13 +153,33 @@ data:
     #: The table (ClickHouse) or object directory (a file drop) holding the transactions.
     TABLE = os.environ.get('TFM_TABLE', 'transactions')
   
+    def _whole_number(value, fallback: int) -> int:
+        """An integer out of whatever the platform rendered into the environment.
+  
+        `int('2.5e+07')` raises, and `2.5e+07` is exactly what arrives: the listing's
+        `maxRows` is an integer parameter, the marketplace carries it as a JSON
+        number, and a YAML emitter writes a large float in scientific notation. The
+        first real deployment of this chart died on that at *import* time — the
+        whole workspace was unusable, before a single cell ran (SUP-870, measured on
+        the gpu-blueprints cloud rather than found in review).
+        """
+        text = str(value or '').strip()
+        if not text:
+            return fallback
+        try:
+            return int(float(text))
+        except ValueError:
+            print(f'[tfm] TFM_MAX_ROWS={text!r} is not a number; using {fallback:,}')
+            return fallback
+  
+  
     #: The ceiling on rows read into one frame. A transaction history is the one kind
     #: of table that is routinely larger than host RAM.
-    MAX_ROWS = int(os.environ.get('TFM_MAX_ROWS') or 25_000_000)
+    MAX_ROWS = _whole_number(os.environ.get('TFM_MAX_ROWS'), 25_000_000)
   
     #: How much of the data has to tokenise into something the shipped vocabulary
     #: contains before the notebooks will extract embeddings from it.
-    MIN_COVERAGE = float(os.environ.get('TFM_MIN_COVERAGE') or 0.5)
+    MIN_COVERAGE = float(os.environ.get('TFM_MIN_COVERAGE') or 0.5)  # float() already reads 5e-01
   
     # ---------------------------------------------------------------------------
     # The column mapping
@@ -811,7 +831,7 @@ kind: ConfigMap
 metadata:
   name: transaction-model-notebook-notebooks
   labels:
-    helm.sh/chart: transaction-model-notebook-0.1.0
+    helm.sh/chart: transaction-model-notebook-0.1.2
     app.kubernetes.io/name: transaction-model-notebook
     app.kubernetes.io/instance: tfm
     app.kubernetes.io/version: "0.1.0"
@@ -4365,7 +4385,7 @@ kind: PersistentVolumeClaim
 metadata:
   name: transaction-model-notebook-workspace
   labels:
-    helm.sh/chart: transaction-model-notebook-0.1.0
+    helm.sh/chart: transaction-model-notebook-0.1.2
     app.kubernetes.io/name: transaction-model-notebook
     app.kubernetes.io/instance: tfm
     app.kubernetes.io/version: "0.1.0"
@@ -4376,7 +4396,7 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: "200Gi"
+      storage: "100Gi"
 ---
 # Source: transaction-model-notebook/templates/service.yaml
 apiVersion: v1
@@ -4384,7 +4404,7 @@ kind: Service
 metadata:
   name: transaction-model-notebook
   labels:
-    helm.sh/chart: transaction-model-notebook-0.1.0
+    helm.sh/chart: transaction-model-notebook-0.1.2
     app.kubernetes.io/name: transaction-model-notebook
     app.kubernetes.io/instance: tfm
     app.kubernetes.io/version: "0.1.0"
@@ -4407,7 +4427,7 @@ kind: Deployment
 metadata:
   name: transaction-model-notebook
   labels:
-    helm.sh/chart: transaction-model-notebook-0.1.0
+    helm.sh/chart: transaction-model-notebook-0.1.2
     app.kubernetes.io/name: transaction-model-notebook
     app.kubernetes.io/instance: tfm
     app.kubernetes.io/version: "0.1.0"
@@ -4430,11 +4450,14 @@ spec:
       annotations:
         # The loader and the notebooks are mounted, not baked, so a change to
         # either has to roll the pod for anything to notice.
-        checksum/workspace: fcf9b15ef146d983550647a2ee6bce30c49ff5d867ec56dfd30a9b77ea732559
+        checksum/workspace: 48aa754c6ca15357556e2644151867b2b903f71b409742c348b57c8e6bc104f8
       labels:
         app.kubernetes.io/name: transaction-model-notebook
         app.kubernetes.io/instance: tfm
     spec:
+      securityContext:
+        fsGroup: 1001
+        fsGroupChangePolicy: OnRootMismatch
       runtimeClassName: nvidia
       containers:
         # ---------------------------------------------------------------------
@@ -4457,6 +4480,13 @@ spec:
                 secretKeyRef:
                   name: transaction-model-notebook
                   key: token
+            # Read by the NVIDIA container runtime before the container starts,
+            # not by anything inside it. See `gpu.requireCuda` in values.yaml:
+            # the image's inherited condition is stricter than this estate's
+            # driver, and the runtime refuses the container rather than letting
+            # it start and fail.
+            - name: NVIDIA_REQUIRE_CUDA
+              value: "cuda>=13.0"
             - name: TFM_BINDING_FILE
               value: /etc/tfm/binding.json
             # The notebooks' own working directories, on the volume.

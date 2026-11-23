@@ -237,6 +237,32 @@ def check_timestamp_parameter() -> None:
                'two timestamp columns are refused', str(error))
 
 
+def check_row_ceiling_parse() -> None:
+    """The row ceiling survives the way the platform actually renders it.
+
+    `maxRows` is an integer parameter; the marketplace carries it as a JSON
+    number and a YAML emitter writes 25000000 as `2.5e+07`. `int()` raises on
+    that string, at module import, so the whole workspace was unusable before a
+    cell ran — found on the first real deployment (SUP-870), not here, which is
+    why it is here now.
+    """
+    cases = [
+        ('a plain integer string', '25000000', 25_000_000),
+        ('scientific notation, which is what the platform renders', '2.5e+07', 25_000_000),
+        ('an empty value falls back to the default', '', 25_000_000),
+        ('a value that is not a number falls back rather than raising', 'lots', 25_000_000),
+        ('a smaller ceiling is honoured', '500000', 500_000),
+    ]
+    for label, value, expected in cases:
+        try:
+            namespace = load({'TFM_MAX_ROWS': value})
+        except Exception as error:  # noqa: BLE001 — a raise at import is the defect
+            report(False, label, f'{type(error).__name__}: {error}')
+            continue
+        found = namespace['MAX_ROWS']
+        report(found == expected, label, f'got {found!r}, expected {expected}')
+
+
 def check_identifier_quoting() -> None:
     namespace = load()
     quote = namespace['_quote']
@@ -436,6 +462,7 @@ def main() -> int:
 
     check_bindings()
     check_timestamp_parameter()
+    check_row_ceiling_parse()
     check_identifier_quoting()
     check_mapping()
     check_label_requirement()

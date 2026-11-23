@@ -63,6 +63,15 @@ spec:
                 secretKeyRef:
                   name: {{ include "transaction-model-notebook.secretName" . }}
                   key: {{ include "transaction-model-notebook.secretKey" . }}
+            {{- if and .Values.gpu.enabled .Values.gpu.requireCuda }}
+            # Read by the NVIDIA container runtime before the container starts,
+            # not by anything inside it. See `gpu.requireCuda` in values.yaml:
+            # the image's inherited condition is stricter than this estate's
+            # driver, and the runtime refuses the container rather than letting
+            # it start and fail.
+            - name: NVIDIA_REQUIRE_CUDA
+              value: {{ .Values.gpu.requireCuda | quote }}
+            {{- end }}
             - name: TFM_BINDING_FILE
               value: /etc/tfm/binding.json
             # The notebooks' own working directories, on the volume.

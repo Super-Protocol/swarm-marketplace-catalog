@@ -73,7 +73,18 @@ service:
 # port-forward, so work lost on a restart cannot be recovered by hand.
 persistence:
   enabled: true
-  size: 200Gi
+  # 100Gi, which is what the single-cell notebook chart asks for and what a pod
+  # on this estate's GPU node has actually been given. 200Gi was the first value
+  # here and the deployment never started: the space's quota granted it, the
+  # scheduler did not, and a cluster space offers no pod events to say so (the
+  # first SUP-870 deployment sat at 0/1 for 55 minutes with no disk or CPU
+  # movement on the node). A quota is not capacity.
+  #
+  # It is also enough: the workspace holds the notebooks, the tokenised corpus
+  # and the embeddings for at most `data.maxRows` transactions — a few GB at the
+  # 25M-row default — plus whatever a tenant uploads and any checkpoint they
+  # fine-tune.
+  size: 100Gi
   storageClass: ""
   accessMode: ReadWriteOnce
 
@@ -86,6 +97,28 @@ gpu:
   # A device request without the runtime class leaves the pod Pending for ever
   # rather than falling back to CPU, so the two move together.
   runtimeClassName: nvidia
+  # The CUDA version the node's driver must support before the NVIDIA container
+  # runtime will start this image.
+  #
+  # Not cosmetic, and not a default anybody should change without a reason: the
+  # workbench image inherits `NVIDIA_REQUIRE_CUDA=cuda>=13.3` from its RAPIDS
+  # 26.10 base, and this estate's H100 node runs driver 595.91.07, which reports
+  # CUDA 13.2. The runtime therefore refused the container outright —
+  #
+  #   nvidia-container-cli.real: requirement error: unsatisfied condition:
+  #   cuda>=13.3, please update your driver to a newer version
+  #
+  # — and a cluster space surfaces no pod events, so the deployment simply sat at
+  # 0/1 in CrashLoopBackOff (55 minutes of it, on SUP-870, before a kubeconfig
+  # from the cloud console said why).
+  #
+  # 13.0 rather than off: CUDA's minor-version compatibility covers libraries
+  # built against 13.6 running on a 13.2 driver, and that was then verified on
+  # the card — torch 2.15.0+cu132 matmul, cudf, cuml and cupy all work on this
+  # node. `NVIDIA_DISABLE_REQUIRE=1` would have turned off the architecture
+  # checks as well, which are the ones worth keeping: a genuinely CUDA-12 driver
+  # still fails this condition, and should.
+  requireCuda: "cuda>=13.0"
 
 # torch's DataLoader talks to its workers over /dev/shm and the 64Mi default is
 # not enough — upstream's own `docker run` line asks for 8g. Memory-backed, so
@@ -189,7 +222,17 @@ securityContext:
   capabilities:
     drop: [ALL]
 
-podSecurityContext: {}
+# The volume is mounted by a container that does not run as root (the base image
+# runs as `rapids`, uid 1001), and a freshly provisioned PV is root-owned: the
+# first thing `bootstrap.sh` does is `mkdir -p /workspace/notebooks`, and under
+# `set -e` a permission denied there is a pod that never starts. `fsGroup` makes
+# the kubelet hand the volume to the container's group, and
+# `OnRootMismatch` keeps that from re-chowning a 100Gi volume on every restart.
+#
+# 1001 is `conda`, the group the base image's `rapids` user belongs to.
+podSecurityContext:
+  fsGroup: 1001
+  fsGroupChangePolicy: OnRootMismatch
 podAnnotations: {}
 podLabels: {}
 
