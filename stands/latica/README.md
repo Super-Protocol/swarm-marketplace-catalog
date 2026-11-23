@@ -313,6 +313,54 @@ commands above name, the `*-runs.json` / `*-signals.json` / `autopilot-*.id` the
 beside itself, the screenshots, the generated corpus and the receiver's own state are all
 ignored.
 
+### Mounting a different set of dataset cards
+
+Every other script here talks to the application. This one talks to the **marketplace**, because
+what it changes is not configuration inside the deployment — it is which gated datasets the
+deployment holds, and that is a deployment parameter.
+
+```bash
+MP_EMAIL=… MP_PASSWORD=… node harness/marketplace.js        # once; stores a bearer token, 0600
+
+MP_ORG=<deploying org id> MP_DEPLOYMENT=<deployment id> \
+  node harness/mount-datasets.js                            # dry run — the default
+
+MP_ORG=… MP_DEPLOYMENT=… node harness/mount-datasets.js --apply --i-have-a-go
+MP_ORG=… MP_DEPLOYMENT=… node harness/mount-datasets.js --rollback --i-have-a-go
+```
+
+**This is the one script here that takes the stand off the air.** A gated dataset reaches a
+deployment three ways at once and `reconfigure` writes all three — `datasetsJson`, from which the
+gatekeeper derives the sources it admits that deployment to; the egress sidecar's nginx and
+Service, one listener per mounted dataset; and the grounding Job, whose name is a hash of the
+bindings. The last two are workloads, and a published cluster space refuses every workload
+change, so the only path is `unpublish → reconfigure → publish` and it costs two pod bring-ups.
+Plan it as a window. PVCs survive it — nothing in the teardown deletes a claim — so the semantic
+model, the dashboards, the library and the autopilots in the deployment's own PostgreSQL come
+back with it.
+
+Three things the script will not get wrong, each of which has cost somebody a stand:
+
+- **It carries no parameter literal.** `reconfigure` replaces the parameter set wholesale and the
+  parameter set is attested, so a value that drifts moves the evidence digest — and a moved digest
+  costs the deployment its access to every gated dataset it has, because the gate holds it to the
+  digest its listing declares. The script reads the live deployment's own `parameters` back from
+  the marketplace, sends exactly those, and writes them to a recovery file first. Sensitive
+  parameters are absent rather than blank, which the API reads as "keep".
+- **It checks the cards before anything goes down**, with the same two conditions
+  `grants.isBindable` applies: the grant to the organisation that owns the *deployment*, and the
+  grant to the application. A card that is not published, not gated, or not granted stops the run
+  with the stand still up.
+- **It verifies the digest after the publish** rather than assuming a dataset change leaves it
+  alone — against both the marketplace's copy and the live `/.well-known/swarm-evidence` a
+  consumer reads. If it moved, it says so and tells you to roll back instead of debugging a stand
+  that is down.
+
+The one check it cannot do for you is the gate's own verdict: the access log belongs to the
+dataset's owner, not to the deploying organisation. The script prints the SQL to run against the
+marketplace's PostgreSQL, and an `allowed` row there is the only thing that says a clinic is
+actually being served.
+
 ## Walking a viewer through it in fifteen minutes
 
 1. **Signals** — two cards, `SURV-01`, P1, Risk. One says `×2`. Read the area line: a site and a

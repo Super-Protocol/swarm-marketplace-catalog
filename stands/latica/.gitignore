@@ -7,6 +7,7 @@
 # Credentials. `*.token` and `*.internalSecret` are the two the README names;
 # the rest are what the marketplace and the identity provider hand back.
 *.token
+.mp.token
 *.internalSecret
 *.adminpass
 *.apiKey
@@ -27,6 +28,10 @@ autopilot-*.id
 booker-args*.json
 *.id
 *.meta
+# The recovery state `mount-datasets.js` writes before it moves anything: the
+# live parameter set, which is not a secret but is a snapshot of one stand at
+# one moment and is worthless to anybody else.
+.mount-*.json
 
 # Screenshots, the generated corpus, and the receiver's own state.
 shots/
