@@ -390,12 +390,14 @@ aivo:
       # subchart already emits `RAI_PROCESS_ROLE=web` on this Deployment whenever
       # `worker.enabled` is true, which it is below — so an entry here is a SECOND definition
       # of the same name in one container. That is harmless at runtime and stable in the
-      # digest, and refused by server-side apply, which is the only way the cluster is written
-      # to: every `reconfigure` of a published deployment failed with
+      # digest, and refused by SERVER-SIDE APPLY, which is how the cloud writes over a live
+      # object. A fresh deployment is `create`d and the API server accepts a duplicate there —
+      # warning only that the entry "may be dropped when using apply" — so this shipped and
+      # ran; a `reconfigure` applies, and is refused:
       #
       #   .spec.template.spec.containers[name="retail-ai"].env: duplicate entries for key
       #
-      # leaving a published stand that could not be reconfigured at all. `charts/tests/duplicate_keys.py`
+      # which left a published stand that could not be reconfigured. `charts/tests/duplicate_keys.py`
       # fails the render if this comes back, here or in any other component.
       resources:
         requests:
