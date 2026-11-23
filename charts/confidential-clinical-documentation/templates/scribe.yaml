@@ -18,8 +18,9 @@ own.
 
 THE CARD IS NOT HERE. One H100 reaches exactly one container, and that container is the
 generation engine in the `swarm-model-server` component. Recognition and diarization run on this
-pod's CPU, which is a measured decision and not a compromise: 21–23 s of wall clock per minute of
-audio on 6 threads, against an engine that would otherwise not start at all. `ccd.validate`
+pod's CPU, which is a measured decision and not a compromise: 16–19 s of wall clock per minute of
+audio, measured on a real deployment of this listing, against an engine that would otherwise not
+start at all. `ccd.validate`
 refuses a GPU request on any container in this pod, because a Pod that asks for a card it cannot
 get stays Pending for ever beside an engine that then cannot start either.
 */ -}}

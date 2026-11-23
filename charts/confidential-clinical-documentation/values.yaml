@@ -33,8 +33,8 @@ ingress:
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-clinical-documentation/scribe-server
-  digest: sha256:e10034864d16fb08cc56d83a16e0894b884cb47d68136a7b0466ca29b7704bbe
-  tag: 1.0.0-sp.89cdda7
+  digest: sha256:5550822b1b69cf9fa48906147f69042101566defc709f2d82931f8a68699c309
+  tag: 1.0.0-sp.481f179
   pullPolicy: IfNotPresent
 
 # ---------------------------------------------------------------------------------------------
@@ -91,8 +91,10 @@ scribe:
     # A directory inside the image, never a model name: a name would make the first
     # transcription of a fresh deployment reach huggingface.co.
     modelDir: /models/asr
-    # int8 on the CPU. Measured at 21–23 s of wall clock per minute of audio on six threads,
-    # recognition and diarization together.
+    # int8 on the CPU. Measured at 16–19 s of wall clock per minute of audio on a real
+    # deployment of this listing, recognition and diarization together. (The same fixtures on a
+    # workstation run at 21–23; the figure this chart and the listing quote is the deployment's,
+    # because that is the one a tenant gets.)
     computeType: int8
     # Greedy. A beam of five costs about four times the wall clock for a difference this
     # application's own measurement could not see on clinical English.
@@ -136,9 +138,9 @@ scribe:
   # and a pod asking for 8.75 beside it is a pod that stays Pending — the cloud reports
   # `ready: 0` with no reason and there is no pod-level visibility to read it out of. The
   # vulnerability-analysis listing's 6 + 8 is the shape known to be placeable here, so this
-  # listing uses the same. It costs nothing measurable: 21-23 s per minute of audio at five
-  # threads, the same as at six, because CTranslate2's scaling on this work saturates before
-  # then. The eight cores were headroom nobody could place.
+  # listing uses the same. It costs nothing measurable: five threads run at the same rate as six
+  # on this work, because CTranslate2's scaling saturates before then — 16–19 s per minute of
+  # audio either way. The eight cores were headroom nobody could place.
   resources:
     requests:
       cpu: "6"

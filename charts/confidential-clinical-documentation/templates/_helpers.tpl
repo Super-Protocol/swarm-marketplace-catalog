@@ -103,9 +103,34 @@ start either.
 {{- fail "confidential-clinical-documentation: egress.listenAddress must be 127.0.0.1 — a proxy on a pod IP is an egress path for the whole cluster space, which is the opposite of what this container is for" }}
 {{- end }}
 {{- end }}
-{{- $bodyLimitMiB := (regexReplaceAll "[^0-9]" .Values.ingress.maxBodySize "" | int) }}
-{{- if and (hasSuffix "m" .Values.ingress.maxBodySize) (lt $bodyLimitMiB (div (.Values.scribe.maxFileSizeBytes | int) 1048576)) }}
-{{- fail (printf "confidential-clinical-documentation: ingress.maxBodySize (%s) is below scribe.maxFileSizeBytes (%d) — the ingress would cut the upload off with a 413 the console never sees, so the error a clinician reads would come from nginx rather than from the deployment" .Values.ingress.maxBodySize (.Values.scribe.maxFileSizeBytes | int)) }}
+{{- /*
+The ingress body limit against the upload the scribe accepts, in BYTES.
+
+The first version of this only understood an `m` suffix, so `500k`, a bare byte count and `1g`
+were all skipped silently — and a limit the check skips is a limit that renders cleanly and
+then cuts a consultation off with a 413 that comes from nginx, which the console never sees and
+a clinician cannot act on. Every form nginx accepts is normalised here: `k`, `m`, `g`, upper or
+lower case, and a plain number of bytes.
+
+`0` is nginx's "no limit" and is allowed through deliberately rather than read as zero bytes.
+A value that is not a size at all fails rather than being skipped: a typo in this field has the
+same consequence as a limit that is too small, and it should not be quieter.
+*/ -}}
+{{- $body := .Values.ingress.maxBodySize | toString | trim }}
+{{- $digits := regexReplaceAll "[^0-9]" $body "" }}
+{{- if not (regexMatch "^[0-9]+[kKmMgG]?$" $body) }}
+{{- fail (printf "confidential-clinical-documentation: ingress.maxBodySize (%q) is not a size nginx accepts — a number of bytes, optionally suffixed k, m or g" $body) }}
+{{- end }}
+{{- $bodyBytes := $digits | int64 }}
+{{- if or (hasSuffix "g" $body) (hasSuffix "G" $body) }}
+{{- $bodyBytes = mul $bodyBytes 1073741824 }}
+{{- else if or (hasSuffix "m" $body) (hasSuffix "M" $body) }}
+{{- $bodyBytes = mul $bodyBytes 1048576 }}
+{{- else if or (hasSuffix "k" $body) (hasSuffix "K" $body) }}
+{{- $bodyBytes = mul $bodyBytes 1024 }}
+{{- end }}
+{{- if and (ne ($bodyBytes | int64) (int64 0)) (lt ($bodyBytes | int64) (.Values.scribe.maxFileSizeBytes | int64)) }}
+{{- fail (printf "confidential-clinical-documentation: ingress.maxBodySize (%s = %d bytes) is below scribe.maxFileSizeBytes (%d) — the ingress would cut the upload off with a 413 the console never sees, so the error a clinician reads would come from nginx rather than from the deployment" $body ($bodyBytes | int64) (.Values.scribe.maxFileSizeBytes | int64)) }}
 {{- end }}
 {{- end -}}
 
