@@ -4,6 +4,7 @@
 // stand came back to the state it was in.
 //
 //   MP_ORG=… MP_DEPLOYMENT=… node mount-datasets.js                       # dry run, the default
+//   MP_ORG=… MP_DEPLOYMENT=… node mount-datasets.js --verify               # the post-window checks, alone
 //   MP_ORG=… MP_DEPLOYMENT=… node mount-datasets.js --apply --i-have-a-go
 //   MP_ORG=… MP_DEPLOYMENT=… node mount-datasets.js --rollback --i-have-a-go
 //
@@ -34,9 +35,19 @@
 // than assumed: the two collected sidecar objects that do change carry
 // `swarm.io/exclude-evidence-fields` for exactly the fields that change
 // (`/data/nginx.conf` on the ConfigMap, `/spec/ports` on the Service), and the
-// grounding Job is not collected at all. Step 6 below compares the digest the
-// cloud publishes after the window with the one the deployment is held to, and
-// fails loudly if they differ.
+// grounding Job is not collected at all. After the publish the script therefore
+// asserts two things and exits non-zero on either: that the cloud's measured
+// digest still equals what the listing version declares, which is the comparison
+// `clientsFor` makes and therefore whether the gate admits this deployment at
+// all; and that the measured digest is unchanged from before the window, which
+// is whether this window moved it. Both come from `GET …/evidence`. Neither is
+// `expectedEvidenceDigest` off the deployment — that is `renderDigest` under its
+// former name, computed from the manifests before deploying, and a render digest
+// can never equal a collected one.
+//
+// Every published hostname is then fetched directly, because the marketplace
+// reads the cloud's API and the gate reads the hostname: a stand serving a stale
+// or missing bundle is dark to the gate while the marketplace still looks right.
 const fs = require('node:fs');
 const path = require('node:path');
 const { api } = require('./marketplace');
@@ -58,6 +69,7 @@ const WANTED = (process.env.MP_DATASETS
 
 const apply = process.argv.includes('--apply');
 const rollback = process.argv.includes('--rollback');
+const verify = process.argv.includes('--verify');
 const authorised = process.argv.includes('--i-have-a-go');
 
 function required(name) {
@@ -76,21 +88,49 @@ async function deployment() {
   return body;
 }
 
-/** Everything needed to put the deployment back, written before anything moves. */
-function record(live) {
+/** Everything needed to put the deployment back, and the digest the window has to
+ *  leave alone.
+ *
+ *  The baseline is the digest the CLOUD MEASURED, read from `GET …/evidence`
+ *  before the window. Not `expectedEvidenceDigest` off the deployment: that field
+ *  is `renderDigest` under its former name (`deployments.controller.ts:61`), a
+ *  number this marketplace computed from the manifests before deploying, and a
+ *  render digest can never equal a collected one — a cluster defaults fields no
+ *  template writes. Comparing against it reports a mismatch on every healthy
+ *  deployment, which in this script would have ordered a rollback of a stand
+ *  that was fine.
+ *
+ *  `written` is false on a dry run: the recovery file is the record of a window
+ *  that actually happened, and a dry run that overwrote it would quietly replace
+ *  the pre-window state with the post-window one. */
+async function baseline(live, { written }) {
+  const [, evidence] = await api('GET', `${BASE}/evidence`);
   const state = {
     recordedAt: new Date().toISOString(),
     deploymentId: live.id,
     appVersion: live.appVersion,
     published: live.published,
-    expectedEvidenceDigest: live.expectedEvidenceDigest ?? null,
+    // What the gate holds this deployment to, and what the cloud actually
+    // measured. Both, because the pair is the verdict: `matchesExpected` says
+    // the gate will admit it at all, and `digest` unchanged says this window did
+    // not move it.
+    declaredDigest: (evidence && evidence.expectedDigest) ?? null,
+    measuredDigest: (evidence && evidence.digest) ?? null,
+    matchesExpected: (evidence && evidence.matchesExpected) ?? null,
     renderDigest: live.renderDigest ?? null,
     endpoints: live.endpoints ?? [],
     parameters: live.parameters,
     datasets: live.datasets,
   };
-  fs.writeFileSync(STATE, JSON.stringify(state, null, 1), { mode: 0o600 });
-  say(`recovery state written to ${path.basename(STATE)}`);
+  say(`before: measured ${state.measuredDigest} · declared ${state.declaredDigest} · matches ${state.matchesExpected}`);
+  if (state.matchesExpected !== true) {
+    say('  !! this deployment does not match its declared digest BEFORE the window.');
+    say('     The gate is already refusing it, and the window is not what to fix first.');
+  }
+  if (written) {
+    fs.writeFileSync(STATE, JSON.stringify(state, null, 1), { mode: 0o600 });
+    say(`recovery state written to ${path.basename(STATE)}`);
+  }
   return state;
 }
 
@@ -149,22 +189,38 @@ async function dnsReady() {
   throw new Error('hostnames never verified — do not publish a deployment that is dark');
 }
 
-/** The digest the cloud publishes, against the one the deployment is held to. */
-async function checkEvidence(expected) {
+/** What the cloud measured after the window, against the two things that matter.
+ *
+ *  Two conditions, not one. `matchesExpected` is whether the gate will admit this
+ *  deployment at all — it is the measured digest against the one the listing
+ *  version declares, which is exactly the comparison `clientsFor` makes. And the
+ *  measured digest unchanged from the baseline is whether THIS window moved it.
+ *  A mounted dataset should move neither: the two collected sidecar objects that
+ *  change carry `swarm.io/exclude-evidence-fields` for the fields that change,
+ *  and the grounding Job is not collected. */
+async function checkEvidence(state) {
   for (let attempt = 1; attempt <= 25; attempt += 1) {
     const [, evidence] = await api('GET', `${BASE}/evidence`);
     if (evidence && evidence.digest) {
       const resources = (evidence.snapshot && evidence.snapshot.resources) || [];
       const kinds = {};
       for (const resource of resources) kinds[resource.kind] = (kinds[resource.kind] || 0) + 1;
-      say('  digest         ', evidence.digest);
+      say('  measured       ', evidence.digest);
+      say('  declared       ', evidence.expectedDigest);
       say('  matchesExpected', evidence.matchesExpected);
       say('  resources      ', resources.length, JSON.stringify(kinds));
-      if (expected && evidence.digest !== expected) {
-        say(`  !! the digest MOVED — it was ${expected}`);
-        return { evidence, moved: true };
+
+      const problems = [];
+      if (evidence.matchesExpected !== true) {
+        problems.push(
+          `the gate will refuse this deployment: measured ${evidence.digest} is not the declared `
+            + `${evidence.expectedDigest}`,
+        );
       }
-      return { evidence, moved: false };
+      if (state.measuredDigest && digestHex(evidence.digest) !== digestHex(state.measuredDigest)) {
+        problems.push(`this window moved the measured digest — it was ${state.measuredDigest}`);
+      }
+      return { evidence, problems };
     }
     say('  no evidence published yet');
     await sleep(20000);
@@ -172,19 +228,52 @@ async function checkEvidence(expected) {
   throw new Error('no evidence inside the window');
 }
 
-/** The same bundle as the gate reads, from the hostname a consumer uses. */
+/** The same 32 bytes, whichever of the two spellings carried them.
+ *
+ *  The marketplace reports a digest as bare lowercase hex. The published bundle
+ *  reports it as `sha256/<base64url>` — the multihash-ish form the attestation
+ *  code uses. They are the same value, and a string comparison between them is
+ *  false every time: `d391cb85…` against
+ *  `sha256/05HLhdgiR5fOaf50fBHQhRUF61GdXh4t9NL602zAvzo`. Both normalise here, so
+ *  the comparison is about the digest rather than about who formatted it. */
+function digestHex(digest) {
+  if (!digest) return null;
+  const value = String(digest);
+  const encoded = value.includes('/') ? value.slice(value.indexOf('/') + 1) : value;
+  if (/^[0-9a-f]{64}$/i.test(encoded)) return encoded.toLowerCase();
+  const padded = encoded.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (encoded.length % 4)) % 4);
+  const bytes = Buffer.from(padded, 'base64');
+  if (bytes.length !== 32) throw new Error(`cannot read ${value} as a sha-256 digest`);
+  return bytes.toString('hex');
+}
+
+/** The same bundle the gate fetches, from the hostname a consumer uses.
+ *
+ *  Worth checking separately from the route above: the marketplace reads the
+ *  cloud's API, the gate reads this, and a stand whose hostname serves a stale or
+ *  missing bundle is dark to the gate while the marketplace still looks right. */
 async function checkLiveEvidence(host, expected) {
-  const response = await fetch(`https://${host}/.well-known/swarm-evidence`, {
-    signal: AbortSignal.timeout(20000),
-  });
-  if (!response.ok) throw new Error(`/.well-known/swarm-evidence ${response.status}`);
-  const bundle = await response.json();
+  let bundle;
+  try {
+    const response = await fetch(`https://${host}/.well-known/swarm-evidence`, {
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!response.ok) return [`/.well-known/swarm-evidence on ${host} answered ${response.status}`];
+    bundle = await response.json();
+  } catch (error) {
+    return [`/.well-known/swarm-evidence on ${host} could not be read: ${error.message}`];
+  }
+
   const payload = JSON.parse(
     Buffer.from(String(bundle.jws).split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'),
   );
-  const agrees = !expected || payload.evidenceDigest === expected;
-  say(`  live bundle digest ${payload.evidenceDigest} agrees=${agrees}`);
-  return agrees;
+  const served = digestHex(payload.evidenceDigest);
+  const wanted = digestHex(expected);
+  say(`  live bundle on ${host}: ${payload.evidenceDigest}`);
+  if (wanted && served !== wanted) {
+    return [`${host} serves ${served}, but the cloud measured ${wanted}`];
+  }
+  return [];
 }
 
 async function reconfigure(parameters, datasets) {
@@ -194,7 +283,7 @@ async function reconfigure(parameters, datasets) {
   return body;
 }
 
-async function window(datasets, { expected }) {
+async function window(datasets, state) {
   say('unpublish');
   const [unpublished] = await api('POST', `${BASE}/unpublish`);
   say('  ', unpublished);
@@ -209,11 +298,43 @@ async function window(datasets, { expected }) {
   say('publish', published);
   await waitFor('the space to publish', (live) => live.published);
 
-  const { moved } = await checkEvidence(expected);
+  const { evidence, problems } = await checkEvidence(state);
   const final = await deployment();
-  const host = (final.endpoints || []).map((e) => e.host).find(Boolean);
-  if (host) await checkLiveEvidence(host, expected);
-  return { moved, final };
+
+  // Every published hostname, not the first: they serve the same bundle, and one
+  // of them not serving it is the failure this check exists to catch.
+  const hosts = (final.endpoints || []).map((endpoint) => endpoint.host).filter(Boolean);
+  if (hosts.length === 0) problems.push('the deployment publishes no hostname');
+  for (const host of hosts) {
+    problems.push(...(await checkLiveEvidence(host, evidence.digest)));
+  }
+
+  return { problems, final };
+}
+
+/** The post-window checks, run on their own.
+ *
+ *  Separate from the window so the same assertions can be made at any time
+ *  without taking anything down — before a window to see the stand is healthy to
+ *  begin with, and after one to see it still is. Read-only. */
+async function verifyOnly(saved) {
+  const { evidence, problems } = await checkEvidence(saved ?? {});
+  const live = await deployment();
+  const hosts = (live.endpoints || []).map((endpoint) => endpoint.host).filter(Boolean);
+  if (hosts.length === 0) problems.push('the deployment publishes no hostname');
+  for (const host of hosts) problems.push(...(await checkLiveEvidence(host, evidence.digest)));
+
+  say('');
+  if (problems.length > 0) {
+    for (const problem of problems) say(`  !! ${problem}`);
+    return 1;
+  }
+  say(
+    saved && saved.measuredDigest
+      ? 'the gate will admit this deployment, and the digest is unchanged from the recorded baseline'
+      : 'the gate will admit this deployment; no baseline recorded, so nothing to compare it against',
+  );
+  return 0;
 }
 
 (async () => {
@@ -221,9 +342,41 @@ async function window(datasets, { expected }) {
   say(`${live.appTitle} ${live.appVersion} — status=${live.status} published=${live.published}`);
   say('mounted now:', JSON.stringify(live.datasets.map((d) => d.datasetName)));
 
-  const state = fs.existsSync(STATE) && rollback
-    ? JSON.parse(fs.readFileSync(STATE, 'utf8'))
-    : record(live);
+  const saved = fs.existsSync(STATE) ? JSON.parse(fs.readFileSync(STATE, 'utf8')) : null;
+
+  if (verify) {
+    process.exit(await verifyOnly(saved));
+  }
+
+  // A rollback is only a rollback if something recorded where to go back TO.
+  // Without the file this would have read the CURRENT state as the state to
+  // restore and reported success for putting things back exactly as they are.
+  if (rollback) {
+    if (!saved) {
+      throw new Error(
+        `no recovery state at ${path.basename(STATE)} — there is nothing recorded to roll back to, `
+          + 'and restoring the current state is not a rollback. Mount the previous set by name with '
+          + 'MP_DATASETS=… --apply if you know what it was.',
+      );
+    }
+    if (saved.deploymentId !== DEPLOYMENT) {
+      throw new Error(`${path.basename(STATE)} records deployment ${saved.deploymentId}, not this one`);
+    }
+  }
+
+  let state;
+  if (rollback) {
+    state = saved;
+    say(`rolling back to the state recorded at ${state.recordedAt}`);
+  } else if (apply && saved && !saved.completedAt) {
+    // An unfinished window, being retried. Keep the original baseline: the
+    // digest and the dataset list to compare against are the ones from before
+    // the first attempt, not from the half-finished state it left behind.
+    state = saved;
+    say(`reusing the baseline recorded at ${state.recordedAt} — a window was started and not finished`);
+  } else {
+    state = await baseline(live, { written: apply });
+  }
 
   const target = rollback
     ? state.datasets
@@ -240,22 +393,36 @@ async function window(datasets, { expected }) {
   }
 
   if (!apply && !rollback) {
-    say('DRY RUN. Would send:');
+    say('DRY RUN — nothing was written, including the recovery file. Would send:');
     console.log(JSON.stringify({ parameters: live.parameters, datasets: target }, null, 1));
     say('re-run with --apply --i-have-a-go once the freeze is lifted for this window');
     return;
   }
   if (!authorised) throw new Error('refusing to move a frozen stand without --i-have-a-go');
 
-  const { moved, final } = await window(target, { expected: state.expectedEvidenceDigest });
+  const { problems, final } = await window(target, state);
 
   say('');
   say(`status=${final.status} published=${final.published}`);
   say('mounted:', JSON.stringify((final.datasets || []).map((d) => d.datasetName)));
-  if (moved) {
-    say('THE DIGEST MOVED. The gate will refuse this deployment. Roll back now:');
+  if (problems.length > 0) {
+    say('');
+    for (const problem of problems) say(`  !! ${problem}`);
+    say('');
+    say('Roll back now rather than debugging a stand that is down:');
     say(`  node ${path.basename(__filename)} --rollback --i-have-a-go`);
     process.exit(1);
+  }
+
+  // Written only now: a baseline with no `completedAt` is an unfinished window,
+  // and the next `--apply` reuses it rather than recording the broken state as
+  // the thing to go back to.
+  if (!rollback) {
+    fs.writeFileSync(
+      STATE,
+      JSON.stringify({ ...state, completedAt: new Date().toISOString() }, null, 1),
+      { mode: 0o600 },
+    );
   }
   say('');
   say('Now check the gate admitted it, on the marketplace host — the verdict log is the');

@@ -374,6 +374,7 @@ MP_EMAIL=… MP_PASSWORD=… node harness/marketplace.js        # once; stores a
 MP_ORG=<deploying org id> MP_DEPLOYMENT=<deployment id> \
   node harness/mount-datasets.js                            # dry run — the default
 
+MP_ORG=… MP_DEPLOYMENT=… node harness/mount-datasets.js --verify    # the checks alone, read-only
 MP_ORG=… MP_DEPLOYMENT=… node harness/mount-datasets.js --apply --i-have-a-go
 MP_ORG=… MP_DEPLOYMENT=… node harness/mount-datasets.js --rollback --i-have-a-go
 ```
@@ -401,11 +402,34 @@ Three things the script will not get wrong, each of which has cost somebody a st
   grant to the application. A card that is not published, not gated, or not granted stops the run
   with the stand still up.
 - **It verifies the digest after the publish** rather than assuming a dataset change leaves it
-  alone — against both the marketplace's copy and the live `/.well-known/swarm-evidence` a
-  consumer reads. If it moved, it says so and tells you to roll back instead of debugging a stand
-  that is down.
+  alone, and it exits non-zero on either of two conditions: the cloud's measured digest no longer
+  equals what the listing version declares, which is the comparison `clientsFor` makes and so is
+  whether the gate admits the deployment at all; or the measured digest has moved from what it
+  was before the window. Then every published hostname's own `/.well-known/swarm-evidence` is
+  fetched and compared, because the marketplace reads the cloud's API while the gate reads the
+  hostname. On any of them it says what is wrong and tells you to roll back rather than start
+  debugging a stand that is down.
 
-The one check it cannot do for you is the gate's own verdict: the access log belongs to the
+  **Two traps in that check, both of which make a healthy stand look broken.** Neither digest to
+  compare against is `expectedEvidenceDigest` on the deployment: that field is `renderDigest`
+  under its former name (`deployments.controller.ts:61`), computed from the manifests before
+  deploying, and a render digest can never equal a collected one because a cluster defaults
+  fields no template writes. On this stand they are `9e02e6f1…` and `d391cb85…` and always will
+  be. And the two sources spell the same digest differently — the marketplace gives bare hex, the
+  published bundle gives `sha256/<base64url>` — so both are normalised before comparison. A
+  string comparison across that boundary is false every time.
+
+`--verify` runs exactly those checks and nothing else, read-only, so the stand can be confirmed
+healthy before a window as well as after one. With no recovery file it checks only that the gate
+will admit the deployment; with one it also checks the digest against the recorded baseline.
+
+The recovery file is written **only by `--apply`**, and `--rollback` refuses to run without one —
+restoring the state a stand is already in is not a rollback, and a dry run that overwrote the file
+would replace the pre-window record with the post-window one. A file with no `completedAt` is an
+unfinished window, and the next `--apply` reuses its baseline rather than recording the
+half-finished state as the thing to go back to.
+
+The one check none of this can do for you is the gate's own verdict: the access log belongs to the
 dataset's owner, not to the deploying organisation. The script prints the SQL to run against the
 marketplace's PostgreSQL, and an `allowed` row there is the only thing that says a clinic is
 actually being served.
