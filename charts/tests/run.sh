@@ -279,6 +279,17 @@ else
   failures=$((failures + 1))
 fi
 
+# A one-line mitigation that a list in the definition can silently drop, for a pre-auth RCE
+# against the component every sign-in goes through. See the file.
+note "the analyst's Keycloak runs with the Base64 intrinsic off"
+if output=$(python3 charts/tests/keycloak_jvm.py conversational-analyst \
+      charts/tests/cases/analyst-identity.yaml); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  failures=$((failures + 1))
+fi
+
 note "every image the single-cell listing renders is declared by its listing"
 if output=$(python3 charts/tests/declared_images.py confidential-single-cell-analysis \
       workspace rapids-singlecell-notebook charts/tests/cases/single-cell-default.yaml); then
