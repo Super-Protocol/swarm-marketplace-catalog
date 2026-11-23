@@ -1,0 +1,1615 @@
+[
+ {
+  "id": "3e17e642-4cd0-4912-978d-dc49838ad983",
+  "title": "Cross-Site Benchmark",
+  "description": "Cross-site benchmark comparing quality metrics across clinics",
+  "type": "CHART",
+  "visibility": "PRIVATE",
+  "ownerId": "0b765d5d-4f65-49f8-9f33-684e63753de1",
+  "visualizationSpec": {
+   "width": "container",
+   "autosize": {
+    "type": "fit",
+    "contains": "padding"
+   },
+   "transform": [
+    {
+     "fold": [
+      "adequate_prep_rate",
+      "cecal_intubation_rate"
+     ],
+     "as": [
+      "metric_name",
+      "metric_value"
+     ]
+    },
+    {
+     "calculate": "datum.metric_name == 'adequate_prep_rate' ? 'Adequate Prep Rate' : 'Cecal Intubation Rate'",
+     "as": "Metric"
+    }
+   ],
+   "mark": {
+    "type": "bar"
+   },
+   "encoding": {
+    "x": {
+     "field": "site__label",
+     "type": "nominal",
+     "title": "Clinical Site",
+     "axis": {
+      "labelAngle": 0
+     }
+    },
+    "xOffset": {
+     "field": "Metric"
+    },
+    "y": {
+     "field": "metric_value",
+     "type": "quantitative",
+     "title": "Rate",
+     "axis": {
+      "format": ".1%"
+     }
+    },
+    "color": {
+     "field": "Metric",
+     "type": "nominal",
+     "scale": {
+      "range": [
+       "#1f77b4",
+       "#2ca02c"
+      ]
+     }
+    },
+    "tooltip": [
+     {
+      "field": "site__label",
+      "type": "nominal",
+      "title": "Site"
+     },
+     {
+      "field": "Metric",
+      "type": "nominal",
+      "title": "Metric"
+     },
+     {
+      "field": "metric_value",
+      "type": "quantitative",
+      "title": "Rate",
+      "format": ".1%"
+     }
+    ]
+   }
+  },
+  "kind": "semantic",
+  "query": {
+   "version": 1,
+   "dataset": "procedures",
+   "metrics": [
+    {
+     "metric": "adequate_prep_rate",
+     "alias": "adequate_prep_rate"
+    },
+    {
+     "metric": "cecal_intubation_rate",
+     "alias": "cecal_intubation_rate"
+    }
+   ],
+   "groupBy": [
+    {
+     "dimension": "clinical_site",
+     "alias": "site",
+     "withLabel": true
+    }
+   ],
+   "filters": [
+    {
+     "dimension": "clinical_site",
+     "op": "in",
+     "param": "filter_site"
+    },
+    {
+     "dimension": "endoscopist",
+     "op": "in",
+     "param": "filter_endoscopist"
+    },
+    {
+     "dimension": "procedure_type",
+     "op": "in",
+     "param": "filter_procedure_type"
+    }
+   ],
+   "orderBy": [
+    {
+     "ref": "site",
+     "direction": "asc"
+    }
+   ],
+   "limit": 50,
+   "having": [],
+   "parameters": [
+    {
+     "name": "filter_site",
+     "dimension": "clinical_site",
+     "type": "members",
+     "required": false
+    },
+    {
+     "name": "filter_endoscopist",
+     "dimension": "endoscopist",
+     "type": "members",
+     "required": false
+    },
+    {
+     "name": "filter_procedure_type",
+     "dimension": "procedure_type",
+     "type": "members",
+     "required": false
+    }
+   ]
+  },
+  "parameterValues": {},
+  "customSql": null,
+  "customBindings": null,
+  "datasourceId": null,
+  "aiContext": null,
+  "modelId": null,
+  "version": 3,
+  "sourceThreadId": "e15fb7c7-f2f6-49db-a799-ba482eef7cd3",
+  "sourceMessageId": null,
+  "tags": null,
+  "folderId": null,
+  "createdAt": "2026-11-23T16:10:22.278Z",
+  "updatedAt": "2026-11-23T16:19:52.589Z",
+  "runDatasetCode": "procedures",
+  "runDataAsOf": "2026-11-16"
+ },
+ {
+  "id": "3d2755c1-884c-4dcc-b42c-efa824842689",
+  "title": "Procedure Volume Trajectory (Monthly)",
+  "description": "Monthly procedure volume trajectory stacked by procedure type",
+  "type": "CHART",
+  "visibility": "PRIVATE",
+  "ownerId": "0b765d5d-4f65-49f8-9f33-684e63753de1",
+  "visualizationSpec": {
+   "mark": {
+    "type": "bar",
+    "tooltip": true
+   },
+   "encoding": {
+    "x": {
+     "field": "day",
+     "type": "nominal"
+    },
+    "y": {
+     "field": "procedure_count",
+     "type": "quantitative",
+     "stack": "zero"
+    },
+    "color": {
+     "field": "procedure_type",
+     "type": "nominal"
+    }
+   }
+  },
+  "kind": "semantic",
+  "query": {
+   "version": 1,
+   "dataset": "procedures",
+   "metrics": [
+    {
+     "metric": "procedure_count",
+     "alias": "procedure_count"
+    }
+   ],
+   "groupBy": [
+    {
+     "dimension": "day",
+     "alias": "day",
+     "timeGrain": "month"
+    },
+    {
+     "dimension": "procedure_type",
+     "alias": "procedure_type",
+     "withLabel": true
+    }
+   ],
+   "filters": [],
+   "timeRange": {
+    "value": {
+     "kind": "relative",
+     "unit": "year",
+     "amount": 1,
+     "anchor": "data"
+    }
+   },
+   "limit": 1000,
+   "having": [],
+   "parameters": []
+  },
+  "parameterValues": {},
+  "customSql": null,
+  "customBindings": null,
+  "datasourceId": null,
+  "aiContext": null,
+  "modelId": null,
+  "version": 1,
+  "sourceThreadId": "f0f2aba5-ec3e-406c-861e-1a8a62551213",
+  "sourceMessageId": null,
+  "tags": null,
+  "folderId": null,
+  "createdAt": "2026-11-23T16:19:18.274Z",
+  "updatedAt": "2026-11-23T16:19:19.749Z",
+  "runDatasetCode": "procedures",
+  "runDataAsOf": "2026-11-16"
+ },
+ {
+  "id": "8c947c87-d018-4c0a-8545-0c4fe8d76bc6",
+  "title": "Endoscopist Scorecard & Outlier Analysis",
+  "description": "Endoscopist Scorecard sorted descending by procedure volume",
+  "type": "TABLE",
+  "visibility": "PRIVATE",
+  "ownerId": "0b765d5d-4f65-49f8-9f33-684e63753de1",
+  "visualizationSpec": {
+   "columns": [
+    {
+     "key": "endoscopist__label",
+     "title": "Endoscopist",
+     "type": "string"
+    },
+    {
+     "key": "procedure_count",
+     "title": "Procedures",
+     "type": "number"
+    },
+    {
+     "key": "cecal_intubation_rate",
+     "title": "Cecal Intubation Rate",
+     "type": "percent"
+    },
+    {
+     "key": "adequate_prep_rate",
+     "title": "Adequate Prep Rate",
+     "type": "percent"
+    },
+    {
+     "key": "mean_withdrawal_time",
+     "title": "Avg Withdrawal Time (min)",
+     "type": "number"
+    }
+   ]
+  },
+  "kind": "semantic",
+  "query": {
+   "version": 1,
+   "dataset": "procedures",
+   "metrics": [
+    {
+     "metric": "procedure_count",
+     "alias": "procedure_count"
+    },
+    {
+     "metric": "cecal_intubation_rate",
+     "alias": "cecal_intubation_rate"
+    },
+    {
+     "metric": "adequate_prep_rate",
+     "alias": "adequate_prep_rate"
+    },
+    {
+     "metric": "mean_withdrawal_time",
+     "alias": "mean_withdrawal_time"
+    }
+   ],
+   "groupBy": [
+    {
+     "dimension": "endoscopist",
+     "alias": "endoscopist",
+     "withLabel": true
+    }
+   ],
+   "filters": [
+    {
+     "dimension": "clinical_site",
+     "op": "in",
+     "param": "filter_site"
+    },
+    {
+     "dimension": "endoscopist",
+     "op": "in",
+     "param": "filter_endoscopist"
+    },
+    {
+     "dimension": "procedure_type",
+     "op": "in",
+     "param": "filter_procedure_type"
+    }
+   ],
+   "orderBy": [
+    {
+     "ref": "procedure_count",
+     "direction": "desc"
+    }
+   ],
+   "limit": 100,
+   "having": [],
+   "parameters": [
+    {
+     "name": "filter_site",
+     "dimension": "clinical_site",
+     "type": "members",
+     "required": false
+    },
+    {
+     "name": "filter_endoscopist",
+     "dimension": "endoscopist",
+     "type": "members",
+     "required": false
+    },
+    {
+     "name": "filter_procedure_type",
+     "dimension": "procedure_type",
+     "type": "members",
+     "required": false
+    }
+   ]
+  },
+  "parameterValues": {},
+  "customSql": null,
+  "customBindings": null,
+  "datasourceId": null,
+  "aiContext": null,
+  "modelId": null,
+  "version": 1,
+  "sourceThreadId": "e15fb7c7-f2f6-49db-a799-ba482eef7cd3",
+  "sourceMessageId": null,
+  "tags": null,
+  "folderId": null,
+  "createdAt": "2026-11-23T16:11:53.499Z",
+  "updatedAt": "2026-11-23T16:11:54.073Z",
+  "runDatasetCode": "procedures",
+  "runDataAsOf": "2026-11-16"
+ },
+ {
+  "id": "e72ad25f-1275-4522-8855-dc1641eda6c3",
+  "title": "Facility & Provider Productivity Grid",
+  "description": "Facility and provider productivity grid with procedure breakdown",
+  "type": "TABLE",
+  "visibility": "PRIVATE",
+  "ownerId": "0b765d5d-4f65-49f8-9f33-684e63753de1",
+  "visualizationSpec": {
+   "columns": [
+    {
+     "key": "clinical_site",
+     "title": "clinical_site",
+     "type": "string"
+    },
+    {
+     "key": "endoscopist",
+     "title": "endoscopist",
+     "type": "string"
+    },
+    {
+     "key": "procedure_type",
+     "title": "procedure_type",
+     "type": "string"
+    },
+    {
+     "key": "procedure_count",
+     "title": "procedure_count",
+     "type": "string"
+    }
+   ]
+  },
+  "kind": "semantic",
+  "query": {
+   "version": 1,
+   "dataset": "procedures",
+   "metrics": [
+    {
+     "metric": "procedure_count",
+     "alias": "procedure_count"
+    }
+   ],
+   "groupBy": [
+    {
+     "dimension": "clinical_site",
+     "alias": "clinical_site",
+     "withLabel": true
+    },
+    {
+     "dimension": "endoscopist",
+     "alias": "endoscopist",
+     "withLabel": true
+    },
+    {
+     "dimension": "procedure_type",
+     "alias": "procedure_type",
+     "withLabel": true
+    }
+   ],
+   "filters": [],
+   "timeRange": {
+    "value": {
+     "kind": "relative",
+     "unit": "year",
+     "amount": 1,
+     "anchor": "data"
+    }
+   },
+   "orderBy": [
+    {
+     "ref": "clinical_site",
+     "direction": "asc"
+    },
+    {
+     "ref": "endoscopist",
+     "direction": "asc"
+    },
+    {
+     "ref": "procedure_count",
+     "direction": "desc"
+    }
+   ],
+   "limit": 1000,
+   "having": [],
+   "parameters": []
+  },
+  "parameterValues": {},
+  "customSql": null,
+  "customBindings": null,
+  "datasourceId": null,
+  "aiContext": null,
+  "modelId": null,
+  "version": 1,
+  "sourceThreadId": "f0f2aba5-ec3e-406c-861e-1a8a62551213",
+  "sourceMessageId": null,
+  "tags": null,
+  "folderId": null,
+  "createdAt": "2026-11-23T16:10:57.420Z",
+  "updatedAt": "2026-11-23T16:10:58.418Z",
+  "runDatasetCode": "procedures",
+  "runDataAsOf": "2026-11-16"
+ },
+ {
+  "id": "a4083d53-8873-4f9e-b7e5-f859416eadfc",
+  "title": "Network Site Throughput",
+  "description": "Procedural volumes across facility locations",
+  "type": "CHART",
+  "visibility": "PRIVATE",
+  "ownerId": "0b765d5d-4f65-49f8-9f33-684e63753de1",
+  "visualizationSpec": {
+   "mark": {
+    "type": "bar",
+    "tooltip": true
+   },
+   "encoding": {
+    "x": {
+     "field": "clinical_site",
+     "type": "nominal"
+    },
+    "y": {
+     "field": "procedure_count",
+     "type": "quantitative"
+    }
+   }
+  },
+  "kind": "semantic",
+  "query": {
+   "version": 1,
+   "dataset": "procedures",
+   "metrics": [
+    {
+     "metric": "procedure_count",
+     "alias": "procedure_count"
+    }
+   ],
+   "groupBy": [
+    {
+     "dimension": "clinical_site",
+     "alias": "clinical_site",
+     "withLabel": true
+    }
+   ],
+   "filters": [],
+   "timeRange": {
+    "value": {
+     "kind": "relative",
+     "unit": "year",
+     "amount": 1,
+     "anchor": "data"
+    }
+   },
+   "orderBy": [
+    {
+     "ref": "procedure_count",
+     "direction": "desc"
+    }
+   ],
+   "limit": 100,
+   "having": [],
+   "parameters": []
+  },
+  "parameterValues": {},
+  "customSql": null,
+  "customBindings": null,
+  "datasourceId": null,
+  "aiContext": null,
+  "modelId": null,
+  "version": 1,
+  "sourceThreadId": "f0f2aba5-ec3e-406c-861e-1a8a62551213",
+  "sourceMessageId": null,
+  "tags": null,
+  "folderId": null,
+  "createdAt": "2026-11-23T16:10:50.512Z",
+  "updatedAt": "2026-11-23T16:10:51.029Z",
+  "runDatasetCode": "procedures",
+  "runDataAsOf": "2026-11-16"
+ },
+ {
+  "id": "be54c6b4-31e6-410f-8b14-ad6198fb6669",
+  "title": "Procedure Mix Breakdown",
+  "description": "Procedure share and total volume by examination type",
+  "type": "CHART",
+  "visibility": "PRIVATE",
+  "ownerId": "0b765d5d-4f65-49f8-9f33-684e63753de1",
+  "visualizationSpec": {
+   "mark": {
+    "type": "bar",
+    "tooltip": true
+   },
+   "encoding": {
+    "x": {
+     "field": "procedure_count",
+     "type": "nominal"
+    },
+    "y": {
+     "field": "procedure_type",
+     "type": "quantitative"
+    }
+   }
+  },
+  "kind": "semantic",
+  "query": {
+   "version": 1,
+   "dataset": "procedures",
+   "metrics": [
+    {
+     "metric": "procedure_count",
+     "alias": "procedure_count"
+    }
+   ],
+   "groupBy": [
+    {
+     "dimension": "procedure_type",
+     "alias": "procedure_type",
+     "withLabel": true
+    }
+   ],
+   "filters": [],
+   "timeRange": {
+    "value": {
+     "kind": "relative",
+     "unit": "year",
+     "amount": 1,
+     "anchor": "data"
+    }
+   },
+   "orderBy": [
+    {
+     "ref": "procedure_count",
+     "direction": "desc"
+    }
+   ],
+   "limit": 100,
+   "having": [],
+   "parameters": []
+  },
+  "parameterValues": {},
+  "customSql": null,
+  "customBindings": null,
+  "datasourceId": null,
+  "aiContext": null,
+  "modelId": null,
+  "version": 1,
+  "sourceThreadId": "f0f2aba5-ec3e-406c-861e-1a8a62551213",
+  "sourceMessageId": null,
+  "tags": null,
+  "folderId": null,
+  "createdAt": "2026-11-23T16:10:42.959Z",
+  "updatedAt": "2026-11-23T16:10:43.478Z",
+  "runDatasetCode": "procedures",
+  "runDataAsOf": "2026-11-16"
+ },
+ {
+  "id": "dc434f95-b0f2-441e-9ad3-2c106e5f674c",
+  "title": "Endoscopist Scorecard & Outlier Analysis",
+  "description": "Endoscopist Scorecard sorted descending by procedure volume",
+  "type": "TABLE",
+  "visibility": "PRIVATE",
+  "ownerId": "0b765d5d-4f65-49f8-9f33-684e63753de1",
+  "visualizationSpec": {
+   "columns": [
+    {
+     "key": "endoscopist__label",
+     "label": "Endoscopist"
+    },
+    {
+     "key": "procedure_count",
+     "label": "Procedures",
+     "format": {
+      "kind": "number"
+     }
+    },
+    {
+     "key": "cecal_intubation_rate",
+     "label": "Cecal Intubation Rate",
+     "format": {
+      "kind": "percent",
+      "decimals": 1
+     }
+    },
+    {
+     "key": "adequate_prep_rate",
+     "label": "Adequate Prep Rate",
+     "format": {
+      "kind": "percent",
+      "decimals": 1
+     }
+    },
+    {
+     "key": "mean_withdrawal_time",
+     "label": "Avg Withdrawal Time (min)",
+     "format": {
+      "kind": "number",
+      "decimals": 1
+     }
+    }
+   ]
+  },
+  "kind": "semantic",
+  "query": {
+   "version": 1,
+   "dataset": "procedures",
+   "metrics": [
+    {
+     "metric": "procedure_count",
+     "alias": "procedure_count"
+    },
+    {
+     "metric": "cecal_intubation_rate",
+     "alias": "cecal_intubation_rate"
+    },
+    {
+     "metric": "adequate_prep_rate",
+     "alias": "adequate_prep_rate"
+    },
+    {
+     "metric": "mean_withdrawal_time",
+     "alias": "mean_withdrawal_time"
+    }
+   ],
+   "groupBy": [
+    {
+     "dimension": "endoscopist",
+     "alias": "endoscopist",
+     "withLabel": true
+    }
+   ],
+   "filters": [
+    {
+     "dimension": "clinical_site",
+     "op": "in",
+     "param": "filter_site"
+    },
+    {
+     "dimension": "endoscopist",
+     "op": "in",
+     "param": "filter_endoscopist"
+    },
+    {
+     "dimension": "procedure_type",
+     "op": "in",
+     "param": "filter_procedure_type"
+    }
+   ],
+   "orderBy": [
+    {
+     "ref": "procedure_count",
+     "direction": "desc"
+    }
+   ],
+   "limit": 100,
+   "having": [],
+   "parameters": [
+    {
+     "name": "filter_site",
+     "dimension": "clinical_site",
+     "type": "members",
+     "required": false
+    },
+    {
+     "name": "filter_endoscopist",
+     "dimension": "endoscopist",
+     "type": "members",
+     "required": false
+    },
+    {
+     "name": "filter_procedure_type",
+     "dimension": "procedure_type",
+     "type": "members",
+     "required": false
+    }
+   ]
+  },
+  "parameterValues": {},
+  "customSql": null,
+  "customBindings": null,
+  "datasourceId": null,
+  "aiContext": null,
+  "modelId": null,
+  "version": 1,
+  "sourceThreadId": "e15fb7c7-f2f6-49db-a799-ba482eef7cd3",
+  "sourceMessageId": null,
+  "tags": null,
+  "folderId": null,
+  "createdAt": "2026-11-23T16:10:37.398Z",
+  "updatedAt": "2026-11-23T16:10:37.902Z",
+  "runDatasetCode": "procedures",
+  "runDataAsOf": "2026-11-16"
+ },
+ {
+  "id": "2dd19dc4-1205-40ae-8ee8-93c4d76fcb96",
+  "title": "Procedure Volume Trajectory (Monthly)",
+  "description": "Monthly procedure volume trajectory stacked by procedure type",
+  "type": "CHART",
+  "visibility": "PRIVATE",
+  "ownerId": "0b765d5d-4f65-49f8-9f33-684e63753de1",
+  "visualizationSpec": {
+   "mark": {
+    "type": "bar",
+    "tooltip": true
+   },
+   "encoding": {
+    "x": {
+     "field": "date",
+     "type": "nominal"
+    },
+    "y": {
+     "field": "procedure_count",
+     "type": "quantitative",
+     "stack": "zero"
+    },
+    "color": {
+     "field": "procedure_type",
+     "type": "nominal"
+    }
+   }
+  },
+  "kind": "semantic",
+  "query": {
+   "version": 1,
+   "dataset": "procedures",
+   "metrics": [
+    {
+     "metric": "procedure_count",
+     "alias": "procedure_count"
+    }
+   ],
+   "groupBy": [
+    {
+     "dimension": "date",
+     "alias": "date",
+     "timeGrain": "month"
+    },
+    {
+     "dimension": "procedure_type",
+     "alias": "procedure_type",
+     "withLabel": true
+    }
+   ],
+   "filters": [],
+   "timeRange": {
+    "value": {
+     "kind": "relative",
+     "unit": "year",
+     "amount": 1,
+     "anchor": "data"
+    }
+   },
+   "limit": 1000,
+   "having": [],
+   "parameters": []
+  },
+  "parameterValues": {},
+  "customSql": null,
+  "customBindings": null,
+  "datasourceId": null,
+  "aiContext": null,
+  "modelId": null,
+  "version": 1,
+  "sourceThreadId": "f0f2aba5-ec3e-406c-861e-1a8a62551213",
+  "sourceMessageId": null,
+  "tags": null,
+  "folderId": null,
+  "createdAt": "2026-11-23T16:10:33.902Z",
+  "updatedAt": "2026-11-23T16:10:33.943Z",
+  "runDatasetCode": null,
+  "runDataAsOf": null
+ },
+ {
+  "id": "0303a2bf-c9af-443f-99ec-9863ad95d139",
+  "title": "Bowel Preparation Quality Breakdown",
+  "description": "Procedure volume by Bowel Preparation Quality category",
+  "type": "CHART",
+  "visibility": "PRIVATE",
+  "ownerId": "0b765d5d-4f65-49f8-9f33-684e63753de1",
+  "visualizationSpec": {
+   "mark": {
+    "type": "bar"
+   },
+   "encoding": {
+    "x": {
+     "field": "prep_quality__label",
+     "type": "nominal",
+     "title": "Prep Quality",
+     "axis": {
+      "labelAngle": 0
+     }
+    },
+    "y": {
+     "field": "procedure_count",
+     "type": "quantitative",
+     "title": "Procedures"
+    },
+    "color": {
+     "field": "prep_quality__label",
+     "type": "nominal",
+     "title": "Quality",
+     "scale": {
+      "domain": [
+       "Excellent",
+       "Good",
+       "Fair",
+       "Poor"
+      ],
+      "range": [
+       "#2ca02c",
+       "#7bc96f",
+       "#ffbb78",
+       "#d62728"
+      ]
+     }
+    },
+    "tooltip": [
+     {
+      "field": "prep_quality__label",
+      "type": "nominal",
+      "title": "Quality"
+     },
+     {
+      "field": "procedure_count",
+      "type": "quantitative",
+      "title": "Procedures",
+      "format": ",d"
+     }
+    ]
+   }
+  },
+  "kind": "semantic",
+  "query": {
+   "version": 1,
+   "dataset": "procedures",
+   "metrics": [
+    {
+     "metric": "procedure_count",
+     "alias": "procedure_count"
+    }
+   ],
+   "groupBy": [
+    {
+     "dimension": "bowel_prep_quality",
+     "alias": "prep_quality",
+     "withLabel": true
+    }
+   ],
+   "filters": [
+    {
+     "dimension": "clinical_site",
+     "op": "in",
+     "param": "filter_site"
+    },
+    {
+     "dimension": "endoscopist",
+     "op": "in",
+     "param": "filter_endoscopist"
+    },
+    {
+     "dimension": "procedure_type",
+     "op": "in",
+     "param": "filter_procedure_type"
+    }
+   ],
+   "orderBy": [
+    {
+     "ref": "procedure_count",
+     "direction": "desc"
+    }
+   ],
+   "limit": 10,
+   "having": [],
+   "parameters": [
+    {
+     "name": "filter_site",
+     "dimension": "clinical_site",
+     "type": "members",
+     "required": false
+    },
+    {
+     "name": "filter_endoscopist",
+     "dimension": "endoscopist",
+     "type": "members",
+     "required": false
+    },
+    {
+     "name": "filter_procedure_type",
+     "dimension": "procedure_type",
+     "type": "members",
+     "required": false
+    }
+   ]
+  },
+  "parameterValues": {},
+  "customSql": null,
+  "customBindings": null,
+  "datasourceId": null,
+  "aiContext": null,
+  "modelId": null,
+  "version": 1,
+  "sourceThreadId": "e15fb7c7-f2f6-49db-a799-ba482eef7cd3",
+  "sourceMessageId": null,
+  "tags": null,
+  "folderId": null,
+  "createdAt": "2026-11-23T16:10:29.734Z",
+  "updatedAt": "2026-11-23T16:10:30.263Z",
+  "runDatasetCode": "procedures",
+  "runDataAsOf": "2026-11-16"
+ },
+ {
+  "id": "390824e4-cd31-42c8-a85d-1c6664c069d4",
+  "title": "Total Procedures (L1Y vs Prev Period)",
+  "description": "Total procedure volume with previous period comparison",
+  "type": "CHART",
+  "visibility": "PRIVATE",
+  "ownerId": "0b765d5d-4f65-49f8-9f33-684e63753de1",
+  "visualizationSpec": {
+   "kind": "kpi",
+   "version": 1,
+   "value": {
+    "metric": "procedure_count"
+   },
+   "deltas": [
+    {
+     "source": "compare"
+    }
+   ],
+   "caption": "vs Previous Period",
+   "resolved": {
+    "formats": {
+     "procedure_count": {
+      "kind": "number"
+     }
+    },
+    "compareTo": "previous_period",
+    "grain": "year"
+   }
+  },
+  "kind": "semantic",
+  "query": {
+   "version": 1,
+   "dataset": "procedures",
+   "metrics": [
+    {
+     "metric": "procedure_count",
+     "alias": "procedure_count"
+    }
+   ],
+   "groupBy": [],
+   "filters": [],
+   "timeRange": {
+    "value": {
+     "kind": "relative",
+     "unit": "year",
+     "amount": 1,
+     "anchor": "data"
+    }
+   },
+   "limit": 1,
+   "having": [],
+   "parameters": [],
+   "compare": {
+    "to": "previous_period"
+   }
+  },
+  "parameterValues": {},
+  "customSql": null,
+  "customBindings": null,
+  "datasourceId": null,
+  "aiContext": null,
+  "modelId": null,
+  "version": 1,
+  "sourceThreadId": "f0f2aba5-ec3e-406c-861e-1a8a62551213",
+  "sourceMessageId": null,
+  "tags": null,
+  "folderId": null,
+  "createdAt": "2026-11-23T16:10:16.518Z",
+  "updatedAt": "2026-11-23T16:10:17.123Z",
+  "runDatasetCode": "procedures",
+  "runDataAsOf": "2026-11-16"
+ },
+ {
+  "id": "e278969e-0bce-4dc2-88f7-8cea4bbc44d6",
+  "title": "Longitudinal Quality Trends",
+  "description": "Monthly time series of Adequate Prep Rate and Cecal Intubation Rate against clinical benchmarks of 0.85 and 0.95",
+  "type": "CHART",
+  "visibility": "PRIVATE",
+  "ownerId": "0b765d5d-4f65-49f8-9f33-684e63753de1",
+  "visualizationSpec": {
+   "layer": [
+    {
+     "mark": {
+      "type": "line",
+      "point": true
+     },
+     "encoding": {
+      "x": {
+       "field": "month",
+       "type": "temporal",
+       "title": "Month"
+      },
+      "y": {
+       "field": "adequate_prep_rate",
+       "type": "quantitative",
+       "title": "Rate",
+       "axis": {
+        "format": ".1%"
+       },
+       "scale": {
+        "zero": false
+       }
+      },
+      "color": {
+       "datum": "Adequate Prep Rate",
+       "type": "nominal",
+       "scale": {
+        "range": [
+         "#1f77b4",
+         "#2ca02c"
+        ]
+       }
+      },
+      "tooltip": [
+       {
+        "field": "month",
+        "type": "temporal",
+        "title": "Month",
+        "format": "%b %Y"
+       },
+       {
+        "field": "adequate_prep_rate",
+        "type": "quantitative",
+        "title": "Adequate Prep Rate",
+        "format": ".1%"
+       }
+      ]
+     }
+    },
+    {
+     "mark": {
+      "type": "line",
+      "point": true
+     },
+     "encoding": {
+      "x": {
+       "field": "month",
+       "type": "temporal"
+      },
+      "y": {
+       "field": "cecal_intubation_rate",
+       "type": "quantitative",
+       "scale": {
+        "zero": false
+       }
+      },
+      "color": {
+       "datum": "Cecal Intubation Rate",
+       "type": "nominal"
+      },
+      "tooltip": [
+       {
+        "field": "month",
+        "type": "temporal",
+        "title": "Month",
+        "format": "%b %Y"
+       },
+       {
+        "field": "cecal_intubation_rate",
+        "type": "quantitative",
+        "title": "Cecal Intubation Rate",
+        "format": ".1%"
+       }
+      ]
+     }
+    },
+    {
+     "mark": {
+      "type": "rule",
+      "strokeDash": [
+       4,
+       4
+      ],
+      "color": "#1f77b4"
+     },
+     "encoding": {
+      "y": {
+       "datum": 0.85
+      }
+     }
+    },
+    {
+     "mark": {
+      "type": "rule",
+      "strokeDash": [
+       4,
+       4
+      ],
+      "color": "#2ca02c"
+     },
+     "encoding": {
+      "y": {
+       "datum": 0.95
+      }
+     }
+    }
+   ]
+  },
+  "kind": "semantic",
+  "query": {
+   "version": 1,
+   "dataset": "procedures",
+   "metrics": [
+    {
+     "metric": "adequate_prep_rate",
+     "alias": "adequate_prep_rate"
+    },
+    {
+     "metric": "cecal_intubation_rate",
+     "alias": "cecal_intubation_rate"
+    }
+   ],
+   "groupBy": [
+    {
+     "dimension": "day",
+     "alias": "month",
+     "timeGrain": "month"
+    }
+   ],
+   "filters": [
+    {
+     "dimension": "clinical_site",
+     "op": "in",
+     "param": "filter_site"
+    },
+    {
+     "dimension": "endoscopist",
+     "op": "in",
+     "param": "filter_endoscopist"
+    },
+    {
+     "dimension": "procedure_type",
+     "op": "in",
+     "param": "filter_procedure_type"
+    }
+   ],
+   "orderBy": [
+    {
+     "ref": "month",
+     "direction": "asc"
+    }
+   ],
+   "limit": 1000,
+   "having": [],
+   "parameters": [
+    {
+     "name": "filter_site",
+     "dimension": "clinical_site",
+     "type": "members",
+     "required": false
+    },
+    {
+     "name": "filter_endoscopist",
+     "dimension": "endoscopist",
+     "type": "members",
+     "required": false
+    },
+    {
+     "name": "filter_procedure_type",
+     "dimension": "procedure_type",
+     "type": "members",
+     "required": false
+    }
+   ]
+  },
+  "parameterValues": {},
+  "customSql": null,
+  "customBindings": null,
+  "datasourceId": null,
+  "aiContext": null,
+  "modelId": null,
+  "version": 1,
+  "sourceThreadId": "e15fb7c7-f2f6-49db-a799-ba482eef7cd3",
+  "sourceMessageId": null,
+  "tags": null,
+  "folderId": null,
+  "createdAt": "2026-11-23T16:10:15.532Z",
+  "updatedAt": "2026-11-23T16:10:16.250Z",
+  "runDatasetCode": "procedures",
+  "runDataAsOf": "2026-11-16"
+ },
+ {
+  "id": "26daad55-769c-4408-b4c9-faffc1d40246",
+  "title": "Mean Withdrawal Time",
+  "description": "Mean Withdrawal Time in minutes (benchmark >= 6.0 min)",
+  "type": "CHART",
+  "visibility": "PRIVATE",
+  "ownerId": "0b765d5d-4f65-49f8-9f33-684e63753de1",
+  "visualizationSpec": {
+   "kind": "kpi",
+   "version": 1,
+   "value": {
+    "metric": "mean_withdrawal_time"
+   },
+   "caption": "Target: >= 6.0 min",
+   "resolved": {
+    "formats": {
+     "mean_withdrawal_time": {
+      "kind": "number"
+     }
+    }
+   }
+  },
+  "kind": "semantic",
+  "query": {
+   "version": 1,
+   "dataset": "procedures",
+   "metrics": [
+    {
+     "metric": "mean_withdrawal_time",
+     "alias": "mean_withdrawal_time"
+    }
+   ],
+   "groupBy": [],
+   "filters": [
+    {
+     "dimension": "clinical_site",
+     "op": "in",
+     "param": "filter_site"
+    },
+    {
+     "dimension": "endoscopist",
+     "op": "in",
+     "param": "filter_endoscopist"
+    },
+    {
+     "dimension": "procedure_type",
+     "op": "in",
+     "param": "filter_procedure_type"
+    }
+   ],
+   "limit": 1,
+   "having": [],
+   "parameters": [
+    {
+     "name": "filter_site",
+     "dimension": "clinical_site",
+     "type": "members",
+     "required": false
+    },
+    {
+     "name": "filter_endoscopist",
+     "dimension": "endoscopist",
+     "type": "members",
+     "required": false
+    },
+    {
+     "name": "filter_procedure_type",
+     "dimension": "procedure_type",
+     "type": "members",
+     "required": false
+    }
+   ]
+  },
+  "parameterValues": {},
+  "customSql": null,
+  "customBindings": null,
+  "datasourceId": null,
+  "aiContext": null,
+  "modelId": null,
+  "version": 1,
+  "sourceThreadId": "e15fb7c7-f2f6-49db-a799-ba482eef7cd3",
+  "sourceMessageId": null,
+  "tags": null,
+  "folderId": null,
+  "createdAt": "2026-11-23T16:09:40.903Z",
+  "updatedAt": "2026-11-23T16:09:41.478Z",
+  "runDatasetCode": "procedures",
+  "runDataAsOf": "2026-11-16"
+ },
+ {
+  "id": "72ee0596-5451-4395-a563-149c897b67d9",
+  "title": "Cecal Intubation Rate",
+  "description": "Cecal Intubation Rate (target >= 95%)",
+  "type": "CHART",
+  "visibility": "PRIVATE",
+  "ownerId": "0b765d5d-4f65-49f8-9f33-684e63753de1",
+  "visualizationSpec": {
+   "kind": "kpi",
+   "version": 1,
+   "value": {
+    "metric": "cecal_intubation_rate"
+   },
+   "caption": "Target: >= 95%",
+   "resolved": {
+    "formats": {
+     "cecal_intubation_rate": {
+      "kind": "percent"
+     }
+    }
+   }
+  },
+  "kind": "semantic",
+  "query": {
+   "version": 1,
+   "dataset": "procedures",
+   "metrics": [
+    {
+     "metric": "cecal_intubation_rate",
+     "alias": "cecal_intubation_rate"
+    }
+   ],
+   "groupBy": [],
+   "filters": [
+    {
+     "dimension": "clinical_site",
+     "op": "in",
+     "param": "filter_site"
+    },
+    {
+     "dimension": "endoscopist",
+     "op": "in",
+     "param": "filter_endoscopist"
+    },
+    {
+     "dimension": "procedure_type",
+     "op": "in",
+     "param": "filter_procedure_type"
+    }
+   ],
+   "limit": 1,
+   "having": [],
+   "parameters": [
+    {
+     "name": "filter_site",
+     "dimension": "clinical_site",
+     "type": "members",
+     "required": false
+    },
+    {
+     "name": "filter_endoscopist",
+     "dimension": "endoscopist",
+     "type": "members",
+     "required": false
+    },
+    {
+     "name": "filter_procedure_type",
+     "dimension": "procedure_type",
+     "type": "members",
+     "required": false
+    }
+   ]
+  },
+  "parameterValues": {},
+  "customSql": null,
+  "customBindings": null,
+  "datasourceId": null,
+  "aiContext": null,
+  "modelId": null,
+  "version": 1,
+  "sourceThreadId": "e15fb7c7-f2f6-49db-a799-ba482eef7cd3",
+  "sourceMessageId": null,
+  "tags": null,
+  "folderId": null,
+  "createdAt": "2026-11-23T16:09:22.773Z",
+  "updatedAt": "2026-11-23T16:09:23.312Z",
+  "runDatasetCode": "procedures",
+  "runDataAsOf": "2026-11-16"
+ },
+ {
+  "id": "5fcf0bb2-44f2-449b-a891-80366714e8a3",
+  "title": "Adequate Bowel Prep Rate",
+  "description": "Adequate Bowel Prep Rate (target >= 85%)",
+  "type": "CHART",
+  "visibility": "PRIVATE",
+  "ownerId": "0b765d5d-4f65-49f8-9f33-684e63753de1",
+  "visualizationSpec": {
+   "kind": "kpi",
+   "version": 1,
+   "value": {
+    "metric": "adequate_prep_rate"
+   },
+   "caption": "Target: >= 85%",
+   "resolved": {
+    "formats": {
+     "adequate_prep_rate": {
+      "kind": "percent"
+     }
+    }
+   }
+  },
+  "kind": "semantic",
+  "query": {
+   "version": 1,
+   "dataset": "procedures",
+   "metrics": [
+    {
+     "metric": "adequate_prep_rate",
+     "alias": "adequate_prep_rate"
+    }
+   ],
+   "groupBy": [],
+   "filters": [
+    {
+     "dimension": "clinical_site",
+     "op": "in",
+     "param": "filter_site"
+    },
+    {
+     "dimension": "endoscopist",
+     "op": "in",
+     "param": "filter_endoscopist"
+    },
+    {
+     "dimension": "procedure_type",
+     "op": "in",
+     "param": "filter_procedure_type"
+    }
+   ],
+   "limit": 1,
+   "having": [],
+   "parameters": [
+    {
+     "name": "filter_site",
+     "dimension": "clinical_site",
+     "type": "members",
+     "required": false
+    },
+    {
+     "name": "filter_endoscopist",
+     "dimension": "endoscopist",
+     "type": "members",
+     "required": false
+    },
+    {
+     "name": "filter_procedure_type",
+     "dimension": "procedure_type",
+     "type": "members",
+     "required": false
+    }
+   ]
+  },
+  "parameterValues": {},
+  "customSql": null,
+  "customBindings": null,
+  "datasourceId": null,
+  "aiContext": null,
+  "modelId": null,
+  "version": 1,
+  "sourceThreadId": "e15fb7c7-f2f6-49db-a799-ba482eef7cd3",
+  "sourceMessageId": null,
+  "tags": null,
+  "folderId": null,
+  "createdAt": "2026-11-23T16:09:18.028Z",
+  "updatedAt": "2026-11-23T16:09:18.580Z",
+  "runDatasetCode": "procedures",
+  "runDataAsOf": "2026-11-16"
+ },
+ {
+  "id": "e70a628a-56ec-4c3a-a77c-af11b4a15673",
+  "title": "Total Procedures",
+  "description": "Total Procedures performed",
+  "type": "CHART",
+  "visibility": "PRIVATE",
+  "ownerId": "0b765d5d-4f65-49f8-9f33-684e63753de1",
+  "visualizationSpec": {
+   "kind": "kpi",
+   "version": 1,
+   "value": {
+    "metric": "procedure_count"
+   },
+   "caption": "All endoscopic procedures",
+   "resolved": {
+    "formats": {
+     "procedure_count": {
+      "kind": "number"
+     }
+    }
+   }
+  },
+  "kind": "semantic",
+  "query": {
+   "version": 1,
+   "dataset": "procedures",
+   "metrics": [
+    {
+     "metric": "procedure_count",
+     "alias": "procedure_count"
+    }
+   ],
+   "groupBy": [],
+   "filters": [
+    {
+     "dimension": "clinical_site",
+     "op": "in",
+     "param": "filter_site"
+    },
+    {
+     "dimension": "endoscopist",
+     "op": "in",
+     "param": "filter_endoscopist"
+    },
+    {
+     "dimension": "procedure_type",
+     "op": "in",
+     "param": "filter_procedure_type"
+    }
+   ],
+   "limit": 1,
+   "having": [],
+   "parameters": [
+    {
+     "name": "filter_site",
+     "dimension": "clinical_site",
+     "type": "members",
+     "required": false
+    },
+    {
+     "name": "filter_endoscopist",
+     "dimension": "endoscopist",
+     "type": "members",
+     "required": false
+    },
+    {
+     "name": "filter_procedure_type",
+     "dimension": "procedure_type",
+     "type": "members",
+     "required": false
+    }
+   ]
+  },
+  "parameterValues": {},
+  "customSql": null,
+  "customBindings": null,
+  "datasourceId": null,
+  "aiContext": null,
+  "modelId": null,
+  "version": 1,
+  "sourceThreadId": "e15fb7c7-f2f6-49db-a799-ba482eef7cd3",
+  "sourceMessageId": null,
+  "tags": null,
+  "folderId": null,
+  "createdAt": "2026-11-23T16:09:12.495Z",
+  "updatedAt": "2026-11-23T16:09:13.602Z",
+  "runDatasetCode": "procedures",
+  "runDataAsOf": "2026-11-16"
+ }
+]
