@@ -12,7 +12,7 @@ metadata:
     endpoint, including one in your own perimeter — and the embeddings that index your schema
     and documents are served from inside the deployment, so neither your data nor its
     description reaches a third party.
-  version: "5.0.0"
+  version: "5.0.1"
   category: ai-agents
   license: Proprietary
   tags:
@@ -22,6 +22,31 @@ metadata:
     - text-to-sql
     - confidential
 
+# ---------------------------------------------------------------------------
+# 5.0.1 makes a deployment of this listing RECONFIGURABLE. It is one env entry
+# fewer and nothing else: the same images, the same parameter set, the same
+# question put to the operator — only agent chart 0.6.0 -> 0.6.1 (SUP-899).
+#
+# The `retail-ai` back container defined `RAI_PROCESS_ROLE` twice. The vendored
+# subchart emits it from `worker.enabled`, and the chart's `back.extraEnv` added
+# a second, identical entry. Both values were `web`, so the container behaved
+# correctly, every check in this repository passed, all fifteen workloads started
+# and the digest was reproducible — the defect is invisible everywhere except in
+# the one operation the cloud performs with SERVER-SIDE APPLY:
+#
+#   .spec.template.spec.containers[name="retail-ai"].env: duplicate entries for key
+#
+# A fresh deployment is `create`d, which the API server accepts (with a warning
+# that the entry "may be dropped when using apply"), so 4.0.x and 5.0.0 deploy and
+# run. A `reconfigure` applies over the live object, and that is refused — so
+# `unpublish -> reconfigure -> publish`, the only way a published space's
+# parameters or hostname can be changed, could not be completed on a published
+# stand (found on SUP-896).
+#
+# Why this is a patch rather than a major: nothing an operator reads, chooses or
+# is asked changes, and no software moves. Only the digest does, because one
+# attested env entry is gone — a change a verifier comparing 5.0.0 and 5.0.1
+# snapshots can see in full, which is the point of attesting the env at all.
 # ---------------------------------------------------------------------------
 # 5.0.0 is the agent 1.22.1 listing. 4.0.x ran 1.17.0, which was already two
 # releases behind the day it was authored; this closes the gap over 1.18.0,
@@ -905,7 +930,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-agent
-      version: "0.6.0"
+      version: "0.6.1"
     images:
       - name: registry.aggregion.com/gh/aivoagent/agent/backend
         digest: sha256:5ddf6cc1685fc74286a2953583d14dfd7b1a899b44a57fbd81eee56461949b36
@@ -1332,14 +1357,29 @@ evidence:
   # SUP-871).
   #
   # Measured, not derived. Two deployments of this definition on `azure-test`, 2026-11-23
-  # (SUP-896): different namespaces, different hostnames and three separately generated
-  # credentials each, same parameter set. Both attested 63 resources — 13 ConfigMaps, 10
-  # Deployments, 1 Ingress, 15 Secrets, 19 Services, 5 StatefulSets — and their canonical
-  # snapshots were BYTE-IDENTICAL: same SHA-256 over the document, and a field-by-field
-  # comparison as JSON Pointers found zero differing fields and no object present on one side
-  # only. That is what makes the exclusion set below complete and this number declarable.
+  # (SUP-899): different namespaces, different hostnames and three separately generated
+  # credentials each, same reference parameter set, both published so the snapshot is taken
+  # over a locked space. Both attested 63 resources — 13 ConfigMaps, 10 Deployments, 1
+  # Ingress, 15 Secrets, 19 Services, 5 StatefulSets — and their canonical snapshots were
+  # BYTE-IDENTICAL: same SHA-256 over the document, and a field-by-field comparison as JSON
+  # Pointers found zero differing fields and no object present on one side only. That is what
+  # makes the exclusion set below complete and this number declarable.
   #
-  # The exclusion set was re-derived rather than carried over from 4.0.6, in both directions:
+  # 5.0.0's number was `c6a1709f33317262c1a115fd0f8cc2f9e8cb37ae7a9982e0f5ccaf264e2ba11c`, and
+  # it is not this version's — which is why it was not carried over. The two snapshots were
+  # diffed against each other as well, and the difference is exactly, and only, the duplicate
+  # env entry this version removes:
+  #
+  #   Deployment/conversational-analyst-agent-retail-ai-back
+  #     /spec/template/spec/containers/0/env/4/name   = "RAI_PROCESS_ROLE"   (5.0.0 only)
+  #     /spec/template/spec/containers/0/env/4/value  = "web"                (5.0.0 only)
+  #
+  # Two fields, one object, 63 resources on both sides and nothing else moved. A verifier
+  # holding both snapshots can establish for themselves that 5.0.1 changed what it says it
+  # changed — which is the reason a container's env is attested rather than excluded.
+  #
+  # The exclusion set is unchanged from 5.0.0 and was re-resolved for this version rather than
+  # taken on trust, in both directions, against one of the two snapshots above:
   #
   #   * nothing is MISSING — the diff of the two snapshots turned up no field at all, so there
   #     is no per-deployment value left attested that would need excluding or fixing;
@@ -1396,7 +1436,7 @@ evidence:
   # "nothing to hold it to, or nowhere to check"), so an absent value leaves every deployment
   # of a listing with a data slot unable to receive gated data at all. `apps/tests/run.sh`
   # fails a definition that has a slot and no digest, so this cannot go missing again.
-  expectedDigest: "c6a1709f33317262c1a115fd0f8cc2f9e8cb37ae7a9982e0f5ccaf264e2ba11c"
+  expectedDigest: "d391cb85d8224797ce69fe747c11d0851505eb519d5e1e2df4d2fad36cc0bf3a"
   exclude:
     # Every deployment lives in a namespace of its own. The platform strips this itself; it is
     # declared because the listing page shows the exclusions from the definition only, and a
