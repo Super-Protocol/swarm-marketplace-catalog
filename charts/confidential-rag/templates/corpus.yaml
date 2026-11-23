@@ -58,6 +58,9 @@ spec:
             - name: APP_VECTORSTORE_PASSWORD
               valueFrom:
                 secretKeyRef: { name: {{ $name }}-secrets, key: vector-store-password }
+            - name: CORPUS_API_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ $name }}-secrets, key: corpus-api-key }
             - name: CORPUS_BINDING_FILE
               value: /etc/corpus/corpus-binding.json
             - name: CORPUS_TABLE

@@ -5,7 +5,7 @@ Separated from the shell because each one is a claim with a shape — a score th
 is not zero, a flag that is set, a table that came back as a grid — and shell is
 a poor place to read JSON.
 
-Three groups, in the order a deployment meets them:
+Five groups, in the order a deployment meets them:
 
 1. **A submitted document is extracted, indexed and retrievable.** Through the
    console's own session, because the console is the only door and a check that
@@ -23,6 +23,20 @@ Three groups, in the order a deployment meets them:
 
 3. **A working reranker is not reported as degraded**, which is the half that
    makes the alarm worth having.
+
+4. **Two documents whose names are not Latin are two documents.** 0.1.8 sent the
+   submitted name as `name.encode("ascii", "replace")`, so `Счёт.html` and
+   `План.html` both reached the indexer as `????.html` — one identity, and the
+   second submission therefore DELETED every chunk of the first, silently,
+   inside an enclave where the submitted copy is the only copy. This is the
+   group that would have caught it, which is why it is here and not only in
+   `charts/tests/rag_instruments.py`: the defect lived in the seam between the
+   console's encoding and the indexer's decoding, and a test on either side
+   alone passes while the seam is broken (SUP-895).
+
+5. **The indexer refuses a caller with no key.** Its write routes build the
+   index whose answers are cited beside the gated corpus, and until 0.1.9 they
+   answered anything in the namespace that could reach port 8085.
 """
 
 from __future__ import annotations
@@ -146,6 +160,34 @@ DOCUMENT = """<!doctype html>
 )
 
 
+# Two names that are the whole of the SUP-895 defect: equal length, both Cyrillic,
+# both entirely ordinary for this deployment's users. `encode("ascii", "replace")`
+# maps BOTH to `????.html`, and the identifier is the name's hash.
+NAME_A = "Счёт.html"
+NAME_B = "План.html"
+assert len(NAME_A) == len(NAME_B), "the point of the pair is that length cannot tell"
+
+
+def small_document(title: str, body: str) -> bytes:
+    """One short document. Short on purpose: extraction is the slow part of this run."""
+    return (
+        f"<!doctype html><html><head><title>{title}</title></head>"
+        f"<body><h1>{title}</h1><p>{body}</p></body></html>"
+    ).encode()
+
+
+DOCUMENT_A = small_document(
+    "Счёт за ноябрь",
+    "Invoice SP-2026-1147 covers the November subscription and is payable in thirty days. "
+    "The reference to quote on the transfer is SP-2026-1147.",
+)
+DOCUMENT_B = small_document(
+    "План на декабрь",
+    "The December plan moves the quarterly review to the second week and freezes new "
+    "hiring requisitions until the budget is signed.",
+)
+
+
 def multipart(name: str, blob: bytes) -> tuple[bytes, str]:
     boundary = "----cragsmoke"
     buffer = io.BytesIO()
@@ -195,6 +237,10 @@ def main() -> int:
     parser.add_argument("--rag", required=True)
     parser.add_argument("--collection", required=True)
     parser.add_argument("--uploads", required=True)
+    # The indexer, reached directly rather than through the console: the only way to ask
+    # what a second workload in the namespace would get.
+    parser.add_argument("--indexer", default="")
+    parser.add_argument("--indexer-key", default="")
     args = parser.parse_args()
 
     session = sign_in(args.console, args.password)
@@ -269,6 +315,164 @@ def main() -> int:
         (panel.get("corpus") or {}).get("uploads", {}).get("enabled") is True,
         "the status panel says this deployment accepts documents",
     )
+
+    # -------------------------------------------------------------------
+    print("\n  two documents whose names are not Latin")
+    # -------------------------------------------------------------------
+    def submit(name: str, blob: bytes) -> tuple[int, dict]:
+        body, content_type = multipart(name, blob)
+        status, payload, _ = request(
+            args.console + "/api/documents",
+            data=body,
+            headers={**auth, "Content-Type": content_type},
+            method="POST",
+            timeout=900,
+        )
+        return status, (json.loads(payload) if payload else {})
+
+    status, first = submit(NAME_A, DOCUMENT_A)
+    if not check(status == 201, f"{NAME_A} is accepted ({status}: {first})"):
+        return 1
+    check(
+        first.get("name") == NAME_A,
+        f"and comes back under its own name rather than mangled ({first.get('name')!r})",
+    )
+    check(
+        first.get("replaced") == 0,
+        f"replacing nothing, because nothing of that name was here ({first.get('replaced')})",
+    )
+
+    status, second = submit(NAME_B, DOCUMENT_B)
+    if not check(status == 201, f"{NAME_B} is accepted ({status}: {second})"):
+        return 1
+    check(
+        second.get("name") == NAME_B,
+        f"under its own name too ({second.get('name')!r})",
+    )
+    # THE defect. 0.1.8 answered `replaced: <every chunk of Счёт.html>` here and the
+    # console said nothing about it.
+    check(
+        second.get("replaced") == 0,
+        f"and it REPLACES NOTHING — a different name is a different document "
+        f"({second.get('replaced')})",
+    )
+    check(
+        first.get("id") != second.get("id"),
+        f"two identifiers, not one ({first.get('id')}, {second.get('id')})",
+    )
+
+    status, payload, _ = request(args.console + "/api/documents", headers=auth)
+    documents = (json.loads(payload).get("documents") or []) if status == 200 else []
+    by_name = {entry.get("name"): entry for entry in documents}
+    check(
+        NAME_A in by_name and NAME_B in by_name,
+        f"both are listed, under the names they were submitted with ({sorted(by_name)})",
+    )
+    check(
+        not any("?" in (entry.get("name") or "") for entry in documents),
+        f"and nothing in the list reads as question marks ({sorted(by_name)})",
+    )
+    check(
+        (by_name.get(NAME_A) or {}).get("chunks", 0) > 0
+        and (by_name.get(NAME_B) or {}).get("chunks", 0) > 0,
+        f"with chunks of their own apiece ({[(n, e.get('chunks')) for n, e in by_name.items()]})",
+    )
+
+    # And the other half of the ask: a DELIBERATE resubmission replaces, and says so.
+    status, again = submit(NAME_A, DOCUMENT_A)
+    check(status == 201, f"{NAME_A} submitted a second time is accepted ({status})")
+    check(
+        again.get("id") == first.get("id"),
+        "as the same document, because the identifier is the name's",
+    )
+    check(
+        (again.get("replaced") or 0) > 0,
+        f"and it reports what it replaced ({again.get('replaced')})",
+    )
+    status, payload, _ = request(args.console + "/api/documents", headers=auth)
+    documents = (json.loads(payload).get("documents") or []) if status == 200 else []
+    by_name = {entry.get("name"): entry for entry in documents}
+    check(
+        NAME_A in by_name and NAME_B in by_name,
+        f"and the OTHER document is still there afterwards ({sorted(by_name)})",
+    )
+    check(
+        (by_name.get(NAME_A) or {}).get("chunks", 0) == first.get("chunks"),
+        f"with one copy of the resubmitted one, not two "
+        f"({(by_name.get(NAME_A) or {}).get('chunks')} vs {first.get('chunks')})",
+    )
+
+    # Milvus loads the new segments asynchronously. `/v1/search` rather than the
+    # console's `/api/ask`, for the same reason the reranker groups below use it: there
+    # is no card in this run and nothing writes prose. Retrieval and the citation are
+    # the halves that carry the name.
+    time.sleep(8)
+    status, body = search(
+        args.rag, "which reference goes on the transfer?", [args.uploads], top_k=12
+    )
+    results = (
+        ((json.loads(body).get("citations") or json.loads(body)).get("results") or [])
+        if status == 200
+        else []
+    )
+    # `document_name` is the field the citation model carries; the console reads
+    # `source || document_name`, so both are looked at here.
+    sources = [
+        f"{result.get('source') or ''}{result.get('document_name') or ''}"
+        for result in results
+    ]
+    check(
+        any("SP-2026-1147" in (result.get("content") or "") for result in results),
+        "the Cyrillic-named document is retrievable",
+        f"{status}: {sources}",
+    )
+    check(
+        any(NAME_A in source for source in sources),
+        f"and its citation names it as {NAME_A}, not as question marks",
+        str(sources),
+    )
+
+    # -------------------------------------------------------------------
+    print("\n  the indexer, asked directly")
+    # -------------------------------------------------------------------
+    if args.indexer:
+        status, payload, _ = request(args.indexer + "/healthz")
+        check(status == 200, f"/healthz is open — the kubelet carries no key ({status})")
+
+        status, payload, _ = request(
+            args.indexer + "/documents",
+            data=b"not a document",
+            headers={
+                "Content-Type": "application/octet-stream",
+                "X-Document-Name": "unauthorised.html",
+            },
+            method="POST",
+        )
+        check(
+            status == 401,
+            f"a write with no bearer token is refused ({status}: {payload[:200]})",
+        )
+
+        status, payload, _ = request(
+            args.indexer + f"/documents/{first.get('id')}", method="DELETE"
+        )
+        check(
+            status == 401,
+            f"and so is a delete ({status}: {payload[:200]})",
+        )
+        status, payload, _ = request(
+            args.indexer + "/documents",
+            headers={"Authorization": f"Bearer {args.indexer_key}"},
+        )
+        check(
+            status == 200 and b"name" in payload,
+            f"while the key the console holds is admitted ({status})",
+        )
+        status, payload, _ = request(
+            args.indexer + "/documents",
+            headers={"Authorization": "Bearer not-the-key-at-all"},
+        )
+        check(status == 401, f"and a wrong key is not ({status})")
 
     # -------------------------------------------------------------------
     print("\n  the reranker, working")

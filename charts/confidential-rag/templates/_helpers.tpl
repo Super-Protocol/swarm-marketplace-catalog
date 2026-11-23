@@ -57,6 +57,9 @@ time — which reads as "the answers stopped being grounded" rather than as a mi
 {{- if and .Values.reranker.enabled (not .Values.reranker.model) }}
 {{- fail "confidential-rag: reranker.model is required while reranker.enabled is true" }}
 {{- end }}
+{{- if not .Values.corpus.apiKey }}
+{{- fail "confidential-rag: corpus.apiKey is required — the indexer authenticates the console, and every route on :8085 but /healthz refuses without it. Two of those routes write the collection whose answers are cited beside the gated corpus, so an unkeyed indexer takes a document from anything in the namespace that can reach the Service" }}
+{{- end }}
 {{- if not .Values.vectorStore.password }}
 {{- fail "confidential-rag: vectorStore.password is required — the vector store authenticates" }}
 {{- end }}

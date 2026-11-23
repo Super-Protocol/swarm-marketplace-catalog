@@ -15,6 +15,10 @@ stringData:
   inference-api-key: "INFERENCE-KEY-FOR-THE-GOLDEN"
   embeddings-api-key: "INFERENCE-KEY-FOR-THE-GOLDEN"
   reranker-api-key: "INFERENCE-KEY-FOR-THE-GOLDEN"
+  # The indexer's own key, presented by the console. Not `inference-api-key` and not
+  # `ingest-api-key`: the models, the extractor and the index are three components with three
+  # blast radii, and one key across them would mean rotating any one of them rotated all.
+  corpus-api-key: "indexer-api-key-for-the-render-test"
   vector-store-password: "VECTOR-STORE-PASSWORD-FOR-THE-GOLDEN"
   # The resolved `corpus` slot. For a gated dataset this carries no credential at all — a local
   # address, a database name and the literal user `gateway`, which the gate replaces with the
@@ -81,6 +85,7 @@ data:
     import os
     import secrets
     import time
+    import urllib.parse
     
     import httpx
     from fastapi import FastAPI, File, Form, Request, Response, UploadFile
@@ -96,6 +101,11 @@ data:
     
     RAG_URL = os.environ.get("RAG_SERVER_URL", "http://127.0.0.1:8081").rstrip("/")
     SYNC_URL = os.environ.get("CORPUS_SYNC_URL", "").rstrip("/")
+    # The indexer authenticates from 0.1.9 — `POST /documents` and `DELETE /documents/<id>` on
+    # its port are writes into the index whose answers are cited beside the gated corpus, and a
+    # namespace is not a trust boundary once a second workload is in it (SUP-895). Same Secret,
+    # same key, both pods.
+    SYNC_API_KEY = os.environ.get("CORPUS_API_KEY", "")
     COLLECTION = os.environ.get("COLLECTION_NAME", "documents")
     UPLOAD_COLLECTION = os.environ.get("UPLOAD_COLLECTION_NAME", "")
     UI_DIR = os.environ.get("UI_DIR", "/opt/console")
@@ -141,6 +151,34 @@ data:
         )
     
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    
+    
+    def sync_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
+        """What the console presents to the indexer. Its bearer token, plus whatever else."""
+        headers = dict(extra or {})
+        if SYNC_API_KEY:
+            headers["Authorization"] = f"Bearer {SYNC_API_KEY}"
+        return headers
+    
+    
+    def document_name_header(name: str) -> str:
+        """A submitted file name, in a form an HTTP header carries without losing any of it.
+    
+        Percent-encoded, and that is the whole of SUP-895. 0.1.8 sent
+        `name.encode("ascii", "replace")`, which turns every character outside ASCII into `?` —
+        so `Счёт.pdf` and `План.pdf` both arrived at the indexer as `????.pdf`. The indexer
+        derives a document's identity from the name it was given and REPLACES a document of the
+        same identity, so the second of those two uploads deleted every chunk of the first, and
+        both read `????.pdf` in the console and in every citation quoting them. Cyrillic file
+        names are the normal case for this deployment's users, and the submitted copy inside the
+        enclave is the only copy.
+    
+        A header is latin-1 on the wire, so the name cannot simply be sent as it is. Percent
+        encoding is reversible, is ASCII, and leaves nothing for the indexer's filter-expression
+        checks to have to care about; `urllib.parse.unquote` on the other side gets the real name
+        back before anything is derived from it.
+        """
+        return urllib.parse.quote(name, safe="")
     
     
     def issue(ttl: int = SESSION_TTL) -> str:
@@ -317,7 +355,9 @@ data:
         async with httpx.AsyncClient(timeout=30.0) as client:
             if SYNC_URL:
                 try:
-                    answer = await client.get(f"{SYNC_URL}/status")
+                    answer = await client.get(
+                        f"{SYNC_URL}/status", headers=sync_headers()
+                    )
                     out["corpus"] = answer.json()
                 except Exception as error:  # noqa: BLE001 — the panel reports, it does not fail
                     out["corpus"] = {"error": str(error)}
@@ -368,7 +408,9 @@ data:
             return None
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                answer = await client.get(f"{SYNC_URL}/collections")
+                answer = await client.get(
+                    f"{SYNC_URL}/collections", headers=sync_headers()
+                )
             return [
                 name
                 for name in (answer.json().get("collections") or [])
@@ -514,7 +556,9 @@ data:
             return JSONResponse({"documents": [], "enabled": False})
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                answer = await client.get(f"{SYNC_URL}/documents")
+                answer = await client.get(
+                    f"{SYNC_URL}/documents", headers=sync_headers()
+                )
             return JSONResponse(answer.json(), status_code=answer.status_code)
         except Exception as error:  # noqa: BLE001
             return JSONResponse({"error": str(error)}, status_code=502)
@@ -544,16 +588,21 @@ data:
         if not name:
             return JSONResponse({"error": "the file has no name"}, status_code=400)
     
-        blob = await file.read()
+        # One byte past the ceiling and no further: the refusal has to happen on bytes already
+        # read rather than after the whole upload is resident in a 512Mi container (SUP-893).
+        # `UploadFile.read` takes a size, so this costs nothing but the argument.
+        blob = await file.read(UPLOAD_MAX_BYTES + 1)
         if not blob:
             return JSONResponse(
                 {"error": "an empty document has nothing to index"}, status_code=400
             )
         if len(blob) > UPLOAD_MAX_BYTES:
+            # The size is not reported, because this never read it: what is known is that the
+            # document is larger than the limit, and the limit is the actionable half.
             return JSONResponse(
                 {
-                    "error": f"{name} is {len(blob)} bytes and this deployment accepts up to "
-                    f"{UPLOAD_MAX_BYTES}"
+                    "error": f"{name} is larger than the {UPLOAD_MAX_BYTES} bytes this "
+                    "deployment accepts"
                 },
                 status_code=413,
             )
@@ -563,10 +612,10 @@ data:
                 answer = await client.post(
                     f"{SYNC_URL}/documents",
                     content=blob,
-                    headers={
+                    headers=sync_headers({
                         "Content-Type": "application/octet-stream",
-                        "X-Document-Name": name.encode("ascii", "replace").decode("ascii"),
-                    },
+                        "X-Document-Name": document_name_header(name),
+                    }),
                 )
         except httpx.TimeoutException:
             return JSONResponse(
@@ -595,7 +644,9 @@ data:
             return JSONResponse({"error": "no indexer to ask"}, status_code=503)
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
-                answer = await client.delete(f"{SYNC_URL}/documents/{upload_id}")
+                answer = await client.delete(
+                    f"{SYNC_URL}/documents/{upload_id}", headers=sync_headers()
+                )
             return JSONResponse(answer.json(), status_code=answer.status_code)
         except Exception as error:  # noqa: BLE001
             return JSONResponse({"error": str(error)}, status_code=502)
@@ -992,8 +1043,16 @@ data:
               ? `, ${e.charts} chart/image${e.charts === 1 ? "" : "s"} located (${e.chartsIndexed}` +
                 ` with a caption; their data is not searchable)`
               : "";
+            // A document of the same name REPLACES the one already indexed, and until 0.1.9 it
+            // did so without saying anything. The number was in the indexer's answer all along;
+            // nothing rendered it, which made a replacement indistinguishable from a first
+            // upload — and, while non-ASCII names were being collapsed to `????`, made a
+            // DIFFERENT document's deletion look like an ordinary success (SUP-895).
+            const replaced = body.replaced
+              ? ` It replaced the ${body.replaced} chunks of an earlier ${body.name}.`
+              : "";
             note(`${body.name}: ${body.chunks} chunks indexed — ${e.text || 0} text, ` +
-                 `${e.tables || 0} table${e.tables === 1 ? "" : "s"}${charts}.`);
+                 `${e.tables || 0} table${e.tables === 1 ? "" : "s"}${charts}.${replaced}`);
           }
         } catch (error) {
           note(String(error), true);
@@ -1079,6 +1138,7 @@ data:
     from __future__ import annotations
     
     import hashlib
+    import hmac
     import json
     import logging
     import os
@@ -1113,6 +1173,13 @@ data:
     # rest: a 15-page 200-dpi scan through OCR is 52.6 s measured, and a queue in
     # front of it makes that a wait rather than a failure.
     INGEST_TIMEOUT = float(os.environ.get("INGEST_TIMEOUT_SECONDS", 900))
+    # What the console presents to reach this service, as a bearer token. The same argument the
+    # extraction service's own key rests on, one step further in: this process WRITES the index
+    # whose answers are cited beside the gated corpus, and `POST /documents` /
+    # `DELETE /documents/<id>` on this port took anything that could reach them. A namespace is
+    # not a trust boundary once a second workload is in it (SUP-895). `/healthz` stays open —
+    # the kubelet carries no credential, and it reports liveness and nothing about the corpus.
+    CORPUS_API_KEY = os.environ.get("CORPUS_API_KEY", "")
     UPLOAD_MAX_BYTES = int(os.environ.get("UPLOAD_MAX_BYTES", 64 * 1024 * 1024))
     # How many chunk rows the listing and the delete will read in one query. A document of a
     # hundred pages is a few hundred chunks, so this is two hundred such documents.
@@ -1120,6 +1187,14 @@ data:
     # What this service issues as a document identifier, and therefore all it will accept: the
     # value is interpolated into a Milvus filter expression.
     UPLOAD_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+    try:
+        # The name `langchain_milvus` gives the primary key it generates, read from the library
+        # rather than written here: replacing a document deletes the OLD chunks by their keys,
+        # and a key field this file guessed would be a guess about a collection the retriever's
+        # own code path created.
+        from langchain_milvus.utils.constant import PRIMARY_FIELD as UPLOAD_PK_FIELD
+    except ImportError:  # the image carries it; a render test that stubs the library does not
+        UPLOAD_PK_FIELD = "pk"
     BINDING_PATH = os.environ.get("CORPUS_BINDING_FILE", "/etc/corpus/binding.json")
     TABLE = os.environ.get("CORPUS_TABLE", "documents")
     COL_ID = os.environ.get("CORPUS_ID_COLUMN", "doc_id")
@@ -1512,6 +1587,38 @@ data:
         return base[:200]
     
     
+    def received_name(header: str) -> str:
+        """The name `X-Document-Name` carried, decoded before anything is derived from it.
+    
+        The console percent-encodes it, because an HTTP header is latin-1 on the wire and these
+        names are routinely Cyrillic. Decoding has to happen HERE, ahead of `safe_name` and
+        ahead of the identifier, or the mangling SUP-895 is about moves rather than going away:
+        0.1.8 received `????.pdf` for every non-ASCII name, hashed that into one identity, and
+        replaced one tenant's document with another's. `safe_name` still does its own work after
+        the decode — the path goes, control characters go, the length is bounded — on the real
+        name instead of on a row of question marks.
+    
+        The console and this indexer ship from the same ConfigMap and are therefore always the
+        same version, so there is no window where an un-encoded name arrives here. A name that
+        contains a literal `%` survives the round trip: the console encodes it to `%25`.
+        """
+        return safe_name(urllib.parse.unquote(header or "", errors="replace"))
+    
+    
+    def upload_identifier(filename: str) -> str:
+        """A submitted document's identity.
+    
+        The hash of the NAME and not of the content, so submitting a corrected version of a
+        document replaces it instead of leaving two copies of nearly the same text competing in
+        every search. The extractor's own `source_id` is a per-request uuid and would make every
+        resubmission a new document.
+    
+        Because it is the name's hash, the name has to reach this undamaged — which is what
+        `received_name` is for, and what 0.1.8 did not do.
+        """
+        return hashlib.sha256(filename.encode("utf-8")).hexdigest()[:32]
+    
+    
     def extract(filename: str, blob: bytes) -> dict[str, Any]:
         """One document through `swarm-doc-ingest`, returning its elements.
     
@@ -1726,11 +1833,7 @@ data:
                 f"{filename} is {len(blob)} bytes and the limit is {UPLOAD_MAX_BYTES}"
             )
     
-        # The identifier is the NAME's hash and not the content's, so submitting a corrected
-        # version of a document replaces it instead of leaving two copies of nearly the same
-        # text competing in every search. The extractor's own `source_id` is a per-request
-        # uuid and would make every resubmission a new document.
-        upload_id = hashlib.sha256(filename.encode("utf-8")).hexdigest()[:32]
+        upload_id = upload_identifier(filename)
         extracted = extract(filename, blob)
         documents, counts = element_documents(
             extracted.get("elements") or [], upload_id, filename
@@ -1744,9 +1847,26 @@ data:
         with INDEX_LOCK:
             # Replace rather than add to: submitting the same file twice should leave one copy,
             # not two sets of chunks competing in every search.
-            removed = remove_upload(upload_id)
+            #
+            # Write first, then drop the version it replaces. 0.1.8 deleted first, so a
+            # `write_all` that failed partway left NEITHER version complete — and, less
+            # dramatically but on every single resubmission, left the document unsearchable for
+            # however long re-embedding it took. The old chunks are identified by the primary
+            # keys they already carry, which needs no new metadata field and so does not change
+            # a collection `langchain_milvus` built from the first batch it was given.
+            superseded = upload_chunk_keys(upload_id)
             _, store = vector_store(UPLOAD_COLLECTION)
-            written = write_all(store, documents)
+            try:
+                written = write_all(store, documents)
+            except BaseException:
+                # Half a new version plus a whole old one is two answers to one question, so
+                # the half goes back out: whatever is there now and was not there before.
+                previous = set(superseded)
+                discard_chunk_keys(
+                    [key for key in upload_chunk_keys(upload_id) if key not in previous]
+                )
+                raise
+            removed = discard_chunk_keys(superseded)
     
         logger.info(
             "indexed %s: %d chunks (%d text, %d tables, %d pictures of which %d captioned)%s",
@@ -1817,6 +1937,50 @@ data:
         return sorted(counted.values(), key=lambda entry: entry["name"].lower())
     
     
+    def upload_chunk_keys(upload_id: str) -> list[Any]:
+        """The primary keys of every chunk of one submitted document, as they stand now.
+    
+        Taken before a replacement is written so the old version can be dropped after the new
+        one is whole. `auto_id` is on, so these are keys Milvus generated and nothing else in
+        this file has any use for.
+        """
+        if not UPLOAD_ID_PATTERN.match(upload_id or ""):
+            raise ValueError(
+                f"{upload_id!r} is not a document identifier — 1 to 64 characters of "
+                "[A-Za-z0-9_-], which is what this service issues"
+            )
+        vdb = upload_client()
+        if vdb is None:
+            return []
+        rows = vdb._client.query(  # noqa: SLF001 — see upload_client
+            collection_name=UPLOAD_COLLECTION,
+            filter=f'upload_id == "{upload_id}"',
+            output_fields=[UPLOAD_PK_FIELD],
+            limit=UPLOAD_LIST_LIMIT,
+        )
+        return [
+            row[UPLOAD_PK_FIELD] for row in rows if row.get(UPLOAD_PK_FIELD) is not None
+        ]
+    
+    
+    def discard_chunk_keys(keys: list[Any]) -> int:
+        """Delete exactly these chunks. Returns how many went.
+    
+        By key rather than by filter expression: the filter would also match the chunks written
+        a moment ago, which is the whole point of writing before deleting.
+        """
+        if not keys:
+            return 0
+        vdb = upload_client()
+        if vdb is None:
+            return 0
+        vdb._client.delete(  # noqa: SLF001 — see upload_client
+            collection_name=UPLOAD_COLLECTION, ids=list(keys)
+        )
+        vdb._client.flush(collection_name=UPLOAD_COLLECTION)  # noqa: SLF001
+        return len(keys)
+    
+    
     def remove_upload(upload_id: str) -> int:
         """Drop every chunk of one submitted document. Returns how many went.
     
@@ -1882,16 +2046,52 @@ data:
     
     
     class Status(BaseHTTPRequestHandler):
-        """The console's only way in. No authentication of its own, and that is deliberate.
+        """The console's only way in, and from 0.1.9 it has to prove it is the console.
     
-        This is a ClusterIP Service on no Ingress. The console is the whole of the
-        authentication in front of it and it is the only caller — the same arrangement as the
-        rag-server, which also answers this namespace without a credential. What a second
-        workload in the namespace could reach is the reason the EXTRACTION service, which this
-        one calls, does carry a key.
+        This is a ClusterIP Service on no Ingress, and until 0.1.9 that was the whole of the
+        argument: the console authenticates its users, the console is the only caller, and the
+        rag-server answers this namespace without a credential either. The hole in it is that
+        `POST /documents` and `DELETE /documents/<id>` here are WRITES into the index whose
+        answers are cited beside the gated corpus — so anything in the namespace that could
+        reach port 8085 could add a document a tenant would read as their own, or delete one.
+        A namespace is not a trust boundary once a second workload is in it, which is the
+        argument the extraction service's own key already rested on (SUP-895).
+    
+        So every route but `/healthz` now needs the bearer token the chart generates and gives
+        to the console and to this pod from the same Secret. `/healthz` stays open because the
+        kubelet carries no credential and it reports liveness and nothing about the corpus.
         """
     
         protocol_version = "HTTP/1.1"
+    
+        def admitted(self) -> bool:
+            """Whether this request carries the key, answering the caller itself if it does not.
+    
+            Constant-time, because `==` on a secret leaks its prefix by timing. Fails CLOSED
+            when no key is configured: an indexer without its credential serves nothing rather
+            than serving everything, and `crag.validate` refuses to render it that way at all.
+            """
+            if not CORPUS_API_KEY:
+                self.close_connection = True
+                self.respond(
+                    503,
+                    {
+                        "error": "this indexer has no API key configured, so it accepts "
+                        "nothing but its own health check"
+                    },
+                )
+                return False
+            scheme, _, presented = (self.headers.get("Authorization") or "").partition(" ")
+            if scheme.lower() != "bearer" or not hmac.compare_digest(
+                presented.strip(), CORPUS_API_KEY
+            ):
+                # The connection goes with the refusal: a POST refused before its body is read
+                # leaves bytes in the pipe that the next request on a kept-alive connection
+                # would be parsed from.
+                self.close_connection = True
+                self.respond(401, {"error": "a bearer token is required"})
+                return False
+            return True
     
         def respond(self, status: int, payload: dict[str, Any]) -> None:
             body = json.dumps(payload).encode()
@@ -1907,11 +2107,20 @@ data:
     
         def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's own naming
             route = self.route()
-            if route in ("/status", "/healthz"):
+            if route == "/healthz":
+                # Open, and liveness only: the probe's three fields and nothing about what is
+                # indexed. `/status`, which carries the gate's verdict and the document list,
+                # is behind the key with everything else.
                 with STATE_LOCK:
                     payload = dict(STATE)
-                if route == "/status":
-                    payload["uploadedDocuments"] = uploaded_documents()
+                self.respond(200, payload)
+                return
+            if not self.admitted():
+                return
+            if route == "/status":
+                with STATE_LOCK:
+                    payload = dict(STATE)
+                payload["uploadedDocuments"] = uploaded_documents()
                 self.respond(200, payload)
                 return
             if route == "/collections":
@@ -1924,15 +2133,22 @@ data:
             self.send_error(404)
     
         def do_POST(self) -> None:  # noqa: N802
-            """`POST /documents` — one file, raw, with its name in `X-Document-Name`.
+            """`POST /documents` — one file, raw, with its name percent-encoded in
+            `X-Document-Name`.
     
             Raw bytes and a header rather than a multipart body: the console has already parsed
             the browser's multipart form, and parsing it a second time here would mean a
             multipart parser in a `BaseHTTPRequestHandler`, which is a place to put a bug rather
             than a feature.
+    
+            Percent-encoded because a header is latin-1 and these names are routinely Cyrillic.
+            See `received_name`: decoding before the identifier is derived is what keeps two
+            different names from being one document (SUP-895).
             """
             if self.route() != "/documents":
                 self.send_error(404)
+                return
+            if not self.admitted():
                 return
             if not uploads_enabled():
                 self.respond(
@@ -1961,7 +2177,7 @@ data:
                 )
                 return
             try:
-                name = safe_name(self.headers.get("X-Document-Name") or "")
+                name = received_name(self.headers.get("X-Document-Name") or "")
             except ValueError as error:
                 self.respond(400, {"error": str(error)})
                 return
@@ -1986,6 +2202,8 @@ data:
             route = self.route()
             if not route.startswith("/documents/"):
                 self.send_error(404)
+                return
+            if not self.admitted():
                 return
             upload_id = route[len("/documents/") :]
             try:
@@ -2093,6 +2311,15 @@ data:
     
     
     def main() -> None:
+        if not CORPUS_API_KEY:
+            # Said once and loudly rather than refused: the gated-corpus loop below is this
+            # pod's other half and has to run regardless. What a missing key costs is the API —
+            # every route but `/healthz` answers 503 — so the console reports "not configured"
+            # instead of a door standing open.
+            logger.error(
+                "CORPUS_API_KEY is not set: every route but /healthz will refuse. The chart "
+                "renders this key from the deployment's Secret and crag.validate requires it."
+            )
         server = Service(("0.0.0.0", STATUS_PORT), Status)
         threading.Thread(target=server.serve_forever, name="status", daemon=True).start()
         logger.info("status on :%d, polling every %ds", STATUS_PORT, POLL_SECONDS)
@@ -2434,7 +2661,7 @@ spec:
     spec:
       containers:
         - name: console
-          image: "ghcr.io/super-protocol/confidential-rag/rag-server@sha256:cd54accbf4d946835aabf8664486cf1fc02ec63818baf5e7b175c6607dbf2413"
+          image: "ghcr.io/super-protocol/confidential-rag/rag-server@sha256:ec7a6c221f835e73834f74615a5a061f91a8c6d890afc2392feb840a9a078966"
           imagePullPolicy: IfNotPresent
           command: [uvicorn]
           args:
@@ -2464,6 +2691,11 @@ spec:
               value: "http://confidential-rag-server:8081"
             - name: CORPUS_SYNC_URL
               value: "http://confidential-rag-corpus:8085"
+            # The indexer's bearer token. Same Secret key as the indexer's own env, so the
+            # two cannot be rendered out of step.
+            - name: CORPUS_API_KEY
+              valueFrom:
+                secretKeyRef: { name: confidential-rag-secrets, key: corpus-api-key }
             - name: COLLECTION_NAME
               value: "documents"
             - name: UI_DIR
@@ -2569,7 +2801,7 @@ spec:
     spec:
       containers:
         - name: corpus
-          image: "ghcr.io/super-protocol/confidential-rag/rag-server@sha256:cd54accbf4d946835aabf8664486cf1fc02ec63818baf5e7b175c6607dbf2413"
+          image: "ghcr.io/super-protocol/confidential-rag/rag-server@sha256:ec7a6c221f835e73834f74615a5a061f91a8c6d890afc2392feb840a9a078966"
           imagePullPolicy: IfNotPresent
           command: [python3, /opt/app/corpus_sync.py]
           # The pipeline's own configuration, so the embedder, the vector store and the
@@ -2584,6 +2816,9 @@ spec:
             - name: APP_VECTORSTORE_PASSWORD
               valueFrom:
                 secretKeyRef: { name: confidential-rag-secrets, key: vector-store-password }
+            - name: CORPUS_API_KEY
+              valueFrom:
+                secretKeyRef: { name: confidential-rag-secrets, key: corpus-api-key }
             - name: CORPUS_BINDING_FILE
               value: /etc/corpus/corpus-binding.json
             - name: CORPUS_TABLE
@@ -2701,7 +2936,7 @@ spec:
     spec:
       containers:
         - name: server
-          image: "ghcr.io/super-protocol/confidential-rag/rag-server@sha256:cd54accbf4d946835aabf8664486cf1fc02ec63818baf5e7b175c6607dbf2413"
+          image: "ghcr.io/super-protocol/confidential-rag/rag-server@sha256:ec7a6c221f835e73834f74615a5a061f91a8c6d890afc2392feb840a9a078966"
           imagePullPolicy: IfNotPresent
           args:
             - --host
