@@ -378,6 +378,24 @@ async function verifyOnly(saved) {
     state = await baseline(live, { written: apply });
   }
 
+  // A window run on a deployment that is ALREADY failing its digest check cannot
+  // be judged: the post-window assertion would find a mismatch and blame the
+  // window for one it inherited, and the rollback it ordered would restore a
+  // state the gate was refusing anyway. Refused rather than warned about — the
+  // whole point of the guard is that somebody reads it, and a warning in the
+  // middle of a window's output is not read.
+  //
+  // `--rollback` is deliberately exempt: a stand in that state is exactly when
+  // you want to put it back.
+  if (apply && !rollback && state.matchesExpected !== true) {
+    throw new Error(
+      'this deployment does not match its declared digest BEFORE the window '
+        + `(measured ${state.measuredDigest}, declared ${state.declaredDigest}) — the gate is `
+        + 'already refusing it. Fix that first; a window run from here cannot be judged, and its '
+        + 'rollback would restore a state the gate was refusing anyway.',
+    );
+  }
+
   const target = rollback
     ? state.datasets
     : WANTED.map((datasetName) => ({ slot: SLOT, datasetName }));
@@ -431,7 +449,39 @@ async function verifyOnly(saved) {
   say('    "select l.name, e.verdict, e.reason, e.\\"occurredAt\\" from gatekeeper_access_events e');
   say('     join dataset_listings l on l.id = e.\\"datasetListingId\\"');
   say(`     where e.\\"deploymentId\\" = '${DEPLOYMENT}' order by e.\\"occurredAt\\" desc limit 20"`);
-})().catch((error) => {
+})().catch(async (error) => {
   console.log('FAILED', error.message);
+
+  // Where the stand actually is, and the one command that puts it back. A
+  // failure in the middle of a window leaves somebody reading this output with
+  // the stand down, and "FAILED <message>" alone does not say whether it is
+  // published, whether a rollback is possible, or what to type. Best effort: if
+  // even this read fails, say so rather than throwing a second error over the
+  // first.
+  try {
+    const live = await deployment();
+    console.log(
+      `       stand: status=${live.status} published=${live.published} `
+        + `mounted=${JSON.stringify((live.datasets || []).map((d) => d.datasetName))}`,
+    );
+    if (!live.published) {
+      console.log('       the stand is NOT published — it is off the air until a publish succeeds.');
+    }
+  } catch (second) {
+    console.log(`       could not read the deployment to report its state: ${second.message}`);
+  }
+
+  if (fs.existsSync(STATE)) {
+    const saved = JSON.parse(fs.readFileSync(STATE, 'utf8'));
+    console.log(
+      `       recovery state from ${saved.recordedAt}`
+        + `${saved.completedAt ? ' (a completed window)' : ' (a window that did not finish)'}:`
+        + ` ${JSON.stringify(saved.datasets.map((d) => d.datasetName))}`,
+    );
+    console.log(`       put it back with:  node ${path.basename(__filename)} --rollback --i-have-a-go`);
+  } else {
+    console.log('       no recovery state on disk, so nothing was changed by this run.');
+  }
+
   process.exit(1);
 });

@@ -32,6 +32,18 @@ function env(name) {
   return value;
 }
 
+// `READER_USER` and `TABLE_PREFIX` are interpolated into DDL as identifiers, not
+// as literals, so they are checked rather than escaped: there is no quoting that
+// makes an arbitrary string safe in that position, and both are ours to choose.
+for (const [name, value] of [
+  ['READER_USER', READER],
+  ['TABLE_PREFIX', PREFIX],
+]) {
+  if (!/^[a-z][a-z0-9_]*$/.test(value)) {
+    throw new Error(`${name} must be lowercase letters, digits and underscores — got "${value}"`);
+  }
+}
+
 function decrypt(encoded) {
   const [version, iv, tag, ciphertext] = encoded.split(':');
   if (version !== 'v1') throw new Error('unexpected cipher version');
@@ -54,6 +66,28 @@ async function run(sql, { user = ROW.username, password = OWNER_PASSWORD, body =
   const text = (await response.text()).trim();
   if (!response.ok) throw new Error(`${response.status} ${text.slice(0, 300)}`);
   return text;
+}
+
+/** A value as a ClickHouse string literal.
+ *
+ *  The backslash is replaced FIRST and that order is the whole of it: escaping
+ *  the quote first would produce a `\\'` whose backslash the next pass would
+ *  then double, and a password containing a backslash would authenticate as
+ *  something else — or end the literal early and leave the rest of it parsed as
+ *  SQL. The generated reader passwords are alphanumeric, so nothing has ever hit
+ *  this; the password arrives from the environment, so the script does not get
+ *  to assume that.
+ *
+ *  The three whitespace escapes are here because they cannot be represented
+ *  literally inside a statement this script builds by concatenation. */
+function literal(value) {
+  const escaped = String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\0/g, '\\0');
+  return `'${escaped}'`;
 }
 
 function statements(sql) {
@@ -94,7 +128,7 @@ function statements(sql) {
   // behaviour rather than a special case.
   await run(`DROP USER IF EXISTS ${READER}`);
   await run(
-    `CREATE USER ${READER} IDENTIFIED WITH sha256_password BY '${READER_PASSWORD.replace(/'/g, "\\'")}' `
+    `CREATE USER ${READER} IDENTIFIED WITH sha256_password BY ${literal(READER_PASSWORD)} `
       + "HOST IP '10.10.1.0/24' HOST IP '127.0.0.1' SETTINGS readonly = 2",
   );
   for (const table of tables) {

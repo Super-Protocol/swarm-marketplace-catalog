@@ -423,6 +423,17 @@ Three things the script will not get wrong, each of which has cost somebody a st
 healthy before a window as well as after one. With no recovery file it checks only that the gate
 will admit the deployment; with one it also checks the digest against the recorded baseline.
 
+**`--apply` refuses outright when the stand is already failing that check** rather than warning
+and proceeding. A window run from there cannot be judged — the post-window assertion would find a
+mismatch and blame the window for one it inherited — and the rollback it ordered would restore a
+state the gate was refusing anyway. `--rollback` is exempt: a stand in that state is exactly when
+you want to put it back.
+
+When anything fails, the script prints the stand's actual state — `status`, `published`, what is
+mounted — says plainly if it is off the air, and gives the rollback command, or says that nothing
+was changed. A failure in the middle of a window leaves somebody reading that output with the
+stand down, and a bare message does not tell them which of those two situations they are in.
+
 The recovery file is written **only by `--apply`**, and `--rollback` refuses to run without one —
 restoring the state a stand is already in is not a rollback, and a dry run that overwrote the file
 would replace the pre-window record with the post-window one. A file with no `completedAt` is an
