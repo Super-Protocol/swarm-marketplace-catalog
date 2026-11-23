@@ -19,6 +19,11 @@
 //                same words, because the claim must not outrun the mechanism.
 //
 // Both are recorded, accepted or refused, in an append-only journal.
+//
+// The practice's own coordinators read the diary and the journal two ways: the
+// JSON routes below, with their token as a bearer, and the screen in
+// `staff.mjs`, which takes the same token once through a form and carries a
+// session cookie. Same grant, same scope, one check — `grantFor(…, 'read')`.
 import { createServer } from 'node:http';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -27,6 +32,10 @@ import { z } from 'zod';
 import { AttestationError, verifyCaller } from './attestation.mjs';
 import { loadGrants } from './grants.mjs';
 import { ClinicStore } from './store.mjs';
+import {
+  StaffSessions, appointmentsPage, clearedCookie, isSecureRequest, journalPage, loginPage,
+  readCookie, sessionCookie,
+} from './staff.mjs';
 
 const SERVER_NAME = 'cypress-bay-scheduling';
 const SERVER_VERSION = '0.1.0';
@@ -197,7 +206,121 @@ async function handleMcp(req, res) {
   await transport.handleRequest(req, res);
 }
 
-createServer({ maxHeaderSize: 64 * 1024 }, (req, res) => {
+const sessions = new StaffSessions();
+
+function sendHtml(res, status, html, headers = {}) {
+  res.writeHead(status, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-store',
+    // The pages hold patient names, so they are not a document any
+    // intermediary, extension or embedder should get to keep or frame.
+    'referrer-policy': 'no-referrer',
+    'x-content-type-options': 'nosniff',
+    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    ...headers,
+  });
+  res.end(html);
+}
+
+function seeOther(res, location, headers = {}) {
+  res.writeHead(303, { location, 'cache-control': 'no-store', ...headers });
+  res.end();
+}
+
+/**
+ * An `application/x-www-form-urlencoded` body, capped: a token is at most a
+ * hundred characters and nothing here has any use for more. Over the cap the
+ * rest is DISCARDED rather than the socket destroyed — a request killed
+ * mid-stream never receives the refusal, so the browser shows a network error
+ * where it should show "that was too long to be a token".
+ */
+function readForm(req, limitBytes = 8 * 1024) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    let overflow = false;
+    const chunks = [];
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > limitBytes) { overflow = true; return; }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve({
+      overflow,
+      form: new URLSearchParams(overflow ? '' : Buffer.concat(chunks).toString('utf8')),
+    }));
+    req.on('error', reject);
+  });
+}
+
+/**
+ * The screen. Two views, a sign-in form, a sign-out, and nothing else: there is
+ * no route here that writes to the diary, because a window that can also book
+ * is a second way into the scheduling system and the demonstration does not
+ * need one.
+ *
+ * The credential check is `grantFor(…, 'read')` — the same call the JSON routes
+ * make, against the same grants file. A session is only ever opened from a
+ * token that already carries scope `read`, so the screen cannot show anything a
+ * holder of that token could not already fetch.
+ */
+async function handleStaff(req, res, path) {
+  const secure = isSecureRequest(req);
+
+  if (req.method === 'POST' && path === '/staff/session') {
+    const { form, overflow } = await readForm(req);
+    if (overflow) {
+      sendHtml(res, 413, loginPage({ error: 'That was too long to be a token.' }));
+      return;
+    }
+    const presented = (form.get('token') ?? '').trim();
+    const reader = grantFor(`Bearer ${presented}`, 'read');
+    if (!reader) {
+      // A refused credential on the clinic's own system is exactly what a
+      // journal is for. A successful sign-in is not recorded: the journal is
+      // the record of CALLS, and page views would bury the six entries the
+      // demonstration turns on.
+      store.record({ outcome: 'refused', reason: 'no_staff_credential', path, method: req.method });
+      log('warn', 'request_refused', { reason: 'no_staff_credential', path });
+      sendHtml(res, 401, loginPage({ error: 'That is not a token this practice issued for reading.' }));
+      return;
+    }
+    const id = sessions.open(reader.label);
+    log('info', 'staff_signed_in', { grant: reader.label });
+    seeOther(res, '/staff/appointments', { 'set-cookie': sessionCookie(id, { secure }) });
+    return;
+  }
+
+  if (req.method === 'POST' && path === '/staff/sign-out') {
+    const id = readCookie(req.headers.cookie);
+    sessions.close(id);
+    seeOther(res, '/staff', { 'set-cookie': clearedCookie({ secure }) });
+    return;
+  }
+
+  if (req.method !== 'GET') {
+    sendHtml(res, 405, loginPage({ error: 'Method not allowed.' }), { allow: 'GET, POST' });
+    return;
+  }
+
+  const session = sessions.get(readCookie(req.headers.cookie));
+  if (!session) {
+    // A cookie that has expired is cleared on the way out, so the browser stops
+    // sending a value this process will never recognise again.
+    sendHtml(res, 200, loginPage(), { 'set-cookie': clearedCookie({ secure }) });
+    return;
+  }
+  if (path === '/staff/journal') {
+    sendHtml(res, 200, journalPage(store.journal(), session));
+    return;
+  }
+  if (path === '/staff/appointments') {
+    sendHtml(res, 200, appointmentsPage(store.appointments(), session));
+    return;
+  }
+  seeOther(res, '/staff/appointments');
+}
+
+const server = createServer({ maxHeaderSize: 64 * 1024 }, (req, res) => {
   const path = (req.url ?? '/').split('?')[0];
   if (req.method === 'GET' && path === '/healthz') {
     const callers = [...grants.values()].filter((g) => g.scopes.includes('mcp')).length;
@@ -223,6 +346,23 @@ createServer({ maxHeaderSize: 64 * 1024 }, (req, res) => {
     sendJson(res, 200, path === '/appointments' ? store.appointments() : store.journal());
     return;
   }
+  // The screen. `/` lands here because a person who is handed this hostname
+  // types no path, and `/staff` without a view is the diary.
+  if (path === '/' || path === '/staff' || path.startsWith('/staff/')) {
+    handleStaff(req, res, path === '/' || path === '/staff' ? '/staff/appointments' : path).catch((error) => {
+      log('error', 'request_failed', { error: error?.message ?? 'Error', path });
+      if (!res.headersSent) sendHtml(res, 500, loginPage({ error: 'Something went wrong on this system.' }));
+      else res.end();
+    });
+    return;
+  }
+  // Browsers ask for this unprompted; answering 404 with a JSON body is noise
+  // in the log of a system whose log is evidence.
+  if (req.method === 'GET' && path === '/favicon.ico') {
+    res.writeHead(204, { 'cache-control': 'public, max-age=86400' });
+    res.end();
+    return;
+  }
   if (path === '/mcp') {
     handleMcp(req, res).catch((error) => {
       log('error', 'request_failed', { error: error?.message ?? 'Error' });
@@ -232,4 +372,8 @@ createServer({ maxHeaderSize: 64 * 1024 }, (req, res) => {
     return;
   }
   sendJson(res, 404, { error: 'not found' });
-}).listen(PORT, () => log('info', 'listening', { port: PORT, grants: grants.size, dataDir: DATA_DIR }));
+});
+// The port that was actually bound, not the one that was asked for: `PORT=0`
+// means "whichever is free", and the tests read this line to find the server.
+server.listen(PORT, () =>
+  log('info', 'listening', { port: server.address().port, grants: grants.size, dataDir: DATA_DIR }));

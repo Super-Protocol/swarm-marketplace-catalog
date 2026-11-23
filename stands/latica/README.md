@@ -325,11 +325,18 @@ ignored.
    `Manual`. One of them is the refusal.
 5. **Administration → MCP servers** → one server, one tool, a token, and the sentence about
    outbound traffic.
-6. The clinic's side: `GET /appointments` and `GET /journal` on the scheduling system, **with the
-   practice's own staff token** — two appointments, each stamped with the evidence digest it was
-   accepted from, and a refusal. The deployment's token does not open these: it carries
-   `scopes: ["mcp"]` and the read routes want `read`, which is what keeps the one tool it was
-   given from being a way back into the chart.
+6. The clinic's side, on its own screen: open `https://cypress-bay-scheduling.demo.superprotocol.dev`
+   and sign in with the **practice's own staff token**. **Appointments** — the recalls that were
+   booked, each stamped with the evidence digest the call was accepted from; **Journal** — every
+   call, with its attestation verdict, and the refusals in red beside the acceptances. (The same
+   two things are `GET /appointments` and `GET /journal` as JSON, for anyone who prefers a
+   `curl`.) The deployment's token opens none of it: it carries `scopes: ["mcp"]` and these want
+   `read`, which is what keeps the one tool it was given from being a way back into the chart —
+   paste the deployment's token into the sign-in form and watch it refused.
+
+   The Journal page states its own limits where a viewer reads them: the check binds the approved
+   code to the **hostname**, the **token** binds the individual call, the code is re-checked once
+   per 60-second window, and the deployment's outbound destinations are not all attested yet.
 7. **Chat** → attach `tillerson-nadine-report-2025-10-05.pdf` and ask it to reconcile. It reads a
    named patient's signed report and catches an error in the record.
 
