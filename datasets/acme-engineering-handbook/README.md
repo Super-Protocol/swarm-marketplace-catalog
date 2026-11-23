@@ -156,6 +156,62 @@ documents survive the round trip with their line breaks intact — verified by r
 back out and comparing it to the generator's own output, which differ only in ClickHouse's own
 escaping of `'` on export.
 
-`users.xml` is the one thing this repository cannot regenerate: it carries the reader's password,
-which is a stand secret and lives on the host and in the dataset's publisher secrets. Recovering
-it means writing a new password into both.
+`users.xml` is the one thing this repository cannot regenerate, because it carries the reader's
+password — a stand secret, held on the host and in the dataset's publisher secrets. Everything
+else about it is below; recovering the file means writing this out and putting the same new
+password in both places.
+
+```xml
+<clickhouse>
+  <users>
+    <!-- Reader for the Acme engineering handbook dataset (SUP-840). SELECT on the one
+         table and nothing else; the gate holds this credential and the consumer never
+         sees it. -->
+    <handbook_reader>
+      <password>REPLACE-ME</password>
+      <networks><ip>10.10.1.0/24</ip><ip>127.0.0.1</ip></networks>
+      <profile>readonly</profile>
+      <quota>default</quota>
+      <access_management>0</access_management>
+      <!-- The reader sees one database. The gate rewrites the database a caller named, so
+           an application cannot ask for another one through it; this is the second lock. -->
+      <allow_databases>
+        <database>handbook</database>
+      </allow_databases>
+    </handbook_reader>
+
+    <!-- SUP-888. `default` holds every grant WITH GRANT OPTION and has no password, so it is
+         confined to this container's own loopback. Without it `default` answers on
+         10.10.1.0/24 like any other user, which makes the read-only reader above decorative:
+         anybody who could reach the gate's host could DROP the table, and only the NSG would
+         have been in the way.
+
+         The image's entrypoint narrows `default` the same way on startup — but it stands down,
+         silently, as soon as a users.d file has already changed `users.default`. So once this
+         block exists, this block IS the lockdown. Keep both anyway: a container re-created
+         without this file is then locked down by the entrypoint instead, as long as
+         CLICKHOUSE_SKIP_USER_SETUP is not set. The open state needs both mistakes at once. -->
+    <default>
+      <networks replace="replace">
+        <ip>127.0.0.1</ip>
+        <ip>::1</ip>
+      </networks>
+    </default>
+  </users>
+  <profiles>
+    <readonly>
+      <readonly>1</readonly>
+      <max_execution_time>30</max_execution_time>
+      <max_result_rows>100000</max_result_rows>
+    </readonly>
+  </profiles>
+</clickhouse>
+```
+
+Two notes on that file. `readonly` is a *profile*, not a grant: the reader is held to `SELECT`
+by the profile and to one database by `allow_databases`, which is why the credential the gate
+holds cannot be used for anything else even by a caller the gate has admitted. And
+`replace="replace"` on `default`'s `<networks>` is explicitness rather than necessity — it was
+tried both ways on the live container, and a `users.d` file that names `<networks>` replaces the
+`::/0` from the image either way (which is why the image's own `default-user.xml` works without
+the attribute). It is kept because a reader of this file should not have to know that.
