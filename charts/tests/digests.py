@@ -37,6 +37,13 @@ IMAGES = {
         "image",
         "cache.image",
     ],
+    # Confidential Vulnerability Analysis (SUP-843). One image, first-party,
+    # built from our fork — and the only image the whole listing adds, since the
+    # console, the workbench and the egress guard run inside it from a ConfigMap
+    # rather than as containers of their own.
+    "confidential-vulnerability-analysis": [
+        "image",
+    ],
     "patroni-postgresql": [
         "image",
         "etcd.image",

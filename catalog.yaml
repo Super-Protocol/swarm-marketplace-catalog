@@ -78,6 +78,14 @@ apps:
   # the port, the pins and the confidential execution, not somebody else's brand.
   - path: apps/confidential-rag
     organization: platform-team
+  # Ported from NVIDIA's open vulnerability-analysis reference architecture
+  # (SUP-843). The audit found nothing mandatory and encumbered in it, so what
+  # this listing stands behind is narrower and sharper than a substitution: the
+  # input is an organisation's image inventory and its open findings, and the
+  # deployment reaches exactly one external host with exactly a CVE identifier.
+  # Published by the platform team like the rest of the ported family.
+  - path: apps/confidential-vulnerability-analysis
+    organization: platform-team
   - path: apps/conversational-analyst
     organization: aivo
     secrets:

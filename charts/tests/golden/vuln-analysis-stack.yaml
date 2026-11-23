@@ -1,0 +1,1850 @@
+---
+# Source: confidential-vulnerability-analysis/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: confidential-vuln-analysis-secrets
+  labels:
+    app.kubernetes.io/name: confidential-vuln-analysis
+    app.kubernetes.io/instance: va
+    app.kubernetes.io/managed-by: Helm
+type: Opaque
+stringData:
+  console-password: "ACCESS-PASSWORD-FOR-THE-GOLDEN"
+  console-session-key: "SESSION-SIGNING-KEY-FOR-THE-GOLDEN-0123"
+  # Authenticates this deployment to the generation endpoint beside it. That endpoint is on no
+  # public address, but an unauthenticated inference endpoint is an unauthenticated inference
+  # endpoint, and the client has to carry a key regardless.
+  inference-api-key: "INFERENCE-KEY-FOR-THE-GOLDEN"
+---
+# Source: confidential-vulnerability-analysis/templates/configmap-app.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: confidential-vuln-analysis-app
+  labels:
+    app.kubernetes.io/name: confidential-vuln-analysis
+    app.kubernetes.io/instance: va
+    app.kubernetes.io/managed-by: Helm
+data:
+  console.py: |
+    #!/usr/bin/env python3
+    """The deployment's front door: a sign-in form, a session cookie, and the analyst's workbench.
+    
+    What is behind this door is a map of which vulnerabilities an organisation has and where they
+    are, which is why there is a door at all. Upstream has none: `nat serve` publishes the pipeline,
+    the report endpoints and a Swagger UI with no authentication unless an OAuth2 issuer is
+    configured for it, and the blueprint's own Compose file publishes JupyterLab on loopback with
+    authentication explicitly disabled. Neither is a thing to put on a public hostname.
+    
+    Four things here are not incidental.
+    
+    **The credential is collected with a form and carried in a cookie.** HTTP Basic does not survive
+    a single-page console: the manifest and the icons are fetched in a mode where the browser sends
+    no credentials, so the prompt returns for ever, and ingress-nginx strips `Authorization` when it
+    performs basic auth itself, so the app behind it authenticates nobody.
+    
+    **The session is a signed assertion, not a row.** `HMAC-SHA256(key, "v1|<expiry>")`, verified in
+    constant time. No store to run, no state to lose on a restart, and nothing per-deployment in any
+    rendered object: the key is in a Secret, which the platform lifts out before the evidence
+    snapshot is taken.
+    
+    **The analysis API is on loopback and on no Service.** It is reachable from this process and
+    from nothing else in the cluster — so this session check is the whole of what stands in front of
+    it, and that is the only reason it is safe for the API to have no authentication of its own.
+    
+    **The root filesystem is uploaded, not pulled.** Upstream resolves an image reference and exports
+    the rootfs with `crane`, which means the deployment reaches a registry and the registry learns
+    which image is being analysed. Here the tenant extracts it on their own machine — the image
+    carries `scripts/extract_image.py` for exactly that — and uploads the tar. Nothing about the
+    inventory leaves, and there is no registry credential for this deployment to hold.
+    
+    Only `/healthz` is outside the session. It reports liveness and nothing about any finding.
+    
+    stdlib plus what the analysis image already carries (fastapi, httpx) — this runs in that image,
+    from a ConfigMap the cloud digests and signs, so the code serving the door is in the evidence
+    beside the code doing the analysis.
+    """
+    
+    from __future__ import annotations
+    
+    import asyncio
+    import hashlib
+    import hmac
+    import json
+    import logging
+    import os
+    import re
+    import secrets
+    import shutil
+    import tarfile
+    import time
+    from pathlib import Path
+    
+    import httpx
+    from fastapi import FastAPI, Form, Request, Response
+    from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+    
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
+    logger = logging.getLogger("console")
+    
+    PASSWORD = os.environ.get("CONSOLE_PASSWORD", "")
+    SESSION_KEY = os.environ.get("CONSOLE_SESSION_KEY", "").encode()
+    SESSION_TTL = int(os.environ.get("CONSOLE_SESSION_TTL_SECONDS", 12 * 3600))
+    COOKIE = "cva_session"
+    
+    API_URL = os.environ.get("ANALYSIS_API_URL", "http://127.0.0.1:26466").rstrip("/")
+    GUARD_URL = os.environ.get("EGRESS_GUARD_URL", "").rstrip("/")
+    DATA_ROOT = Path(os.environ.get("DATA_ROOT", "/data"))
+    ROOTFS_ROOT = DATA_ROOT / "rootfs"
+    UI_DIR = os.environ.get("UI_DIR", "/opt/console")
+    
+    MAX_UPLOAD_BYTES = int(float(os.environ.get("UPLOAD_MAX_GIB", "8")) * (1024**3))
+    KEEP_ROOTFS = int(os.environ.get("UPLOAD_KEEP", "6"))
+    
+    NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
+    VULN_PATTERN = re.compile(r"^(CVE-[0-9]{4}-[0-9]{4,}|GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4})$", re.I)
+    # A container reference the pipeline will echo into its reports. Validated because it reaches a
+    # filename and a report heading, not because it is resolved — nothing here pulls an image.
+    IMAGE_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,190}$")
+    TAG_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$")
+    
+    # What the deployment says about itself. Every value is rendered from the listing's own
+    # parameters, so the panel a user reads and the digest the cloud signed describe the same thing.
+    ABOUT = {
+        "title": os.environ.get("CONSOLE_TITLE", "Confidential Vulnerability Analysis"),
+        "generationModel": os.environ.get("ABOUT_GENERATION_MODEL", ""),
+        "generationLicence": os.environ.get("ABOUT_GENERATION_LICENCE", ""),
+        "contextWindowTokens": os.environ.get("ABOUT_CONTEXT_WINDOW", ""),
+        "egressAllowHost": os.environ.get("ABOUT_EGRESS_HOST", ""),
+        "egressAllowPort": os.environ.get("ABOUT_EGRESS_PORT", ""),
+        "sourceRepo": os.environ.get("ABOUT_SOURCE_REPO", ""),
+        "upstream": os.environ.get("ABOUT_UPSTREAM", ""),
+        "uploadMaxGiB": os.environ.get("UPLOAD_MAX_GIB", ""),
+    }
+    
+    if not PASSWORD or not SESSION_KEY:
+        # Refuse to start rather than serve an open door. A console that came up without a password
+        # would pass every probe in the chart and publish an organisation's vulnerability map.
+        raise SystemExit(
+            "console: CONSOLE_PASSWORD and CONSOLE_SESSION_KEY are required; refusing to serve "
+            "an unauthenticated interface on a public hostname"
+        )
+    
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    
+    
+    # ---------------------------------------------------------------------------
+    # The session
+    # ---------------------------------------------------------------------------
+    def issue(ttl: int = SESSION_TTL) -> str:
+        expiry = int(time.time()) + ttl
+        payload = f"v1|{expiry}"
+        mac = hmac.new(SESSION_KEY, payload.encode(), hashlib.sha256).hexdigest()
+        return f"{payload}|{mac}"
+    
+    
+    def valid(token: str | None) -> bool:
+        if not token:
+            return False
+        parts = token.split("|")
+        if len(parts) != 3 or parts[0] != "v1":
+            return False
+        payload, mac = f"{parts[0]}|{parts[1]}", parts[2]
+        expected = hmac.new(SESSION_KEY, payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, mac):
+            return False
+        try:
+            return int(parts[1]) > time.time()
+        except ValueError:
+            return False
+    
+    
+    def signed_in(request: Request) -> bool:
+        return valid(request.cookies.get(COOKIE))
+    
+    
+    def denied() -> JSONResponse:
+        return JSONResponse({"error": "not signed in"}, status_code=401)
+    
+    
+    LOGIN_PAGE = """<!doctype html>
+    <html lang="en"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>__TITLE__</title>
+    <style>
+     :root{color-scheme:dark}
+     body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0e14;color:#e6e6e6;
+          font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+     form{width:min(92vw,22rem);padding:2rem;background:#141925;border:1px solid #232a3a;border-radius:12px}
+     h1{margin:0 0 .25rem;font-size:1.15rem}
+     p{margin:0 0 1.5rem;color:#8b94a7;font-size:.86rem}
+     label{display:block;margin-bottom:.4rem;font-size:.8rem;color:#8b94a7}
+     input{width:100%;box-sizing:border-box;padding:.6rem .7rem;background:#0b0e14;color:#e6e6e6;
+           border:1px solid #2b3448;border-radius:8px;font-size:.95rem}
+     button{margin-top:1.1rem;width:100%;padding:.65rem;border:0;border-radius:8px;background:#3b82f6;
+            color:#fff;font-size:.95rem;font-weight:600;cursor:pointer}
+     .err{margin:.9rem 0 0;color:#f87171;font-size:.84rem}
+    </style></head>
+    <body><form method="post" action="/login">
+     <h1>__TITLE__</h1>
+     <p>This deployment analyses container images you upload. Sign in to continue.</p>
+     <label for="password">Access password</label>
+     <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
+     <button type="submit">Sign in</button>
+     __ERROR__
+    </form></body></html>
+    """
+    
+    
+    def login_page(error: str = "") -> HTMLResponse:
+        markup = LOGIN_PAGE.replace("__TITLE__", ABOUT["title"])
+        markup = markup.replace(
+            "__ERROR__", '<p class="err">That password was not accepted.</p>' if error else ""
+        )
+        # 401 on a failed attempt, 200 on a first visit: a monitor should be able to tell the
+        # difference without parsing the body.
+        return HTMLResponse(markup, status_code=401 if error else 200)
+    
+    
+    @app.get("/healthz")
+    async def healthz() -> JSONResponse:
+        """Liveness, and nothing about any finding. Reachable by anybody who finds the hostname."""
+        return JSONResponse({"status": "ok"})
+    
+    
+    @app.get("/")
+    async def root(request: Request) -> HTMLResponse:
+        if not signed_in(request):
+            return login_page()
+        with open(os.path.join(UI_DIR, "index.html"), encoding="utf-8") as handle:
+            return HTMLResponse(handle.read())
+    
+    
+    @app.post("/login")
+    async def login(password: str = Form("")) -> Response:
+        # Constant-time, so a wrong answer takes as long as a right one.
+        if not hmac.compare_digest(password.encode(), PASSWORD.encode()):
+            # A deliberate, fixed delay — not rate limiting, which one process cannot do honestly,
+            # but enough that an online guess against this door is not free. `asyncio.sleep` and not
+            # `time.sleep`: this handler runs on the event loop, and blocking it would stop the whole
+            # console for every wrong password, uploads and polls included.
+            await asyncio.sleep(0.5)
+            return login_page(error="bad")
+        redirect = RedirectResponse("/", status_code=303)
+        redirect.set_cookie(
+            COOKIE,
+            issue(),
+            max_age=SESSION_TTL,
+            httponly=True,
+            # The deployment is served over TLS by the cloud's gateway and on no other scheme.
+            secure=True,
+            samesite="lax",
+            path="/",
+        )
+        return redirect
+    
+    
+    @app.post("/logout")
+    async def logout() -> Response:
+        redirect = RedirectResponse("/", status_code=303)
+        redirect.delete_cookie(COOKIE, path="/")
+        return redirect
+    
+    
+    # ---------------------------------------------------------------------------
+    # What the deployment is
+    # ---------------------------------------------------------------------------
+    @app.get("/api/about")
+    async def about(request: Request) -> JSONResponse:
+        if not signed_in(request):
+            return denied()
+        return JSONResponse(ABOUT)
+    
+    
+    @app.get("/api/status")
+    async def status(request: Request) -> JSONResponse:
+        """Readiness of the pipeline, what the egress guard has decided, and the volume."""
+        if not signed_in(request):
+            return denied()
+    
+        out: dict[str, object] = {}
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            try:
+                answer = await client.get(f"{API_URL}/ready")
+                out["pipeline"] = {"httpStatus": answer.status_code, **_json_or_text(answer)}
+            except Exception as error:  # noqa: BLE001 — the panel reports, it does not fail
+                out["pipeline"] = {"error": str(error)}
+            if GUARD_URL:
+                try:
+                    answer = await client.get(f"{GUARD_URL}/_guard/status")
+                    out["egress"] = _json_or_text(answer)
+                except Exception as error:  # noqa: BLE001
+                    out["egress"] = {"error": str(error)}
+    
+        usage = shutil.disk_usage(DATA_ROOT)
+        out["volume"] = {
+            "totalGiB": round(usage.total / 1024**3, 1),
+            "usedGiB": round(usage.used / 1024**3, 1),
+            "freeGiB": round(usage.free / 1024**3, 1),
+        }
+        out["rootfs"] = _list_rootfs()
+        return JSONResponse(out)
+    
+    
+    def _json_or_text(answer: httpx.Response) -> dict:
+        try:
+            payload = answer.json()
+            return payload if isinstance(payload, dict) else {"value": payload}
+        except Exception:  # noqa: BLE001
+            return {"body": answer.text[:2000]}
+    
+    
+    # ---------------------------------------------------------------------------
+    # The uploaded root filesystems
+    # ---------------------------------------------------------------------------
+    def _list_rootfs() -> list[dict]:
+        if not ROOTFS_ROOT.is_dir():
+            return []
+        entries = []
+        for child in sorted(ROOTFS_ROOT.iterdir()):
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            meta_file = child / ".upload.json"
+            meta = {}
+            if meta_file.is_file():
+                try:
+                    meta = json.loads(meta_file.read_text())
+                except Exception:  # noqa: BLE001
+                    meta = {}
+            entries.append(
+                {
+                    "name": child.name,
+                    "uploadedAt": meta.get("uploadedAt", ""),
+                    "bytes": meta.get("bytes", 0),
+                    "entries": meta.get("entries", 0),
+                    "filesystemPath": meta.get("filesystemPath", ""),
+                    "imageConfigPath": meta.get("imageConfigPath", ""),
+                }
+            )
+        return entries
+    
+    
+    def _resolve_rootfs(target: Path) -> tuple[str, str]:
+        """Find the directory the tools should treat as `/`, and an image config beside it.
+    
+        A tar of a flattened rootfs comes in two shapes depending on how it was made: members at the
+        archive root (`./etc`, `./usr`), or one top-level directory holding them. Both are accepted,
+        because telling an analyst their tar is the wrong shape is a worse answer than looking.
+        """
+        markers = {"etc", "usr", "bin", "lib", "var", "opt"}
+        candidates = [target, *[c for c in target.iterdir() if c.is_dir()]]
+        best = target
+        for candidate in candidates:
+            names = {c.name for c in candidate.iterdir() if c.is_dir()}
+            if len(names & markers) >= 2:
+                best = candidate
+                break
+        config = ""
+        for name in ("config.json", "image_config.json"):
+            for place in (target, best, best.parent):
+                if (place / name).is_file():
+                    config = str(place / name)
+                    break
+            if config:
+                break
+        return (str(best), config)
+    
+    
+    def _extract(tar_path: Path, target: Path) -> int:
+        """Unpack with the `data` filter: no device nodes, no setuid bits, no paths outside target.
+    
+        Python's `data` filter is what makes unpacking somebody else's container image safe to do as
+        an unprivileged process — it refuses absolute and parent-relative members, drops special
+        files, and strips the ownership and permission bits that would need root to apply. Without it
+        the first archive with a device node in `/dev` fails the whole extraction, and a crafted one
+        could write outside the directory.
+        """
+        count = 0
+        with tarfile.open(tar_path, mode="r:*") as archive:
+            for member in archive:
+                count += 1
+                try:
+                    archive.extract(member, path=target, filter="data")
+                except Exception as error:  # noqa: BLE001
+                    # One unextractable member is not a failed upload: a rootfs holds sockets,
+                    # fifos and hard links to things the filter dropped, and the analysis reads
+                    # regular files.
+                    logger.info("skipped %s: %s", member.name, error)
+        return count
+    
+    
+    @app.put("/api/rootfs/{name}")
+    async def upload_rootfs(name: str, request: Request) -> JSONResponse:
+        """Stream a rootfs tar onto the volume and unpack it. The request body is the tar itself.
+    
+        Not multipart: a multipart parser buffers the part it is reading, and this part is gigabytes.
+        The body is written to the volume as it arrives and never held in memory.
+        """
+        if not signed_in(request):
+            return denied()
+        if not NAME_PATTERN.match(name):
+            return JSONResponse(
+                {"error": "the name may hold lowercase letters, digits, dot, dash and underscore"},
+                status_code=400,
+            )
+    
+        declared = request.headers.get("content-length")
+        if declared and int(declared) > MAX_UPLOAD_BYTES:
+            return JSONResponse(
+                {
+                    "error": f"that archive is larger than this deployment accepts "
+                    f"({MAX_UPLOAD_BYTES // 1024**3} GiB)"
+                },
+                status_code=413,
+            )
+    
+        ROOTFS_ROOT.mkdir(parents=True, exist_ok=True)
+        target = ROOTFS_ROOT / name
+        if target.exists():
+            return JSONResponse(
+                {"error": f"{name} is already here; delete it first or choose another name"},
+                status_code=409,
+            )
+    
+        _prune(keep=KEEP_ROOTFS - 1)
+        staging = ROOTFS_ROOT / f".upload-{name}.tar"
+        written = 0
+        try:
+            with open(staging, "wb") as handle:
+                async for chunk in request.stream():
+                    written += len(chunk)
+                    if written > MAX_UPLOAD_BYTES:
+                        raise ValueError(
+                            f"the upload passed {MAX_UPLOAD_BYTES // 1024**3} GiB and was stopped"
+                        )
+                    handle.write(chunk)
+            if written == 0:
+                raise ValueError("the request body was empty")
+            target.mkdir(parents=True)
+            entries = await asyncio.to_thread(_extract, staging, target)
+            filesystem_path, image_config_path = await asyncio.to_thread(_resolve_rootfs, target)
+        except Exception as error:  # noqa: BLE001
+            shutil.rmtree(target, ignore_errors=True)
+            staging.unlink(missing_ok=True)
+            logger.error("upload %s failed after %d bytes: %s", name, written, error)
+            return JSONResponse({"error": str(error)}, status_code=400)
+        finally:
+            staging.unlink(missing_ok=True)
+    
+        meta = {
+            "uploadedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "bytes": written,
+            "entries": entries,
+            "filesystemPath": filesystem_path,
+            "imageConfigPath": image_config_path,
+        }
+        (target / ".upload.json").write_text(json.dumps(meta))
+        logger.info("upload %s: %d bytes, %d members, root %s", name, written, entries, filesystem_path)
+        return JSONResponse({"name": name, **meta})
+    
+    
+    @app.delete("/api/rootfs/{name}")
+    async def delete_rootfs(name: str, request: Request) -> JSONResponse:
+        if not signed_in(request):
+            return denied()
+        if not NAME_PATTERN.match(name):
+            return JSONResponse({"error": "no such upload"}, status_code=404)
+        target = ROOTFS_ROOT / name
+        if not target.is_dir():
+            return JSONResponse({"error": "no such upload"}, status_code=404)
+        shutil.rmtree(target, ignore_errors=True)
+        return JSONResponse({"deleted": name})
+    
+    
+    def _prune(keep: int) -> None:
+        """Drop the oldest uploads so a new one does not fill the volume."""
+        if keep < 0 or not ROOTFS_ROOT.is_dir():
+            return
+        directories = sorted(
+            (c for c in ROOTFS_ROOT.iterdir() if c.is_dir() and not c.name.startswith(".")),
+            key=lambda c: c.stat().st_mtime,
+        )
+        while len(directories) > keep:
+            oldest = directories.pop(0)
+            logger.info("pruning %s to make room", oldest.name)
+            shutil.rmtree(oldest, ignore_errors=True)
+    
+    
+    # ---------------------------------------------------------------------------
+    # Analysis jobs
+    # ---------------------------------------------------------------------------
+    @app.post("/api/jobs")
+    async def submit(request: Request) -> JSONResponse:
+        """Validate what the form sent and submit it to the pipeline as an asynchronous job."""
+        if not signed_in(request):
+            return denied()
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return JSONResponse({"error": "expected a JSON body"}, status_code=400)
+    
+        name = str(body.get("rootfs") or "")
+        if not NAME_PATTERN.match(name) or not (ROOTFS_ROOT / name).is_dir():
+            return JSONResponse({"error": "choose an uploaded root filesystem"}, status_code=400)
+        meta = json.loads((ROOTFS_ROOT / name / ".upload.json").read_text())
+    
+        image_name = str(body.get("imageName") or "").strip()
+        image_tag = str(body.get("imageTag") or "").strip()
+        if not IMAGE_PATTERN.match(image_name):
+            return JSONResponse({"error": "the image name is required"}, status_code=400)
+        if not TAG_PATTERN.match(image_tag):
+            return JSONResponse({"error": "the image tag is required"}, status_code=400)
+    
+        vulns = []
+        for entry in body.get("vulns") or []:
+            identifier = str(entry.get("id") or "").strip().upper()
+            if not VULN_PATTERN.match(identifier):
+                return JSONResponse(
+                    {"error": f"{identifier or '(empty)'} is not a CVE or GHSA identifier"},
+                    status_code=400,
+                )
+            item: dict[str, str] = {"vuln_id": identifier}
+            if entry.get("package"):
+                item["package_hint"] = str(entry["package"])[:200]
+            if entry.get("version"):
+                item["version_hint"] = str(entry["version"])[:100]
+            vulns.append(item)
+        if not vulns:
+            return JSONResponse({"error": "at least one CVE or GHSA identifier"}, status_code=400)
+        if len(vulns) > 20:
+            return JSONResponse(
+                {"error": "twenty identifiers at a time; each one is its own research branch"},
+                status_code=400,
+            )
+    
+        payload = {
+            "vulns": vulns,
+            "image_name": image_name,
+            "image_tag": image_tag,
+            "filesystem_path": meta.get("filesystemPath") or str(ROOTFS_ROOT / name),
+            # Phase 1 of the container analyzer researches a PUBLIC image on the web. There is no
+            # web tool in this deployment's configuration, and the image was never pulled from a
+            # registry here, so it is switched off at the request as well — the attested
+            # configuration and the request agree, rather than relying on each other.
+            "skip_web_research": True,
+        }
+        if meta.get("imageConfigPath"):
+            payload["image_config_path"] = meta["imageConfigPath"]
+    
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=120.0)) as client:
+            try:
+                # Preflight first, as upstream prescribes: it checks the input, the rootfs and the
+                # configured models, and its answer is a far better error than a job that fails
+                # four minutes in.
+                check = await client.post(f"{API_URL}/preflight", json=payload)
+                if check.status_code >= 400:
+                    return JSONResponse(
+                        {"error": "the pipeline refused this request", "preflight": _json_or_text(check)},
+                        status_code=400,
+                    )
+                answer = await client.post(f"{API_URL}/v1/workflow/async", json=payload)
+            except Exception as error:  # noqa: BLE001
+                return JSONResponse({"error": f"the pipeline is unreachable: {error}"}, status_code=502)
+    
+        return JSONResponse(_json_or_text(answer), status_code=answer.status_code)
+    
+    
+    @app.get("/api/jobs/{job_id}")
+    async def job(job_id: str, request: Request) -> JSONResponse:
+        if not signed_in(request):
+            return denied()
+        if not re.match(r"^[A-Za-z0-9._:-]{1,128}$", job_id):
+            return JSONResponse({"error": "no such job"}, status_code=404)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                answer = await client.get(f"{API_URL}/v1/workflow/async/job/{job_id}")
+            except Exception as error:  # noqa: BLE001
+                return JSONResponse({"error": str(error)}, status_code=502)
+        return JSONResponse(_json_or_text(answer), status_code=answer.status_code)
+    
+    
+    # ---------------------------------------------------------------------------
+    # The reports
+    # ---------------------------------------------------------------------------
+    @app.get("/api/reports")
+    async def reports(request: Request) -> JSONResponse:
+        if not signed_in(request):
+            return denied()
+        allowed = {"vulnerability", "container", "report_type"}
+        params = {k: v for k, v in request.query_params.items() if k in allowed}
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                answer = await client.get(f"{API_URL}/reports", params=params)
+            except Exception as error:  # noqa: BLE001
+                return JSONResponse({"error": str(error)}, status_code=502)
+        return JSONResponse(_json_or_text(answer), status_code=answer.status_code)
+    
+    
+    @app.get("/api/reports/{group}/{report_type}/{filename}")
+    async def report(group: str, report_type: str, filename: str, request: Request) -> Response:
+        """One report, relayed. The path is checked here as well as by the API behind it."""
+        if not signed_in(request):
+            return denied()
+        for part in (group, report_type, filename):
+            if not re.match(r"^[A-Za-z0-9._@:+-]{1,200}$", part):
+                return JSONResponse({"error": "no such report"}, status_code=404)
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            try:
+                answer = await client.get(f"{API_URL}/reports/{group}/{report_type}/{filename}")
+            except Exception as error:  # noqa: BLE001
+                return JSONResponse({"error": str(error)}, status_code=502)
+        return Response(
+            content=answer.content,
+            status_code=answer.status_code,
+            media_type=answer.headers.get("content-type", "text/plain; charset=utf-8"),
+        )
+    
+    
+    # A nonce is generated per process and is not used for anything a reader should trust; it exists
+    # so a restarted console is distinguishable in its own logs.
+    logger.info("console up (instance %s)", secrets.token_hex(4))
+    
+  index.html: |
+    <!doctype html>
+    <!--
+      The analyst's workbench: upload a root filesystem, name the findings a scanner gave you, read
+      the VEX decision and the evidence behind it.
+    
+      Everything here is fetched from this console's own /api routes, which require the session
+      cookie. The analysis API is on loopback inside the pod and is not reachable from a browser at
+      all, so there is no path from this page to anything unauthenticated.
+    -->
+    <html lang="en">
+    <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Confidential Vulnerability Analysis</title>
+    <style>
+     :root{color-scheme:dark}
+     *{box-sizing:border-box}
+     body{margin:0;background:#0b0e14;color:#e6e6e6;font:14px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+     header{display:flex;align-items:baseline;gap:1rem;padding:1rem 1.5rem;border-bottom:1px solid #1d2432}
+     header h1{margin:0;font-size:1.05rem}
+     header .sub{color:#8b94a7;font-size:.82rem}
+     header form{margin-left:auto}
+     main{max-width:74rem;margin:0 auto;padding:1.5rem;display:grid;gap:1.25rem}
+     section{background:#141925;border:1px solid #232a3a;border-radius:12px;padding:1.1rem 1.25rem}
+     h2{margin:0 0 .75rem;font-size:.95rem}
+     h2 span{color:#8b94a7;font-weight:400;font-size:.82rem;margin-left:.5rem}
+     .grid{display:grid;gap:.75rem;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr))}
+     .tile{background:#0f141f;border:1px solid #1d2432;border-radius:9px;padding:.65rem .8rem}
+     .tile .k{color:#8b94a7;font-size:.74rem;text-transform:uppercase;letter-spacing:.04em}
+     .tile .v{font-size:.95rem;margin-top:.2rem;word-break:break-word}
+     label{display:block;color:#8b94a7;font-size:.76rem;margin:.6rem 0 .25rem}
+     input,select,textarea,button{font:inherit}
+     input,select{width:100%;padding:.45rem .55rem;background:#0b0e14;color:#e6e6e6;border:1px solid #2b3448;border-radius:7px}
+     button{padding:.5rem .9rem;border:0;border-radius:7px;background:#3b82f6;color:#fff;font-weight:600;cursor:pointer}
+     button.ghost{background:#1d2432;color:#c7cedb;font-weight:500}
+     button:disabled{opacity:.5;cursor:default}
+     table{width:100%;border-collapse:collapse;font-size:.86rem}
+     th,td{text-align:left;padding:.4rem .5rem;border-bottom:1px solid #1d2432;vertical-align:top}
+     th{color:#8b94a7;font-weight:500;font-size:.76rem;text-transform:uppercase;letter-spacing:.04em}
+     .row{display:grid;gap:.5rem;grid-template-columns:1fr 1fr 1fr auto;align-items:end}
+     .muted{color:#8b94a7}
+     .ok{color:#34d399}.warn{color:#fbbf24}.bad{color:#f87171}
+     pre{background:#0b0e14;border:1px solid #1d2432;border-radius:8px;padding:.8rem;overflow:auto;max-height:28rem;white-space:pre-wrap;font-size:.8rem}
+     .bar{height:6px;background:#1d2432;border-radius:3px;overflow:hidden;margin-top:.4rem}
+     .bar i{display:block;height:100%;background:#3b82f6;width:0}
+     .pill{display:inline-block;padding:.1rem .45rem;border-radius:5px;font-size:.74rem;background:#1d2432}
+     .pill.affected{background:#7f1d1d;color:#fecaca}
+     .pill.not_affected{background:#14532d;color:#bbf7d0}
+     .pill.unknown{background:#78350f;color:#fde68a}
+     footer{max-width:74rem;margin:0 auto;padding:0 1.5rem 2.5rem;color:#6b7482;font-size:.78rem}
+     a{color:#60a5fa}
+    </style>
+    </head>
+    <body>
+    <header>
+      <h1 id="title">Confidential Vulnerability Analysis</h1>
+      <div class="sub" id="subtitle"></div>
+      <form method="post" action="/logout"><button class="ghost" type="submit">Sign out</button></form>
+    </header>
+    
+    <main>
+      <section>
+        <h2>This deployment <span id="aboutNote"></span></h2>
+        <div class="grid" id="about"></div>
+      </section>
+    
+      <section>
+        <h2>Root filesystems <span>extracted on your machine, uploaded here — nothing is pulled from a registry</span></h2>
+        <table>
+          <thead><tr><th>Name</th><th>Uploaded</th><th>Size</th><th>Members</th><th></th></tr></thead>
+          <tbody id="rootfsRows"><tr><td colspan="5" class="muted">loading…</td></tr></tbody>
+        </table>
+        <div class="row" style="margin-top:.9rem;grid-template-columns:1fr 2fr auto">
+          <div><label for="upName">Name</label><input id="upName" placeholder="morpheus-25-06"></div>
+          <div><label for="upFile">Archive (.tar / .tar.gz of the flattened rootfs)</label><input id="upFile" type="file" accept=".tar,.tgz,.gz,.tar.gz,application/x-tar,application/gzip"></div>
+          <div><button id="upload">Upload</button></div>
+        </div>
+        <div class="bar"><i id="upBar"></i></div>
+        <div class="muted" id="upNote" style="margin-top:.4rem"></div>
+      </section>
+    
+      <section>
+        <h2>New analysis <span>one research branch, one exploitability assessment and one VEX decision per identifier</span></h2>
+        <div class="row" style="grid-template-columns:2fr 1fr 1fr">
+          <div><label for="jobRootfs">Root filesystem</label><select id="jobRootfs"></select></div>
+          <div><label for="imageName">Image name</label><input id="imageName" placeholder="nvcr.io/nvidia/morpheus/morpheus"></div>
+          <div><label for="imageTag">Tag</label><input id="imageTag" placeholder="25.06-runtime"></div>
+        </div>
+        <div id="vulnRows"></div>
+        <div style="margin-top:.7rem;display:flex;gap:.5rem">
+          <button class="ghost" id="addVuln">Add another identifier</button>
+          <button id="submit">Analyse</button>
+        </div>
+        <div class="muted" id="jobNote" style="margin-top:.6rem"></div>
+      </section>
+    
+      <section>
+        <h2>Job <span id="jobId"></span></h2>
+        <div id="jobBody" class="muted">No job submitted in this session.</div>
+      </section>
+    
+      <section>
+        <h2>Reports</h2>
+        <div style="display:flex;gap:.5rem;margin-bottom:.6rem">
+          <button class="ghost" id="refreshReports">Refresh</button>
+        </div>
+        <table>
+          <thead><tr><th>Identifier</th><th>Kind</th><th>Verdict</th><th>File</th></tr></thead>
+          <tbody id="reportRows"><tr><td colspan="4" class="muted">none yet</td></tr></tbody>
+        </table>
+        <pre id="reportBody" hidden></pre>
+      </section>
+    </main>
+    
+    <footer>
+      The pipeline is a port of NVIDIA's open vulnerability-analysis reference architecture
+      (Apache-2.0), rebuilt on open components. NVIDIA is a trademark of NVIDIA Corporation; this
+      deployment is not produced, endorsed or supported by NVIDIA.
+      <span id="evidenceLink"></span>
+    </footer>
+    
+    <script>
+    const $ = (id) => document.getElementById(id);
+    const fmtBytes = (n) => !n ? "—" : n > 1073741824 ? (n/1073741824).toFixed(2)+" GiB" : (n/1048576).toFixed(1)+" MiB";
+    
+    async function api(path, options) {
+      const answer = await fetch(path, Object.assign({credentials: "same-origin"}, options || {}));
+      if (answer.status === 401) { location.reload(); throw new Error("signed out"); }
+      return answer;
+    }
+    
+    let about = {};
+    
+    async function loadAbout() {
+      about = await (await api("/api/about")).json();
+      $("title").textContent = about.title || "Confidential Vulnerability Analysis";
+      $("subtitle").textContent = "ported from NVIDIA's open reference architecture";
+      const egress = about.egressAllowHost
+        ? `${about.egressAllowHost}:${about.egressAllowPort}`
+        : "nothing — no external host at all";
+      $("about").innerHTML = [
+        ["Generation model", `${about.generationModel || "—"}<br><span class="muted">${about.generationLicence || ""}</span>`],
+        ["Context window", about.contextWindowTokens ? Number(about.contextWindowTokens).toLocaleString() + " tokens" : "—"],
+        ["May reach", `<span class="${about.egressAllowHost ? "warn" : "ok"}">${egress}</span><br><span class="muted">a CVE identifier in a URL path; never a package, a version, an image name or a report</span>`],
+        ["Upload ceiling", (about.uploadMaxGiB || "—") + " GiB per archive"],
+        ["Built from", `<a href="${about.sourceRepo}" target="_blank" rel="noopener noreferrer">our fork</a><br><span class="muted">of <a href="${about.upstream}" target="_blank" rel="noopener noreferrer">the upstream blueprint</a></span>`],
+      ].map(([k, v]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+      $("evidenceLink").innerHTML =
+        ' This deployment publishes <a href="/.well-known/swarm-evidence">its own signed evidence</a>.';
+    }
+    
+    async function loadStatus() {
+      const s = await (await api("/api/status")).json();
+      const ready = s.pipeline && s.pipeline.httpStatus === 200;
+      const parts = [`<span class="${ready ? "ok" : "warn"}">pipeline ${ready ? "ready" : "not ready"}</span>`];
+      if (s.egress && !s.egress.error) {
+        parts.push(`egress admitted ${s.egress.admitted}, refused ${s.egress.refused}` +
+          (s.egress.lastRefused ? ` (last refusal: ${s.egress.lastRefused})` : ""));
+      }
+      if (s.volume) parts.push(`volume ${s.volume.usedGiB} / ${s.volume.totalGiB} GiB used`);
+      $("aboutNote").innerHTML = parts.join(" · ");
+    
+      const rows = s.rootfs || [];
+      $("rootfsRows").innerHTML = rows.length
+        ? rows.map((r) => `<tr><td>${r.name}</td><td class="muted">${r.uploadedAt || "—"}</td>` +
+            `<td>${fmtBytes(r.bytes)}</td><td>${r.entries || "—"}</td>` +
+            `<td><button class="ghost" data-del="${r.name}">Delete</button></td></tr>`).join("")
+        : '<tr><td colspan="5" class="muted">nothing uploaded yet</td></tr>';
+      $("jobRootfs").innerHTML = rows.map((r) => `<option>${r.name}</option>`).join("")
+        || '<option value="">upload one first</option>';
+      for (const button of document.querySelectorAll("[data-del]")) {
+        button.onclick = async () => {
+          if (!confirm(`Delete ${button.dataset.del} and everything extracted from it?`)) return;
+          await api(`/api/rootfs/${encodeURIComponent(button.dataset.del)}`, {method: "DELETE"});
+          loadStatus();
+        };
+      }
+    }
+    
+    // --- upload -----------------------------------------------------------------
+    // XHR rather than fetch: it reports upload progress, which a multi-gigabyte PUT needs.
+    $("upload").onclick = () => {
+      const name = $("upName").value.trim();
+      const file = $("upFile").files[0];
+      if (!name || !file) { $("upNote").textContent = "a name and an archive"; return; }
+      $("upload").disabled = true;
+      $("upNote").textContent = "uploading…";
+      const request = new XMLHttpRequest();
+      request.open("PUT", `/api/rootfs/${encodeURIComponent(name)}`);
+      request.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          $("upBar").style.width = (100 * event.loaded / event.total).toFixed(1) + "%";
+          $("upNote").textContent = `uploading ${fmtBytes(event.loaded)} of ${fmtBytes(event.total)}…`;
+        }
+      };
+      request.onload = () => {
+        $("upload").disabled = false;
+        $("upBar").style.width = "0";
+        let payload = {};
+        try { payload = JSON.parse(request.responseText); } catch (e) { payload = {error: request.responseText}; }
+        if (request.status >= 400) {
+          $("upNote").innerHTML = `<span class="bad">${payload.error || request.status}</span>`;
+        } else {
+          $("upNote").innerHTML = `<span class="ok">unpacked ${payload.entries} members; root ${payload.filesystemPath}</span>` +
+            (payload.imageConfigPath ? ` <span class="muted">(image config found)</span>` : "");
+          $("upName").value = ""; $("upFile").value = "";
+        }
+        loadStatus();
+      };
+      request.onerror = () => {
+        $("upload").disabled = false;
+        $("upNote").innerHTML = '<span class="bad">the upload failed</span>';
+      };
+      request.send(file);
+    };
+    
+    // --- the job form -----------------------------------------------------------
+    function vulnRow() {
+      const wrap = document.createElement("div");
+      wrap.className = "row";
+      wrap.innerHTML =
+        '<div><label>CVE or GHSA</label><input class="vid" placeholder="CVE-2024-5187"></div>' +
+        '<div><label>Package (optional hint)</label><input class="vpkg" placeholder="tqdm"></div>' +
+        '<div><label>Version (optional hint)</label><input class="vver" placeholder="4.66.2"></div>' +
+        '<div><button class="ghost drop">Remove</button></div>';
+      wrap.querySelector(".drop").onclick = () => wrap.remove();
+      return wrap;
+    }
+    $("addVuln").onclick = () => $("vulnRows").append(vulnRow());
+    $("vulnRows").append(vulnRow());
+    
+    let polling = null;
+    
+    $("submit").onclick = async () => {
+      const vulns = [...document.querySelectorAll("#vulnRows .row")].map((row) => ({
+        id: row.querySelector(".vid").value.trim(),
+        package: row.querySelector(".vpkg").value.trim(),
+        version: row.querySelector(".vver").value.trim(),
+      })).filter((v) => v.id);
+      const body = {
+        rootfs: $("jobRootfs").value,
+        imageName: $("imageName").value.trim(),
+        imageTag: $("imageTag").value.trim(),
+        vulns,
+      };
+      $("submit").disabled = true;
+      $("jobNote").textContent = "preflight and submit…";
+      const answer = await api("/api/jobs", {
+        method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+      });
+      const payload = await answer.json();
+      $("submit").disabled = false;
+      if (!answer.ok) {
+        $("jobNote").innerHTML = `<span class="bad">${payload.error || "refused"}</span>` +
+          (payload.preflight ? `<pre>${JSON.stringify(payload.preflight, null, 2)}</pre>` : "");
+        return;
+      }
+      $("jobNote").textContent = "";
+      const id = payload.job_id || payload.id || "";
+      $("jobId").textContent = id;
+      if (polling) clearInterval(polling);
+      const poll = async () => {
+        const job = await (await api(`/api/jobs/${encodeURIComponent(id)}`)).json();
+        renderJob(job);
+        if (["success", "failure", "interrupted"].includes(job.status)) {
+          clearInterval(polling); polling = null; loadReports();
+        }
+      };
+      poll();
+      polling = setInterval(poll, 10000);
+    };
+    
+    function renderJob(job) {
+      const klass = job.status === "success" ? "ok" : job.status === "running" || job.status === "submitted" ? "warn" : "bad";
+      let html = `<div><span class="${klass}">${job.status || "—"}</span>`;
+      if (job.output && job.output.outcome) html += ` · outcome <b>${job.output.outcome}</b>`;
+      html += "</div>";
+      if (job.progress) html += `<pre>${JSON.stringify(job.progress, null, 2)}</pre>`;
+      const results = (job.output && job.output.vulnerabilities) || [];
+      if (results.length) {
+        html += '<table><thead><tr><th>Identifier</th><th>VEX</th><th>Justification</th><th>Notes</th></tr></thead><tbody>' +
+          results.map((r) => {
+            const status = (r.vex_status || r.status || "unknown").toString();
+            return `<tr><td>${r.vuln_id || r.identifier || "—"}</td>` +
+              `<td><span class="pill ${status}">${status}</span></td>` +
+              `<td>${r.justification || "—"}</td><td class="muted">${(r.errors || []).join("; ")}</td></tr>`;
+          }).join("") + "</tbody></table>";
+      }
+      if (job.error) html += `<div class="bad" style="margin-top:.5rem">${job.error}</div>`;
+      $("jobBody").innerHTML = html;
+    }
+    
+    // --- reports ----------------------------------------------------------------
+    async function loadReports() {
+      const payload = await (await api("/api/reports")).json();
+      const items = [];
+      for (const [group, kinds] of Object.entries(payload.reports || payload || {})) {
+        if (typeof kinds !== "object") continue;
+        for (const [kind, entries] of Object.entries(kinds)) {
+          for (const entry of [].concat(entries || [])) {
+            if (!entry || typeof entry !== "object") continue;
+            items.push({group, kind, ...entry});
+          }
+        }
+      }
+      $("reportRows").innerHTML = items.length
+        ? items.map((item) => {
+            const url = item.report_url || item.url || "";
+            const path = url.replace(/^.*\/reports\//, "");
+            const verdict = item.vex_status || item.status || "";
+            return `<tr><td>${item.vulnerability || item.container || item.group}</td><td>${item.kind}</td>` +
+              `<td>${verdict ? `<span class="pill ${verdict}">${verdict}</span>` : "—"}</td>` +
+              `<td><a href="#" data-report="${path}">${(item.filename || path).split("/").pop()}</a></td></tr>`;
+          }).join("")
+        : '<tr><td colspan="4" class="muted">none yet</td></tr>';
+      for (const link of document.querySelectorAll("[data-report]")) {
+        link.onclick = async (event) => {
+          event.preventDefault();
+          const answer = await api(`/api/reports/${link.dataset.report}`);
+          $("reportBody").hidden = false;
+          $("reportBody").textContent = await answer.text();
+          $("reportBody").scrollIntoView({behavior: "smooth", block: "nearest"});
+        };
+      }
+    }
+    $("refreshReports").onclick = loadReports;
+    
+    loadAbout().then(loadStatus).then(loadReports);
+    setInterval(loadStatus, 20000);
+    </script>
+    </body>
+    </html>
+    
+  egress_guard.py: |
+    #!/usr/bin/env python3
+    """The one way out of this deployment, and the allowlist is this file.
+    
+    The pipeline needs public vulnerability intelligence to say anything useful about a CVE, so this
+    listing does reach the internet — once per vulnerability, to one host. What a reader of the
+    listing cannot verify from that sentence is whether anything else can, and that is what this
+    process is for: the analysis container's HTTP clients are pointed at it, and it admits
+    ``CONNECT api.osv.dev:443`` and refuses every other request with a 403.
+    
+    Three choices in here are deliberate.
+    
+    **It is a CONNECT proxy and nothing else.** A plain proxied request (``GET http://host/path``)
+    is refused, so there is no cleartext path out at all — the admitted host is reached over TLS the
+    client terminates itself, and this process sees a byte stream it cannot read. It is an
+    allowlist, not an inspection point, and it does not hold a certificate for anything.
+    
+    **The host and the port are matched exactly.** No wildcards, no suffix matching, no second
+    entry: a wildcard is how an allowlist stops being one, and a suffix match on ``.osv.dev`` would
+    admit anything anybody can name under that zone. The hostname is resolved HERE, after the match,
+    so even the DNS lookup a refused request would have caused does not happen.
+    
+    **It is code in a ConfigMap rather than a configuration file for a third-party proxy.** The
+    cloud digests and signs the manifests, so this file is inside the deployment's published
+    evidence: the rule, and the thing that enforces the rule, are the same artefact and a verifier
+    reads it rather than taking a squid.conf and a container image on trust.
+    
+    Why this exists at all rather than a NetworkPolicy: a cluster space is provisioned with the
+    platform's own policy set, which admits ``0.0.0.0/0`` minus the private ranges, and Kubernetes
+    NetworkPolicies are additive — a policy a chart renders can only widen what is permitted. A
+    listing therefore cannot narrow its namespace's egress, and the enforcement point available to
+    it is in front of the client.
+    
+    stdlib only, so it runs in the analysis image with nothing installed.
+    """
+    
+    from __future__ import annotations
+    
+    import asyncio
+    import json
+    import logging
+    import os
+    import sys
+    import time
+    
+    LISTEN_ADDRESS = os.environ.get("EGRESS_LISTEN_ADDRESS", "127.0.0.1")
+    LISTEN_PORT = int(os.environ.get("EGRESS_LISTEN_PORT", "3128"))
+    ALLOW_HOST = os.environ.get("EGRESS_ALLOW_HOST", "")
+    ALLOW_PORT = int(os.environ.get("EGRESS_ALLOW_PORT", "443"))
+    
+    # A request line plus headers. Anything past this is not a proxy request a client of ours sends.
+    MAX_HEADER_BYTES = 8192
+    # How long a client may take to send its request line.
+    REQUEST_TIMEOUT_SECONDS = 30.0
+    # How long an established tunnel may sit with no bytes in either direction. An OSV lookup is one
+    # request and one response.
+    IDLE_TIMEOUT_SECONDS = 120.0
+    RELAY_CHUNK_BYTES = 65536
+    
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s egress-guard %(message)s",
+    )
+    logger = logging.getLogger("egress-guard")
+    
+    STATUS: dict[str, object] = {
+        "allowHost": ALLOW_HOST,
+        "allowPort": ALLOW_PORT,
+        "admitted": 0,
+        "refused": 0,
+        "lastRefused": "",
+        "lastRefusedAt": "",
+        "startedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    
+    # Served on loopback, to the console in the same pod, so an operator can see what this process
+    # decided without reading a log. It is the only non-CONNECT request this process answers.
+    STATUS_PATH = "/_guard/status"
+    
+    
+    def _refuse_response(reason: str) -> bytes:
+        body = json.dumps({"error": "refused by the deployment's egress guard", "reason": reason})
+        return (
+            "HTTP/1.1 403 Forbidden\r\n"
+            "Content-Type: application/json\r\n"
+            f"Content-Length: {len(body)}\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            f"{body}"
+        ).encode()
+    
+    
+    def _status_response() -> bytes:
+        body = json.dumps(STATUS)
+        return (
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: application/json\r\n"
+            f"Content-Length: {len(body)}\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            f"{body}"
+        ).encode()
+    
+    
+    def _record_refusal(target: str) -> None:
+        STATUS["refused"] = int(STATUS["refused"]) + 1  # type: ignore[arg-type]
+        STATUS["lastRefused"] = target
+        STATUS["lastRefusedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    
+    
+    def parse_target(request_line: str) -> tuple[str, str, str]:
+        """Split a request line into (method, host, port). Non-CONNECT lines return empty host."""
+        parts = request_line.split()
+        if len(parts) < 2:
+            return ("", "", "")
+        method, target = parts[0].upper(), parts[1]
+        if method != "CONNECT":
+            return (method, "", "")
+        host, _, port = target.rpartition(":")
+        if not host or not port:
+            return (method, "", "")
+        return (method, host, port)
+    
+    
+    def admitted(host: str, port: str) -> bool:
+        """Exact host, exact port. Nothing else, and no normalisation that could widen either."""
+        if not ALLOW_HOST:
+            return False
+        if host != ALLOW_HOST:
+            return False
+        try:
+            return int(port) == ALLOW_PORT
+        except ValueError:
+            return False
+    
+    
+    async def _relay(src: asyncio.StreamReader, dst: asyncio.StreamWriter) -> None:
+        try:
+            while True:
+                chunk = await asyncio.wait_for(src.read(RELAY_CHUNK_BYTES), IDLE_TIMEOUT_SECONDS)
+                if not chunk:
+                    break
+                dst.write(chunk)
+                await dst.drain()
+        except (asyncio.TimeoutError, ConnectionResetError, BrokenPipeError):
+            pass
+        finally:
+            dst.close()
+    
+    
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            try:
+                head = await asyncio.wait_for(
+                    reader.readuntil(b"\r\n\r\n"), REQUEST_TIMEOUT_SECONDS
+                )
+            except asyncio.IncompleteReadError as error:
+                head = error.partial
+            except (asyncio.TimeoutError, asyncio.LimitOverrunError):
+                writer.close()
+                return
+    
+            if len(head) > MAX_HEADER_BYTES:
+                _record_refusal("oversized request")
+                writer.write(_refuse_response("the request head is larger than this guard accepts"))
+                await writer.drain()
+                writer.close()
+                return
+    
+            request_line = head.split(b"\r\n", 1)[0].decode("latin-1", "replace")
+    
+            if request_line.startswith("GET " + STATUS_PATH):
+                writer.write(_status_response())
+                await writer.drain()
+                writer.close()
+                return
+    
+            method, host, port = parse_target(request_line)
+            if not host:
+                # A plain proxied request, or something that is not a proxy request at all. Refused
+                # rather than forwarded: there is no cleartext path out of this deployment.
+                _record_refusal(request_line[:200])
+                logger.warning("refused: %s", request_line[:200])
+                writer.write(
+                    _refuse_response(
+                        f"only CONNECT to {ALLOW_HOST}:{ALLOW_PORT} is admitted; "
+                        f"{method or 'that'} is not"
+                    )
+                )
+                await writer.drain()
+                writer.close()
+                return
+    
+            if not admitted(host, port):
+                _record_refusal(f"{host}:{port}")
+                logger.warning("refused: CONNECT %s:%s", host, port)
+                writer.write(
+                    _refuse_response(
+                        f"{host}:{port} is not the one host this deployment may reach "
+                        f"({ALLOW_HOST}:{ALLOW_PORT})"
+                    )
+                )
+                await writer.drain()
+                writer.close()
+                return
+    
+            try:
+                # Resolved here, after the match: a refused request causes no lookup either.
+                upstream_reader, upstream_writer = await asyncio.wait_for(
+                    asyncio.open_connection(ALLOW_HOST, ALLOW_PORT), REQUEST_TIMEOUT_SECONDS
+                )
+            except Exception as error:  # noqa: BLE001 — any failure is one answer to the client
+                logger.error("upstream %s:%s unreachable: %s", ALLOW_HOST, ALLOW_PORT, error)
+                writer.write(
+                    _refuse_response(f"{ALLOW_HOST}:{ALLOW_PORT} could not be reached: {error}")
+                )
+                await writer.drain()
+                writer.close()
+                return
+    
+            STATUS["admitted"] = int(STATUS["admitted"]) + 1  # type: ignore[arg-type]
+            logger.info("admitted: CONNECT %s:%s", host, port)
+            writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            await writer.drain()
+            await asyncio.gather(
+                _relay(reader, upstream_writer),
+                _relay(upstream_reader, writer),
+            )
+        except Exception as error:  # noqa: BLE001 — one bad connection is not the guard's life
+            logger.error("connection failed: %s", error)
+            try:
+                writer.close()
+            except Exception:  # noqa: BLE001
+                pass
+    
+    
+    async def main() -> None:
+        if not ALLOW_HOST:
+            # Refuse to start rather than run a proxy that admits nothing while the deployment
+            # believes it has vulnerability intelligence: every lookup would fail with a 403 and the
+            # reports would say "no data" without saying why.
+            print(
+                "egress-guard: EGRESS_ALLOW_HOST is required; refusing to start a guard with no "
+                "allowlist",
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+    
+        server = await asyncio.start_server(handle, LISTEN_ADDRESS, LISTEN_PORT)
+        logger.info(
+            "listening on %s:%s — admitting CONNECT %s:%s and nothing else",
+            LISTEN_ADDRESS,
+            LISTEN_PORT,
+            ALLOW_HOST,
+            ALLOW_PORT,
+        )
+        async with server:
+            await server.serve_forever()
+    
+    
+    if __name__ == "__main__":
+        asyncio.run(main())
+---
+# Source: confidential-vulnerability-analysis/templates/configmap-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: confidential-vuln-analysis-config
+  labels:
+    app.kubernetes.io/name: confidential-vuln-analysis
+    app.kubernetes.io/instance: va
+    app.kubernetes.io/managed-by: Helm
+data:
+  config.yml: |
+    general:
+      use_uvloop: true
+      front_end:
+        _type: fastapi
+        # Upstream's own worker: the read-only report endpoints, Dask-aware readiness, and
+        # richer async job progress. Its optional inbound OAuth2/JWT authentication is left off
+        # — this API is on loopback and the console in front of it holds the session.
+        runner_class: vuln_analysis.server.fastapi_worker.VulnAnalysisFastApiWorker
+
+    llms:
+      cve_researcher_llm:
+        _type: openai
+        model_name: "qwen3-coder-30b-a3b-instruct-fp8"
+        base_url: "http://swarm-model-server:8000/v1"
+        temperature: 0.15
+        max_tokens: 16384
+
+      # Upstream calls this one `nemotron_lightning_llm` and points it at a model this listing
+      # does not serve. One engine answers every role here.
+      research_subagent_llm:
+        _type: openai
+        model_name: "qwen3-coder-30b-a3b-instruct-fp8"
+        base_url: "http://swarm-model-server:8000/v1"
+        temperature: 0.7
+        top_p: 0.7
+        max_tokens: 16384
+        max_retries: 5
+
+      container_phase1_llm:
+        _type: openai
+        model_name: "qwen3-coder-30b-a3b-instruct-fp8"
+        base_url: "http://swarm-model-server:8000/v1"
+        temperature: 0.1
+        max_tokens: 4096
+
+      container_phase2_llm:
+        _type: openai
+        model_name: "qwen3-coder-30b-a3b-instruct-fp8"
+        base_url: "http://swarm-model-server:8000/v1"
+        temperature: 0.15
+        max_tokens: 16384
+
+      exploitability_llm:
+        _type: openai
+        model_name: "qwen3-coder-30b-a3b-instruct-fp8"
+        base_url: "http://swarm-model-server:8000/v1"
+        temperature: 0.1
+        max_tokens: 16384
+
+      vex_llm:
+        _type: openai
+        model_name: "qwen3-coder-30b-a3b-instruct-fp8"
+        base_url: "http://swarm-model-server:8000/v1"
+        temperature: 0.0
+        max_tokens: 4096
+
+    functions:
+      # The one tool in this deployment that leaves the cluster space. One request shape:
+      # GET https://api.osv.dev/v1/vulns/<CVE-ID>, no redirects followed.
+      osv_lookup:
+        _type: osv_lookup
+
+      # The filesystem tools. Path-restricted at runtime to the root filesystem of the image
+      # being analysed, which the tenant uploaded — the pipeline configures the allowed roots
+      # per stage and a path resolving outside them is refused.
+      read_file:
+        _type: read_file
+      list_directory:
+        _type: list_directory
+      grep_search:
+        _type: grep_search
+      glob_find:
+        _type: glob_find
+
+      # Binary and package inspection, all of it inside the uploaded root filesystem.
+      check_binary_dependencies:
+        _type: check_binary_dependencies
+      search_binary_content:
+        _type: search_binary_content
+      check_distro_patches:
+        _type: check_distro_patches
+      get_binary_linked_libraries:
+        _type: get_binary_linked_libraries
+      query_dpkg_database:
+        _type: query_dpkg_database
+      search_dpkg_file_lists:
+        _type: search_dpkg_file_lists
+      query_rpm_database:
+        _type: query_rpm_database
+      list_python_packages:
+        _type: list_python_packages
+      find_shared_libraries:
+        _type: find_shared_libraries
+      find_go_binaries:
+        _type: find_go_binaries
+      check_security_controls:
+        _type: check_security_controls
+      query_npm_packages:
+        _type: query_npm_packages
+      find_java_packages:
+        _type: find_java_packages
+      list_installed_packages:
+        _type: list_installed_packages
+
+      # --- stage 1A: what is publicly known about the vulnerability ---
+      cve_researcher:
+        _type: cve_researcher
+        llm_name: cve_researcher_llm
+        advisory_researcher_llm_name: research_subagent_llm
+        exploit_intel_researcher_llm_name: research_subagent_llm
+        tool_names: [osv_lookup]
+        data_sources: null
+        include_middleware: true
+        # A second external host, for a check the researcher reaches through OSV anyway.
+        validate_cve_exists: false
+        max_research_model_calls: 24
+        max_research_tool_calls: 28
+        max_identical_tool_calls: 2
+        max_consecutive_tool_errors: 3
+        graph_recursion_limit: 80
+        verbose: true
+        output_subdir: vulnerability_reports
+
+      # --- stage 1B: what is actually in the image ---
+      container_analyzer:
+        _type: container_analyzer
+        phase1_llm_name: container_phase1_llm
+        phase2_llm_name: container_phase2_llm
+        # Empty, deliberately: phase 1 researches a public image on the web, and this
+        # deployment has no web tool. The console also sets `skip_web_research` on every
+        # request, so the configuration and the request agree rather than relying on each other.
+        web_tool_names: []
+        fs_tool_names: [read_file, list_directory, grep_search, glob_find]
+        phase1_max_iterations: 8
+        phase2_max_iterations: 40
+        context_window_tokens: 65536
+        wrap_up_fraction: 0.80
+        loop_detection_threshold: 2
+        # Upstream treats these prefixes as "public, so researchable". Nothing is researched
+        # here and nothing is pulled, so the list is empty and every image is treated as
+        # private — which is what an uploaded root filesystem is.
+        public_registry_prefixes: []
+        output_subdir: container_reports
+
+      # --- stage 2: is the vulnerable code present, reachable, exploitable in THIS image ---
+      exploitability_analyzer:
+        _type: exploitability_analyzer
+        llm_name: exploitability_llm
+        tool_names:
+          - read_file
+          - list_directory
+          - grep_search
+          - glob_find
+          - check_binary_dependencies
+          - search_binary_content
+          - check_distro_patches
+          - get_binary_linked_libraries
+          - query_dpkg_database
+          - search_dpkg_file_lists
+          - query_rpm_database
+          - list_python_packages
+          - find_shared_libraries
+          - find_go_binaries
+          - check_security_controls
+          - query_npm_packages
+          - find_java_packages
+          - list_installed_packages
+        phase2_max_iterations: 40
+        context_window_tokens: 65536
+        wrap_up_fraction: 0.80
+        loop_detection_threshold: 2
+        output_subdir: exploitability_reports
+
+      # --- stage 3: the VEX decision, with its reasoning trace ---
+      vex_categorizer:
+        _type: vex_categorizer
+        llm_name: vex_llm
+        max_iterations: 10
+        context_window_tokens: 65536
+        loop_detection_threshold: 2
+        output_subdir: vex_results
+
+    workflow:
+      _type: cve_pipeline
+      cve_researcher_name: cve_researcher
+      container_analyzer_name: container_analyzer
+      exploitability_analyzer_name: exploitability_analyzer
+      vex_categorizer_name: vex_categorizer
+      # Upstream's 600 is sized for a hosted 550B endpoint answering many requests at once. One
+      # 30B engine on one card, running a tool-calling loop of up to forty iterations, needs
+      # more — and a stage that times out discards the work it had already done.
+      stage_timeout: 1800
+      stage_max_retries: 1
+      max_concurrency: null
+      # No rate limit: the engine is in this cluster space, it is not metered, and it queues
+      # requests itself.
+      llm_max_rate: null
+      # A model swap or a prompt change must use a new namespace, or the stage cache serves a
+      # report produced under a policy that no longer applies. This one names the engine and the
+      # fact that research is OSV-only, because those are the two things that decide what a
+      # report here is worth.
+      cache_namespace: "qwen3-coder-30b-a3b-instruct-fp8-osv-v1"
+      cache_stage_namespaces:
+        vex_categorizer: "qwen3-coder-30b-a3b-instruct-fp8-osv-vex-v1"
+      # Absolute, on the volume. A relative path would resolve against the working directory and
+      # land inside the image, where a restart loses every report written.
+      output_dir: /data/outputs
+---
+# Source: confidential-vulnerability-analysis/templates/analysis.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: confidential-vuln-analysis-data
+  labels:
+    app.kubernetes.io/name: confidential-vuln-analysis
+    app.kubernetes.io/instance: va
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: analysis
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: "60Gi"
+---
+# Source: confidential-vulnerability-analysis/templates/analysis.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: confidential-vuln-analysis-console
+  labels:
+    app.kubernetes.io/name: confidential-vuln-analysis
+    app.kubernetes.io/instance: va
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: console
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: confidential-vuln-analysis
+    app.kubernetes.io/instance: va
+    app.kubernetes.io/component: analysis
+---
+# Source: confidential-vulnerability-analysis/templates/analysis.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: confidential-vuln-analysis
+  labels:
+    app.kubernetes.io/name: confidential-vuln-analysis
+    app.kubernetes.io/instance: va
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: analysis
+spec:
+  replicas: 1
+  # The volume is held open by the running pod, so a rolling update would leave the replacement
+  # Pending on it for ever while the old pod serves.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: confidential-vuln-analysis
+      app.kubernetes.io/instance: va
+      app.kubernetes.io/component: analysis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: confidential-vuln-analysis
+        app.kubernetes.io/instance: va
+        app.kubernetes.io/component: analysis
+    spec:
+      securityContext:
+        fsGroup: 1000
+      initContainers:
+        # The job store's directory, and the one the console writes uploads into. The image's
+        # own entrypoint creates the paths the pipeline needs — it runs in the `api` container —
+        # but the console does not go through it, and `nat serve` opens its SQLite job store
+        # before anything has made a directory for it.
+        - name: prepare
+          image: "ghcr.io/super-protocol/confidential-vulnerability-analysis/analysis-server@sha256:ae2eadfdd89012f7f5ff5af3dfce5486805a812b33319ad5d14cd90690db8875"
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -ec]
+          args:
+            - mkdir -p /data/state /data/rootfs /data/outputs /data/home
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 1000
+          resources:
+            requests: { cpu: 100m, memory: 128Mi, nvidia.com/gpu: "0" }
+            limits: { cpu: 100m, memory: 128Mi, nvidia.com/gpu: "0" }
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        # -------------------------------------------------------------------
+        - name: api
+          image: "ghcr.io/super-protocol/confidential-vulnerability-analysis/analysis-server@sha256:ae2eadfdd89012f7f5ff5af3dfce5486805a812b33319ad5d14cd90690db8875"
+          imagePullPolicy: IfNotPresent
+          args:
+            - nat
+            - serve
+            - --config_file=/etc/vuln-analysis/config.yml
+            - --host=127.0.0.1
+            - --port=26466
+            - --db_url=sqlite+aiosqlite:////data/state/job_store.db
+            - --max_running_async_jobs=1
+            - --dask_worker_memory_limit=0.4
+          env:
+            # The key the model calls carry. By reference: an env *value* is rendered into the
+            # Deployment and published in the evidence snapshot, a `secretKeyRef` is a pointer
+            # to something the platform sealed. The OpenAI client reads this variable when the
+            # configuration names no key, which is why the attested config can name none.
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef: { name: confidential-vuln-analysis-secrets, key: inference-api-key }
+            # Every HTTP client in this container goes through the guard. `httpx` — which is
+            # what both the OpenAI SDK and the OSV tool use — honours these, and NO_PROXY is
+            # what keeps the engine call inside the cluster space: routed through the guard it
+            # would be refused, since the guard admits one external host and the engine is not
+            # it.
+            - name: HTTPS_PROXY
+              value: "http://127.0.0.1:3128"
+            - name: HTTP_PROXY
+              value: "http://127.0.0.1:3128"
+            - name: NO_PROXY
+              value: "localhost,127.0.0.1,::1,.svc,.svc.cluster.local,.cluster.local,swarm-model-server"
+            # Pinned to the cores this container is granted, not to the host's. The chart
+            # convention from SUP-882: a library that sizes its pool from `nproc` starts a
+            # thread per host core inside the quota and spends the request being throttled.
+            - name: OMP_NUM_THREADS
+              value: "6"
+            - name: MKL_NUM_THREADS
+              value: "6"
+            - name: RAYON_NUM_THREADS
+              value: "6"
+            - name: NUMEXPR_MAX_THREADS
+              value: "6"
+            - name: TOKENIZERS_PARALLELISM
+              value: "false"
+            # Says, in the attested snapshot, that this deployment runs without web research —
+            # and makes `/preflight` agree. Upstream requires both NVIDIA_API_KEY and
+            # TAVILY_API_KEY unconditionally, so a deployment serving open weights on its own
+            # endpoint with no Tavily account reported `ready: false` for ever and the route
+            # answered 503 with it, which is a client that preflights and then refuses to
+            # submit anything at all. Our fork makes each vendor credential required only when
+            # the provider is in use; this variable is the half of that signal a configuration
+            # file cannot carry.
+            - name: VULN_ANALYSIS_WEB_RESEARCH
+              value: "off"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: LOG_LEVEL
+              value: "INFO"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 1000
+          # No `ports:` and no Service. The API listens on loopback, so there is nothing to
+          # declare and nothing for another pod to reach.
+          #
+          # And the probes are `exec` for the same reason: a kubelet httpGet probe connects to
+          # the POD's address, which this process does not listen on, so an httpGet probe here
+          # would fail every time while the API answered the console perfectly. `curl` is in the
+          # image.
+          startupProbe:
+            exec:
+              command: [curl, -sf, --max-time, "10", "http://127.0.0.1:26466/health"]
+            periodSeconds: 10
+            failureThreshold: 60
+          # `/ready` is NAT, the Dask scheduler and at least one worker. Slack on the timeouts:
+          # the readiness endpoint is served by the same process that is running an agent loop,
+          # and a busy process answering slowly is not a dead one — the RAG port lost a deploy
+          # cycle to exactly this (SUP-840).
+          readinessProbe:
+            exec:
+              command: [curl, -sf, --max-time, "15", "http://127.0.0.1:26466/ready"]
+            periodSeconds: 20
+            timeoutSeconds: 20
+            failureThreshold: 4
+          livenessProbe:
+            exec:
+              command: [curl, -sf, --max-time, "20", "http://127.0.0.1:26466/health"]
+            periodSeconds: 30
+            timeoutSeconds: 25
+            failureThreshold: 6
+          resources:
+            limits:
+              cpu: "6"
+              memory: 20Gi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: "6"
+              memory: 20Gi
+              nvidia.com/gpu: "0"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /etc/vuln-analysis
+              readOnly: true
+        # -------------------------------------------------------------------
+        - name: console
+          image: "ghcr.io/super-protocol/confidential-vulnerability-analysis/analysis-server@sha256:ae2eadfdd89012f7f5ff5af3dfce5486805a812b33319ad5d14cd90690db8875"
+          imagePullPolicy: IfNotPresent
+          # The image's entrypoint prepares the pipeline's own writable paths and is not this
+          # process's business; the init container above made what the console writes to.
+          command: [uvicorn]
+          args:
+            - console:app
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8080"
+            # One worker: the session is a signed assertion rather than a stored row, so more
+            # would be free — but an upload is a stream to one volume and a second worker would
+            # only add a way to race it.
+            - --workers
+            - "1"
+            # An upload is a PUT with a multi-gigabyte body, and the default keep-alive and
+            # header timeouts are not what cuts it off — this is the one that does, on a slow
+            # link.
+            - --timeout-keep-alive
+            - "75"
+          env:
+            - name: PYTHONPATH
+              value: /opt/app
+            - name: CONSOLE_TITLE
+              value: "Confidential Vulnerability Analysis"
+            - name: CONSOLE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: confidential-vuln-analysis-secrets, key: console-password }
+            - name: CONSOLE_SESSION_KEY
+              valueFrom:
+                secretKeyRef: { name: confidential-vuln-analysis-secrets, key: console-session-key }
+            - name: CONSOLE_SESSION_TTL_SECONDS
+              value: "43200"
+            - name: ANALYSIS_API_URL
+              value: "http://127.0.0.1:26466"
+            - name: EGRESS_GUARD_URL
+              value: "http://127.0.0.1:3128"
+            - name: DATA_ROOT
+              value: /data
+            - name: UI_DIR
+              value: /opt/app
+            - name: UPLOAD_MAX_GIB
+              value: "8"
+            - name: UPLOAD_KEEP
+              value: "6"
+            # What the console tells a user about the deployment they are using. Plain
+            # configuration, not a credential, and attested with everything else — so the panel
+            # and the signed evidence describe the same deployment.
+            - name: ABOUT_GENERATION_MODEL
+              value: "qwen3-coder-30b-a3b-instruct-fp8"
+            - name: ABOUT_GENERATION_LICENCE
+              value: "Apache-2.0"
+            - name: ABOUT_CONTEXT_WINDOW
+              value: "65536"
+            - name: ABOUT_EGRESS_HOST
+              value: "api.osv.dev"
+            - name: ABOUT_EGRESS_PORT
+              value: "443"
+            - name: ABOUT_SOURCE_REPO
+              value: "https://github.com/Super-Protocol/confidential-vulnerability-analysis"
+            - name: ABOUT_UPSTREAM
+              value: https://github.com/NVIDIA-AI-Blueprints/vulnerability-analysis
+            # There is deliberately no ABOUT_EXPECTED_DIGEST here. That env value would be
+            # rendered into this Deployment, the Deployment is in the evidence snapshot, and the
+            # snapshot is what the digest is OVER — so a console displaying the digest it should
+            # match changes that digest by displaying it. It cost the RAG port a deploy cycle to
+            # notice. The deployment's own digest is at the evidence URL the console links.
+            - name: LOG_LEVEL
+              value: "INFO"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 1000
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          # The one route outside the session, and it reports liveness and nothing about any
+          # finding — it is reachable from the public hostname by anybody who finds the name.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 4
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: 500m
+              memory: 512Mi
+              nvidia.com/gpu: "0"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: app
+              mountPath: /opt/app
+              readOnly: true
+        # -------------------------------------------------------------------
+        - name: egress
+          image: "ghcr.io/super-protocol/confidential-vulnerability-analysis/analysis-server@sha256:ae2eadfdd89012f7f5ff5af3dfce5486805a812b33319ad5d14cd90690db8875"
+          imagePullPolicy: IfNotPresent
+          command: [python, /opt/app/egress_guard.py]
+          env:
+            - name: EGRESS_LISTEN_ADDRESS
+              value: "127.0.0.1"
+            - name: EGRESS_LISTEN_PORT
+              value: "3128"
+            - name: EGRESS_ALLOW_HOST
+              value: "api.osv.dev"
+            - name: EGRESS_ALLOW_PORT
+              value: "443"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: LOG_LEVEL
+              value: "INFO"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 1000
+          # Loopback, so the probe is `exec` for the same reason the api's are — and it asks the
+          # guard's own status route, which is the one non-CONNECT request the guard answers.
+          startupProbe:
+            exec:
+              command: [curl, -sf, --max-time, "5", "--noproxy", "*", "http://127.0.0.1:3128/_guard/status"]
+            periodSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            exec:
+              command: [curl, -sf, --max-time, "5", "--noproxy", "*", "http://127.0.0.1:3128/_guard/status"]
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
+          resources:
+            limits:
+              cpu: 250m
+              memory: 256Mi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: 250m
+              memory: 256Mi
+              nvidia.com/gpu: "0"
+          volumeMounts:
+            - name: app
+              mountPath: /opt/app
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: confidential-vuln-analysis-data
+        - name: app
+          configMap:
+            name: confidential-vuln-analysis-app
+        - name: config
+          configMap:
+            name: confidential-vuln-analysis-config
+---
+# Source: confidential-vulnerability-analysis/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: confidential-vuln-analysis
+  labels:
+    app.kubernetes.io/name: confidential-vuln-analysis
+    app.kubernetes.io/instance: va
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    # Declared on the object as well as in the listing's `evidence.exclude`. The annotation is
+    # what the cloud reads when it digests the namespace; the definition's copy is what the
+    # listing page shows. A digest displayed beside "no exclusions" answers the only question
+    # that matters about it wrongly.
+    swarm.io/exclude-evidence-fields: "/spec/rules/0/host"
+    # A root filesystem is uploaded through this hostname. Without the body size the default
+    # 1 MiB limit refuses every real archive with a 413 that comes from nginx rather than from
+    # the deployment; without the timeouts, a multi-gigabyte upload or a report fetch is cut
+    # off mid-stream and reads as a broken console.
+    nginx.ingress.kubernetes.io/proxy-body-size: "8192m"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: "nginx"
+  rules:
+    - host: "vuln.conf-apps.superprotocol.dev"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: confidential-vuln-analysis-console
+                port:
+                  number: 80

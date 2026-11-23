@@ -59,6 +59,21 @@ EXPECTED = {
         ("Secret", "confidential-rag-vectors-config"),
         ("Service", "confidential-rag-vectors"),
     },
+    # Confidential Vulnerability Analysis (SUP-843). One pod with three containers, so the
+    # object list is short and every entry in it matters: the two ConfigMaps are the code the
+    # evidence covers and the configuration that says what the agents may reach, and there is
+    # exactly ONE Service — the console's. A Service for the analysis API or for the egress
+    # guard would publish an unauthenticated API and an open proxy to every pod in the space,
+    # which is the one mistake this chart's shape exists to make impossible.
+    "confidential-vulnerability-analysis": {
+        ("ConfigMap", "confidential-vuln-analysis-app"),
+        ("ConfigMap", "confidential-vuln-analysis-config"),
+        ("Deployment", "confidential-vuln-analysis"),
+        ("Ingress", "confidential-vuln-analysis"),
+        ("PersistentVolumeClaim", "confidential-vuln-analysis-data"),
+        ("Secret", "confidential-vuln-analysis-secrets"),
+        ("Service", "confidential-vuln-analysis-console"),
+    },
     "confidential-rag": {
         ("ConfigMap", "confidential-rag-app"),
         ("ConfigMap", "confidential-rag-config"),
