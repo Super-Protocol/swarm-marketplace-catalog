@@ -1501,7 +1501,7 @@ spec:
         # but the console does not go through it, and `nat serve` opens its SQLite job store
         # before anything has made a directory for it.
         - name: prepare
-          image: "ghcr.io/super-protocol/confidential-vulnerability-analysis/analysis-server@sha256:ae2eadfdd89012f7f5ff5af3dfce5486805a812b33319ad5d14cd90690db8875"
+          image: "ghcr.io/super-protocol/confidential-vulnerability-analysis/analysis-server@sha256:00d88aaa9a91d4380d27244f870363b37518b21080a4b89fd089e28d305b61c5"
           imagePullPolicy: IfNotPresent
           command: [/bin/sh, -ec]
           args:
@@ -1524,7 +1524,7 @@ spec:
       containers:
         # -------------------------------------------------------------------
         - name: api
-          image: "ghcr.io/super-protocol/confidential-vulnerability-analysis/analysis-server@sha256:ae2eadfdd89012f7f5ff5af3dfce5486805a812b33319ad5d14cd90690db8875"
+          image: "ghcr.io/super-protocol/confidential-vulnerability-analysis/analysis-server@sha256:00d88aaa9a91d4380d27244f870363b37518b21080a4b89fd089e28d305b61c5"
           imagePullPolicy: IfNotPresent
           args:
             - nat
@@ -1635,7 +1635,7 @@ spec:
               readOnly: true
         # -------------------------------------------------------------------
         - name: console
-          image: "ghcr.io/super-protocol/confidential-vulnerability-analysis/analysis-server@sha256:ae2eadfdd89012f7f5ff5af3dfce5486805a812b33319ad5d14cd90690db8875"
+          image: "ghcr.io/super-protocol/confidential-vulnerability-analysis/analysis-server@sha256:00d88aaa9a91d4380d27244f870363b37518b21080a4b89fd089e28d305b61c5"
           imagePullPolicy: IfNotPresent
           # The image's entrypoint prepares the pipeline's own writable paths and is not this
           # process's business; the init container above made what the console writes to.
@@ -1750,7 +1750,7 @@ spec:
               readOnly: true
         # -------------------------------------------------------------------
         - name: egress
-          image: "ghcr.io/super-protocol/confidential-vulnerability-analysis/analysis-server@sha256:ae2eadfdd89012f7f5ff5af3dfce5486805a812b33319ad5d14cd90690db8875"
+          image: "ghcr.io/super-protocol/confidential-vulnerability-analysis/analysis-server@sha256:00d88aaa9a91d4380d27244f870363b37518b21080a4b89fd089e28d305b61c5"
           imagePullPolicy: IfNotPresent
           command: [python, /opt/app/egress_guard.py]
           env:
