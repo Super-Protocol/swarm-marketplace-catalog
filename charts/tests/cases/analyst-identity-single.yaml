@@ -20,3 +20,4 @@ keycloak:
     - { name: KC_HTTP_ENABLED, value: "true" }
     - { name: KEYCLOAK_EXTRA_ARGS, value: "--features organization" }
     - { name: RAI_SERVICE_DISCOVERY_URL, value: "http://analyst-service-discovery" }
+    - { name: _JAVA_OPTIONS, value: "-XX:-UseBASE64Intrinsics" }

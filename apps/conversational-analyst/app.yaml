@@ -12,7 +12,7 @@ metadata:
     endpoint, including one in your own perimeter — and the embeddings that index your schema
     and documents are served from inside the deployment, so neither your data nor its
     description reaches a third party.
-  version: "4.0.6"
+  version: "5.0.0"
   category: ai-agents
   license: Proprietary
   tags:
@@ -22,6 +22,74 @@ metadata:
     - text-to-sql
     - confidential
 
+# ---------------------------------------------------------------------------
+# 5.0.0 is the agent 1.22.1 listing. 4.0.x ran 1.17.0, which was already two
+# releases behind the day it was authored; this closes the gap over 1.18.0,
+# 1.19.0, 1.20.0, 1.21.0, 1.22.0 and 1.22.1 — 51 commits (SUP-896).
+#
+# A major, by this repository's rule that a major is what an operator has to
+# re-read: the agent images move, every component chart that declares an agent
+# release moves with them, and the identity component now carries a JVM
+# mitigation. What the operator is ASKED does not change — the parameter set,
+# the ui sections and the data slot are byte-identical to 4.0.6 — so an operator
+# re-deploying has nothing new to decide. The digest below is new, because the
+# images are.
+#
+# ## The three places 4.0.x was tied to 1.17, re-checked against 1.22.1
+#
+# Each was read off `release-v1.22.1` in `aivoagent/agent`, not assumed to carry
+# over, and each is recorded where the coupling lives rather than only here.
+#
+#   1. `LlmProvider` is still a GraphQL enum and its values are still UPPER case
+#      — `OPENAI`, `GOOGLE`, `DEEPSEEK`, unchanged from 1.17.0. The 4.0.5 fix
+#      stands, and so does its neighbour: `SchemaAnnotationTarget` is still lower
+#      case `table` / `column`. Neither is to be tidied into the other.
+#   2. **There is still no graph backend.** `neo4j` appears in 1.22.1 only in two
+#      prose comments; it is in no dependency of `package.json` or the lockfile,
+#      and the knowledge index, the schema catalogue and the semantic model are
+#      still PostgreSQL with pgvector. So the catalogue is still built without
+#      Neo4j, and PostgreSQL still has to carry pgvector.
+#   3. **The grounding Job needs no change.** All 18 admin operations
+#      `ground.py` issues have byte-identical signatures in 1.22.1's
+#      `apps/api/schema.graphql`, as do all eight of its input types,
+#      `PaginationInput` (still `limit`/`offset` — the 4.0.4 fix stands) and both
+#      enums above. The schema diff over the 51 commits is +233/-2 lines and the
+#      two removed lines are dashboard field signatures the Job does not call.
+#      The api still has no migrations either, so a fresh deployment builds the
+#      1.22.1 schema through `synchronize` as before.
+#
+# ## What else was checked, and found not to need anything
+#
+#   * **The configuration contract.** `conf/local/services.yaml.tpl` gains six
+#     COMMENTED lines for the new weather connector and nothing else; the api's
+#     own config schema gains four `dashboardRefresh` keys, all defaulted, and
+#     removes none. Every key this listing writes is still read; no key it omits
+#     is now required.
+#   * **A new tenancy path that does not apply here.** 1.22 derives extra group
+#     paths from an employer INN claim (`local.derivedGroups`, enabled by
+#     default upstream). It belongs to the `local` identity provider; this
+#     deployment runs `keycloak`, so the block is unreachable rather than merely
+#     inert, and the organisation boundary this listing sells is unaffected.
+#   * **No new workload.** 1.22's additions — dashboards with goals and KPI
+#     zones, the semantic layer, dataset freshness, the library, the billing UI
+#     and real work on the signals widget — are all inside the api, the worker
+#     and the frontend already deployed. The first-party MCP connector shipped
+#     with 1.18 (`apps/mcp-weather`) is NOT deployed: its whole function is
+#     calling Open-Meteo, which is the one thing this listing claims it does not
+#     do.
+#   * **The model registry is still installation-scoped.** `installation.llm-models.write`
+#     on every mutation of `admin-llm-model.resolver.ts`, unchanged. So SUP-711's
+#     finding stands: an `org-admin` cannot register a model, and the
+#     model-ownership claim must not be shown. Nothing about masking moved either.
+#
+# ## One thing 5.0.0 fixes that is not an agent change
+#
+# Keycloak's JVM now runs with `-XX:-UseBASE64Intrinsics` — the mitigation for
+# CVE-2026-114938, a pre-auth RCE against Keycloak in its default configuration
+# for which no fixed JDK build exists. Upstream mitigated it in their own
+# Keycloak chart, which this listing does not use; it is carried in
+# `conversational-analyst-identity` 0.7.0 instead, verified on the pinned image.
+# It is a constant, so it does not make the digest a consumer's.
 # ---------------------------------------------------------------------------
 # 4.0.6 declares the reference configuration's digest, and nothing else moves:
 # `expectedDigest` reaches no manifest, so a deployment of 4.0.5 attests exactly
@@ -573,7 +641,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-platform
-      version: "0.4.1"
+      version: "0.4.2"
     images:
       - name: pgvector/pgvector
         digest: sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd
@@ -708,7 +776,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-identity
-      version: "0.6.1"
+      version: "0.7.0"
     images:
       - name: docker.io/bitnamilegacy/keycloak
         digest: sha256:5a480d090639bbb09b25dbdb70819dab3302118fd824c2bad03d12a93f46c82b
@@ -754,6 +822,16 @@ components:
                 value: "--features organization"
               - name: RAI_SERVICE_DISCOVERY_URL
                 value: ""
+              # CVE-2026-114938: a pre-auth RCE against Keycloak through the HotSpot Base64
+              # intrinsic, for which no fixed JDK exists. `_JAVA_OPTIONS` rather than
+              # `JAVA_OPTS_APPEND`, which the vendored chart already uses for the jgroups DNS
+              # query — see the reasoning in `conversational-analyst-identity`'s values. It is
+              # here as well as in the chart's defaults because a list in a definition
+              # REPLACES the chart's, so the chart's own entry would be dropped by this very
+              # block; `charts/tests/keycloak_jvm.py` is what keeps that from happening
+              # silently. APPEND only: the patch below addresses index 3 by number.
+              - name: _JAVA_OPTIONS
+                value: "-XX:-UseBASE64Intrinsics"
         patches:
           - op: replace
             path: internalSecret
@@ -827,12 +905,12 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-agent
-      version: "0.5.1"
+      version: "0.6.0"
     images:
       - name: registry.aggregion.com/gh/aivoagent/agent/backend
-        digest: sha256:ead6c3816c5a492e3ebc657276a224e5db15374d8e0d491c08f1bda6987d41a8
+        digest: sha256:5ddf6cc1685fc74286a2953583d14dfd7b1a899b44a57fbd81eee56461949b36
       - name: registry.aggregion.com/gh/aivoagent/agent/frontend
-        digest: sha256:6e2920d5cf5b3eb85576871795f838de17b2605574335d85c5cc8f7129f77515
+        digest: sha256:c2fd6bd7c17dc987975354a517e9d0c5ed14c64f4a38db89b0a051bd36c0e60d
     deployment:
       values:
         base:
@@ -994,7 +1072,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-gateway
-      version: "0.4.0"
+      version: "0.4.1"
     images:
       - name: quay.io/oauth2-proxy/oauth2-proxy
         digest: sha256:47b1db28264a646c5c07e1fb690e3deef7edbbb487030ad7c1f0b22f942d6837
@@ -1111,7 +1189,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-grounding
-      version: "0.5.1"
+      version: "0.6.0"
     images:
       - name: docker.io/library/python
         digest: sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
@@ -1249,25 +1327,46 @@ outputs:
 # kind — they ARE configuration, so what this deployment may reach cannot be widened without
 # the digest saying so.
 evidence:
-  # THE REFERENCE CONFIGURATION'S DIGEST — not a value every deployment reproduces, and the
-  # listing page should say so (option 2, decided on SUP-711; the presentation change is
-  # SUP-871).
+  # THE DIGEST FOR 5.0.0 IS NOT MEASURED YET, AND IS THEREFORE NOT DECLARED.
   #
-  # Measured, not derived: two deployments of listing 4.0.5 — whose rendered manifests are
-  # byte-for-byte this version's, since the only change here is this block and
-  # `expectedDigest` reaches no manifest — on `azure-test`, 2026-11-21. They differed in
-  # hostname and namespace alone and attested BYTE-IDENTICAL 63-resource snapshots, which is
-  # what makes the exclusion set below complete and this number declarable.
+  # This is deliberate and it is why `apps/tests/run.sh` fails on this version: the guard
+  # added in 4.0.6 refuses a definition that has a data slot and no digest, and that red
+  # check is exactly the right state for a listing whose number has not been measured.
+  # 4.0.6's value is NOT carried over — the agent images move in this version, so it is a
+  # digest of different manifests, and declaring it would assert something false. An absent
+  # value stops gated data from flowing; a wrong one makes the gate refuse a deployment that
+  # is correct, and tells a verifier the wrong thing about what is running.
   #
-  # What the number is a function of, all three of which have to match for a deployment to
+  # The measurement cannot be done before this version's charts are in the chart repository,
+  # which is a merge to `main` (GitHub Pages refuses a deployment from any other branch), so
+  # the order is fixed:
+  #
+  #   1. merge the charts — `feature/SUP-896-analyst-charts-1-22-1`, which changes no
+  #      definition and publishes chart versions no published listing yet pins;
+  #   2. seed this definition to the stand WITHOUT a digest, create two deployments of the
+  #      reference parameter set below on `azure-test`, and read
+  #      `GET <cloud>/api/v1/deployments/<id>/evidence` for each;
+  #   3. require the two snapshots to be byte-identical — that is what makes the exclusion
+  #      set below complete and the number declarable, and it is the step that caught 4.0.0's
+  #      `match.name` naming an object no deployment renders (SUP-823);
+  #   4. declare the digest here and merge. `expectedDigest` reaches no manifest, so the
+  #      deployments measured in step 2 attest exactly what a deployment of the merged
+  #      version does.
+  #
+  # The number remains THE REFERENCE CONFIGURATION'S — not a value every deployment
+  # reproduces, and the listing page should say so (option 2, decided on SUP-711; the
+  # presentation change is SUP-871).
+  #
+  # What it will be a function of, all three of which have to match for a deployment to
   # reproduce it:
   #
   #   1. this definition and the chart versions it pins;
   #   2. THE COLLECTING CLOUD'S BUILD. `azure-test` runs the signed `build-477-release`,
-  #      whose collector gathers six kinds and 63 resources here. The destroyed `sup823a`
-  #      (`build-448-release`) gathered 71 for the same definition: ServiceAccount, Role,
-  #      RoleBinding and PodDisruptionBudget entered the collector later. A cloud on another
-  #      build therefore attests a different digest, and that is expected — not tampering;
+  #      whose collector gathered six kinds and 63 resources for 4.0.5. The destroyed
+  #      `sup823a` (`build-448-release`) gathered 71 for the same definition: ServiceAccount,
+  #      Role, RoleBinding and PodDisruptionBudget entered the collector later. A cloud on
+  #      another build therefore attests a different digest, and that is expected — not
+  #      tampering;
   #   3. THE PARAMETER SET, because the operator's choices are attested on purpose. The model
   #      endpoint, the model id, the embedding endpoint and model, the MCP and signal
   #      settings, the result policy and the product name are all in the snapshot, and a
@@ -1275,7 +1374,8 @@ evidence:
   #      the trade this listing makes deliberately: the fact a verifier most needs — where
   #      this deployment sends data — is IN the signed bundle rather than excluded from it.
   #
-  # The reference parameter set this value was measured with:
+  # The reference parameter set to measure it with, unchanged from 4.0.6 so that the only
+  # thing moving between the two numbers is the software:
   #
   #   modelBaseUrl          https://api.router.superprotocol.com/v1
   #   modelId               qwen/qwen3-coder-next
@@ -1287,17 +1387,10 @@ evidence:
   #   modelContextWindow    262144
   #   data slot `datasets`  cypressbay-digestive-health
   #
-  # Everything else was left at this definition's defaults, and the three generated
-  # credentials (`internalSecret`, `modelApiKey`, `embeddingsApiKey`) are in Secrets and reach
-  # no attested object. The organisation names are not in the snapshot either — they travel in
-  # a Secret and in a Job's name, and a Job is not collected.
-  #
-  # Declaring it is not optional for this listing: the marketplace admits a deployment to the
-  # gatekeeper only when its version declares a digest (`clientsFor` skips one with none —
-  # "nothing to hold it to, or nowhere to check"), so an absent value leaves every deployment
-  # of a listing with a data slot unable to receive gated data at all. `apps/tests/run.sh`
-  # now fails a definition that has a slot and no digest, so this cannot go missing again.
-  expectedDigest: "f6a4fb8d8d07aca5b1d12337a2e89260adc15a287b4910ee2b4c147e2cbb587d"
+  # Everything else at this definition's defaults, and the three generated credentials
+  # (`internalSecret`, `modelApiKey`, `embeddingsApiKey`) are in Secrets and reach no attested
+  # object. The organisation names are not in the snapshot either — they travel in a Secret
+  # and in a Job's name, and a Job is not collected.
   exclude:
     # Every deployment lives in a namespace of its own. The platform strips this itself; it is
     # declared because the listing page shows the exclusions from the definition only, and a
