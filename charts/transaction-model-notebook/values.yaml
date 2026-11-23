@@ -1,0 +1,198 @@
+# The workbench image, built from Super Protocol's fork of NVIDIA's
+# transaction-foundation-model developer example and pinned by digest for the
+# reason every image in this repository is: the deployment's evidence names what
+# is running, and only a digest survives a moved tag (marketplace spec §2.7).
+#
+# ghcr.io, not nvcr.io. Upstream has no image at all — its README tells a
+# developer to run `nvcr.io/nvidia/nemo:25.09.01` by hand, bind-mount the
+# repository and `git lfs pull` the checkpoint. None of that is available to a
+# confidential cluster space, so the fork builds the environment itself on an
+# anonymously pullable RAPIDS base, pins every wheel by sha256 and bakes the
+# 29M-parameter checkpoint in. Nothing in this image needs a credential to pull.
+#
+# `tag` records which tag the digest was resolved from. It is not used to pull.
+image:
+  registry: ghcr.io
+  repository: super-protocol/confidential-transaction-model/transaction-workbench
+  digest: sha256:5e27d69e16319e352d88cded7fe0b93420acfe3d0fb99ba602ae42803d4ffdeb
+  tag: 0.1.0-sp.1c3d2ae
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# The token JupyterLab demands before it serves anything. It reaches the
+# container through a Secret as `JUPYTER_TOKEN`, which jupyter_server reads by
+# itself — never as a command-line argument, because arguments are rendered into
+# the manifests and published in the evidence snapshot in clear (marketplace
+# trap 4).
+#
+# The chart refuses to render an ingress without one: a notebook server on a
+# public hostname with no authentication is a GPU, a transaction history and a
+# shell handed to whoever finds the name.
+token: ""
+existingSecret: ""
+existingSecretKey: token
+
+# The public name the workbench answers on. Required when the ingress is on.
+hostname: ""
+
+ingress:
+  enabled: true
+  # Without a class the object is created, the cloud registers the hostname and
+  # writes its DNS, and nothing serves it: the controller only picks up what
+  # names it. Marketplace trap 1, and it reads as a DNS fault for an hour.
+  className: nginx
+  pathType: Prefix
+  path: /
+  annotations:
+    # A notebook kernel holds the websocket open for as long as the session
+    # lasts, and here a cell that runs for an hour is the normal case — notebook
+    # 03 fine-tunes. The default 60-second read timeout would drop it
+    # mid-training.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # A transaction extract uploaded through the browser goes through this proxy.
+    nginx.ingress.kubernetes.io/proxy-body-size: 8192m
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  tls:
+    enabled: false
+    secretName: ""
+
+service:
+  type: ClusterIP
+  port: 8888
+  targetPort: 8888
+
+# The workspace: notebooks as the tenant edits them, the tokenised corpus, the
+# embeddings, and any checkpoint their own fine-tune writes. It survives a
+# restart, which is the difference between a pod that comes back and a pod that
+# comes back empty — and a published cluster space has no exec and no
+# port-forward, so work lost on a restart cannot be recovered by hand.
+persistence:
+  enabled: true
+  size: 200Gi
+  storageClass: ""
+  accessMode: ReadWriteOnce
+
+gpu:
+  # The tokenizer is cuDF/cuML and the model is torch. Without a device the
+  # notebooks import and then fail on the first `cudf.DataFrame` — a deployment
+  # that looks healthy and cannot do the one thing it is for.
+  enabled: true
+  count: 1
+  # A device request without the runtime class leaves the pod Pending for ever
+  # rather than falling back to CPU, so the two move together.
+  runtimeClassName: nvidia
+
+# torch's DataLoader talks to its workers over /dev/shm and the 64Mi default is
+# not enough — upstream's own `docker run` line asks for 8g. Memory-backed, so
+# this counts against the container's memory limit: `resources.memory` below
+# includes it, it is not free.
+shm:
+  size: 8Gi
+
+# requests and limits are one map on purpose: a tenant cluster space sets
+# `maxLimitRequestRatio: 1`, so a pod whose request differs from its limit is
+# refused outright.
+#
+# Memory is host memory, not VRAM. The tokenised corpus is built in host RAM
+# before it reaches the card, and cuDF's read path holds the extract there first.
+resources:
+  cpu: "8"
+  memory: 56Gi
+
+# Where the tenant's own data comes from, and what their columns are called.
+data:
+  # `bindingJson` is the marketplace's resolved `data.<slot>` document — a JSON
+  # ARRAY of bound datasets, one object each, carrying the dataset owner's
+  # credentials — so the chart renders it into a Secret and nowhere else. The
+  # notebooks read it through `tfm_workspace.py`, which is the only thing in this
+  # chart that knows the shape of a binding.
+  #
+  # Empty is a supported deployment: the workbench then reads whatever the tenant
+  # uploads into /workspace/data through the browser, and the render is identical
+  # either way, because the binding never leaves the Secret.
+  bindingJson: ""
+
+  # The table (ClickHouse) or object directory (object storage) holding the
+  # transactions inside the bound dataset.
+  table: transactions
+
+  # The ceiling on rows read into one frame. A transaction history is the one
+  # kind of table that is routinely larger than host RAM, and the honest failure
+  # is "I read the most recent 25 million of your rows", printed, rather than an
+  # OOMKill forty minutes in. The public corpus upstream uses has 24.4M rows,
+  # which is where this number comes from.
+  maxRows: "25000000"
+
+  # Which of the tenant's columns is which. The defaults are the column names of
+  # the public TabFormer corpus upstream's notebooks were written against, so a
+  # deployment reading that corpus answers nothing here.
+  #
+  # These are not secret and they are the same for every deployment that chooses
+  # the same schema, so they travel as ordinary environment values.
+  #
+  # The four that carry the model: a customer identity, an amount, a merchant and
+  # a timestamp. Without those four there is no transaction sequence to learn
+  # from.
+  columns:
+    user: User
+    amount: Amount
+    merchant: Merchant Name
+    # One timestamp column, parsed for the hour, the day of week and the month.
+    # Upstream's corpus instead has four columns (Year, Month, Day, Time); naming
+    # them here, comma-separated and in that order, is accepted too and is what
+    # the default does.
+    timestamp: "Year,Month,Day,Time"
+    # The rest are genuinely optional in the data. An empty value means "my
+    # extract has no such column", and the loader substitutes the same constant
+    # upstream's tokenizer would have produced for a missing one — recorded in
+    # the coverage report so that it is a stated fact rather than a silent zero.
+    card: Card
+    mcc: MCC
+    zip: Zip
+    state: Merchant State
+    entrymode: Use Chip
+    # Not a tokenizer field: the city is one of the thirteen raw features the
+    # XGBoost baseline in notebook 01 is built from, and nothing tokenises it.
+    city: Merchant City
+    # The fraud flag, where the extract carries one. Notebooks 01 and 05 need it:
+    # they are the baseline and the comparison, and without a label there is
+    # nothing to score. Everything up to and including the embeddings runs
+    # without it.
+    label: Is Fraud?
+
+# How much of the tenant's data has to land inside the checkpoint's fixed
+# vocabulary before the notebooks will produce embeddings from it.
+#
+# This is the part of the port that has no counterpart upstream, and it is the
+# reason this listing can be honest. The shipped checkpoint was trained with a
+# 6,251-token vocabulary enumerating US states, 3-digit ZIP prefixes, a fixed MCC
+# list, dollar-amount buckets and customer indices 0-2999. Feed it transactions
+# from another country and every one of those fields tokenises to its
+# catch-all — STATE_XX, MCC_-1, CAT_GENERAL — and the model returns embeddings
+# that look exactly like embeddings and mean nothing.
+#
+# So the coverage is measured, printed, and below `minCoverage` it raises. A
+# tenant whose data genuinely does not fit that vocabulary has a real option —
+# fine-tune in notebook 03 with their own tokenizer vocabulary — and the one
+# thing they should not be able to do by accident is extract embeddings from a
+# tokenizer that matched nothing.
+vocabulary:
+  minCoverage: "0.5"
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+
+podSecurityContext: {}
+podAnnotations: {}
+podLabels: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

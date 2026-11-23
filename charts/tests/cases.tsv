@@ -51,6 +51,14 @@ analyst-grounding	conversational-analyst-grounding
 single-cell-default	rapids-singlecell-notebook		
 single-cell-unbound	rapids-singlecell-notebook		
 single-cell-component	rapids-singlecell-notebook		
+
+# Confidential Transaction Model (SUP-870), ported from NVIDIA's open developer example.
+# One chart, three shapes: a bound ClickHouse table with a tenant's own column names, the
+# same deployment with nothing attached (which must differ in the Secret alone), and the
+# no-ingress component shape on the chart's default column names.
+transaction-model-default	transaction-model-notebook		
+transaction-model-unbound	transaction-model-notebook		
+transaction-model-component	transaction-model-notebook		
 doc-ingest-component	swarm-doc-ingest		
 doc-ingest-no-ocr	swarm-doc-ingest		
 doc-ingest-millicores	swarm-doc-ingest		

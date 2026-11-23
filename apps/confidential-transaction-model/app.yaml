@@ -1,0 +1,619 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: AppDefinition
+
+# ---------------------------------------------------------------------------
+# Confidential Transaction Model — the fourth listing in the blueprint-port
+# epic (SUP-837), and the odd one out twice over.
+#
+# First, upstream is not a blueprint: NVIDIA labels
+# `NVIDIA-AI-Blueprints/transaction-foundation-model` a *developer example*, and
+# it is five notebooks and a tokenizer rather than a deployable service. The
+# naming here says "developer example" everywhere it says anything, per SUP-841
+# §1. Second, upstream ships no environment at all — its README tells a
+# developer to run NVIDIA's NeMo container by hand, bind-mount the repository,
+# `git lfs pull` a checkpoint and start Jupyter with no authentication. So the
+# port is not a substitution of encumbered parts (the stage-1 audit, SUP-838,
+# found none: Apache-2.0 throughout, no NIM, no Triton, no proprietary model,
+# and a checkpoint NVIDIA trained from random init). The port is an image, a
+# chart, and one check that upstream has no reason to have.
+#
+# What it serves was the decision this issue had to make before any chart work
+# (SUP-870): a notebook environment, on the pattern
+# `apps/confidential-single-cell-analysis` established — not a training service
+# and not an embedding API. Serving the shipped 29M-parameter checkpoint over an
+# API was rejected because its usefulness on another institution's transactions
+# is precisely what nobody has established; a listing whose value rests on an
+# unverified assumption is not a thing to put a signature on.
+#
+# The licence of the container: our image is built on the RAPIDS notebooks image
+# from Docker Hub, which carries `/NGC-DL-CONTAINER-LICENSE` — not Apache-2.0,
+# and not NVIDIA AI Enterprise either: no entitlement, no NGC credential, no
+# per-GPU fee, and it pulls anonymously. Surfaced on the card through the
+# `containerLicence` output rather than buried here, exactly as the single-cell
+# listing does.
+# ---------------------------------------------------------------------------
+
+metadata:
+  name: confidential-transaction-model
+  title: Confidential Transaction Model
+  description: >-
+    Train and explore a transaction foundation model on your own payment history, inside
+    confidential hardware it never leaves. A JupyterLab workbench with a GPU-accelerated
+    tokenizer (RAPIDS), NeMo AutoModel for pretraining and the published 29M-parameter decoder
+    checkpoint on the card — reading the transaction table you attach rather than a public
+    corpus. Every deployment publishes signed evidence of the exact environment it is running,
+    down to the sha256 of every Python wheel, and the data owner can withdraw access the moment
+    that changes. Based on NVIDIA's open-source transaction-foundation-model developer example
+    (Apache-2.0), rebuilt as our own image.
+  version: "0.1.0"
+  # What an auditor should read: the notebooks, the tokenizer and their licence
+  # are upstream's; what we changed is in the chart's
+  # files/notebooks/PROVENANCE.md (copied into every deployment's workspace) and
+  # in the fork's MODIFICATIONS.md.
+  sourceRepo: https://github.com/Super-Protocol/confidential-transaction-model
+  license: Apache-2.0
+  category: finance
+  tags:
+    - transactions
+    - fraud
+    - foundation-model
+    - embeddings
+    - rapids
+    - jupyter
+    - gpu
+    - attestation
+
+ui:
+  sections:
+    - id: access
+      title: Access
+      description: >-
+        Where the workbench is served, and the token that opens it. Take the hostname offered and
+        the DNS is written for you.
+      fields:
+        - parameterId: hostname
+          widget: hostname
+        - parameterId: token
+          widget: password
+
+    - id: data
+      title: Your transactions
+      description: >-
+        Which table holds them, how many rows to read at once, and which of your columns is
+        which. The defaults are the column names of the public corpus the notebooks were written
+        against, so a deployment reading that corpus answers nothing here. The first notebook
+        prints the mapping it resolved and the columns it actually found, so a wrong answer is a
+        message in cell 3 rather than a failure forty cells in.
+      fields:
+        - parameterId: table
+          widget: text
+        - parameterId: maxRows
+          widget: number
+        - parameterId: colUser
+          widget: text
+        - parameterId: colAmount
+          widget: text
+        - parameterId: colMerchant
+          widget: text
+        - parameterId: colTimestamp
+          widget: text
+        - parameterId: colCard
+          widget: text
+        - parameterId: colMcc
+          widget: text
+        - parameterId: colZip
+          widget: text
+        - parameterId: colState
+          widget: text
+        - parameterId: colEntryMode
+          widget: text
+        - parameterId: colCity
+          widget: text
+        - parameterId: colLabel
+          widget: text
+
+    - id: honesty
+      title: When the shipped model does not fit your data
+      description: >-
+        The published checkpoint was pretrained on a public US card-transaction corpus with a
+        fixed 6,251-token vocabulary — US states, 3-digit ZIP prefixes, a fixed list of merchant
+        category codes, dollar-amount buckets, customer indices 0-2999. Transactions from outside
+        that world tokenise entirely to catch-all tokens, and the notebooks would still produce
+        embeddings, a UMAP and an AUROC from them. So the workbench measures how much of your
+        data lands inside that vocabulary and refuses to extract embeddings below this floor.
+        Pretraining from scratch on your own fields (notebook 03) does not depend on those
+        weights and is unaffected by this setting.
+      fields:
+        - parameterId: minCoverage
+          widget: slider
+
+parameters:
+  - id: hostname
+    type: string
+    title: Workbench hostname
+    description: >-
+      Where JupyterLab is served. Take the one offered and the DNS is written for you; bring your
+      own and point it at this cloud's gateway before publishing the deployment.
+    required: true
+    validation:
+      pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+
+  - id: token
+    type: string
+    title: Sign-in token
+    description: >-
+      The only credential the workbench accepts. Generated if left blank and shown below once
+      this is deployed — paste it into the sign-in form. It is the whole of the authentication in
+      front of a GPU and a transaction history, so it is not optional and it is not short.
+    sensitive: true
+    generated: true
+    validation:
+      minLength: 32
+
+  - id: table
+    type: string
+    title: Transaction table
+    description: >-
+      The table inside the attached dataset that holds the transactions, one row per transaction.
+      Ignored when nothing is attached and the workbench reads an extract you uploaded instead.
+    required: true
+    default: transactions
+    validation:
+      pattern: "^[A-Za-z_][A-Za-z0-9_.-]*$"
+
+  - id: maxRows
+    type: integer
+    title: Rows to read at once
+    description: >-
+      The ceiling on how many rows one notebook frame holds. A transaction history is the one
+      kind of table that is routinely larger than the host memory of a single pod, and the honest
+      limit is "the most recent N rows", printed, rather than a pod killed forty minutes in. The
+      public corpus upstream uses has 24.4 million rows, which is where the default comes from.
+    required: true
+    default: 25000000
+    validation:
+      min: 100000
+      max: 200000000
+
+  - id: colUser
+    type: string
+    title: Customer column
+    description: >-
+      The column identifying whose transaction it is. Sequences are built per customer, in time
+      order, so this is not optional: without it there is nothing sequential to learn from.
+    required: true
+    default: User
+
+  - id: colAmount
+    type: string
+    title: Amount column
+    description: >-
+      The transaction amount. Numbers or strings like `$42.75` both work; the tokenizer buckets
+      them at 10, 50, 100, 500, 1,000 and 5,000 units, which is the vocabulary the published
+      checkpoint was trained with.
+    required: true
+    default: Amount
+
+  - id: colMerchant
+    type: string
+    title: Merchant column
+    description: >-
+      The merchant identity — a name, an ID, anything stable. Hashed into 2,000 buckets, so no
+      merchant list is needed and no merchant name reaches a token in clear.
+    required: true
+    default: Merchant Name
+
+  - id: colTimestamp
+    type: string
+    title: Timestamp column
+    description: >-
+      One column holding the transaction time, parsed for the hour, the day of week and the
+      month. If your extract instead has four separate columns, name them comma-separated in the
+      order year, month, day, time — which is what the default does, because the public corpus is
+      shaped that way. A value that does not parse is an error naming the row count, not an hour
+      zero the model would read as a fact.
+    required: true
+    default: "Year,Month,Day,Time"
+
+  - id: colCard
+    type: string
+    title: Card column
+    description: >-
+      Which of the customer's cards. Optional — leave empty if your extract has none. The
+      vocabulary has ten card tokens and anything above nine is clipped onto the tenth.
+    default: Card
+
+  - id: colMcc
+    type: string
+    title: Merchant category code column
+    description: >-
+      The merchant category code (ISO 18245). Optional. Codes outside the fixed list the
+      checkpoint was trained with tokenise to `MCC_-1`, which the coverage report in the first
+      notebook counts for you.
+    default: MCC
+
+  - id: colZip
+    type: string
+    title: Postcode column
+    description: >-
+      The merchant's postcode. Optional, and only useful where a 3-digit numeric prefix means
+      something — the vocabulary holds ZIP3 regions 000-999, so a non-numeric scheme has nothing
+      to tokenise.
+    default: Zip
+
+  - id: colState
+    type: string
+    title: State column
+    description: >-
+      The merchant's state or region. Optional. The vocabulary holds the US state abbreviations
+      plus `ONLINE` and a catch-all; a region outside that list becomes the catch-all.
+    default: Merchant State
+
+  - id: colEntryMode
+    type: string
+    title: Entry-mode column
+    description: >-
+      How the card was presented. Optional. The vocabulary holds three values — `Swipe
+      Transaction`, `Chip Transaction`, `Online Transaction` — and anything else becomes
+      `CHIP_UNK`; mapping your own values onto those three strings is worth doing where you can.
+    default: Use Chip
+
+  - id: colCity
+    type: string
+    title: City column
+    description: >-
+      The merchant's city. Optional, and not tokenised at all: it is one of the thirteen raw
+      features the XGBoost baseline in the first notebook is built from.
+    default: Merchant City
+
+  - id: colLabel
+    type: string
+    title: Fraud label column
+    description: >-
+      A flag saying whether the transaction was fraudulent, where your extract carries one. Yes/No,
+      true/false and 1/0 are all understood. Optional, and what it gates is specific: notebooks 01
+      and 05 are the baseline and the comparison, and they have nothing to score without it.
+      Tokenising, pretraining and extracting embeddings (02, 03, 04) need no label.
+    default: "Is Fraud?"
+
+  - id: minCoverage
+    type: number
+    title: Minimum vocabulary coverage
+    description: >-
+      How much of your data has to tokenise into tokens the published checkpoint actually has
+      before the notebooks will extract embeddings from it. Measured per field and averaged; the
+      first notebook prints every field's number. 0 switches the check off, which is a thing to
+      do deliberately and never by accident.
+    required: true
+    default: 0.5
+    validation:
+      min: 0
+      max: 1
+      step: 0.05
+
+resources:
+  # ---------------------------------------------------------------------------
+  # The cluster space quota, not a hint: it becomes the namespace's quota, and
+  # under-declared it evicts the heaviest pod and reads as "the app is broken".
+  #
+  # One pod, one container — 8 CPU / 56Gi, which includes the 8Gi of
+  # memory-backed /dev/shm torch's DataLoader workers use. The extra 1 CPU and
+  # 2Gi above that are not margin: the marketplace adds its own egress sidecar
+  # to any deployment that mounts GATED data (limits 250m / 128Mi), and a quota
+  # sized for the application alone refuses it.
+  #
+  # Memory is host memory, not VRAM. The tokenised corpus is built in host RAM
+  # before it reaches the card, and cuDF's read path holds the extract there
+  # first — which is also what `maxRows` exists to bound.
+  min:
+    cpu: "9"
+    memory: "58Gi"
+    storage: "200Gi"
+  # The heaviest single pod, which is the one the cloud requires ONE node to be
+  # able to hold — and the LimitRange max of the space. The sidecar is a pod of
+  # its own, and a far smaller one, so this is the workbench container's limits.
+  maxPod:
+    cpu: "8"
+    memory: "56Gi"
+  recommended:
+    cpu: "16"
+    memory: "96Gi"
+    storage: "400Gi"
+  gpu:
+    # The tokenizer is cuDF/cuML and the model is torch. Without a card the
+    # notebooks import and then fail on the first frame — a deployment that looks
+    # healthy and cannot do the one thing it is for.
+    required: true
+    minCount: 1
+    # Upstream documents 1x A100 80 GB or H100 for the full public corpus. What a
+    # deployment actually needs scales with how many rows it reads (`maxRows`),
+    # so this is the floor we are prepared to place rather than upstream's
+    # headline: 40 GiB holds the tokenisation of a few million transactions and
+    # a fine-tune of a 29M-parameter decoder with room to spare.
+    minVram: "40Gi"
+    # nvidia-smi product names, which hw-measurement writes to
+    # device.swarm.io/gpu-product. Placement requires this exact string, so a
+    # different card of the same family needs its own entry — and a plausible
+    # guess is worse than no entry at all. These two are the cards this estate
+    # actually has: H100 NVL was measured inside a cluster space on the
+    # gpu-blueprints cloud (SUP-868), H200 NVL is the card the model-serving
+    # listings run on.
+    types:
+      - NVIDIA H100 NVL
+      - NVIDIA H200 NVL
+
+data:
+  slots:
+    # -------------------------------------------------------------------------
+    # One slot, one interface, and the interface is the gateable one.
+    #
+    # `clickhouse-http/v1` is today the ONLY interface the marketplace gatekeeper
+    # can serve: the gate injects ClickHouse credentials into every request it
+    # forwards and rewrites the database it names. A dataset published
+    # `access.mode: gateway` over this interface reaches this deployment through
+    # a plain listener in its own namespace, and every read is admitted against
+    # the evidence this deployment published — which, for transaction histories,
+    # is the whole reason this listing exists rather than a notebook on a laptop.
+    #
+    # Object storage is NOT accepted, and that is a real limitation rather than
+    # an oversight. `s3-parquet/v1` and `s3-csv/v1` are registered interfaces and
+    # would be useful here; reading them needs `s3fs`, whose botocore pins
+    # `python-dateutil<3.0.0` while the workbench image carries 3.0.0 as a conda
+    # package underneath pandas and cuDF. Adding it would downgrade a package the
+    # CUDA builds are linked against. An extract uploaded through the browser
+    # covers the ungated case with no S3 client at all; revisit when the base
+    # image's dateutil moves.
+    #
+    # Not required. A deployment with nothing attached is a supported and useful
+    # one: the tenant drops a .csv or .parquet extract into /workspace/data
+    # through the browser and never registers the data with a marketplace at all.
+    # The binding — and therefore everything that varies between two deployments
+    # of this version — lives in a Secret, so the attested render is the same
+    # either way.
+    # -------------------------------------------------------------------------
+    - name: transactions
+      title: Transaction history
+      description: >-
+        The transactions the notebooks work on: one row per transaction, in a ClickHouse table
+        named by the "Transaction table" parameter. Nothing attached is also supported — upload a
+        .csv or .parquet extract into /workspace/data instead. The column names are yours; the
+        parameters say which is which.
+      required: false
+      multiple: true
+      accepts:
+        - interface: clickhouse-http/v1
+      # No `schema:` here, deliberately. A slot schema says which columns a
+      # dataset must have, by name — and in this listing the column names are a
+      # deployment PARAMETER, because an institution's transaction extract is
+      # not going to use the public corpus's spelling. Naming three columns here
+      # would be a requirement this listing does not actually have (and the
+      # specification's column-name pattern forbids the spelling upstream
+      # itself uses: `Merchant Name` has a space in it). What a tenant's columns
+      # have to be is answered by the parameters and checked by the first
+      # notebook, which prints the mapping it resolved and the coverage it
+      # measured.
+
+components:
+  - name: workbench
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: transaction-model-notebook
+      version: "0.1.0"
+    # Our own image, built by
+    # Super-Protocol/confidential-transaction-model from upstream's Apache-2.0
+    # source on an anonymously pullable RAPIDS base, with every wheel pinned by
+    # sha256 and the 29M-parameter checkpoint baked in and checksummed. The
+    # digest traces back to the commit that built it through a GitHub build
+    # attestation (`scripts/verify-pins`).
+    images:
+      - name: ghcr.io/super-protocol/confidential-transaction-model/transaction-workbench
+        digest: sha256:5e27d69e16319e352d88cded7fe0b93420acfe3d0fb99ba602ae42803d4ffdeb
+    deployment:
+      values:
+        base:
+          hostname: ""
+          token: ""
+          data:
+            bindingJson: ""
+            table: ""
+            maxRows: ""
+            columns:
+              user: ""
+              amount: ""
+              merchant: ""
+              timestamp: ""
+              card: ""
+              mcc: ""
+              zip: ""
+              state: ""
+              entrymode: ""
+              city: ""
+              label: ""
+          vocabulary:
+            minCoverage: ""
+        patches:
+          - op: replace
+            path: hostname
+            value: "{{ params.hostname }}"
+
+          - op: replace
+            path: token
+            value: "{{ params.token }}"
+
+          # The resolved binding, straight into the chart's Secret. It carries
+          # the dataset owner's credentials, and it is the one value that differs
+          # between two deployments of this version — both of which are reasons
+          # for it to be nowhere else.
+          - op: replace
+            path: data.bindingJson
+            value: "{{ data.transactions | json }}"
+
+          - op: replace
+            path: data.table
+            value: "{{ params.table }}"
+
+          - op: replace
+            path: data.maxRows
+            value: "{{ params.maxRows }}"
+
+          - op: replace
+            path: data.columns.user
+            value: "{{ params.colUser }}"
+
+          - op: replace
+            path: data.columns.amount
+            value: "{{ params.colAmount }}"
+
+          - op: replace
+            path: data.columns.merchant
+            value: "{{ params.colMerchant }}"
+
+          - op: replace
+            path: data.columns.timestamp
+            value: "{{ params.colTimestamp }}"
+
+          - op: replace
+            path: data.columns.card
+            value: "{{ params.colCard }}"
+
+          - op: replace
+            path: data.columns.mcc
+            value: "{{ params.colMcc }}"
+
+          - op: replace
+            path: data.columns.zip
+            value: "{{ params.colZip }}"
+
+          - op: replace
+            path: data.columns.state
+            value: "{{ params.colState }}"
+
+          - op: replace
+            path: data.columns.entrymode
+            value: "{{ params.colEntryMode }}"
+
+          - op: replace
+            path: data.columns.city
+            value: "{{ params.colCity }}"
+
+          - op: replace
+            path: data.columns.label
+            value: "{{ params.colLabel }}"
+
+          - op: replace
+            path: vocabulary.minCoverage
+            value: "{{ params.minCoverage }}"
+
+outputs:
+  - id: workbenchUrl
+    title: Open the workbench
+    type: url
+    value: "https://{{ params.hostname }}/lab"
+
+  - id: token
+    title: Sign-in token
+    # `secret`, so it is surfaced only to people who may deploy for the
+    # organisation, masked, with one-click copy.
+    type: secret
+    value: "{{ params.token }}"
+
+  - id: signIn
+    title: How to sign in
+    # Deliberately NOT a `https://…/lab?token=…` link, which is how JupyterLab
+    # usually hands a token over. A query string is written to the ingress
+    # controller's access log, to any proxy in between, and to the browser's
+    # history; the sign-in form posts the same token in a body and sets a
+    # cookie. One copy-paste is worth that.
+    type: string
+    value: >-
+      Open the workbench above and paste the sign-in token into the form. Do not append it to the
+      URL as `?token=…` — a query string lands in the gateway's access log and in your browser
+      history, and the form does not.
+
+  - id: startHere
+    title: Run this first
+    type: string
+    value: >-
+      `00_environment.ipynb`. It names the card, loads the published checkpoint from its own
+      bytes, checks that the tokenizer and that checkpoint agree the vocabulary is 6,251 tokens,
+      prints the column mapping this deployment resolved, and measures how much of your data
+      lands inside that vocabulary. It is the only notebook here whose job is to fail loudly.
+
+  - id: checkpointNote
+    title: What the published checkpoint is, and is not
+    type: string
+    value: >-
+      A 29M-parameter decoder NVIDIA trained from random initialisation on a public corpus of
+      synthetic US card transactions, with a 6,251-token financial vocabulary of its own — not a
+      Llama model, despite `"model_type": "llama"` in its config, which names the architecture
+      and carries no Llama licence. It is in the image so you can fine-tune from it or measure
+      against it. Whether its embeddings transfer to another institution's transactions is not
+      established by anybody, upstream included, which is why the workbench measures the fit
+      rather than assuming it.
+
+  - id: containerLicence
+    title: Licence of the container this runs
+    type: string
+    value: >-
+      The notebooks, the chart and the ported workflow are Apache-2.0, and the image is ours,
+      built from our fork in GitHub Actions with a build attestation. Its base layers are the
+      `rapidsai/notebooks` image from Docker Hub, governed by the NVIDIA Deep Learning Container
+      License (`/NGC-DL-CONTAINER-LICENSE` inside the image), with its components under their own
+      open licences. It needs no NVIDIA entitlement, no NGC credential and no per-GPU fee, and it
+      pulls anonymously. What it does require of you: material additional functionality beyond
+      the container (§2(a)), and no claim that this is sponsored or endorsed by NVIDIA (§4(d)) —
+      it is not.
+
+  - id: evidenceBundle
+    title: Published evidence
+    type: url
+    value: "https://{{ params.hostname }}/.well-known/swarm-evidence"
+
+  - id: dataBound
+    title: Data
+    type: string
+    value: >-
+      A dataset is attached to this deployment. `00_environment.ipynb` names it, resolves your
+      column mapping against it and measures the vocabulary fit before any analysis starts.
+    when: "data.transactions.count > 0"
+
+  - id: dataUnbound
+    title: Data
+    type: string
+    value: >-
+      No dataset is attached. Upload a .csv or .parquet extract into /workspace/data with the file
+      browser in JupyterLab, or reconfigure the deployment with a dataset in the "Transaction
+      history" slot.
+    when: "data.transactions.count == 0"
+
+evidence:
+  # ---------------------------------------------------------------------------
+  # Measured, not derived — and NOT YET MEASURED. This value is what two
+  # deployments of this version publish, read back from the cloud's own signed
+  # snapshot; it cannot be computed from the chart, because a cluster defaults
+  # fields no template writes.
+  #
+  # Declaring it is not documentation: the marketplace admits a deployment to the
+  # gatekeeper only when its listing version carries one, so a listing with a
+  # data slot and no digest produces deployments the gate has never heard of
+  # (SUP-711, and `apps/tests/gated_digest.py`, which fails until this is a real
+  # digest).
+  #
+  # The measurement needs the epic's single GPU, which SUP-895 holds. Two
+  # deployments on the gpu-blueprints cloud, two hostnames in two namespaces,
+  # and this line carries their digest.
+  expectedDigest: "__EXPECTED_DIGEST__"
+  # ---------------------------------------------------------------------------
+  # The hostname is the one field that differs between two deployments of this
+  # version, and excluding it is what makes the digest a property of the version
+  # rather than of the deployment. Declared here as well as in the chart's own
+  # annotation, because the listing page shows only what the definition declares
+  # — a digest displayed beside "no exclusions" answers the only question that
+  # matters about it wrongly.
+  exclude:
+    - match:
+        kind: Ingress
+        name: transaction-model-notebook
+      fields:
+        - /spec/rules/0/host

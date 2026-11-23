@@ -48,7 +48,14 @@ jobs:
       # catches is `--root-path` stopping short of authenticating the prefixed
       # path in a *later* framework than the one measured against. Without it the
       # check skips with a note, which is a check nobody runs.
-      - run: pip install --quiet pyyaml fastapi
+      #
+      # pandas for transaction_workspace.py, which stubs cuDF with it: the
+      # transaction workbench's column mapping and its vocabulary-coverage check
+      # are the whole of that listing's port, they live in a Python module the
+      # chart mounts, and nothing in a render can see either. pandas implements
+      # every operation that module uses, so the logic is exercised here without
+      # a GPU and without the 9 GB image.
+      - run: pip install --quiet pyyaml fastapi pandas
 
       - name: Lint, render, diff
         run: charts/tests/run.sh

@@ -1,0 +1,26 @@
+# The other supported shape: no dataset attached, the tenant uploads a .csv or
+# .parquet extract into /workspace/data instead. The render must differ from
+# transaction-model-default in nothing but the Secret, which the platform lifts
+# out before the snapshot is taken — otherwise `evidence.expectedDigest` would
+# be a property of whether somebody attached data rather than of the version.
+hostname: tfm-4b91.conf-apps.superprotocol.dev
+token: Qp7xR2mVt8kYd0ZaLn5WcBjHu3Gf9Es1
+data:
+  # An empty slot renders as `[]`, not as an empty string.
+  bindingJson: "[]"
+  table: card_transactions
+  maxRows: "25000000"
+  columns:
+    user: customer_id
+    amount: amount_eur
+    merchant: merchant_id
+    timestamp: booked_at
+    card: card_index
+    mcc: category_code
+    zip: postcode
+    state: region
+    entrymode: entry_mode
+    city: city
+    label: is_fraud
+vocabulary:
+  minCoverage: "0.5"

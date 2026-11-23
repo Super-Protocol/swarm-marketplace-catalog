@@ -1,0 +1,13 @@
+# No ingress: the workbench reachable inside the namespace only, which is the
+# shape a listing that puts its own front end in front of this one would use.
+# Linted separately because the validations that fire with an ingress on (a
+# hostname, a token) are exactly the ones this shape does not have.
+#
+# The columns are left at the chart's defaults here, which are the public
+# corpus's own names — the second shape worth linting, because a deployment
+# reading that corpus answers none of those parameters.
+token: Qp7xR2mVt8kYd0ZaLn5WcBjHu3Gf9Es1
+ingress:
+  enabled: false
+data:
+  bindingJson: ""

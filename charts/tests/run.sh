@@ -21,12 +21,12 @@ cd "$root"
 # only for the label: those charts address one another by `<release>-<subchart>` and the
 # listing resolves the same names through `{{ components.agent.release }}`, so a golden taken
 # under a different release name would not be the deployment anybody gets.
-release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; rapids-singlecell-notebook) printf 'sc' ;; text-embeddings-server|milvus-standalone|confidential-rag) printf 'rag' ;; confidential-vulnerability-analysis) printf 'va' ;; patroni-postgresql) printf 'pg' ;; swarm-model-server) printf 'ms' ;; swarm-doc-ingest) printf 'di' ;; conversational-analyst-*) printf 'analyst' ;; *) printf 'cr' ;; esac; }
-namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; rapids-singlecell-notebook) printf 'single-cell' ;; text-embeddings-server|milvus-standalone|confidential-rag) printf 'confidential-rag' ;; confidential-vulnerability-analysis) printf 'vuln-analysis' ;; patroni-postgresql) printf 'patroni' ;; swarm-model-server) printf 'model-server' ;; swarm-doc-ingest) printf 'doc-ingest' ;; conversational-analyst-*) printf 'conversational-analyst' ;; *) printf 'confidential-router' ;; esac; }
+release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; rapids-singlecell-notebook) printf 'sc' ;; transaction-model-notebook) printf 'tfm' ;; text-embeddings-server|milvus-standalone|confidential-rag) printf 'rag' ;; confidential-vulnerability-analysis) printf 'va' ;; patroni-postgresql) printf 'pg' ;; swarm-model-server) printf 'ms' ;; swarm-doc-ingest) printf 'di' ;; conversational-analyst-*) printf 'analyst' ;; *) printf 'cr' ;; esac; }
+namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; rapids-singlecell-notebook) printf 'single-cell' ;; transaction-model-notebook) printf 'transaction-model' ;; text-embeddings-server|milvus-standalone|confidential-rag) printf 'confidential-rag' ;; confidential-vulnerability-analysis) printf 'vuln-analysis' ;; patroni-postgresql) printf 'patroni' ;; swarm-model-server) printf 'model-server' ;; swarm-doc-ingest) printf 'doc-ingest' ;; conversational-analyst-*) printf 'conversational-analyst' ;; *) printf 'confidential-router' ;; esac; }
 
 RELEASE=cr
 NAMESPACE=confidential-router
-CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ollama confidential-router-ui confidential-s3 patroni-postgresql swarm-model-server rapids-singlecell-notebook swarm-doc-ingest
+CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ollama confidential-router-ui confidential-s3 patroni-postgresql swarm-model-server rapids-singlecell-notebook transaction-model-notebook swarm-doc-ingest
         conversational-analyst-platform conversational-analyst-embeddings conversational-analyst-identity conversational-analyst-agent conversational-analyst-gateway conversational-analyst-grounding
         text-embeddings-server milvus-standalone confidential-rag confidential-vulnerability-analysis)
 
@@ -77,6 +77,7 @@ for chart in "${CHARTS[@]}"; do
     patroni-postgresql) values="charts/tests/cases/patroni-default.yaml" ;;
     swarm-model-server) values="charts/tests/cases/model-server-llama.yaml" ;;
     rapids-singlecell-notebook) values="charts/tests/cases/single-cell-default.yaml" ;;
+    transaction-model-notebook) values="charts/tests/cases/transaction-model-default.yaml" ;;
     swarm-doc-ingest) values="charts/tests/cases/doc-ingest-component.yaml" ;;
     conversational-analyst-platform) values="charts/tests/cases/analyst-platform.yaml" ;;
     conversational-analyst-embeddings) values="charts/tests/cases/analyst-embeddings.yaml" ;;
@@ -128,6 +129,20 @@ for shape in unbound component; do
     pass "rapids-singlecell-notebook ($shape)"
   else
     fail "rapids-singlecell-notebook ($shape)"
+    printf '%s\n' "$output" | sed 's/^/        /'
+  fi
+done
+
+# The workbench's two other shapes, for the same reason as the single-cell ones
+# above: the validations that fire with an ingress on — a hostname, a token — are
+# exactly the ones the component shape does not have, and the unbound shape is
+# the one a tenant who uploads an extract gets.
+for shape in unbound component; do
+  if output=$(helm lint charts/transaction-model-notebook \
+        --values "charts/tests/cases/transaction-model-$shape.yaml" 2>&1); then
+    pass "transaction-model-notebook ($shape)"
+  else
+    fail "transaction-model-notebook ($shape)"
     printf '%s\n' "$output" | sed 's/^/        /'
   fi
 done
@@ -359,6 +374,60 @@ else
 fi
 rm -f /tmp/sc-bind-diff.$$
 
+note "every image the transaction-model listing renders is declared by its listing"
+if output=$(python3 charts/tests/declared_images.py confidential-transaction-model \
+      workbench transaction-model-notebook charts/tests/cases/transaction-model-default.yaml); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/declared_images.py confidential-transaction-model"
+fi
+
+note "the heaviest pod the transaction-model listing renders is within its declared maxPod"
+if output=$(python3 charts/tests/max_pod.py confidential-transaction-model \
+      workbench:transaction-model-notebook:transaction-model-default); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/max_pod.py confidential-transaction-model"
+fi
+
+note "two consumers of the transaction-model listing attest the same snapshot"
+if output=$(python3 charts/tests/evidence_drift.py transaction-model-notebook \
+      charts/tests/cases/transaction-model-default.yaml confidential-transaction-model \
+      'hostname={t}.conf-apps.superprotocol.dev' \
+      'token=SIGNIN-{t}'); then
+  # The binding is deliberately not varied here, as in the single-cell case:
+  # `helm --set` cannot carry a JSON document, and a Secret's values are dropped
+  # from the snapshot before this check ever sees them. What attaching a dataset
+  # does to the render is asked directly, against the two goldens, below.
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/evidence_drift.py transaction-model-notebook"
+fi
+
+# The column mapping, the binding shapes and the vocabulary-coverage check are
+# the whole of this listing's port, and not one of them is visible in a render.
+# See the file.
+note "the workbench loader maps a tenant's columns and refuses data the checkpoint cannot read"
+if output=$(python3 charts/tests/transaction_workspace.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/transaction_workspace.py"
+fi
+
+note "attaching a transaction table changes nothing outside the Secret"
+if diff -u <(strip_secret charts/tests/golden/transaction-model-default.yaml) \
+            <(strip_secret charts/tests/golden/transaction-model-unbound.yaml) >/tmp/tfm-bind-diff.$$ 2>&1; then
+  pass "bound and unbound renders differ in the Secret alone"
+else
+  fail "bound and unbound renders differ outside the Secret"
+  sed 's/^/        /' /tmp/tfm-bind-diff.$$
+fi
+rm -f /tmp/tfm-bind-diff.$$
+
 note "every rendered container clears a cluster space's LimitRange"
 if output=$(python3 charts/tests/limitrange.py); then
   printf '%s\n' "$output"
@@ -542,6 +611,34 @@ refuses "an unpinned image" "pinned by digest" \
 # variable and would match nobody once it is split.
 refuses "a landing URL where a hostname belongs" "must be a hostname, not a URL" \
   "${base_api[@]}" --set invites.landingHostname=https://landing.confidential-router.example
+
+base_tfm=(helm template tfm charts/transaction-model-notebook --namespace transaction-model --values charts/tests/cases/transaction-model-default.yaml)
+
+# The RAPIDS base image's own command starts JupyterLab with
+# --NotebookApp.token='', so a published deployment with no token is a GPU and a
+# transaction history handed to whoever finds the hostname.
+refuses "a published workbench with no sign-in token" "token must be set" \
+  "${base_tfm[@]}" --set token=
+
+refuses "an ingress with no hostname" "hostname must be set" \
+  "${base_tfm[@]}" --set hostname=
+
+refuses "a GPU request with no runtime class" "gpu.runtimeClassName must be set" \
+  "${base_tfm[@]}" --set gpu.runtimeClassName=
+
+refuses "a workspace on an emptyDir" "persistence.enabled must be true" \
+  "${base_tfm[@]}" --set persistence.enabled=false
+
+refuses "an unpinned image" "pinned by digest" \
+  "${base_tfm[@]}" --set image.digest= --set image.tag=
+
+# A transaction sequence is a customer, an amount, a merchant and a time. A
+# deployment missing one of the four renders a workbench whose first notebook
+# raises, and the parameter it is missing is named here instead.
+for required in user amount merchant timestamp; do
+  refuses "a deployment naming no $required column" "data.columns.$required must name a column" \
+    "${base_tfm[@]}" --set "data.columns.$required="
+done
 
 refuses "an operator name where an address belongs" "not an email address" \
   "${base_api[@]}" --set 'auth.adminEmails[0]=operator'

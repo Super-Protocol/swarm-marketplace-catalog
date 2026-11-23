@@ -86,6 +86,16 @@ apps:
   # Published by the platform team like the rest of the ported family.
   - path: apps/confidential-vulnerability-analysis
     organization: platform-team
+  # Ported from NVIDIA's open transaction-foundation-model DEVELOPER EXAMPLE
+  # (SUP-870) — upstream's own word, and the reason this listing never calls it a
+  # blueprint. The audit found nothing encumbered here either, and nothing
+  # runnable: upstream is five notebooks and a tokenizer with no image at all, so
+  # what this listing stands behind is the image we built from it, the environment
+  # pinned by sha256, the transaction table bound under the gate, and the one
+  # check that refuses to extract embeddings from a tokenizer that matched
+  # nothing. Published by the platform team like the rest of the ported family.
+  - path: apps/confidential-transaction-model
+    organization: platform-team
   - path: apps/conversational-analyst
     organization: aivo
     secrets:
