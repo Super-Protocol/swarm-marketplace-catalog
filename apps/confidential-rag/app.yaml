@@ -2,6 +2,58 @@ apiVersion: swarm.cloud/v1alpha1
 kind: AppDefinition
 
 # ---------------------------------------------------------------------------
+# 0.1.9 is the document NAME, which 0.1.8 destroyed, and the three items parked
+# against the next re-measure of this listing's digest. One change, one
+# re-measure, because every item in it moves `expectedDigest` and a re-measure
+# costs two gated deployments on the epic's single card (SUP-895, carrying
+# SUP-893).
+#
+# **Two documents whose names are not Latin were ONE document.** `console.py`
+# sent the submitted name as `name.encode("ascii", "replace")`, so every
+# character outside ASCII became `?`. The indexer derives a document's identity
+# from the name it is handed and REPLACES a document of the same identity — so
+# `Счёт.pdf` and `План.pdf` both arrived as `????.pdf`, hashed to one identity,
+# and submitting the second deleted every chunk of the first. The indexer's
+# answer carried `replaced: N` the whole time and nothing rendered it, so the
+# deletion looked exactly like an ordinary upload, and both documents and every
+# citation quoting them read `????.pdf`. Cyrillic file names are the normal case
+# for these users rather than an edge case, and the copy a person submits into
+# the enclave is the only copy. The name is percent-encoded on the way out and
+# `unquote`d before `safe_name` on the way in, so the identifier and the stored
+# `document_name` both carry the real name; a replacement now says so in the
+# console.
+#
+# **A replacement writes before it deletes.** 0.1.8 dropped the old chunks
+# first, so a write that failed partway left neither version complete, and every
+# ordinary resubmission left the document unsearchable for as long as
+# re-embedding it took. The superseded chunks are identified by the primary keys
+# they already carry, which needs no new metadata field and so does not change a
+# collection `langchain_milvus` built from its first batch.
+#
+# **The indexer authenticates.** `POST /documents` and `DELETE /documents/<id>`
+# on :8085 were open to the namespace, and they write the collection whose
+# answers are cited beside the gated corpus — so anything in the namespace that
+# could reach the Service could add a document a tenant would read as their own,
+# or delete one. Every route but `/healthz` now needs the bearer token the
+# deployment's Secret carries to both pods, generated like the extractor's and
+# on exactly the same argument: a namespace is not a trust boundary once a
+# second workload is in it. `crag.validate` requires the key, so an unkeyed
+# indexer does not render.
+#
+# **And the three parked items (SUP-893).** The retriever score was
+# `1 - d²/4` on a number Milvus already returns squared — `metric_type: L2`
+# skips the square root — so it computed `1 - (1 - cos)²` while its own
+# docstring claimed `(1 + cos) / 2`. Order survives for `cos ≥ 0`, which is why
+# monotonicity tests passed either way; what it cost is that every document the
+# query points away from read exactly 0.0 on the degraded path, which is the
+# value the console treats as "no score". Now `1 - d/4` with the cosine identity
+# pinned by a test. The console reads one byte past `UPLOAD_MAX_BYTES` and
+# refuses on the overflow rather than after the whole upload is resident in a
+# 512Mi container. And `server.rerankerScoreThreshold` now says what it means on
+# a fallback, where it filters retriever similarities rather than cross-encoder
+# probabilities.
+#
+# ---------------------------------------------------------------------------
 # 0.1.8 is two things the pilot shipped without, done as ONE change because
 # either one on its own moves `expectedDigest` and a re-measure costs two gated
 # deployments on the epic's single card (SUP-889 + SUP-890, parked as a pair and
@@ -21,7 +73,7 @@ kind: AppDefinition
 #
 # **Documents can be submitted, not only read from a table.** The ingestion
 # component this listing has reserved 4 CPU and 4Gi for since 0.1.0 is now
-# composed: `swarm-doc-ingest` 0.2.0 (SUP-874) — Docling, TableFormer and
+# composed: `swarm-doc-ingest` 0.3.0 (SUP-874, SUP-890) — Docling, TableFormer and
 # RapidOCR, CPU-only, no NIM and no NGC credential — with the console gaining
 # the submit / list / remove that upstream's `ingestor-server` would have
 # provided. Submitted files are indexed into a SECOND collection, because the
@@ -168,7 +220,7 @@ metadata:
     deployment publishes cryptographic proof of which embedder and which model touch your data, and
     the data owner can withdraw access the moment that changes. Based on the open-source NVIDIA RAG
     reference architecture (Apache-2.0), rebuilt on open components.
-  version: "0.1.8"
+  version: "0.1.9"
   category: ai-inference
   # Our fork — the code the image is built from — and not the upstream repository.
   sourceRepo: https://github.com/Super-Protocol/confidential-rag
@@ -249,6 +301,8 @@ ui:
         - parameterId: inferenceKey
           widget: password
         - parameterId: ingestKey
+          widget: password
+        - parameterId: indexerKey
           widget: password
         - parameterId: sessionKey
           widget: password
@@ -427,6 +481,17 @@ parameters:
       is on no public address and a namespace is not a trust boundary once a second workload is
       in it — an unauthenticated extractor would take a document from anything that could reach
       it.
+    sensitive: true
+    generated: true
+
+  - id: indexerKey
+    type: string
+    title: Indexer endpoint key
+    description: >-
+      Authenticates the console to the indexer inside this deployment. Two of the indexer's
+      routes write the collection whose answers are cited beside the gated corpus, so an
+      unauthenticated one would take a document from anything in the namespace that could
+      reach it — or delete one.
     sensitive: true
     generated: true
 
@@ -875,13 +940,14 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-rag
-      version: "0.2.0"
+      version: "0.2.1"
     images:
       - name: ghcr.io/super-protocol/confidential-rag/rag-server
-        # Built from `confidential/2.6.2` at 5285f52, the commit that carries the
-        # reported reranker fallback. `scripts/verify-pins` traces this digest to
-        # that commit through the build's own attestation.
-        digest: sha256:cd54accbf4d946835aabf8664486cf1fc02ec63818baf5e7b175c6607dbf2413
+        # Built from f118cd8, the commit that corrects the retriever score:
+        # `metric_type: L2` in Milvus is the SQUARED distance, so the mapping is
+        # `1 - d/4` and not `1 - d²/4` (SUP-893). `scripts/verify-pins` traces
+        # this digest to that commit through the build's own attestation.
+        digest: sha256:ec7a6c221f835e73834f74615a5a061f91a8c6d890afc2392feb840a9a078966
       - name: docker.io/valkey/valkey
         digest: sha256:e706d1213aaba6896c162bb6a3a9e1894e1a435f28f8f856d14fab2e10aa098b
     deployment:
@@ -919,6 +985,7 @@ components:
             url: http://confidential-rag-vectors:19530
             password: ""
           corpus:
+            apiKey: ""
             bindingJson: ""
             table: ""
             idColumn: ""
@@ -1003,6 +1070,13 @@ components:
           - op: replace
             path: ingest.apiKey
             value: "{{ params.ingestKey }}"
+
+          # The indexer's own key, for the same reason the extractor's is its
+          # own: three components, three blast radii, and one key across them
+          # would mean rotating any one of them rotated all three.
+          - op: replace
+            path: corpus.apiKey
+            value: "{{ params.indexerKey }}"
 
           - op: replace
             path: vectorStore.password
@@ -1250,10 +1324,20 @@ evidence:
   #   answerMaxTokens        1024
   #   data slot `corpus`     acme-engineering-handbook   (gated)
   #
-  # The five generated credentials — `accessPassword`, `inferenceKey`,
-  # `ingestKey`, `sessionKey`, `vectorStorePassword` — are in Secrets, which the
-  # platform lifts out before the snapshot is taken, so they reach no attested
-  # object and are not part of this set.
+  # The six generated credentials — `accessPassword`, `inferenceKey`,
+  # `ingestKey`, `indexerKey`, `sessionKey`, `vectorStorePassword` — are in
+  # Secrets, which the platform lifts out before the snapshot is taken, so they
+  # reach no attested object and are not part of this set.
+  # !!! NOT RE-MEASURED YET — THIS IS 0.1.8's NUMBER AND THIS PR MUST NOT MERGE
+  # WITH IT. 0.1.9 re-pins the rag-server image and adds an environment entry to
+  # two Deployments, so the snapshot moves and this value is wrong for it. The
+  # re-measure needs two gated deployments on the epic's single `NVIDIA H100
+  # NVL` in `gpu-blueprints`, and when this branch was finished that card was
+  # held by `rag-890a` — a published, live, gated deployment of a Confidential
+  # RAG "0.1.9" that is not this branch and is in no pull request, raised
+  # outside this task at 2026-11-23T05:12Z. The epic's rule is that a deployment
+  # you did not create is not yours to delete, so the measurement is handed over
+  # rather than taken. See SUP-895 for the state of that card.
   expectedDigest: "d6abfe09887cf1199d1b774b82fa27eb9da02259414546ee3b67d17d60b4db6a"
   # ---------------------------------------------------------------------------
   # The hostname is the one field that differs between two deployments of this

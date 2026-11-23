@@ -30,6 +30,37 @@ type: application
 # nothing published. Each batch now runs under a timeout, progress is published per batch, and a
 # stall is its own verdict rather than a refusal: the source served the documents, the index did
 # not take them, and those want different people looking.
+# 0.2.1 is the document name, which 0.2.0 destroyed, plus the three items parked against the
+# next re-measure of this listing's digest.
+#
+# `console.py` sent the submitted name as `name.encode("ascii", "replace")`, so every character
+# outside ASCII became `?`. The indexer derives a document's identity from the name it is given
+# and REPLACES a document of the same identity — so `Счёт.pdf` and `План.pdf` both arrived as
+# `????.pdf`, hashed to one identity, and the second upload deleted every chunk of the first.
+# The returned `replaced` count said so and nothing rendered it. Both documents, and every
+# citation quoting them, read `????.pdf`. Cyrillic names are the normal case for these users and
+# the submitted copy inside the enclave is the only copy. Now percent-encoded on the way out and
+# `unquote`d before `safe_name` on the way in, so the identifier and the stored `document_name`
+# both carry the real name; `safe_name` keeps doing its own work on it.
+#
+# `store_upload` also writes before it deletes now. It deleted the old chunks first, so a write
+# that failed partway left neither version complete — and, on every ordinary resubmission, left
+# the document unsearchable for as long as re-embedding it took. The superseded chunks are
+# identified by the primary keys they already carry, so this needs no new metadata field and
+# does not change a collection `langchain_milvus` built from its first batch.
+#
+# And the indexer authenticates. Every route on :8085 but `/healthz` now needs the bearer token
+# the Secret carries to both pods: two of those routes write the collection whose answers are
+# cited beside the gated corpus, and a ClusterIP Service is not a trust boundary once a second
+# workload is in the namespace — the same argument the extraction service's key already rested
+# on. `crag.validate` requires `corpus.apiKey`, so an unkeyed indexer does not render.
+#
+# Smaller, from the same review: the console reads one byte past `UPLOAD_MAX_BYTES` and refuses
+# on the overflow instead of after the whole upload is resident in a 512Mi container, and
+# `server.rerankerScoreThreshold` now says what it means on a reranker fallback, where the
+# scores it filters are the retriever's similarities rather than the cross-encoder's
+# probabilities.
+#
 # 0.2.0 is two things the pilot shipped without, and the minor bump is because the second one
 # adds a component and a collection rather than correcting a number.
 #
@@ -66,7 +97,7 @@ type: application
 #
 # And `login()` called `time.sleep(0.5)` on the event loop: every wrong password froze the whole
 # console for half a second, streaming answers included. It awaits now.
-version: 0.2.0
+version: 0.2.1
 # The upstream release this is a port of. The image is built from
 # Super-Protocol/confidential-rag at branch confidential/2.6.2 — see MODIFICATIONS.md there for
 # what differs, which is the open embedding, reranking and generation engines and nothing about

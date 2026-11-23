@@ -46,6 +46,7 @@ import logging
 import os
 import secrets
 import time
+import urllib.parse
 
 import httpx
 from fastapi import FastAPI, File, Form, Request, Response, UploadFile
@@ -61,6 +62,11 @@ COOKIE = "crag_session"
 
 RAG_URL = os.environ.get("RAG_SERVER_URL", "http://127.0.0.1:8081").rstrip("/")
 SYNC_URL = os.environ.get("CORPUS_SYNC_URL", "").rstrip("/")
+# The indexer authenticates from 0.1.9 — `POST /documents` and `DELETE /documents/<id>` on
+# its port are writes into the index whose answers are cited beside the gated corpus, and a
+# namespace is not a trust boundary once a second workload is in it (SUP-895). Same Secret,
+# same key, both pods.
+SYNC_API_KEY = os.environ.get("CORPUS_API_KEY", "")
 COLLECTION = os.environ.get("COLLECTION_NAME", "documents")
 UPLOAD_COLLECTION = os.environ.get("UPLOAD_COLLECTION_NAME", "")
 UI_DIR = os.environ.get("UI_DIR", "/opt/console")
@@ -106,6 +112,34 @@ if not PASSWORD or not SESSION_KEY:
     )
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+
+def sync_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """What the console presents to the indexer. Its bearer token, plus whatever else."""
+    headers = dict(extra or {})
+    if SYNC_API_KEY:
+        headers["Authorization"] = f"Bearer {SYNC_API_KEY}"
+    return headers
+
+
+def document_name_header(name: str) -> str:
+    """A submitted file name, in a form an HTTP header carries without losing any of it.
+
+    Percent-encoded, and that is the whole of SUP-895. 0.1.8 sent
+    `name.encode("ascii", "replace")`, which turns every character outside ASCII into `?` —
+    so `Счёт.pdf` and `План.pdf` both arrived at the indexer as `????.pdf`. The indexer
+    derives a document's identity from the name it was given and REPLACES a document of the
+    same identity, so the second of those two uploads deleted every chunk of the first, and
+    both read `????.pdf` in the console and in every citation quoting them. Cyrillic file
+    names are the normal case for this deployment's users, and the submitted copy inside the
+    enclave is the only copy.
+
+    A header is latin-1 on the wire, so the name cannot simply be sent as it is. Percent
+    encoding is reversible, is ASCII, and leaves nothing for the indexer's filter-expression
+    checks to have to care about; `urllib.parse.unquote` on the other side gets the real name
+    back before anything is derived from it.
+    """
+    return urllib.parse.quote(name, safe="")
 
 
 def issue(ttl: int = SESSION_TTL) -> str:
@@ -282,7 +316,9 @@ async def status(request: Request) -> JSONResponse:
     async with httpx.AsyncClient(timeout=30.0) as client:
         if SYNC_URL:
             try:
-                answer = await client.get(f"{SYNC_URL}/status")
+                answer = await client.get(
+                    f"{SYNC_URL}/status", headers=sync_headers()
+                )
                 out["corpus"] = answer.json()
             except Exception as error:  # noqa: BLE001 — the panel reports, it does not fail
                 out["corpus"] = {"error": str(error)}
@@ -333,7 +369,9 @@ async def live_collections() -> list[str] | None:
         return None
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            answer = await client.get(f"{SYNC_URL}/collections")
+            answer = await client.get(
+                f"{SYNC_URL}/collections", headers=sync_headers()
+            )
         return [
             name
             for name in (answer.json().get("collections") or [])
@@ -479,7 +517,9 @@ async def list_documents(request: Request) -> JSONResponse:
         return JSONResponse({"documents": [], "enabled": False})
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            answer = await client.get(f"{SYNC_URL}/documents")
+            answer = await client.get(
+                f"{SYNC_URL}/documents", headers=sync_headers()
+            )
         return JSONResponse(answer.json(), status_code=answer.status_code)
     except Exception as error:  # noqa: BLE001
         return JSONResponse({"error": str(error)}, status_code=502)
@@ -509,16 +549,21 @@ async def submit_document(request: Request, file: UploadFile = File(...)) -> JSO
     if not name:
         return JSONResponse({"error": "the file has no name"}, status_code=400)
 
-    blob = await file.read()
+    # One byte past the ceiling and no further: the refusal has to happen on bytes already
+    # read rather than after the whole upload is resident in a 512Mi container (SUP-893).
+    # `UploadFile.read` takes a size, so this costs nothing but the argument.
+    blob = await file.read(UPLOAD_MAX_BYTES + 1)
     if not blob:
         return JSONResponse(
             {"error": "an empty document has nothing to index"}, status_code=400
         )
     if len(blob) > UPLOAD_MAX_BYTES:
+        # The size is not reported, because this never read it: what is known is that the
+        # document is larger than the limit, and the limit is the actionable half.
         return JSONResponse(
             {
-                "error": f"{name} is {len(blob)} bytes and this deployment accepts up to "
-                f"{UPLOAD_MAX_BYTES}"
+                "error": f"{name} is larger than the {UPLOAD_MAX_BYTES} bytes this "
+                "deployment accepts"
             },
             status_code=413,
         )
@@ -528,10 +573,10 @@ async def submit_document(request: Request, file: UploadFile = File(...)) -> JSO
             answer = await client.post(
                 f"{SYNC_URL}/documents",
                 content=blob,
-                headers={
+                headers=sync_headers({
                     "Content-Type": "application/octet-stream",
-                    "X-Document-Name": name.encode("ascii", "replace").decode("ascii"),
-                },
+                    "X-Document-Name": document_name_header(name),
+                }),
             )
     except httpx.TimeoutException:
         return JSONResponse(
@@ -560,7 +605,9 @@ async def remove_document(request: Request, upload_id: str) -> JSONResponse:
         return JSONResponse({"error": "no indexer to ask"}, status_code=503)
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            answer = await client.delete(f"{SYNC_URL}/documents/{upload_id}")
+            answer = await client.delete(
+                f"{SYNC_URL}/documents/{upload_id}", headers=sync_headers()
+            )
         return JSONResponse(answer.json(), status_code=answer.status_code)
     except Exception as error:  # noqa: BLE001
         return JSONResponse({"error": str(error)}, status_code=502)

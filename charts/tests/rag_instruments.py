@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The two instruments 0.1.8 adds, exercised against the code the cloud signs.
+"""The instruments this listing adds, exercised against the code the cloud signs.
 
     charts/tests/rag_instruments.py
 
@@ -439,6 +439,128 @@ def check_names(sync) -> None:
         check(True, "a name with nothing in it is refused rather than renamed silently")
 
 
+def check_document_names(console, sync) -> None:
+    """A submitted name survives the console, the header and the indexer intact.
+
+    This is the one check in this file that stands for a DELETION. 0.1.8 sent the name
+    as `name.encode("ascii", "replace")`, so `Счёт.pdf` and `План.pdf` — equal length,
+    both Cyrillic, both entirely ordinary for these users — arrived as `????.pdf`. The
+    identifier is the name's hash and a document of the same identifier is REPLACED, so
+    submitting the second deleted every chunk of the first, inside an enclave where the
+    submitted copy is the only copy (SUP-895).
+
+    The whole path is exercised, not one end of it: what the console puts in the header,
+    what the indexer makes of the header, and what identity it derives. A fix to either
+    half alone leaves the collision in place.
+    """
+    first, second = "Счёт.pdf", "План.pdf"
+    check(
+        len(first) == len(second),
+        "the two names in this check are the same length — a length check would not "
+        "have caught the collision either",
+    )
+
+    def submitted(name: str) -> tuple[str, str]:
+        received = sync.received_name(console.document_name_header(name))
+        return received, sync.upload_identifier(received)
+
+    first_name, first_id = submitted(first)
+    second_name, second_id = submitted(second)
+
+    check(
+        first_name == first and second_name == second,
+        f"a Cyrillic name reaches the index as itself ({first_name!r}, {second_name!r})",
+    )
+    check(
+        first_id != second_id,
+        "two different Cyrillic names of equal length are two documents, not one",
+    )
+    check(
+        submitted(first)[1] == first_id,
+        "and the same name is the same document, so a resubmission replaces rather "
+        "than duplicates",
+    )
+
+    # The header is what travels, and a header is latin-1 on the wire: a name that is
+    # not ASCII after encoding would be refused by the HTTP client or mangled by it.
+    for name in (first, second, "rapport trimestriel – T4.pdf", "台帳.xlsx"):
+        header = console.document_name_header(name)
+        check(
+            header.isascii() and sync.received_name(header) == name,
+            f"{name!r} crosses the namespace as ASCII and arrives as itself",
+        )
+
+    check(
+        sync.received_name(console.document_name_header("100%_done.pdf"))
+        == "100%_done.pdf",
+        "a literal percent survives the encoding rather than eating the next two "
+        "characters",
+    )
+    # `safe_name` still does its own work, on the real name instead of on question marks.
+    check(
+        sync.received_name(console.document_name_header("../../etc/Счёт.pdf"))
+        == "Счёт.pdf",
+        "and the path is still dropped after the decode, not before it",
+    )
+    check(
+        '"' not in sync.received_name(console.document_name_header('Счёт"1.pdf')),
+        "and a quote still cannot reach a Milvus filter",
+    )
+    for refused in ("", "%2E", "%2E%2E", "%20%20"):
+        try:
+            sync.received_name(refused)
+            check(False, f"{refused!r} is refused rather than stored as something")
+            break
+        except ValueError:
+            continue
+    else:
+        check(True, "a header that decodes to nothing usable is refused, not renamed")
+
+
+def check_the_replacement_is_said(console) -> None:
+    """A replacement is reported. The count was in the answer and nothing rendered it.
+
+    `replaced` has been in the indexer's response since 0.1.8 and did not appear in the
+    console at all, so a deliberate resubmission and the silent deletion of somebody
+    else's document looked identical: one success line about the document just indexed.
+    """
+    ui = (ROOT / "charts/confidential-rag/files/index.html").read_text()
+    check("body.replaced" in ui, "the console reads `replaced` out of the indexer's answer")
+    check(
+        "It replaced the" in ui,
+        "and says so in the upload note when it is non-zero",
+    )
+
+
+def check_the_indexer_authenticates(sync) -> None:
+    """Every route but `/healthz` needs the key, and the comparison is constant-time.
+
+    `POST /documents` and `DELETE /documents/<id>` WRITE the collection whose answers are
+    cited beside the gated corpus. They answered anything in the namespace that could
+    reach port 8085 (SUP-895). The handler needs a socket, so what is checked here is the
+    shape: the guard exists, every write route calls it, and `/healthz` does not.
+    """
+    source = (ROOT / "charts/confidential-rag/files/corpus_sync.py").read_text()
+    check(
+        "hmac.compare_digest" in source,
+        "the token comparison is constant-time, not `==` on a secret",
+    )
+    check(
+        source.count("if not self.admitted():") == 3,
+        f"all three handlers consult the guard (found "
+        f"{source.count('if not self.admitted():')})",
+    )
+    check(
+        "if not CORPUS_API_KEY:\n            self.close_connection = True" in source,
+        "and it fails CLOSED: no key configured means no route answers",
+    )
+    helpers = (ROOT / "charts/confidential-rag/templates/_helpers.tpl").read_text()
+    check(
+        "corpus.apiKey is required" in helpers,
+        "`crag.validate` refuses to render an indexer with no key at all",
+    )
+
+
 def check_identifiers(sync) -> None:
     """The identifier is interpolated into a Milvus filter, so it is checked."""
     for hostile in ('x" or upload_id != "', "../x", "a b", "x" * 65, ""):
@@ -480,6 +602,9 @@ def main() -> int:
     check_the_elements(sync)
     check_table_splitting(sync)
     check_names(sync)
+    check_document_names(console, sync)
+    check_the_replacement_is_said(console)
+    check_the_indexer_authenticates(sync)
     check_identifiers(sync)
 
     # The listing's copy and this code have to agree about charts, because the

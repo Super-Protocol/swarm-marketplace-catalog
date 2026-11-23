@@ -384,8 +384,16 @@ if (upload) {
           ? `, ${e.charts} chart/image${e.charts === 1 ? "" : "s"} located (${e.chartsIndexed}` +
             ` with a caption; their data is not searchable)`
           : "";
+        // A document of the same name REPLACES the one already indexed, and until 0.1.9 it
+        // did so without saying anything. The number was in the indexer's answer all along;
+        // nothing rendered it, which made a replacement indistinguishable from a first
+        // upload — and, while non-ASCII names were being collapsed to `????`, made a
+        // DIFFERENT document's deletion look like an ordinary success (SUP-895).
+        const replaced = body.replaced
+          ? ` It replaced the ${body.replaced} chunks of an earlier ${body.name}.`
+          : "";
         note(`${body.name}: ${body.chunks} chunks indexed — ${e.text || 0} text, ` +
-             `${e.tables || 0} table${e.tables === 1 ? "" : "s"}${charts}.`);
+             `${e.tables || 0} table${e.tables === 1 ? "" : "s"}${charts}.${replaced}`);
       }
     } catch (error) {
       note(String(error), true);

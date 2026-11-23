@@ -23,8 +23,8 @@ ingress:
 image:
   registry: ghcr.io
   repository: super-protocol/confidential-rag/rag-server
-  digest: sha256:cd54accbf4d946835aabf8664486cf1fc02ec63818baf5e7b175c6607dbf2413
-  tag: 2.6.2-sp.5285f52
+  digest: sha256:ec7a6c221f835e73834f74615a5a061f91a8c6d890afc2392feb840a9a078966
+  tag: 2.6.2-sp.f118cd8
   pullPolicy: IfNotPresent
 
 # ---------------------------------------------------------------------------------------------
@@ -110,6 +110,17 @@ server:
   # A cross-encoder's score is a probability in [0, 1] here, not the unbounded logit a NeMo
   # Retriever reranker returns — so a threshold carried over from a NIM deployment means
   # something else. Zero: let the reranker order, and let `rerankerTopK` do the cutting.
+  #
+  # And it means a third thing on a reranker FALLBACK. When the reranker is unreachable or
+  # refuses the batch, the scores the filter sees are the retriever's own — `(1 + cos) / 2`
+  # off the dense search — which is a different scale from the cross-encoder's probability
+  # and is centred near 0.5 rather than spread across [0, 1]. A value tuned against the
+  # cross-encoder would therefore cut a different, usually larger, set of passages on the
+  # degraded path than it does on the healthy one. Harmless at zero, which is why this is
+  # documented here rather than special-cased in the pipeline: at zero nothing is filtered
+  # on either path. Raise it and the degraded path is the case to check — the answer says
+  # `citations.reranker.degraded` and `score_source: retriever` when it is on that path
+  # (SUP-893).
   rerankerScoreThreshold: 0.0
   maxTokens: 1024
   temperature: 0
@@ -265,6 +276,12 @@ corpus:
   # deployments of this version — both of which are reasons for it to be in the one place the
   # platform lifts out before the snapshot is taken.
   bindingJson: ""
+  # The indexer's own bearer token, presented by the console and by nothing else. Every route
+  # on :8085 but `/healthz` requires it: two of them WRITE the collection whose answers are
+  # cited beside the gated corpus, and a ClusterIP Service is not a trust boundary once a
+  # second workload is in the namespace. Generated per deployment by the listing and carried
+  # in the Secret, so it costs the attested digest nothing.
+  apiKey: ""
   table: documents
   idColumn: doc_id
   titleColumn: title

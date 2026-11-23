@@ -22,7 +22,15 @@
 #   1. a reranker that refuses the batch is reported as degraded, and the
 #      citations it degraded carry the retriever's own scores rather than 0.0;
 #   2. a submitted document is extracted, indexed and retrievable, with a table
-#      searchable as a grid and a chart located rather than transcribed.
+#      searchable as a grid and a chart located rather than transcribed;
+#   3. two documents whose names are not Latin are two documents — the 0.1.8
+#      defect, where `Счёт.html` and `План.html` both reached the indexer as
+#      `????.html` and the second submission deleted the first (SUP-895). This
+#      run is the one that would have caught it: the defect was in the seam
+#      between the console's encoding and the indexer's decoding, and a unit
+#      test on either side alone passes while the seam is broken;
+#   4. the indexer refuses a caller with no bearer token, which is what a second
+#      workload in the namespace is.
 #
 # What it does NOT cover: generation. vLLM needs the card, and nothing here
 # changes it — `/v1/search` is the endpoint that retrieves, reranks and cites
@@ -40,6 +48,8 @@ cd "$root"
 NET=crag-smoke
 KEY=smoke-inference-key-not-for-production
 INGEST_KEY=smoke-ingest-key-not-for-production
+# The indexer's own key from 0.1.9: every route on :8085 but /healthz needs it.
+CORPUS_KEY=smoke-indexer-key-not-for-production
 CONSOLE_PASSWORD=smoke-console-password-not-for-production
 SESSION_KEY=smoke-session-signing-key-not-for-production
 VECTOR_PASSWORD=smoke-vector-store-password-not-prod
@@ -225,6 +235,7 @@ docker run -d --name crag-corpus --network "$NET" -p 18085:8085 \
   -e UPLOAD_COLLECTION_NAME="$UPLOADS" \
   -e INGEST_URL=http://crag-ingest:8080 \
   -e INGEST_API_KEY="$INGEST_KEY" \
+  -e CORPUS_API_KEY="$CORPUS_KEY" \
   -e CORPUS_BINDING_FILE=/etc/corpus/corpus-binding.json \
   -e CORPUS_POLL_SECONDS=30 -e CORPUS_STATUS_PORT=8085 \
   -e CORPUS_CHUNK_CHARS=1800 -e CORPUS_EMBED_BATCH=4 \
@@ -240,6 +251,7 @@ docker run -d --name crag-console --network "$NET" -p 18080:8080 \
   -e CONSOLE_SESSION_KEY="$SESSION_KEY" \
   -e RAG_SERVER_URL=http://crag-server:8081 \
   -e CORPUS_SYNC_URL=http://crag-corpus:8085 \
+  -e CORPUS_API_KEY="$CORPUS_KEY" \
   -e COLLECTION_NAME="$COLLECTION" \
   -e UPLOAD_COLLECTION_NAME="$UPLOADS" \
   -e UPLOAD_MAX_BYTES=67108864 \
@@ -260,7 +272,8 @@ if python3 "$here/confidential-rag-checks.py" \
       --console http://localhost:18080 \
       --password "$CONSOLE_PASSWORD" \
       --rag http://localhost:18081 \
-      --collection "$COLLECTION" --uploads "$UPLOADS"; then
+      --collection "$COLLECTION" --uploads "$UPLOADS" \
+      --indexer http://localhost:18085 --indexer-key "$CORPUS_KEY"; then
   :
 else
   failures=$((failures + 1))

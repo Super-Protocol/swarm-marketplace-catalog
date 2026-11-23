@@ -62,6 +62,11 @@ spec:
               value: {{ printf "http://%s-server:8081" $name | quote }}
             - name: CORPUS_SYNC_URL
               value: {{ printf "http://%s-corpus:8085" $name | quote }}
+            # The indexer's bearer token. Same Secret key as the indexer's own env, so the
+            # two cannot be rendered out of step.
+            - name: CORPUS_API_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ $name }}-secrets, key: corpus-api-key }
             - name: COLLECTION_NAME
               value: {{ .Values.server.collection | quote }}
             {{- if and .Values.ingest.enabled .Values.server.uploadCollection }}

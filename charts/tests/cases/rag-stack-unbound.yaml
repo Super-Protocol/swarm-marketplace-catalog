@@ -36,6 +36,7 @@ vectorStore:
   url: http://confidential-rag-vectors:19530
   password: VECTOR-STORE-PASSWORD-FOR-THE-GOLDEN
 corpus:
+  apiKey: indexer-api-key-for-the-render-test
   bindingJson: "[]"
   table: documents
   idColumn: doc_id

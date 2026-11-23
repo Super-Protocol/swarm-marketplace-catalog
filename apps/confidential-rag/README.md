@@ -119,6 +119,12 @@ deleted has to leave the index — so one collection for both would delete every
 the next refresh of the corpus, with nothing in any log or panel saying it had happened. The chart
 refuses a render where the two collection names are equal. A question searches both.
 
+A document's **name is its identity**: submitting a file under a name already in the index
+replaces that document rather than adding a second copy, and the console says how many chunks it
+replaced. From 0.1.9 the name reaches the index as the name you gave it — in 0.1.8 anything
+outside ASCII was collapsed to `?`, so two Cyrillic names of the same length were one document and
+submitting the second deleted the first (SUP-895). Rename the file if you want both.
+
 ### What is searchable, and what is only located
 
 | | |
@@ -197,6 +203,12 @@ the corpus is in the snapshot in full.
 
 `evidence.expectedDigest` describes the **gated configuration**: a deployment with a dataset
 attached to the `corpus` slot.
+
+> **0.1.9 has not been re-measured.** The number below is 0.1.8's. 0.1.9 re-pins the rag-server
+> image and adds one environment entry to two Deployments, both of which are fields of objects in
+> the snapshot, so it moves — and the two gated deployments it takes could not be made because the
+> epic's single card was held by a deployment this change did not create. Do not read the number
+> below as 0.1.9's.
 
 `d6abfe09887cf1199d1b774b82fa27eb9da02259414546ee3b67d17d60b4db6a`, measured on two deployments
 of 0.1.8 on the `gpu-blueprints` cloud on 2026-11-23 — `rag-889c` and `rag-889d`, two hostnames in

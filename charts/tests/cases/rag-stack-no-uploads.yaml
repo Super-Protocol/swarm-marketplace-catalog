@@ -36,6 +36,7 @@ vectorStore:
   url: http://confidential-rag-vectors:19530
   password: VECTOR-STORE-PASSWORD-FOR-THE-GOLDEN
 corpus:
+  apiKey: indexer-api-key-for-the-render-test
   bindingJson: >-
     [{"dataset":"acme-internal-knowledge-base","title":"Acme Internal Knowledge Base",
     "interface":"clickhouse-http/v1","connection":{"host":"cr-gatekeeper-egress","port":9500,
