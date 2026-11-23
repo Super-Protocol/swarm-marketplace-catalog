@@ -21,8 +21,11 @@ type: application
 # rendered as the 32 bytes of hex Garage demands. Before it, `analyst-garage`
 # CrashLoopBackOffed on every deployment of this chart with
 # «Invalid RPC secret key», so the agent had no object storage at all (SUP-711).
-version: 0.4.1
-appVersion: "1.17.0"
+# 0.4.2 declares the agent release this chart's services support — 1.22.1 — and
+# nothing else moves. No rendered manifest changes: the 1.17 → 1.22.1 move needs
+# no new database, extension, bucket, stream or cache from this layer (SUP-896).
+version: 0.4.2
+appVersion: "1.22.1"
 dependencies:
   # Not the bitnami chart: its images do not ship the `vector` extension
   # (checked upstream on 16.6.0-debian-12-r0 and 17.3.0-debian-12-r1), and
