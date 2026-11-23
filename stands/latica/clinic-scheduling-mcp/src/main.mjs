@@ -2,16 +2,21 @@
 //
 // The far end of the Latica demonstration stand's one outbound channel. An
 // autopilot inside the confidential deployment calls `schedule_recall` here and
-// a surveillance appointment is written into the clinic's diary. Nothing on
-// this server can be used to read a patient record: there is one tool and it
-// writes.
+// a surveillance appointment is written into the clinic's diary. There is one
+// tool and it writes; the diary and the journal are behind a credential the
+// clinic issues to its own staff, so nothing the DEPLOYMENT holds reads a
+// patient record.
 //
 // Every call is admitted by two independent things, and the clinic owns both:
 //
 //   the token  — issued by the clinic, sent as `Authorization: Bearer …`,
-//                granting exactly one tool and the clinic's own six sites;
-//   the code   — pulled and verified by the clinic on every call, against the
-//                digest the clinic approved (see attestation.mjs).
+//                carrying the scope the route needs, and for a caller granting
+//                exactly one tool and the clinic's own six sites;
+//   the code   — pulled and verified by the clinic once per ATTESTATION_TTL_MS,
+//                against the digest the clinic approved (see attestation.mjs).
+//                It binds the approved code to the caller's HOSTNAME; the token
+//                is what binds the individual call. The README says so in the
+//                same words, because the claim must not outrun the mechanism.
 //
 // Both are recorded, accepted or refused, in an append-only journal.
 import { createServer } from 'node:http';
@@ -36,14 +41,21 @@ const store = new ClinicStore(DATA_DIR);
 const log = (level, event, fields = {}) =>
   console.log(JSON.stringify({ at: new Date().toISOString(), level, event, ...fields }));
 
-/** Constant-time lookup of a presented bearer among the tokens the clinic issued. */
-function grantFor(authorization) {
+/**
+ * Constant-time lookup of a presented bearer among the tokens the clinic
+ * issued, narrowed to the scope the route needs. A grant that does not carry
+ * that scope is no grant at all here: the deployment's token opens `/mcp` and
+ * cannot read the diary, and a staff token reads and cannot call a tool.
+ */
+function grantFor(authorization, scope) {
   const match = /^Bearer\s+(.+)$/i.exec(authorization ?? '');
   if (!match) return null;
   const presented = createHash('sha256').update(match[1].trim()).digest();
   for (const [token, grant] of grants) {
     const known = createHash('sha256').update(token).digest();
-    if (timingSafeEqual(presented, known)) return grant;
+    if (timingSafeEqual(presented, known)) {
+      return grant.scopes.includes(scope) ? grant : null;
+    }
   }
   return null;
 }
@@ -153,7 +165,7 @@ function rpcError(res, status, message, headers = {}) {
 }
 
 async function handleMcp(req, res) {
-  const grant = grantFor(req.headers.authorization);
+  const grant = grantFor(req.headers.authorization, 'mcp');
   if (!grant) {
     store.record({ outcome: 'refused', reason: 'no_credential', path: '/mcp', method: req.method });
     log('warn', 'request_refused', { reason: 'no_credential' });
@@ -188,14 +200,24 @@ async function handleMcp(req, res) {
 createServer({ maxHeaderSize: 64 * 1024 }, (req, res) => {
   const path = (req.url ?? '/').split('?')[0];
   if (req.method === 'GET' && path === '/healthz') {
-    sendJson(res, 200, { status: 'ok', server: SERVER_NAME, version: SERVER_VERSION, grants: grants.size });
+    const callers = [...grants.values()].filter((g) => g.scopes.includes('mcp')).length;
+    sendJson(res, 200, {
+      status: 'ok', server: SERVER_NAME, version: SERVER_VERSION,
+      grants: grants.size, callers, readers: grants.size - callers,
+    });
     return;
   }
-  // The diary and the journal, for whoever holds a token. Same credential, so
-  // the clinic's own staff read them with the grant they already have.
+  // The diary and the journal, for the practice's own staff and for nobody
+  // else. A SEPARATE credential on purpose: the diary holds names and medical
+  // record numbers and the journal holds every grant's history, so the
+  // deployment's token must not open them — otherwise the one tool it was given
+  // would be a way back into the chart after all.
   if (req.method === 'GET' && (path === '/appointments' || path === '/journal')) {
-    if (!grantFor(req.headers.authorization)) {
-      sendJson(res, 401, { error: 'unauthorized' }, { 'www-authenticate': 'Bearer' });
+    const reader = grantFor(req.headers.authorization, 'read');
+    if (!reader) {
+      store.record({ outcome: 'refused', reason: 'no_read_credential', path, method: req.method });
+      log('warn', 'request_refused', { reason: 'no_read_credential', path });
+      sendJson(res, 401, { error: 'unauthorized: these routes need a credential Cypress Bay issued to its own staff' }, { 'www-authenticate': 'Bearer' });
       return;
     }
     sendJson(res, 200, path === '/appointments' ? store.appointments() : store.journal());

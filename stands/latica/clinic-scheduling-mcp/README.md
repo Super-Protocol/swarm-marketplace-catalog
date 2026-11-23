@@ -9,6 +9,9 @@ It exists to make one sentence true rather than asserted:
 > Outbound traffic carries only the action the clinic authorised, for the patient it authorised,
 > and only from code the clinic verified. Data never leaves.
 
+How far "code the clinic verified" reaches is in *What this does not prove* below, and it belongs
+beside the sentence wherever the sentence is said.
+
 ## What it is
 
 Stateless Streamable HTTP, the shape `apps/mcp-weather` in the agent repository uses, so what
@@ -16,15 +19,19 @@ works here works against the product's MCP client.
 
 | Route | |
 |---|---|
-| `POST /mcp` | MCP. `GET` / `DELETE` → `405`: there are no sessions. |
+| `POST /mcp` | MCP. `GET` / `DELETE` → `405`: there are no sessions. Needs a grant with scope `mcp`. |
 | `GET /healthz` | open |
-| `GET /appointments` | the diary, for a token holder |
-| `GET /journal` | the clinic's own record of every call, accepted or refused, for a token holder |
+| `GET /appointments` | the diary. Needs a grant with scope `read`. |
+| `GET /journal` | the clinic's own record of every call, accepted or refused. Needs scope `read`. |
 
 **One tool, and it writes.** `schedule_recall(recall_id, mrn, patient_name, site, due_date?,
-days_overdue?, reason, outreach_channel, requested_by, signal_url?)`. There is no read tool:
-nothing here can be used to fetch a patient record, which is why handing the deployment a token
-for it is not handing it a way back into the chart.
+days_overdue?, reason, outreach_channel, requested_by, signal_url?)`. There is no read tool.
+
+**And the two read routes are a different credential.** The diary holds names and medical record
+numbers and the journal holds every grant's history, so they are behind scope `read`, which the
+deployment's grant does not carry. That separation is what makes "handing the deployment a token
+for this is not handing it a way back into the chart" true rather than nearly true: the token it
+holds opens one write tool and nothing else, and a staff token reads and cannot call a tool.
 
 Booking is **idempotent on `recall_id`** — the same recall booked twice returns the appointment
 already made (`already_booked`), which is what keeps a repeating signal out of the diary.
@@ -38,25 +45,31 @@ from it. One mechanism, both ends.
 Two independent things, and the clinic owns both.
 
 **The token.** Issued by the clinic, sent as `Authorization: Bearer …` on every call, and listed
-in `grants.json` with the rights it carries: the tools it may call and the sites it may book at.
-A call naming a site outside the grant is refused `site_outside_grant`. No token, or a token the
-clinic does not know, is `401`.
+in `grants.json` with the rights it carries: its **scopes**, the tools it may call and the sites
+it may book at. A call naming a site outside the grant is refused `site_outside_grant`. No token,
+a token the clinic does not know, or a token whose scopes do not cover the route, is `401` — and
+a grant written before scopes existed reads as `["mcp"]`, never as "everything".
 
 **The code — Pull Attestation, from the receiving end.** Before the first call of each TTL window
-the clinic fetches the caller's `/.well-known/swarm-evidence` itself and checks four things:
+(`ATTESTATION_TTL_MS`, 60 s by default — so a change of code is caught within the minute, and not
+re-fetched per JSON-RPC frame) the clinic fetches the caller's `/.well-known/swarm-evidence`
+itself and checks:
 
-1. the JWS verifies against a certificate chain ending at the pinned root
-   (`pinnedRootFingerprint`, the Swarm cluster's own `Super Swarm Root CA`);
-2. the signed `hostname` is the host that was connected to;
-3. the signed `certFingerprint` equals the SHA-256 of the TLS certificate **this** connection
+1. the JWS header names `RS256` — an algorithm is read and insisted on, not assumed;
+2. the signature verifies against a certificate chain in which **every issuer is itself a CA**
+   and whose last link is the pinned root (`pinnedRootFingerprint`, the Swarm cluster's own
+   `Super Swarm Root CA`), with every certificate inside its validity window;
+3. the signed `hostname` is the host that was connected to;
+4. the signed `certFingerprint` equals the SHA-256 of the TLS certificate **this** connection
    presented — the channel binding, which is what stops a copy of somebody else's evidence
    document being replayed from another server;
-4. `evidenceDigest` equals the digest the clinic approved.
+5. `evidenceDigest` equals the digest the clinic approved.
 
-Any of the four failing is `403`, and the reason is in the journal: `attestation_untrusted_root`,
-`attestation_broken_chain`, `attestation_expired_signer`, `attestation_bad_signature`,
-`attestation_wrong_host`, `attestation_channel_mismatch`, `attestation_digest_mismatch`,
-`attestation_unavailable`.
+Any of them failing is `403`, and the reason is in the journal: `attestation_bad_algorithm`,
+`attestation_untrusted_root`, `attestation_issuer_not_ca`, `attestation_broken_chain`,
+`attestation_expired_signer`, `attestation_bad_signature`, `attestation_wrong_host`,
+`attestation_channel_mismatch`, `attestation_digest_mismatch`, `attestation_unavailable`.
+`src/attestation.spec.mjs` mints its own chains and asserts each refusal.
 
 **What this does not prove, stated plainly.** It binds the approved code to the hostname the
 clinic calls back, and the token to a deployment that was given it. It does not bind the
@@ -85,22 +98,30 @@ its namespace `evidenceToken` (`Secret/swarm-pull`) for the receiver to resolve 
     {
       "label": "latica-analyst-stand",
       "token": "…",
+      "scopes": ["mcp"],
       "tools": ["schedule_recall"],
       "sites": ["Cypress Bay Endoscopy Center", "…"],
       "evidenceUrl": "https://analyst-stand.conf-apps.superprotocol.dev/.well-known/swarm-evidence",
       "approvedDigest": "sha256/05HLhdgiR5f…"
+    },
+    {
+      "label": "cypress-bay-staff",
+      "token": "…",
+      "scopes": ["read"],
+      "note": "The practice's own coordinators. Reads the diary and the journal, calls nothing."
     }
   ]
 }
 ```
 
-A second grant with a digest the clinic has stopped approving is how the refusal is shown on
+A third grant with a digest the clinic has stopped approving is how the refusal is shown on
 camera without touching the stand.
 
 ## Running it
 
 ```bash
 npm install
+npm test                       # the refusals, on chains minted by the test
 GRANTS_PATH=./grants.json DATA_DIR=./data node src/main.mjs
 ```
 

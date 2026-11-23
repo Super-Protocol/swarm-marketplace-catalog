@@ -70,10 +70,27 @@ function sha256Base64Url(buffer) {
   return `sha256/${createHash('sha256').update(buffer).digest('base64url')}`;
 }
 
-/** The JWS, verified against a chain that must end at the pinned root. */
-function verifySignedStatement(document, pinnedRootFingerprint) {
+/** The one signature algorithm this evidence is published with. */
+const EXPECTED_ALG = 'RS256';
+
+/** The JWS, verified against a chain that must end at the pinned root. Exported for the tests. */
+export function verifySignedStatement(document, pinnedRootFingerprint) {
   const parts = String(document.jws ?? '').split('.');
   if (parts.length !== 3) throw new AttestationError('attestation_malformed', 'jws is not three parts');
+
+  // Read the algorithm out of the header and insist on it, rather than passing
+  // the bytes to an RSA verify and letting a header that says something else go
+  // unnoticed. A verifier that ignores `alg` is the oldest JWS mistake there is.
+  let header;
+  try {
+    header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+  } catch {
+    throw new AttestationError('attestation_malformed', 'jws header is not JSON');
+  }
+  if (header.alg !== EXPECTED_ALG) {
+    throw new AttestationError('attestation_bad_algorithm', `alg=${String(header.alg)}`);
+  }
+
   const chain = (document.certChain ?? []).map((pem) => new X509Certificate(pem));
   if (chain.length < 2) throw new AttestationError('attestation_malformed', 'certificate chain too short');
 
@@ -82,6 +99,13 @@ function verifySignedStatement(document, pinnedRootFingerprint) {
     throw new AttestationError('attestation_untrusted_root', root.subject.replace(/\n/g, ','));
   }
   for (let i = 0; i < chain.length - 1; i += 1) {
+    // Every issuer must itself be a CA. Without this a leaf that happens to
+    // have signed another certificate would be accepted as a link, which is a
+    // path to a chain that reaches the pinned root through something that was
+    // never entitled to issue.
+    if (chain[i + 1].ca !== true) {
+      throw new AttestationError('attestation_issuer_not_ca', chain[i + 1].subject.replace(/\n/g, ','));
+    }
     if (!chain[i].checkIssued(chain[i + 1]) || !chain[i].verify(chain[i + 1].publicKey)) {
       throw new AttestationError('attestation_broken_chain', `link ${i}`);
     }

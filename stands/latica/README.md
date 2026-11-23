@@ -25,6 +25,17 @@ servers**, where it reads beside the address the agent may call. It is also in t
 autopilot that makes the call. **"Nothing leaves the perimeter" is not said anywhere**, and must
 not be: the moment an autopilot writes a recall back, it stops being true.
 
+**And exactly how far "from code the clinic verified" reaches, in the same breath.** The clinic's
+check binds the approved code to the **hostname** it calls back: it proves that the deployment
+answering on `analyst-stand.conf-apps.superprotocol.dev` attests the digest the clinic approved,
+over a TLS certificate that the signed evidence itself names. It is the **token** that binds the
+individual call, because the MCP leg carries no client certificate — so a holder of the token,
+from anywhere, passes the code check while the stand is healthy. Closing that last gap needs
+mutual TLS on the MCP leg, or the caller presenting its namespace `evidenceToken` from
+`Secret/swarm-pull` for the receiver to resolve at `<cloud>/v1/evidence/<token>`, which the
+platform already serves. Say it this way round whenever the sentence above is said; wording that
+is stronger than the mechanism is the exact failure this stand exists to avoid.
+
 ## Scenario 1 — Chart abstraction
 
 A clinical document is attached to the message box and read whole. Nothing is de-identified
@@ -153,19 +164,24 @@ subscription list is where that is decided.
 ## The clinic's scheduling system
 
 `clinic-scheduling-mcp/` — a stateless Streamable-HTTP MCP server with **one tool**,
-`schedule_recall`, which writes. There is no read tool: nothing on it can be used to fetch a
-patient. See its own README for the attestation protocol and the deployment.
+`schedule_recall`, which writes. There is no read tool, and the diary and the journal are behind
+a **separate credential the clinic issues to its own staff**, so nothing the deployment holds can
+be used to fetch a patient. See its own README for the attestation protocol and the deployment.
 
 Two independent things admit a call, and the clinic owns both:
 
 1. **The token**, issued by the clinic, sent as `Authorization: Bearer …` on every call. It grants
    one tool and the practice's six sites; a call naming any other site is refused
    (`site_outside_grant`).
-2. **The code**, pulled and verified by the clinic on every call: it fetches the caller's
-   `/.well-known/swarm-evidence`, checks the JWS against a chain ending at the pinned
+2. **The code**, pulled and verified by the clinic **once per 60-second TTL window** (`attest()`
+   in `main.mjs`), not on each JSON-RPC frame: it fetches the caller's
+   `/.well-known/swarm-evidence`, requires the JWS header to say `RS256`, checks the signature
+   against a chain whose every issuer is a CA and whose last link is the pinned
    `Super Swarm Root CA`, checks the signed `hostname`, checks the signed `certFingerprint`
-   against the TLS certificate that very connection presented, and checks `evidenceDigest`
-   against the digest the clinic approved.
+   against the TLS certificate **that** connection presented, and checks `evidenceDigest` against
+   the digest the clinic approved. A change of code is therefore caught within the minute, and
+   what the check binds is the hostname rather than the caller — see the limitation stated beside
+   the required sentence above.
 
 Both the acceptance and the refusal are in the clinic's own append-only journal:
 
@@ -291,7 +307,11 @@ APP_BASE=… APP_USER=… PASS_FILE=… QUESTION="$(cat scenarios/abstract.txt)"
 ```
 
 `PASS_FILE` and `TOKEN_FILE` are paths, never arguments: a credential must not reach a shell
-history or a process list. Nothing in this directory contains one.
+history or a process list. Nothing in this directory contains one, and `stands/latica/.gitignore`
+is written so that nothing a run produces can become one by accident — the token files the
+commands above name, the `*-runs.json` / `*-signals.json` / `autopilot-*.id` the harness writes
+beside itself, the screenshots, the generated corpus and the receiver's own state are all
+ignored.
 
 ## Walking a viewer through it in fifteen minutes
 
@@ -305,8 +325,11 @@ history or a process list. Nothing in this directory contains one.
    `Manual`. One of them is the refusal.
 5. **Administration → MCP servers** → one server, one tool, a token, and the sentence about
    outbound traffic.
-6. The clinic's side: `GET /appointments` and `GET /journal` on the scheduling system — two
-   appointments, each stamped with the evidence digest it was accepted from, and a refusal.
+6. The clinic's side: `GET /appointments` and `GET /journal` on the scheduling system, **with the
+   practice's own staff token** — two appointments, each stamped with the evidence digest it was
+   accepted from, and a refusal. The deployment's token does not open these: it carries
+   `scopes: ["mcp"]` and the read routes want `read`, which is what keeps the one tool it was
+   given from being a way back into the chart.
 7. **Chat** → attach `tillerson-nadine-report-2025-10-05.pdf` and ask it to reconcile. It reads a
    named patient's signed report and catches an error in the record.
 
