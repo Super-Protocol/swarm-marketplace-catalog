@@ -1,0 +1,19 @@
+{{ .Chart.Name }} {{ .Chart.Version }} — transaction workbench {{ .Chart.AppVersion }}
+
+{{ if .Values.ingress.enabled -}}
+JupyterLab:  http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.hostname }}/lab
+Sign in with the token this deployment generated — it is in the deployment's
+secret outputs, and it is the only credential the server accepts.
+{{- else -}}
+No ingress. The workbench is reachable inside the namespace only:
+  http://{{ include "transaction-model-notebook.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
+{{- end }}
+
+The GPU:   {{ if .Values.gpu.enabled }}{{ .Values.gpu.count }} device, runtimeClass {{ .Values.gpu.runtimeClassName }}{{ else }}none — the tokenizer is cuDF and will fail on the first frame{{ end }}.
+Data:      {{ if .Values.data.bindingJson }}a dataset is bound; 00_environment.ipynb names it{{ else }}nothing bound — upload a .csv or .parquet extract into /workspace/data{{ end }}.
+Columns:   {{ .Values.data.columns.user }} / {{ .Values.data.columns.amount }} / {{ .Values.data.columns.merchant }} / {{ .Values.data.columns.timestamp }}
+           Run 00_environment.ipynb first: it prints the card, the checkpoint, the
+           columns it found and how much of the data lands inside the shipped
+           model's 6,251-token vocabulary. Below {{ .Values.vocabulary.minCoverage }} coverage it
+           refuses to go on, because embeddings from a tokenizer that matched
+           nothing look exactly like embeddings.

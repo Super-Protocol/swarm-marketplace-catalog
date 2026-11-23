@@ -1,0 +1,10 @@
+apiVersion: v2
+name: transaction-model-notebook
+description: A GPU JupyterLab for transaction foundation models — NVIDIA's open developer example, ported to read the tenant's own transaction history out of a marketplace dataset and never leave the enclave.
+type: application
+version: 0.1.2
+# The version of our port, not of anything upstream: the forked developer
+# example publishes no release and no tag. It is the version of the fork branch
+# the workbench image is built from (`confidential/0.1.0` in
+# Super-Protocol/confidential-transaction-model), so the two move together.
+appVersion: "0.1.0"

@@ -1,0 +1,30 @@
+# The listing's own values: a bound transaction table, a hostname, a generated
+# token, and a tenant's own column names rather than the defaults — the mapping
+# is the product's main question and a golden taken on the defaults would not
+# show it being applied at all.
+hostname: tfm-4b91.conf-apps.superprotocol.dev
+token: Qp7xR2mVt8kYd0ZaLn5WcBjHu3Gf9Es1
+data:
+  # A gated ClickHouse dataset, as the gatekeeper hands it over: a plain
+  # listener in this namespace, and no credentials in the connection. The shape
+  # `{{ data.transactions | json }}` actually renders: an ARRAY of bound
+  # datasets, one object each. Taken from a real deployment of the single-cell
+  # listing rather than from the platform's `SlotBinding` type, which reads like
+  # an object and is not what reaches the chart.
+  bindingJson: '[{"dataset":"example-card-history","title":"Example card history","interface":"clickhouse-http/v1","connection":{"host":"tfm-gatekeeper-egress","port":9502,"database":"marketplace","username":"","password":""},"secretProperties":["username","password"]}]'
+  table: card_transactions
+  maxRows: "25000000"
+  columns:
+    user: customer_id
+    amount: amount_eur
+    merchant: merchant_id
+    timestamp: booked_at
+    card: card_index
+    mcc: category_code
+    zip: postcode
+    state: region
+    entrymode: entry_mode
+    city: city
+    label: is_fraud
+vocabulary:
+  minCoverage: "0.5"

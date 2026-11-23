@@ -1,0 +1,226 @@
+{{- $name := include "transaction-model-notebook.fullname" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "transaction-model-notebook.labels" . | nindent 4 }}
+spec:
+  # One. A second replica would want a second card, and the workspace volume is
+  # ReadWriteOnce.
+  replicas: 1
+  strategy:
+    # The card is held by the running pod until it exits, so a rolling update
+    # would leave the new pod Pending on a GPU quota of one for ever.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "transaction-model-notebook.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # The loader and the notebooks are mounted, not baked, so a change to
+        # either has to roll the pod for anything to notice.
+        checksum/workspace: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "transaction-model-notebook.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.gpu.enabled }}
+      runtimeClassName: {{ .Values.gpu.runtimeClassName }}
+      {{- end }}
+      containers:
+        # ---------------------------------------------------------------------
+        # The workbench, and the only container in this pod.
+        # ---------------------------------------------------------------------
+        - name: notebook
+          image: {{ include "transaction-model-notebook.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # The image's own entrypoint puts the conda environment on PATH; its
+          # command is the part being replaced, and it is replaced because the
+          # RAPIDS base image's command starts JupyterLab with
+          # `--NotebookApp.token=''`.
+          command: [/home/rapids/entrypoint.sh]
+          args: [bash, /opt/tfm-chart/bootstrap.sh]
+          env:
+            # jupyter_server reads this by itself and demands it on the login
+            # form. By reference, never as an argument.
+            - name: JUPYTER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "transaction-model-notebook.secretName" . }}
+                  key: {{ include "transaction-model-notebook.secretKey" . }}
+            {{- if and .Values.gpu.enabled .Values.gpu.requireCuda }}
+            # Read by the NVIDIA container runtime before the container starts,
+            # not by anything inside it. See `gpu.requireCuda` in values.yaml:
+            # the image's inherited condition is stricter than this estate's
+            # driver, and the runtime refuses the container rather than letting
+            # it start and fail.
+            - name: NVIDIA_REQUIRE_CUDA
+              value: {{ .Values.gpu.requireCuda | quote }}
+            {{- end }}
+            - name: TFM_BINDING_FILE
+              value: /etc/tfm/binding.json
+            # The notebooks' own working directories, on the volume.
+            - name: TFM_DATA_DIR
+              value: /workspace/data
+            - name: TFM_DERIVED_DIR
+              value: /workspace/derived
+            # Which table inside the bound dataset holds the transactions, and
+            # how many of its rows one frame may hold.
+            - name: TFM_TABLE
+              value: {{ .Values.data.table | quote }}
+            - name: TFM_MAX_ROWS
+              value: {{ .Values.data.maxRows | quote }}
+            # Which of the tenant's columns is which. Not secret, and the same
+            # for every deployment that reads the same schema.
+            {{- range $field, $column := .Values.data.columns }}
+            - name: TFM_COL_{{ $field | upper }}
+              value: {{ $column | quote }}
+            {{- end }}
+            # How much of the data has to tokenise into something the shipped
+            # checkpoint's vocabulary actually contains before the notebooks
+            # will extract embeddings from it.
+            - name: TFM_MIN_COVERAGE
+              value: {{ .Values.vocabulary.minCoverage | quote }}
+            # /opt/tfm-chart FIRST, deliberately. `tfm_workspace` is the
+            # chart's and is imported from there, so a fix to it reaches an
+            # existing deployment when the pod rolls; then the image's own
+            # roots, so `src.tokenizer` resolves; /workspace/notebooks last so a
+            # tenant's own modules beside their notebooks still import. Reverse
+            # the order and a copy of the loader left on the volume shadows the
+            # chart's for the life of the deployment.
+            - name: PYTHONPATH
+              value: /opt/tfm-chart:/opt/tfm:/opt/tfm/src:/workspace/notebooks
+            # Telemetry off, and no model downloads: a deployment working on a
+            # bank's transaction history should not be reporting anything about
+            # itself, and the checkpoint it needs is already in the image.
+            - name: DO_NOT_TRACK
+              value: "1"
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: JUPYTER_PLATFORM_DIRS
+              value: "1"
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8888
+              protocol: TCP
+          # `/login` — the one route jupyter_server serves without a credential,
+          # which is what makes it usable as a probe at all. `/api/status` looks
+          # like the obvious choice and is not: jupyter_server answers it 403 to
+          # an unauthenticated caller, so a probe on it marks the pod unready for
+          # ever while the server behind it is serving perfectly (measured on the
+          # single-cell chart's image, 2026-11-22).
+          #
+          # The startup probe has room for the first pull and the seeding, not
+          # for an environment install: this image carries the environment, so
+          # the server is up in seconds once the image is on the node. The
+          # generous failureThreshold is for the pull — 9 GB of compressed layers
+          # the first time a node sees them.
+          startupProbe:
+            httpGet:
+              path: /login
+              port: http
+            periodSeconds: 10
+            failureThreshold: 90
+          readinessProbe:
+            httpGet:
+              path: /login
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /login
+              port: http
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: chart
+              mountPath: /opt/tfm-chart
+              readOnly: true
+            - name: notebooks
+              mountPath: /opt/tfm-notebooks
+              readOnly: true
+            - name: binding
+              mountPath: /etc/tfm
+              readOnly: true
+            - name: shm
+              mountPath: /dev/shm
+          resources:
+            # requests and limits are one map: a tenant cluster space sets
+            # `maxLimitRequestRatio: 1`, so a pod whose request differs from its
+            # limit is refused at admission and never exists.
+            requests:
+              cpu: {{ .Values.resources.cpu | quote }}
+              memory: {{ .Values.resources.memory | quote }}
+              # Named in request AND limit, and named even when it is zero. A
+              # cluster space raised with a GPU carries a ResourceQuota on
+              # `nvidia.com/gpu`, and a container that leaves it unsaid takes the
+              # namespace default — which is how SUP-890 spent three GPU
+              # deployments on one pod stuck at 0/1 for an hour.
+              nvidia.com/gpu: {{ ternary .Values.gpu.count 0 .Values.gpu.enabled | quote }}
+            limits:
+              cpu: {{ .Values.resources.cpu | quote }}
+              memory: {{ .Values.resources.memory | quote }}
+              nvidia.com/gpu: {{ ternary .Values.gpu.count 0 .Values.gpu.enabled | quote }}
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: {{ $name }}-workspace
+        - name: chart
+          configMap:
+            name: {{ $name }}
+            defaultMode: 0555
+        - name: notebooks
+          configMap:
+            name: {{ $name }}-notebooks
+        - name: binding
+          secret:
+            secretName: {{ include "transaction-model-notebook.secretName" . }}
+            items:
+              - key: binding.json
+                path: binding.json
+            # The slot may be empty — a deployment with no dataset bound reads
+            # what the tenant uploads instead — and a Secret key that is not
+            # there must not stop the pod from starting.
+            optional: true
+        # torch's DataLoader talks to its workers over /dev/shm and the 64Mi
+        # default is not enough; upstream's own `docker run` line asks for 8g.
+        # Memory-backed, so this counts against the container's memory limit —
+        # `resources.memory` includes it.
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.shm.size }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

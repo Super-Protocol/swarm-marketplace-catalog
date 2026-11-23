@@ -1,0 +1,40 @@
+{{- /*
+Everything the container runs that is not in the image, in two attested objects.
+
+The image carries the environment (every wheel by sha256), upstream's tokenizer
+and the 29M-parameter checkpoint. What is here is the part that is this
+deployment's own — and it is here rather than baked for one reason: the cloud
+digests these objects and signs the result, so what the workbench actually
+executes is named inside its own evidence, and a fix to it reaches an existing
+deployment when the pod rolls.
+
+  bootstrap.sh      what replaces the base image's own command, which starts
+                    JupyterLab with `--NotebookApp.token=''`.
+  tfm_workspace.py  where the notebooks get their data from, how the tenant's
+                    columns are mapped onto the schema upstream's tokenizer
+                    expects, and the coverage check that refuses to produce
+                    embeddings from a tokenizer that matched nothing.
+  notebooks/*       the ported developer example, 00_environment.ipynb (ours),
+                    and PROVENANCE.md saying what was changed in the rest.
+
+Nothing in here varies between two deployments of this version. The dataset
+binding, which does, is in the Secret.
+*/ -}}
+{{- include "transaction-model-notebook.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "transaction-model-notebook.fullname" . }}
+  labels:
+    {{- include "transaction-model-notebook.labels" . | nindent 4 }}
+data:
+{{ (.Files.Glob "files/*.{sh,py}").AsConfig | indent 2 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "transaction-model-notebook.fullname" . }}-notebooks
+  labels:
+    {{- include "transaction-model-notebook.labels" . | nindent 4 }}
+data:
+{{ (.Files.Glob "files/notebooks/*").AsConfig | indent 2 }}

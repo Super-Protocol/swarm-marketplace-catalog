@@ -1,0 +1,24 @@
+{{- include "transaction-model-notebook.validate" . -}}
+{{- /*
+The workspace. Kept across restarts because everything a tenant does here is in
+it: their edits to the notebooks, the tokenised corpus notebook 02 writes, the
+embeddings notebook 04 extracts and any checkpoint notebook 03 fine-tuned. A
+published cluster space is frozen — there is no exec and no port-forward into it
+— so a volume lost on a restart is work that cannot be recovered by hand
+afterwards.
+*/ -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "transaction-model-notebook.fullname" . }}-workspace
+  labels:
+    {{- include "transaction-model-notebook.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.accessMode }}
+  {{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size | quote }}
