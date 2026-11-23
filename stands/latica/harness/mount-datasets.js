@@ -100,10 +100,10 @@ async function deployment() {
  *  deployment, which in this script would have ordered a rollback of a stand
  *  that was fine.
  *
- *  `written` is false on a dry run: the recovery file is the record of a window
- *  that actually happened, and a dry run that overwrote it would quietly replace
- *  the pre-window state with the post-window one. */
-async function baseline(live, { written }) {
+ *  This only READS. The recovery file is the record of a window that actually
+ *  started, so it is written by `window()` immediately before the unpublish and
+ *  nowhere else — see `writeState`. */
+async function baseline(live) {
   const [, evidence] = await api('GET', `${BASE}/evidence`);
   const state = {
     recordedAt: new Date().toISOString(),
@@ -127,10 +127,24 @@ async function baseline(live, { written }) {
     say('  !! this deployment does not match its declared digest BEFORE the window.');
     say('     The gate is already refusing it, and the window is not what to fix first.');
   }
-  if (written) {
-    fs.writeFileSync(STATE, JSON.stringify(state, null, 1), { mode: 0o600 });
-    say(`recovery state written to ${path.basename(STATE)}`);
-  }
+  return state;
+}
+
+/** The recovery file, which exists if and only if a window has been started.
+ *
+ *  Written by `window()` on the line before the unpublish, and by nothing else.
+ *  Writing it when the baseline was merely READ — which is what this script used
+ *  to do on every `--apply` — leaves a file behind whenever a run is refused
+ *  before it touches anything, and then: the failure report tells the operator to
+ *  roll back a stand nothing happened to; the next `--apply` treats the file as
+ *  an unfinished window and reuses its baseline, so a run refused for a digest
+ *  mismatch is refused forever until somebody deletes the file by hand; and a
+ *  refused card check says "nothing was touched" and is contradicted three lines
+ *  later. The fix is the ordering, not a cleanup path: a file that is only
+ *  written once something has actually moved cannot lie about whether anything
+ *  moved. */
+function writeState(state, extra = {}) {
+  fs.writeFileSync(STATE, JSON.stringify({ ...state, ...extra }, null, 1), { mode: 0o600 });
   return state;
 }
 
@@ -284,6 +298,15 @@ async function reconfigure(parameters, datasets) {
 }
 
 async function window(datasets, state) {
+  // The last line before anything moves. A rollback deliberately does NOT
+  // rewrite it: the file is the record of where to go back TO, and a rollback
+  // that overwrote it with the state it is trying to leave would destroy the
+  // only copy of its own destination.
+  if (!rollback) {
+    writeState(state);
+    say(`recovery state written to ${path.basename(STATE)} — the window starts now`);
+  }
+
   say('unpublish');
   const [unpublished] = await api('POST', `${BASE}/unpublish`);
   say('  ', unpublished);
@@ -375,7 +398,25 @@ async function verifyOnly(saved) {
     state = saved;
     say(`reusing the baseline recorded at ${state.recordedAt} — a window was started and not finished`);
   } else {
-    state = await baseline(live, { written: apply });
+    state = await baseline(live);
+  }
+
+  // A window run on a deployment that is ALREADY failing its digest check cannot
+  // be judged: the post-window assertion would find a mismatch and blame the
+  // window for one it inherited, and the rollback it ordered would restore a
+  // state the gate was refusing anyway. Refused rather than warned about — the
+  // whole point of the guard is that somebody reads it, and a warning in the
+  // middle of a window's output is not read.
+  //
+  // `--rollback` is deliberately exempt: a stand in that state is exactly when
+  // you want to put it back.
+  if (apply && !rollback && state.matchesExpected !== true) {
+    throw new Error(
+      'this deployment does not match its declared digest BEFORE the window '
+        + `(measured ${state.measuredDigest}, declared ${state.declaredDigest}) — the gate is `
+        + 'already refusing it. Fix that first; a window run from here cannot be judged, and its '
+        + 'rollback would restore a state the gate was refusing anyway.',
+    );
   }
 
   const target = rollback
@@ -393,7 +434,7 @@ async function verifyOnly(saved) {
   }
 
   if (!apply && !rollback) {
-    say('DRY RUN — nothing was written, including the recovery file. Would send:');
+    say('DRY RUN — nothing was written. Would send:');
     console.log(JSON.stringify({ parameters: live.parameters, datasets: target }, null, 1));
     say('re-run with --apply --i-have-a-go once the freeze is lifted for this window');
     return;
@@ -417,13 +458,7 @@ async function verifyOnly(saved) {
   // Written only now: a baseline with no `completedAt` is an unfinished window,
   // and the next `--apply` reuses it rather than recording the broken state as
   // the thing to go back to.
-  if (!rollback) {
-    fs.writeFileSync(
-      STATE,
-      JSON.stringify({ ...state, completedAt: new Date().toISOString() }, null, 1),
-      { mode: 0o600 },
-    );
-  }
+  if (!rollback) writeState(state, { completedAt: new Date().toISOString() });
   say('');
   say('Now check the gate admitted it, on the marketplace host — the verdict log is the');
   say('only thing that says the clinic is actually being served:');
@@ -431,7 +466,39 @@ async function verifyOnly(saved) {
   say('    "select l.name, e.verdict, e.reason, e.\\"occurredAt\\" from gatekeeper_access_events e');
   say('     join dataset_listings l on l.id = e.\\"datasetListingId\\"');
   say(`     where e.\\"deploymentId\\" = '${DEPLOYMENT}' order by e.\\"occurredAt\\" desc limit 20"`);
-})().catch((error) => {
+})().catch(async (error) => {
   console.log('FAILED', error.message);
+
+  // Where the stand actually is, and the one command that puts it back. A
+  // failure in the middle of a window leaves somebody reading this output with
+  // the stand down, and "FAILED <message>" alone does not say whether it is
+  // published, whether a rollback is possible, or what to type. Best effort: if
+  // even this read fails, say so rather than throwing a second error over the
+  // first.
+  try {
+    const live = await deployment();
+    console.log(
+      `       stand: status=${live.status} published=${live.published} `
+        + `mounted=${JSON.stringify((live.datasets || []).map((d) => d.datasetName))}`,
+    );
+    if (!live.published) {
+      console.log('       the stand is NOT published — it is off the air until a publish succeeds.');
+    }
+  } catch (second) {
+    console.log(`       could not read the deployment to report its state: ${second.message}`);
+  }
+
+  if (fs.existsSync(STATE)) {
+    const saved = JSON.parse(fs.readFileSync(STATE, 'utf8'));
+    console.log(
+      `       recovery state from ${saved.recordedAt}`
+        + `${saved.completedAt ? ' (a completed window)' : ' (a window that did not finish)'}:`
+        + ` ${JSON.stringify(saved.datasets.map((d) => d.datasetName))}`,
+    );
+    console.log(`       put it back with:  node ${path.basename(__filename)} --rollback --i-have-a-go`);
+  } else {
+    console.log('       no recovery state on disk, so nothing was changed by this run.');
+  }
+
   process.exit(1);
 });
