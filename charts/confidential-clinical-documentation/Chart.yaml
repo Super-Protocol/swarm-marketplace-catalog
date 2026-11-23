@@ -1,0 +1,12 @@
+apiVersion: v2
+name: confidential-clinical-documentation
+description: >-
+  The ported ambient clinical documentation agent — a recorded consultation in, a clinical note
+  out — with local speech recognition and speaker diarization that reports its own reliability,
+  its own authenticating console, and an egress guard with an empty allowlist. Composes a
+  generation endpoint deployed beside it.
+type: application
+version: 0.1.0
+# The fork's own version: upstream release v1.0.0, modified. Bumping it is a chart change,
+# because the image digest and the behaviour move together.
+appVersion: "1.0.0"

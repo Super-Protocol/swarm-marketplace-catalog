@@ -1,0 +1,26 @@
+{{- if .Values.scribe.persistence.enabled -}}
+{{- include "ccd.validate" . -}}
+{{- /*
+The recordings, the transcripts and the notes.
+
+ReadWriteOnce, which is why everything that touches them is in one pod. A quota is not capacity:
+a 200Gi claim against a 200GiB namespace quota never binds, and 100Gi is what a pod on this
+cloud has actually been given — so the listing asks for a storage quota comfortably above this
+size rather than equal to it.
+*/ -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "ccd.name" . }}-data
+  labels:
+    {{- include "ccd.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.scribe.persistence.accessMode | quote }}
+  {{- with .Values.scribe.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.scribe.persistence.size | quote }}
+{{- end }}

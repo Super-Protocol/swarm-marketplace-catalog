@@ -127,6 +127,18 @@ apps:
   # nothing. Published by the platform team like the rest of the ported family.
   - path: apps/confidential-transaction-model
     organization: platform-team
+  # Ported from NVIDIA's open ambient-provider reference architecture (SUP-873).
+  # The heaviest substitution in the family and the only one that was forced
+  # rather than chosen: upstream asks for ~400 GB across five A100s, so
+  # recognition and diarization came off the card onto the CPU and the one GPU
+  # goes entirely to generation. What this listing stands behind is not the
+  # substitution, though — it is that every transcript's speaker attribution is
+  # MEASURED against declared floors and dropped when it misses one, because
+  # upstream guessed who was speaking in three places and a note built on that
+  # guess reads exactly like a correct one. Published by the platform team like
+  # the rest of the ported family.
+  - path: apps/confidential-clinical-documentation
+    organization: platform-team
   - path: apps/conversational-analyst
     organization: aivo
     secrets:
