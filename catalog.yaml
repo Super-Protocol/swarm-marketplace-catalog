@@ -47,6 +47,15 @@ organizations:
   - slug: platform-team
     name: Platform Team
     verifiedPublisher: true
+  # Publishes nothing. It is here because it is granted to — it owns the deployments on the
+  # demonstration stand, and `isBindable` wants a grant to the organisation that owns the
+  # DEPLOYMENT. The seeder resolves every slug a grant names against this list and throws on one
+  # it does not find (`cli/seed.js`, `owner()`), so an organisation that only ever appears as a
+  # grantee still has to be declared. It was not, and the grants below have named it since
+  # SUP-840 — which made a full re-seed of this file fail at the first of them.
+  - slug: big-pharma
+    name: Big Pharma
+    verifiedPublisher: false
 
 apps:
   - path: apps/ollama-webui

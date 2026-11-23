@@ -313,6 +313,127 @@ commands above name, the `*-runs.json` / `*-signals.json` / `autopilot-*.id` the
 beside itself, the screenshots, the generated corpus and the receiver's own state are all
 ignored.
 
+### Putting a clinic corpus on the server, and its reader beside it
+
+Before a card can be mounted it has to have data behind it and an account that can read exactly
+that and nothing else. Both run **inside `marketplace-api-1`**: that container already holds the
+vault key the storage credential is encrypted with, and it is one of the two hosts that
+ClickHouse answers at all — the data host itself takes no SSH key from the agent host. So the
+owner credential is decrypted and used where it already lives, and nothing prints it.
+
+```bash
+# on the marketplace host, with the corpus extracted to /tmp/corpus/<network>
+ROW=$(docker exec marketplace-postgres-1 psql -U marketplace -d swarm_marketplace -At \
+  -c 'select row_to_json(t) from (select host, port, username, "passwordCipher" from connected_storages limit 1) t')
+KEY=$(sudo sed -n 's/.*encryptionKey: *"\(.*\)"/\1/p' /opt/marketplace/marketplace.yaml)
+
+docker cp harness/load-corpus.js marketplace-api-1:/tmp/
+docker exec -e VAULT_KEY="$KEY" -e STORAGE_ROW="$ROW" \
+  -e CORPUS_DIR=/tmp/corpus/ridgeline -e TABLE_PREFIX=rep_ \
+  -e READER_USER=rep_reader -e READER_PASSWORD="$PASSWORD" \
+  marketplace-api-1 node /tmp/load-corpus.js
+```
+
+`load-corpus.js` applies the generated `schema.sql` one statement per request — ClickHouse's HTTP
+interface runs exactly one, and a whole file answers 400, which reads like a malformed statement
+and is not — then loads each TSV and **compares the row count in the table with the row count in
+the file**, which is the only thing that distinguishes a load from a load that half worked. It
+then creates the reader.
+
+**The reader is created with `SETTINGS readonly = 2` on the account, never by attaching this
+server's shared `readonly` profile, which is `readonly = 1`.** That distinction decides whether
+the stand answers questions at all. The analyst's ClickHouse adapter sends `max_execution_time`
+with every query and `max_result_rows` whenever a row limit applies, and `readonly = 1` refuses a
+settings change as well as a write — so every question comes back `Code: 164` while the gate
+still reports `allowed` and the card still looks connected. That cost SUP-905 a day.
+
+`harness/check-readers.js` is what proves the isolation rather than asserting it:
+
+```bash
+READERS='[{"own":"hpg_","user":"hpg_reader","password":"…"},{"own":"rep_","user":"rep_reader","password":"…"}]'
+docker exec -e VAULT_KEY="$KEY" -e STORAGE_ROW="$ROW" -e READERS="$READERS" \
+  marketplace-api-1 node /tmp/check-readers.js
+```
+
+Per reader: it reads its own tables; it is refused **every other dataset on the server**, derived
+from `system.tables` rather than from a list somebody has to remember to extend, and probed at a
+table that really exists — a probe at one that does not answers `UNKNOWN_TABLE`, which proves
+nothing about the grant; it sees only its own tables in `system.tables`; `INSERT` and
+`DROP TABLE` are refused; and a query carrying `max_result_rows` succeeds, which is the
+`readonly = 2` check and the one that would otherwise be found by a customer.
+
+### Mounting a different set of dataset cards
+
+Every other script here talks to the application. This one talks to the **marketplace**, because
+what it changes is not configuration inside the deployment — it is which gated datasets the
+deployment holds, and that is a deployment parameter.
+
+```bash
+MP_EMAIL=… MP_PASSWORD=… node harness/marketplace.js        # once; stores a bearer token, 0600
+
+MP_ORG=<deploying org id> MP_DEPLOYMENT=<deployment id> \
+  node harness/mount-datasets.js                            # dry run — the default
+
+MP_ORG=… MP_DEPLOYMENT=… node harness/mount-datasets.js --verify    # the checks alone, read-only
+MP_ORG=… MP_DEPLOYMENT=… node harness/mount-datasets.js --apply --i-have-a-go
+MP_ORG=… MP_DEPLOYMENT=… node harness/mount-datasets.js --rollback --i-have-a-go
+```
+
+**This is the one script here that takes the stand off the air.** A gated dataset reaches a
+deployment three ways at once and `reconfigure` writes all three — `datasetsJson`, from which the
+gatekeeper derives the sources it admits that deployment to; the egress sidecar's nginx and
+Service, one listener per mounted dataset; and the grounding Job, whose name is a hash of the
+bindings. The last two are workloads, and a published cluster space refuses every workload
+change, so the only path is `unpublish → reconfigure → publish` and it costs two pod bring-ups.
+Plan it as a window. PVCs survive it — nothing in the teardown deletes a claim — so the semantic
+model, the dashboards, the library and the autopilots in the deployment's own PostgreSQL come
+back with it.
+
+Three things the script will not get wrong, each of which has cost somebody a stand:
+
+- **It carries no parameter literal.** `reconfigure` replaces the parameter set wholesale and the
+  parameter set is attested, so a value that drifts moves the evidence digest — and a moved digest
+  costs the deployment its access to every gated dataset it has, because the gate holds it to the
+  digest its listing declares. The script reads the live deployment's own `parameters` back from
+  the marketplace, sends exactly those, and writes them to a recovery file first. Sensitive
+  parameters are absent rather than blank, which the API reads as "keep".
+- **It checks the cards before anything goes down**, with the same two conditions
+  `grants.isBindable` applies: the grant to the organisation that owns the *deployment*, and the
+  grant to the application. A card that is not published, not gated, or not granted stops the run
+  with the stand still up.
+- **It verifies the digest after the publish** rather than assuming a dataset change leaves it
+  alone, and it exits non-zero on either of two conditions: the cloud's measured digest no longer
+  equals what the listing version declares, which is the comparison `clientsFor` makes and so is
+  whether the gate admits the deployment at all; or the measured digest has moved from what it
+  was before the window. Then every published hostname's own `/.well-known/swarm-evidence` is
+  fetched and compared, because the marketplace reads the cloud's API while the gate reads the
+  hostname. On any of them it says what is wrong and tells you to roll back rather than start
+  debugging a stand that is down.
+
+  **Two traps in that check, both of which make a healthy stand look broken.** Neither digest to
+  compare against is `expectedEvidenceDigest` on the deployment: that field is `renderDigest`
+  under its former name (`deployments.controller.ts:61`), computed from the manifests before
+  deploying, and a render digest can never equal a collected one because a cluster defaults
+  fields no template writes. On this stand they are `9e02e6f1…` and `d391cb85…` and always will
+  be. And the two sources spell the same digest differently — the marketplace gives bare hex, the
+  published bundle gives `sha256/<base64url>` — so both are normalised before comparison. A
+  string comparison across that boundary is false every time.
+
+`--verify` runs exactly those checks and nothing else, read-only, so the stand can be confirmed
+healthy before a window as well as after one. With no recovery file it checks only that the gate
+will admit the deployment; with one it also checks the digest against the recorded baseline.
+
+The recovery file is written **only by `--apply`**, and `--rollback` refuses to run without one —
+restoring the state a stand is already in is not a rollback, and a dry run that overwrote the file
+would replace the pre-window record with the post-window one. A file with no `completedAt` is an
+unfinished window, and the next `--apply` reuses its baseline rather than recording the
+half-finished state as the thing to go back to.
+
+The one check none of this can do for you is the gate's own verdict: the access log belongs to the
+dataset's owner, not to the deploying organisation. The script prints the SQL to run against the
+marketplace's PostgreSQL, and an `allowed` row there is the only thing that says a clinic is
+actually being served.
+
 ## Walking a viewer through it in fifteen minutes
 
 1. **Signals** — two cards, `SURV-01`, P1, Risk. One says `×2`. Read the area line: a site and a
