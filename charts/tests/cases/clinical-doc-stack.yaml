@@ -7,8 +7,8 @@ hostname: scribe.conf-apps.superprotocol.dev
 ingress:
   className: nginx
 image:
-  digest: sha256:5550822b1b69cf9fa48906147f69042101566defc709f2d82931f8a68699c309
-  tag: 1.0.0-sp.481f179
+  digest: sha256:20424f033e017b8a79f1cf5dde3f7f03389a56a36f0f2bc4b6c86c4ba1d6169c
+  tag: 1.0.0-sp.277b74e
 console:
   password: ACCESS-PASSWORD-FOR-THE-GOLDEN
   sessionKey: SESSION-SIGNING-KEY-FOR-THE-GOLDEN-01234

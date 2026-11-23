@@ -857,7 +857,7 @@ spec:
         # expects to create on its first write is a directory it fails to create; making them
         # here is cheaper than discovering it at the first upload.
         - name: prepare
-          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:5550822b1b69cf9fa48906147f69042101566defc709f2d82931f8a68699c309"
+          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:20424f033e017b8a79f1cf5dde3f7f03389a56a36f0f2bc4b6c86c4ba1d6169c"
           imagePullPolicy: IfNotPresent
           command: [/bin/sh, -ec]
           args:
@@ -880,7 +880,7 @@ spec:
       containers:
         # -------------------------------------------------------------------
         - name: scribe
-          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:5550822b1b69cf9fa48906147f69042101566defc709f2d82931f8a68699c309"
+          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:20424f033e017b8a79f1cf5dde3f7f03389a56a36f0f2bc4b6c86c4ba1d6169c"
           imagePullPolicy: IfNotPresent
           command: [uvicorn]
           args:
@@ -1051,7 +1051,7 @@ spec:
               mountPath: /data
         # -------------------------------------------------------------------
         - name: console
-          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:5550822b1b69cf9fa48906147f69042101566defc709f2d82931f8a68699c309"
+          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:20424f033e017b8a79f1cf5dde3f7f03389a56a36f0f2bc4b6c86c4ba1d6169c"
           imagePullPolicy: IfNotPresent
           command: [uvicorn]
           args:
@@ -1190,7 +1190,7 @@ spec:
               readOnly: true
         # -------------------------------------------------------------------
         - name: egress
-          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:5550822b1b69cf9fa48906147f69042101566defc709f2d82931f8a68699c309"
+          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:20424f033e017b8a79f1cf5dde3f7f03389a56a36f0f2bc4b6c86c4ba1d6169c"
           imagePullPolicy: IfNotPresent
           command: [python3, /opt/app/egress_guard.py]
           env:
