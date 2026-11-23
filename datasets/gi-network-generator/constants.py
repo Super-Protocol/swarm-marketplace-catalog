@@ -1,4 +1,11 @@
-"""The facts every other module in this generator has to agree about.
+"""The facts every other module in this generator has to agree about, for every
+network it generates.
+
+What is here is true of the specialty and of the snapshot: the anatomy of a
+colon, the age US screening starts at, the day the corpus is a picture of. What
+is true of one practice and not another is a `NetworkProfile` field in
+`profiles.py` — volumes, periods, sites, and how completely the forms get filled
+in.
 
 `AS_OF` used to be spelled out in four files. Nothing went wrong, but nothing was
 stopping it either: a corpus whose tables stop one day short of the date its
@@ -11,17 +18,16 @@ from __future__ import annotations
 
 import datetime as dt
 
-#: The day the corpus is a snapshot of. Everything — the last procedure, the
-#: overdue day counts, the fixed timestamps in the rendered documents — is
-#: relative to this and never to the wall clock, which is what makes a run
-#: reproducible on a different day.
+#: The day the corpus is a snapshot of. Everything — the overdue day counts, the
+#: fixed timestamps in the rendered documents — is relative to this and never to
+#: the wall clock, which is what makes a run reproducible on a different day.
+#:
+#: It is deliberately NOT per network. Three corpora pooled into one question are
+#: three practices read on the same day, and an "overdue by 240 days" that means a
+#: different today in each of them is a number nobody can add up. How far behind
+#: this date a particular practice's structured capture runs is a separate and
+#: real thing, and that one IS per network: `NetworkProfile.feed_lag_days`.
 AS_OF = dt.date(2026, 11, 17)
-
-#: The first procedure in the corpus.
-HISTORY_START = dt.date(2019, 1, 7)
-
-DEFAULT_SEED = 710
-DEFAULT_PATIENTS = 12000
 
 #: Tables are prefixed and live in an existing database rather than one of their
 #: own, because that is what the marketplace stand's ClickHouse can actually
@@ -32,10 +38,13 @@ DEFAULT_PATIENTS = 12000
 #: `cbdh_patients`, not `patients` — and it matches the clinic datasets already on
 #: that stand, which live in `marketplace` as `roczen_*` and `autonomyx_*`.
 #:
-#: A ClickHouse you do own takes `--database cypressbay_gi --table-prefix ""`;
-#: change the card's `database` to match if you publish from there.
+#: Which prefix a network uses is a `NetworkProfile` field; three corpora sharing
+#: one database is the reason it has to be, and the reason the reader accounts are
+#: scoped per prefix rather than per database.
+#:
+#: A ClickHouse you do own takes `--database <yours> --table-prefix ""`; change the
+#: card's `database` to match if you publish from there.
 DEFAULT_DATABASE = "marketplace"
-DEFAULT_TABLE_PREFIX = "cbdh_"
 
 #: The colon, from the anus inward — the order a colonoscope travels in.
 #:

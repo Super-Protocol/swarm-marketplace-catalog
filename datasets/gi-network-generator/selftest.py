@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Check the generated corpus against the properties the demonstration depends on.
 
-    ./selftest.py              # a small corpus, well under a second
-    ./selftest.py --patients 12000
+    ./selftest.py                            # cypress-bay, a small corpus, under a second
+    ./selftest.py --network ridgeline        # the network with the incomplete record
+    ./selftest.py --all-networks             # every network in profiles.py
+    ./selftest.py --published-size          # the size the card declares and the stand loads
 
 What it asserts is not "the script ran". It is the set of claims the dataset card
 makes and the demonstration relies on, every one of which has been wrong at some
@@ -36,6 +38,21 @@ point while this was being written:
     age-appropriate" never appears on a patient under 45.
   * **An outreach outcome is possible on its channel**, and attempts ascend in
     date order.
+  * **Incomplete capture is incomplete in the RECORD and nowhere else.** On a
+    network whose forms are half-filled, a null bowel-preparation score does not
+    come with a null completion status, a missing withdrawal time does not come
+    with a missing cecal-intubation result, and a surveillance interval that
+    never reached the structured record produces no recommendation row and
+    therefore no recall at all. Each declared rate is checked against what the
+    corpus actually contains, because a knob that silently stopped working would
+    leave the cross-network comparison with nothing to compare.
+  * **A lagging feed lags.** No structured procedure in a network declaring
+    `feed_lag_days` is dated inside that window.
+
+Run it for every network, not just the one you changed: the knobs are guarded on
+being non-zero precisely so that the completely-captured networks take a
+different path through the generator, and a single network's pass says nothing
+about the other two.
 """
 
 from __future__ import annotations
@@ -58,6 +75,7 @@ sys.path.insert(0, HERE)
 import constants  # noqa: E402
 import generate  # noqa: E402
 import notes  # noqa: E402
+import profiles  # noqa: E402
 import vocabulary  # noqa: E402
 
 AS_OF = generate.AS_OF.isoformat()
@@ -108,16 +126,18 @@ def tree_digest(directory: str) -> str:
     return digest.hexdigest()
 
 
-def run(out: str, patients: int, seed: int, quiet: bool = False) -> None:
+def run(out: str, network: str, patients: int, seed: int, quiet: bool = False) -> None:
     """Generate one corpus. `quiet` swallows the generator's own row-count table,
     which is worth reading once and not once per seed in a sweep."""
     sink = io.StringIO() if quiet else contextlib.nullcontext()
     with contextlib.redirect_stdout(sink) if quiet else contextlib.nullcontext():
-        code = generate.main(["--out", out, "--patients", str(patients), "--seed", str(seed)])
+        code = generate.main(
+            ["--network", network, "--out", out, "--patients", str(patients), "--seed", str(seed)]
+        )
     assert code == 0
 
 
-def check_placement(directory: str, tables: dict[str, list[dict]]) -> None:
+def check_placement(directory: str, tables: dict[str, list[dict]], profile) -> None:
     """The assertions that depend on WHICH records the generator happened to pick.
 
     Separated out because these are the ones a single seed cannot vouch for. Every
@@ -173,7 +193,7 @@ def check_placement(directory: str, tables: dict[str, list[dict]]) -> None:
     # containing dead patients is realistic; a demonstration that ends in "there
     # is nothing to do about this one" is not.
     status_for_mrn = {p["mrn"]: p["patient_status"] for p in tables["patients"]}
-    named_mrns = sorted(set(re.findall(r"CB-\d{7}", manifest)))
+    named_mrns = sorted(set(re.findall(rf"{re.escape(profile.mrn_prefix)}\d{{7}}", manifest)))
     check(
         len(named_mrns) >= 5,
         f"the manifest names the patients its documents are about ({len(named_mrns)})",
@@ -189,8 +209,28 @@ def check_placement(directory: str, tables: dict[str, list[dict]]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--patients", type=int, default=1500)
-    parser.add_argument("--seed", type=int, default=generate.DEFAULT_SEED)
+    parser.add_argument("--network", default="cypress-bay", choices=sorted(profiles.PROFILES))
+    parser.add_argument(
+        "--all-networks",
+        action="store_true",
+        help="check every network in profiles.py, which is what CI and a review want: "
+        "the capture knobs are guarded on being non-zero, so the complete networks "
+        "and the incomplete one take different paths through the generator",
+    )
+    parser.add_argument(
+        "--patients",
+        type=int,
+        default=1500,
+        help="corpus size (default 1500 — small and fast). Some properties only appear at the "
+        "size the stand runs on, so CI also runs --published-size.",
+    )
+    parser.add_argument(
+        "--published-size",
+        action="store_true",
+        help="use the network's own patient count instead of --patients, which is what the "
+        "published card declares and what the stand loads",
+    )
+    parser.add_argument("--seed", type=int, default=None, help="default: the network's own seed")
     parser.add_argument("--keep", action="store_true", help="do not delete the generated corpora")
     parser.add_argument(
         "--seeds",
@@ -201,13 +241,34 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    workdir = tempfile.mkdtemp(prefix="cbdh-selftest-")
+    networks = sorted(profiles.PROFILES) if args.all_networks else [args.network]
+    if args.published_size:
+        args.patients = None  # resolved per network in check_network
+    for index, network in enumerate(networks):
+        if len(networks) > 1:
+            print(f"\n{'=' * 72}\n== {profiles.by_key(network).network_name}  ({network})\n{'=' * 72}")
+        check_network(network, args)
+
+    print()
+    if failures:
+        print(f"{len(failures)} check(s) failed")
+        return 1
+    print("everything checked out")
+    return 0
+
+
+def check_network(network: str, args) -> None:
+    profile = profiles.by_key(network)
+    seed = args.seed if args.seed is not None else profile.seed
+    n_patients = args.patients if args.patients is not None else profile.patients
+
+    workdir = tempfile.mkdtemp(prefix=f"{profile.network_short.lower()}-selftest-")
     first = os.path.join(workdir, "a")
     second = os.path.join(workdir, "b")
 
     print("generating twice with the same seed")
-    run(first, args.patients, args.seed)
-    run(second, args.patients, args.seed)
+    run(first, network, n_patients, seed)
+    run(second, network, n_patients, seed)
 
     print("\ndeterminism")
     check(tree_digest(first) == tree_digest(second), "two runs of one seed are byte-identical")
@@ -327,7 +388,7 @@ def main() -> int:
     formats = {os.path.splitext(name)[1] for name in on_disk}
     check(formats == {".pdf", ".docx", ".txt"}, f"all three formats are produced ({sorted(formats)})")
 
-    check_placement(first, tables)
+    check_placement(first, tables, profile)
 
     # Every identifying document must actually identify somebody who exists: a
     # note naming an MRN that is not in `patients` would make the reconciliation
@@ -338,7 +399,7 @@ def main() -> int:
         if not name.endswith(".txt"):
             continue
         text = open(os.path.join(notes_dir, name), encoding="utf-8").read()
-        found = re.findall(r"CB-\d{7}", text)
+        found = re.findall(rf"{re.escape(profile.mrn_prefix)}\d{{7}}", text)
         check(bool(found) and all(m in mrns for m in found), f"{name} names a real MRN")
         named += 1
     check(named > 0, "the text notes carry medical record numbers")
@@ -441,15 +502,114 @@ def main() -> int:
     ]
     check(not out_of_order, f"attempts ascend in date order on every recall ({len(out_of_order)})")
 
+    print("\nwhat the record kept, and what it did not")
+    structured = [
+        p
+        for p in tables["procedures"]
+        if p["report_source"] == "Structured capture" and p["procedure_type"].endswith("colonoscopy")
+    ]
+    check(len(structured) > 0, f"the corpus contains captured colonoscopies ({len(structured)})")
+    scale = {"Excellent", "Good", "Fair", "Poor"}
+
+    def share(predicate) -> float:
+        return sum(1 for p in structured if predicate(p)) / len(structured)
+
+    no_bbps = share(lambda p: p["bbps_total"] == "\\N")
+    no_withdrawal = share(lambda p: p["withdrawal_time_min"] == "\\N")
+    free_text = share(lambda p: p["bowel_prep_quality"] not in scale)
+
+    # Rates within four points of what the profile declares. A tolerance rather
+    # than an equality because these are draws, and a tolerance rather than
+    # ">0" because a knob that quietly halved would still pass ">0" and would
+    # take the cross-network comparison with it.
+    for label, observed, declared in [
+        ("no bowel-preparation score", no_bbps, profile.missing_bbps_rate),
+        ("no withdrawal time", no_withdrawal, profile.missing_withdrawal_rate),
+        ("preparation as free text", free_text, profile.prep_free_text),
+    ]:
+        check(
+            abs(observed - declared) < 0.04,
+            f"{label}: {observed:.1%} of captured colonoscopies, profile declares {declared:.0%}",
+        )
+
+    # The whole of the "missing from the form, not from the care" rule. A null
+    # preparation score must not drag the clinical columns down with it: the
+    # scope still either reached the cecum or did not, and the examination still
+    # has a completion status somebody can read.
+    leaked = [
+        p["procedure_id"]
+        for p in structured
+        if p["bbps_total"] == "\\N" and (p["cecal_intubation"] == "\\N" or not p["completion_status"])
+    ]
+    check(
+        not leaked,
+        f"a missing preparation score never takes the clinical columns with it ({len(leaked)})",
+    )
+    # Adequacy is decided by the score and not by the adjective, so wherever the
+    # adjective IS from the scale the two have to agree. Free text is exempt by
+    # construction: "adequate to the cecum" is a clinician's sentence, not a grade.
+    disagreeing = [
+        p["procedure_id"]
+        for p in structured
+        if p["bbps_total"] != "\\N"
+        and p["bowel_prep_quality"] in scale
+        and (int(p["bbps_total"]) >= 6) != (p["bowel_prep_quality"] in ("Excellent", "Good"))
+        and not (p["bowel_prep_quality"] == "Fair" and int(p["bbps_total"]) >= 6)
+    ]
+    check(not disagreeing, f"a recorded score and a recorded adjective agree ({len(disagreeing)})")
+
+    # An interval that never reached the record publishes no recommendation and
+    # therefore no recall — the patient is invisible to the practice's own overdue
+    # query, which is the failure the surveillance story is about. Checked as a
+    # pair of totals rather than per procedure, because the generator does not
+    # emit a row saying "this one was skipped": that absence IS the fact.
+    eligible = [
+        p
+        for p in tables["procedures"]
+        if p["report_source"] == "Structured capture" and p["procedure_type"].endswith("colonoscopy")
+    ]
+    recommended = len(tables["surveillance_recommendations"])
+    missing_share = 1 - recommended / len(eligible)
+    check(
+        abs(missing_share - profile.missing_interval_rate) < 0.04,
+        f"colonoscopies with no surveillance recommendation: {missing_share:.1%}, "
+        f"profile declares {profile.missing_interval_rate:.0%}",
+    )
+    check(
+        len(tables["recalls"]) == recommended,
+        f"every published recommendation has exactly one recall "
+        f"({len(tables['recalls'])} recalls, {recommended} recommendations)",
+    )
+
+    print("\nthe feed lags by as much as it says it does")
+    data_through = constants.AS_OF - dt.timedelta(days=profile.feed_lag_days)
+    inside_window = [
+        p["procedure_id"]
+        for p in tables["procedures"]
+        if p["report_source"] == "Structured capture" and p["procedure_date"] >= data_through.isoformat()
+    ]
+    check(
+        not inside_window,
+        f"no captured procedure is dated on or after {data_through.isoformat()} "
+        f"({profile.feed_lag_days} days behind the as-of date) — {len(inside_window)} are",
+    )
+    latest = max(p["procedure_date"] for p in tables["procedures"])
+    check(
+        latest >= (data_through - dt.timedelta(days=30)).isoformat(),
+        f"the capture reaches the edge of its window rather than stopping short ({latest})",
+    )
+
     print("\nthe dataset card is the agent's only grounding")
-    card_path = os.path.join(os.path.dirname(HERE), "data.yaml")
+    # The generator is shared and the cards are not, so the card this corpus is
+    # checked against is the one belonging to the network that was generated.
+    card_path = os.path.join(os.path.dirname(HERE), profile.dataset, "data.yaml")
     try:
         import yaml
     except ImportError:
         print("  skip  PyYAML not installed — card checks skipped")
     else:
         card = yaml.safe_load(open(card_path, encoding="utf-8"))
-        prefix = generate.DEFAULT_TABLE_PREFIX
+        prefix = profile.table_prefix
         declared = {
             t["name"]: [c["name"] for c in t["columns"]]
             for t in card["spec"]["schema"]["tables"]
@@ -492,6 +652,31 @@ def main() -> int:
             f"every table the card declares carries the published prefix {prefix!r}",
         )
 
+        # A value the generator writes and the card does not mention is the exact
+        # failure this whole section exists for: the agent's only knowledge of
+        # this column is the description, so an undocumented free-text
+        # preparation note is a value it will either ignore or map onto a grade
+        # it is not. Compared against the card as one whitespace-collapsed
+        # string, because the card is wrapped at eighty columns and a value can
+        # straddle a line break.
+        if profile.prep_free_text:
+            flat = " ".join(open(card_path, encoding="utf-8").read().split())
+            undocumented = sorted(
+                value
+                for value in {
+                    row["bowel_prep_quality"]
+                    for row in tables["procedures"]
+                    if row["bowel_prep_quality"]
+                    not in ("", "Excellent", "Good", "Fair", "Poor")
+                }
+                if " ".join(value.split()) not in flat
+            )
+            check(
+                not undocumented,
+                f"the card names every free-text preparation value the corpus contains "
+                f"({undocumented})",
+            )
+
     print("\npdftotext round-trip" if shutil.which("pdftotext") else "\npdftotext not installed — skipped")
     if shutil.which("pdftotext"):
         sample = sorted(n for n in on_disk if n.endswith(".pdf"))[0]
@@ -507,13 +692,13 @@ def main() -> int:
     if args.seeds > 1:
         print(f"\nthe same placement assertions over {args.seeds} seeds")
         global QUIET
-        for seed in range(args.seed, args.seed + args.seeds):
-            corpus = os.path.join(workdir, f"seed-{seed}")
+        for sweep_seed in range(seed, seed + args.seeds):
+            corpus = os.path.join(workdir, f"seed-{sweep_seed}")
             before = len(failures)
             try:
-                run(corpus, args.patients, seed, quiet=True)
+                run(corpus, network, n_patients, sweep_seed, quiet=True)
             except Exception as error:  # a generator that cannot place a document
-                check(False, f"seed {seed}: the generator refused — {error}")
+                check(False, f"seed {sweep_seed}: the generator refused — {error}")
                 continue
             seed_schema = open(
                 os.path.join(corpus, "schema.sql"), encoding="utf-8"
@@ -523,24 +708,17 @@ def main() -> int:
             }
             QUIET = True
             try:
-                check_placement(corpus, seed_tables)
+                check_placement(corpus, seed_tables, profile)
             finally:
                 QUIET = False
             if len(failures) == before:
-                print(f"  ok    seed {seed}")
+                print(f"  ok    seed {sweep_seed}")
             shutil.rmtree(corpus)
 
     if not args.keep:
         shutil.rmtree(workdir)
     else:
         print(f"\ncorpora kept in {workdir}")
-
-    print()
-    if failures:
-        print(f"{len(failures)} check(s) failed")
-        return 1
-    print("all checks passed")
-    return 0
 
 
 if __name__ == "__main__":

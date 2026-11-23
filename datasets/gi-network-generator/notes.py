@@ -50,6 +50,17 @@ from constants import (
 )
 from docwriters import blank, body, h1, h2, mono, rule
 
+#: The network these notes are being written for, set by `build` before anything
+#: is rendered.
+#:
+#: Module state, deliberately. Every function below composes one document, there
+#: are forty of them, and the practice's own name and address are a property of
+#: the run rather than of any one of them — threading a profile through forty
+#: signatures to be read by six would be the worse of the two readings. `build`
+#: is the only entry point into this module and it sets this first, so there is no
+#: state to get wrong between runs of a single corpus.
+PROFILE = None
+
 N_OUTSIDE_PACKETS = 20
 N_QUALITY_REVIEW = 12
 N_REFERRAL_LETTERS = 6
@@ -143,8 +154,8 @@ def _patient_block(patient, extra: list[tuple[str, str]] | None = None) -> list:
 
 def _header(title: str, subtitle: str) -> list:
     return [
-        h1(vocab.NETWORK_NAME),
-        mono("1400 Cypress Bay Parkway, Cypress Bay, FL 34219   (941) 555-0100"),
+        h1(PROFILE.network_name),
+        mono(PROFILE.letterhead),
         rule(),
         h2(title),
         mono(subtitle),
@@ -337,7 +348,7 @@ def _outside_packet(procedure, facility: str, received_on: dt.date, rng: random.
     lines += [
         blank(),
         h2("HISTOPATHOLOGY"),
-        mono(f"  Reporting laboratory: {rng.choice(vocab.OUTSIDE_LABS)}"),
+        mono(f"  Reporting laboratory: {rng.choice(PROFILE.outside_labs)}"),
         mono(
             f"  Accession: {procedure.date.year}-OS-{rng.randint(10000, 99999)}    "
             f"Reported {(procedure.date + dt.timedelta(days=rng.randint(3, 11))).strftime('%m/%d/%Y')}"
@@ -643,10 +654,7 @@ def _first(items, predicate):
 
 
 def _site_name(site_id: str) -> str:
-    for candidate in vocab.SITES:
-        if candidate[0] == site_id:
-            return candidate[1]
-    return vocab.SITES[0][1]
+    return PROFILE.site_name(site_id)
 
 
 # ---------------------------------------------------------------------------
@@ -665,14 +673,7 @@ def _referral_letter(patient, procedure, rng: random.Random) -> list:
     referrer = (
         f"{rng.choice(vocab.GIVEN_FEMALE + vocab.GIVEN_MALE)} {rng.choice(vocab.SURNAMES)}, MD"
     )
-    practice = rng.choice(
-        [
-            "Palm Hollow Family Medicine",
-            "Three Rivers Primary Care",
-            "Seaward Internal Medicine Group",
-            "Caloosa Family Health",
-        ]
-    )
+    practice = rng.choice(PROFILE.referring_practices)
     # Everything the letter asserts about time is computed from the procedure it
     # is about. Picking the interval and the letter date independently produced
     # letters that cited a colonoscopy two months in their own future, and letters
@@ -731,7 +732,7 @@ def _referral_letter(patient, procedure, rng: random.Random) -> list:
     contact = rng.choice(
         [
             f" {possessive.capitalize()} {relative} can be reached at "
-            f"({rng.choice(vocab.FICTION_AREA_CODES)}) 555-0{rng.randint(100, 199)} if "
+            f"({rng.choice(PROFILE.area_codes)}) 555-0{rng.randint(100, 199)} if "
             f"{pronoun} cannot be reached directly.",
             f" {pronoun.capitalize()} is deaf and prefers written contact or the patient portal.",
             f" Please send correspondence in {patient.language}."
@@ -741,11 +742,11 @@ def _referral_letter(patient, procedure, rng: random.Random) -> list:
     )
     return [
         h1(practice),
-        mono("920 Palm Hollow Road, Palmetto Point, FL 34221   (941) 555-0187"),
+        mono(PROFILE.referral_letterhead),
         rule(),
         mono(f"{letter_date.strftime('%B')} {letter_date.day}, {letter_date.year}"),
         blank(),
-        body(f"{vocab.NETWORK_NAME} — Surveillance Service"),
+        body(f"{PROFILE.network_name} — Surveillance Service"),
         blank(),
         h2("RE: " + patient.listed_name),
         mono(f"Date of birth: {patient.dob.strftime('%m/%d/%Y')}    Your MRN: {patient.mrn}"),
@@ -896,7 +897,7 @@ def _recall_note(patient, recall_row: dict, narrative: dict, rng: random.Random)
     last = recall_row["last_outreach_date"]
     return [
         h1("Surveillance recall — coordinator note"),
-        mono(f"{vocab.NETWORK_NAME} — Surveillance Service"),
+        mono(f"{PROFILE.network_name} — Surveillance Service"),
         rule(),
         mono(f"Patient:        {patient.listed_name}"),
         mono(f"Date of birth:  {patient.dob.strftime('%m/%d/%Y')}"),
@@ -935,6 +936,8 @@ def _slug(patient, suffix: str) -> str:
 
 def build(world, notes_dir: str, rng: random.Random):
     """Write every note file. Returns (document records, scripted-case records)."""
+    global PROFILE
+    PROFILE = world.profile
     documents: list[dict] = []
     scripted: list[dict] = []
 
@@ -949,7 +952,7 @@ def build(world, notes_dir: str, rng: random.Random):
     )
     rng.shuffle(outside)
     for procedure in outside[:N_OUTSIDE_PACKETS]:
-        facility = rng.choice(vocab.SOURCE_FACILITIES)
+        facility = rng.choice(PROFILE.source_facilities)
         received = min(AS_OF - dt.timedelta(days=5), procedure.date + dt.timedelta(days=rng.randint(21, 400)))
         lines, recommendation, lesion_count = _outside_packet(procedure, facility, received, rng)
         filename = _slug(procedure.patient, f"outside-colonoscopy-{procedure.date.isoformat()}") + ".pdf"

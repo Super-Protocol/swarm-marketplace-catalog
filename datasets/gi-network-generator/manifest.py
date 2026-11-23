@@ -51,7 +51,8 @@ def write(world, scripted: list[dict], args, path: str) -> None:
     lines: list[str] = []
     out = lines.append
 
-    out("# Cypress Bay Digestive Health — generated corpus")
+    profile = world.profile
+    out(f"# {profile.network_name} — generated corpus")
     out("")
     out(
         f"Seed `{args.seed}`, as-of date `{AS_OF.isoformat()}`, "
@@ -60,6 +61,41 @@ def write(world, scripted: list[dict], args, path: str) -> None:
     out("")
     out("Entirely synthetic. Regenerating with the same seed reproduces this corpus exactly.")
     out("")
+    if profile.feed_lag_days:
+        out(
+            f"**Structured capture runs {profile.feed_lag_days} days behind.** The last procedure "
+            f"in this corpus is dated `{world.data_through.isoformat()}`, not the as-of date — "
+            "this practice batches its uploads. Overdue day counts are still measured from the "
+            "as-of date, because being overdue is a fact about today."
+        )
+        out("")
+    if any(
+        (
+            profile.missing_bbps_rate,
+            profile.missing_withdrawal_rate,
+            profile.prep_free_text,
+            profile.missing_interval_rate,
+        )
+    ):
+        out("**This network's record is incomplete, on purpose.** What is missing is missing from")
+        out("the FORM, never from the care: the examination had a preparation score and earned a")
+        out("surveillance interval whichever columns are null, and the dictated report beside it")
+        out("still says so. The rates are declared in `profiles.py`:")
+        out("")
+        out("| | |")
+        out("|---|---:|")
+        if profile.missing_bbps_rate:
+            out(f"| examinations with no bowel-preparation score | {profile.missing_bbps_rate:.0%} |")
+        if profile.prep_free_text:
+            out(f"| preparation recorded as free text, not the scale | {profile.prep_free_text:.0%} |")
+        if profile.missing_withdrawal_rate:
+            out(f"| colonoscopies with no withdrawal time | {profile.missing_withdrawal_rate:.0%} |")
+        if profile.missing_interval_rate:
+            out(
+                f"| intervals that never reached the record — **and so generate no recall** "
+                f"| {profile.missing_interval_rate:.0%} |"
+            )
+        out("")
 
     out("## Volume")
     out("")
