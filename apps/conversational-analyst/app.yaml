@@ -1356,25 +1356,30 @@ evidence:
   # listing page should say so (option 2, decided on SUP-711; the presentation change is
   # SUP-871).
   #
-  # Measured, not derived — and NOT YET MEASURED FOR 5.0.1, which is why there is no value
-  # here. 5.0.0's number was `c6a1709f33317262c1a115fd0f8cc2f9e8cb37ae7a9982e0f5ccaf264e2ba11c`
-  # and it is NOT this version's: the `retail-ai` back container attests one env entry fewer,
-  # so a snapshot of 5.0.1 is a different document. Carrying 5.0.0's value over would assert
-  # something false AND make the gate refuse every correct deployment of 5.0.1 — an absent
-  # value only withholds gated data, a wrong one misleads a verifier. `apps/tests/run.sh` is
-  # red until the number is measured, which is what makes this version unmergeable until then.
+  # Measured, not derived. Two deployments of this definition on `azure-test`, 2026-11-23
+  # (SUP-899): different namespaces, different hostnames and three separately generated
+  # credentials each, same reference parameter set, both published so the snapshot is taken
+  # over a locked space. Both attested 63 resources — 13 ConfigMaps, 10 Deployments, 1
+  # Ingress, 15 Secrets, 19 Services, 5 StatefulSets — and their canonical snapshots were
+  # BYTE-IDENTICAL: same SHA-256 over the document, and a field-by-field comparison as JSON
+  # Pointers found zero differing fields and no object present on one side only. That is what
+  # makes the exclusion set below complete and this number declarable.
   #
-  # How 5.0.0's was measured, and how 5.0.1's is to be (SUP-896, repeated on SUP-899): two
-  # deployments of this definition on `azure-test`, different namespaces, different hostnames
-  # and three separately generated credentials each, same reference parameter set. 5.0.0's two
-  # both attested 63 resources — 13 ConfigMaps, 10 Deployments, 1 Ingress, 15 Secrets, 19
-  # Services, 5 StatefulSets — and their canonical snapshots were BYTE-IDENTICAL: same SHA-256
-  # over the document, and a field-by-field comparison as JSON Pointers found zero differing
-  # fields and no object present on one side only. That is what makes the exclusion set below
-  # complete and a number declarable; 5.0.1's has to clear the same bar, and the resource count
-  # must still be 63 — this change removes an env value, not an object.
+  # 5.0.0's number was `c6a1709f33317262c1a115fd0f8cc2f9e8cb37ae7a9982e0f5ccaf264e2ba11c`, and
+  # it is not this version's — which is why it was not carried over. The two snapshots were
+  # diffed against each other as well, and the difference is exactly, and only, the duplicate
+  # env entry this version removes:
   #
-  # The exclusion set was re-derived rather than carried over from 4.0.6, in both directions:
+  #   Deployment/conversational-analyst-agent-retail-ai-back
+  #     /spec/template/spec/containers/0/env/4/name   = "RAI_PROCESS_ROLE"   (5.0.0 only)
+  #     /spec/template/spec/containers/0/env/4/value  = "web"                (5.0.0 only)
+  #
+  # Two fields, one object, 63 resources on both sides and nothing else moved. A verifier
+  # holding both snapshots can establish for themselves that 5.0.1 changed what it says it
+  # changed — which is the reason a container's env is attested rather than excluded.
+  #
+  # The exclusion set is unchanged from 5.0.0 and was re-resolved for this version rather than
+  # taken on trust, in both directions, against one of the two snapshots above:
   #
   #   * nothing is MISSING — the diff of the two snapshots turned up no field at all, so there
   #     is no per-deployment value left attested that would need excluding or fixing;
@@ -1431,7 +1436,7 @@ evidence:
   # "nothing to hold it to, or nowhere to check"), so an absent value leaves every deployment
   # of a listing with a data slot unable to receive gated data at all. `apps/tests/run.sh`
   # fails a definition that has a slot and no digest, so this cannot go missing again.
-  # expectedDigest: declared here once 5.0.1 has been deployed twice and the two snapshots agree.
+  expectedDigest: "d391cb85d8224797ce69fe747c11d0851505eb519d5e1e2df4d2fad36cc0bf3a"
   exclude:
     # Every deployment lives in a namespace of its own. The platform strips this itself; it is
     # declared because the listing page shows the exclusions from the definition only, and a
