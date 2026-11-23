@@ -18,6 +18,15 @@ kind: DataDefinition
 # holds this connection, and every request is admitted against the deployment
 # evidence the consuming application published.
 #
+# This is one of THREE identifying GI clinic cards on this catalogue, each owned
+# and granted by a different practice, each reaching the same consuming
+# application through its own grant. They share a generator and a schema, which
+# is what makes a question that crosses them answerable; they do not share a
+# shape. Volumes, periods, site counts, how well the examinations go and how
+# completely the forms get filled in all differ, and the differences are the
+# subject of any cross-network question worth asking. `datasets/gi-network-generator/profiles.py`
+# is where they are declared and reasoned about.
+#
 # The descriptions in this file are not documentation. A consuming agent builds
 # its entire knowledge of this database from the table and column descriptions
 # published here, including each column's `role` and `references` — so anything

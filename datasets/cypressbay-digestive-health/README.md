@@ -4,6 +4,14 @@ A synthetic six-site US gastroenterology network: who the patients are, what was
 colonoscopy, what the pathologist said, what interval that earned, and whether anybody ever got
 the patient back in.
 
+One of **three** identifying GI clinic cards on this catalogue, each owned and granted by a
+different practice: this one, `harborpoint-gastroenterology` (two academic sites, small, recent,
+completely captured) and `ridgeline-endoscopy` (eleven rural sites, a ten-year record with
+declared gaps). They share a generator and a schema, which is what makes a question that crosses
+them answerable, and they share nothing else — volumes, periods, detection rates and how
+completely the forms are filled in all differ on purpose. See
+`datasets/gi-network-generator/README.md`.
+
 Everything here is generated. No row, no name and no sentence is taken from a real patient, a
 real practice or a real dataset, or derived from one. The generator is deterministic — the same
 seed reproduces the corpus byte for byte — so a regenerated copy is the same data, not similar
@@ -115,17 +123,34 @@ the point at which they stop believing the rest.
 
 ## Generating and loading
 
+The generator is shared between the three clinic networks and lives in
+`datasets/gi-network-generator/`. `generate/generate.py` here is the documented path to it with
+this network already chosen, so the command below is the one to run for this corpus:
+
 ```bash
 cd generate
 ./generate.py --out ./out                   # 12,000 patients, ~131,000 rows, 44 documents
 ./generate.py --out ./out --patients 3000   # smaller
-./selftest.py                               # determinism, integrity, the gaps, the anatomy, the card
-./selftest.py --patients 12000 --seeds 8    # what CI runs as its second pass
+```
+
+The self-test is shared too:
+
+```bash
+cd ../../gi-network-generator
+./selftest.py                                                      # this network, small and fast
+./selftest.py --network cypress-bay --published-size --seeds 8     # what CI runs
+./selftest.py --all-networks                                       # all three — run this after any change
 ```
 
 `selftest.py` is what `.github/workflows/dataset-definitions.yml` runs on any change under
-`datasets/`. It needs PyYAML to read the card and `pdftotext` to confirm a generated PDF still
-extracts as text with its identifiers intact.
+`datasets/`, once per network. It needs PyYAML to read the card and `pdftotext` to confirm a
+generated PDF still extracts as text with its identifiers intact.
+
+**This corpus is loaded on a live stand and must not move.** A semantic model, two dashboards
+and fifteen library items were built by hand on top of it, and the row counts above are on the
+card. Any change to the shared generator has to be followed by a regeneration of this network
+and a byte-level diff against a copy taken beforehand — see the last section of the generator's
+README for why and how.
 
 `--seeds` matters more than it looks. Every defect this generator has shipped was
 **placement-dependent** — a contradiction planted on a recommendation a later colonoscopy had
@@ -162,6 +187,12 @@ published there (`roczen_*`, `autonomyx_*`, `reset_*`) live the same way.
 The prefix is therefore part of the published names and the card declares them that way. The
 reader account behind the card's secrets is granted `SELECT` on these eleven tables and nothing
 else in the database, so sharing the database shares no data.
+
+The prefix is also what lets the three clinic corpora share one database without sharing a
+table or a reader account: `cbdh_*`, `hpg_*` and `rep_*` sit side by side in `marketplace`, and
+each card's reader is granted `SELECT` on its own eleven and nothing else. Three networks in one
+database is a property of this stand, not of the data — and it is invisible to a consumer, which
+reaches each one through its own gate port under its own grant.
 
 On a ClickHouse you own, `--database cypressbay_gi --table-prefix ""` gives clean names; change
 the card's `database` and its table names to match before publishing from there.

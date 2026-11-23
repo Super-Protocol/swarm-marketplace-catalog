@@ -1,0 +1,4 @@
+# Generated output. The script is the deliverable, not its product: a committed
+# corpus is a dump that drifts from the generator, and the generator is
+# deterministic so the corpus can always be rebuilt.
+out/

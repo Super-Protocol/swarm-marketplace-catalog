@@ -6,34 +6,41 @@ a real registry or a real person: the name pools are ordinary US given names and
 surnames combined at random, the practice and payer names are invented, and the
 NPIs are deliberately invalid (a real NPI begins with 1 or 2 — every one below
 begins with 9, so none of them can collide with an issued number).
+
+What is in this file is the part that is the same for every network the generator
+produces: the specialty, not the practice. Anything that differs between the
+three clinic networks — the network's name and sites, its payers, its
+laboratories, its streets and area codes, how well its examinations go and how
+completely its forms are filled in — is a field on a `NetworkProfile` in
+`profiles.py`. The division is not cosmetic: a pool of given names shared across
+three practices is correct, and a pool of payer plans shared across Florida,
+Massachusetts and Colorado is not.
 """
 
 # ---------------------------------------------------------------------------
-# The clinic network
+# What a GI network is staffed with
 # ---------------------------------------------------------------------------
+#
+# How MANY of each is a `NetworkProfile` field — an eleven-site rural network and
+# a two-site academic one are not the same establishment, and the surveillance
+# coordinator count in particular is load-bearing: a network with too few of them
+# for its volume is a network whose recalls go unworked, which is the story one
+# of the three corpora is deliberately telling. What each of them DOES is the
+# same everywhere, so the roles and their credentials live here.
 
-NETWORK_NAME = "Cypress Bay Digestive Health"
-NETWORK_SHORT = "CBDH"
+CREDENTIALS = {
+    "Gastroenterologist": "MD",
+    "Advanced endoscopist": "MD",
+    "Colorectal surgeon": "MD, FACS",
+    "Nurse practitioner": "APRN",
+    "Physician assistant": "PA-C",
+    "Surveillance coordinator": "RN",
+    "Pathologist": "MD",
+}
 
-#: site_id, name, city, state, endoscopy suites, opened
-SITES = [
-    ("S01", "Cypress Bay Endoscopy Center", "Cypress Bay", "FL", 4, "2009-03-02"),
-    ("S02", "Palmetto Point Gastroenterology", "Palmetto Point", "FL", 3, "2012-07-16"),
-    ("S03", "Osprey Landing Digestive Care", "Osprey Landing", "FL", 2, "2015-01-12"),
-    ("S04", "Indian Shoal Endoscopy Suite", "Indian Shoal", "FL", 2, "2017-09-05"),
-    ("S05", "Coral Ridge GI Associates", "Coral Ridge", "FL", 3, "2019-04-01"),
-    ("S06", "Mangrove Park Ambulatory Endoscopy", "Mangrove Park", "FL", 2, "2021-10-18"),
-]
-
-PROVIDER_ROLES = [
-    ("Gastroenterologist", 24),
-    ("Advanced endoscopist", 5),
-    ("Colorectal surgeon", 3),
-    ("Nurse practitioner", 6),
-    ("Physician assistant", 4),
-    ("Surveillance coordinator", 8),
-    ("Pathologist", 6),
-]
+#: Who performs procedures. Everybody else in the establishment appears in the
+#: record through a different column.
+ENDOSCOPIST_ROLES = ("Gastroenterologist", "Advanced endoscopist", "Colorectal surgeon")
 
 SPECIALTY_FOCUS = [
     "General gastroenterology",
@@ -81,34 +88,9 @@ SURNAMES = [
     "Yarborough", "Zeppelin", "Arrington", "Blackwood", "Crenshaw", "Delacroix",
 ]
 
-STREETS = [
-    "Mangrove Walk", "Sea Grape Lane", "Tarpon Row", "Live Oak Terrace",
-    "Pelican Crossing", "Saw Palmetto Drive", "Coquina Court", "Banyan Reach",
-    "Spanish Moss Way", "Heron Point Road", "Sabal Palm Circle", "Egret Bend",
-    "Loggerhead Trail", "Buttonwood Place", "Cordgrass Avenue", "Snook Harbour Road",
-]
-
-#: The North American fiction range is 555-0100 to 555-0199. Outside it, a
-#: generated number is somebody's: `(941) 2xx-xxxx` is real Sarasota exchanges,
-#: and twelve thousand of them mostly belong to a person who did not consent to
-#: being in a demonstration. A hundred numbers per area code means patients share
-#: them, which is the honest trade and is stated on the card.
-FICTION_AREA_CODES = ["941", "813", "727", "239"]
-
 LANGUAGES = [
     ("English", 76), ("Spanish", 17), ("Haitian Creole", 4), ("Portuguese", 2),
     ("Vietnamese", 1),
-]
-
-PAYERS = [
-    ("Medicare Part B", "Traditional Medicare", 34),
-    ("Medicare Advantage", "Sunstate Advantage HMO", 16),
-    ("Medicare Advantage", "Gulf Coast Senior Choice PPO", 8),
-    ("Commercial", "Cypress Health Alliance PPO", 14),
-    ("Commercial", "Everglade Mutual Select", 9),
-    ("Commercial", "Sawgrass Employer Plan", 7),
-    ("Medicaid", "State Medicaid Managed Care", 7),
-    ("Self-pay", "Self-pay", 5),
 ]
 
 # ---------------------------------------------------------------------------
@@ -166,10 +148,14 @@ INDICATIONS_BY_TYPE = {
     ],
 }
 
-# A well-run unit reports an inadequate preparation — Boston Bowel Preparation
-# Scale under 6 — in well under a tenth of examinations. "Fair" straddles the
-# threshold, which is why the score and not the adjective decides adequacy.
-PREP_QUALITY = [("Excellent", 30), ("Good", 54), ("Fair", 13), ("Poor", 3)]
+# The bowel-preparation distribution, the withdrawal-time distribution and the
+# lesion count per examination are `NetworkProfile` fields: they are how well a
+# particular unit does its work, which is exactly what a cross-network comparison
+# is asking about. A well-run unit reports an inadequate preparation — Boston
+# Bowel Preparation Scale under 6 — in well under a tenth of examinations.
+# "Fair" straddles the threshold, which is why the score and not the adjective
+# decides adequacy, in every profile.
+
 SEDATION = [("Monitored anesthesia care", 71), ("Moderate sedation", 27), ("General anesthesia", 2)]
 ASA_CLASS = [("I", 11), ("II", 54), ("III", 32), ("IV", 3)]
 COMPLICATIONS = [
@@ -199,23 +185,6 @@ RESECTION_METHODS = [
     ("Endoscopic mucosal resection, piecemeal", 5),
     ("Not resected — referred for surgical management", 1),
     ("Not resected — tattooed for later resection", 1),
-]
-
-#: The laboratories this network sends its own specimens to.
-LABS = [
-    "Cypress Bay Pathology Associates",
-    "Gulfshore Regional Laboratory",
-    "Sabal Diagnostics (reference lab)",
-]
-
-#: Laboratories that appear on a report from another facility. Kept separate
-#: because our own lab's name on an outside report is the kind of detail that
-#: makes a reader stop trusting the whole corpus.
-OUTSIDE_LABS = [
-    "Sunrise Isles Hospital Laboratory",
-    "Northbridge Pathology Group",
-    "Lakeview Anatomic Pathology",
-    "Statewide Reference Pathology",
 ]
 
 # ---------------------------------------------------------------------------
@@ -297,13 +266,4 @@ DEFERRAL_REASONS = [
     "On palliative care pathway",
     "Pregnancy",
     "Recent major surgery",
-]
-
-SOURCE_FACILITIES = [
-    "Sunrise Isles Community Hospital",
-    "Northbridge Surgical Center",
-    "Lakeview Endoscopy Partners",
-    "Bay Terrace Regional Medical Center",
-    "Out-of-state practice, records faxed",
-    "Retired practice, chart transferred",
 ]

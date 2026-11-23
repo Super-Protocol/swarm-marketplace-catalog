@@ -73,6 +73,7 @@ The script copies the catalog, drops listings that need extra env, and runs `doc
 | `qwen3-coder-next-fp8` | Application | Qwen3-Coder-Next in Qwen's FP8 on the same chart: 80B of hybrid-attention mixture of experts, 74.9 GiB of weights pinned file by file, a 262 144-token default context — and the card that takes one H200 NVL to itself rather than pretending to share it. |
 | `roczen-metabolic-programme` | Dataset | De-identified longitudinal metabolic-programme records, 10 tables. |
 | `autonomyx-inflammation-monitoring` | Dataset | De-identified wearable biometrics and AI inflammation scores, 9 tables. |
+| `cypressbay-digestive-health`, `harborpoint-gastroenterology`, `ridgeline-endoscopy` | Datasets | Three **identifying** GI clinic networks, 11 tables each, one owner and one grant apiece — so one clinic can withdraw while the others keep serving. Built from one generator in `datasets/gi-network-generator/` and deliberately different in volume, period, detection rate and how completely their forms are filled in; Ridgeline's registry has declared gaps, which is what makes a pooled question interesting. |
 | `acme-internal-knowledge-base` | Dataset | Restricted internal corpus. |
 | `retail-transactions` | Dataset | Public transactional dataset. |
 

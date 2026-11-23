@@ -1,11 +1,12 @@
 # Checks over `datasets/`.
 #
 # `apps/tests/run.sh` covers `apps/` and says in its own comments that
-# `datasets/` has no check yet. This is that check for the one dataset in here
-# that generates its own data: it regenerates the corpus twice and asserts the
+# `datasets/` has no check yet. This is that check for the datasets in here that
+# generate their own data: it regenerates each corpus twice and asserts the
 # properties the published card claims — byte-level reproducibility, referential
-# integrity, the deliberate gaps between the tables and the documents, and that
-# the card declares exactly the tables and columns the schema creates.
+# integrity, the deliberate gaps between the tables and the documents, the
+# declared rates of incomplete capture, and that the card declares exactly the
+# tables and columns the schema creates.
 #
 # The last one is why this runs in CI rather than by hand. A consuming agent
 # builds its whole knowledge of the database from the card's table and column
@@ -29,9 +30,17 @@ permissions:
   contents: read
 
 jobs:
-  cypressbay-digestive-health:
-    name: cypressbay-digestive-health self-test
+  gi-clinic-networks:
+    name: ${{ matrix.network }} self-test
     runs-on: ubuntu-latest
+    # One job per network rather than one `--all-networks` run: the three take a
+    # different path through the generator — the capture knobs are guarded on
+    # being non-zero — and a failure should name the corpus it is about without
+    # anybody reading a log to find out which.
+    strategy:
+      fail-fast: false
+      matrix:
+        network: [cypress-bay, harbor-point, ridgeline]
     steps:
       - uses: actions/checkout@v4
 
@@ -51,11 +60,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends poppler-utils
 
       - name: Self-test
-        run: python3 datasets/cypressbay-digestive-health/generate/selftest.py
+        run: |
+          python3 datasets/gi-network-generator/selftest.py --network ${{ matrix.network }}
 
-      # The default corpus is what the stand runs on, and some properties only
-      # appear at that size — every planted contradiction has to find a record it
-      # can contradict, and each coordinator note a patient it fits.
+      # The network's own size is what the stand runs on, and some properties
+      # only appear at that size — every planted contradiction has to find a
+      # record it can contradict, and each coordinator note a patient it fits.
+      # `--patients` is therefore left off: the default is the profile's own.
       #
       # `--seeds` re-runs the placement assertions over a range, and that is the
       # part worth having in CI. Every defect this generator has shipped was
@@ -67,5 +78,5 @@ jobs:
       # vouch for a generator. Eight seeds at full size take about 30 seconds.
       - name: Self-test at the published size, across seeds
         run: |
-          python3 datasets/cypressbay-digestive-health/generate/selftest.py \
-            --patients 12000 --seeds 8
+          python3 datasets/gi-network-generator/selftest.py \
+            --network ${{ matrix.network }} --published-size --seeds 8

@@ -30,6 +30,17 @@ organizations:
   - slug: cypress-bay-digestive
     name: Cypress Bay Digestive Health
     verifiedPublisher: true
+  # Two more GI networks, and they are separate organisations for the same reason
+  # Cypress Bay is: the thing worth demonstrating is that each clinic is its own
+  # data owner with its own grant, so one of them can withdraw while the others
+  # keep serving. Publishing all three under one slug would make that a claim
+  # instead of something anybody can watch happen.
+  - slug: harbor-point-gastro
+    name: Harbor Point Gastroenterology
+    verifiedPublisher: true
+  - slug: ridgeline-endoscopy
+    name: Ridgeline Endoscopy Partners
+    verifiedPublisher: true
   # An internal platform team, which is who publishes third-party infrastructure in a company's own
   # marketplace. Deliberately not "Confluent": the publisher of a listing is whoever stands behind
   # it on this marketplace, and that is not the vendor here.
@@ -213,6 +224,63 @@ datasets:
       provenanceScore: 100
       provenanceAttested: true
 
+  # The second and third identifying clinic cards. Same generator and same schema
+  # as Cypress Bay above — which is what makes a question that crosses all three
+  # answerable — and deliberately not the same shape: different volumes, periods,
+  # site counts, detection rates, and in Ridgeline's case a registry with declared
+  # gaps in it. Three copies of one shape would make the comparison meaningless.
+  - path: datasets/harborpoint-gastroenterology
+    organization: harbor-point-gastro
+    sourceType: clickhouse
+    visibility: restricted
+    price: Not for sale
+    expectedUpdate: On demand (regenerated from the committed generator)
+    usageTerms: >-
+      Synthetic demonstration data. No real patient is represented and no record is derived from
+      one, so it may be loaded, queried and shown freely. It is not a substitute for real data in
+      any evaluation that claims clinical validity.
+    # Its own reader, scoped to the eleven `hpg_*` tables. Three clinic corpora
+    # share the `marketplace` database on this stand and share no account: a
+    # reader granted SELECT on one prefix can read one clinic's data and no
+    # other's, which is what makes "separate owner" true below the gate as well
+    # as above it.
+    secrets:
+      readUser: ${HARBORPOINT_READ_USER}
+      readPassword: ${HARBORPOINT_READ_PASSWORD}
+    statistics:
+      sizeBytes: "6339998"
+      recordCount: "45719"
+      format: ClickHouse MergeTree
+      usability: 9.7
+      provenanceScore: 100
+      provenanceAttested: true
+
+  - path: datasets/ridgeline-endoscopy
+    organization: ridgeline-endoscopy
+    sourceType: clickhouse
+    visibility: restricted
+    price: Not for sale
+    expectedUpdate: On demand (regenerated from the committed generator)
+    usageTerms: >-
+      Synthetic demonstration data. No real patient is represented and no record is derived from
+      one, so it may be loaded, queried and shown freely. It is not a substitute for real data in
+      any evaluation that claims clinical validity.
+    secrets:
+      readUser: ${RIDGELINE_READ_USER}
+      readPassword: ${RIDGELINE_READ_PASSWORD}
+    statistics:
+      sizeBytes: "20645374"
+      recordCount: "145037"
+      format: ClickHouse MergeTree
+      # Lower than its two siblings on purpose, and it is the only honest number
+      # here: a third of this network's examinations carry no bowel-preparation
+      # score, nearly half no withdrawal time, and a fifth of its surveillance
+      # intervals never reached the structured record. The card says where each
+      # gap is; the score says there are gaps.
+      usability: 7.4
+      provenanceScore: 100
+      provenanceAttested: true
+
   - path: datasets/autonomyx-inflammation-monitoring
     organization: reset-health
     sourceType: clickhouse
@@ -257,8 +325,21 @@ grants:
   # The clinic grants its own organisation and the operator's. Which organisations
   # appear here is the whole of the tenant boundary the gastroenterology stand
   # demonstrates, so adding one is a decision and not housekeeping.
+  #
+  # `big-pharma` is in each list because it is the organisation the demonstration
+  # deployment belongs to on the marketplace stand, and `isBindable` requires a
+  # grant to the CONSUMING organisation — the one that owns the deployment — not
+  # to the one the data describes. It was added to the Cypress Bay grant by hand
+  # on the stand and was missing here, which meant a full re-seed would have
+  # withdrawn the running stand's access to the clinic's data without saying so.
   - dataset: cypressbay-digestive-health
-    organizations: [cypress-bay-digestive, aivo]
+    organizations: [cypress-bay-digestive, big-pharma, aivo]
+    apps: [conversational-analyst]
+  - dataset: harborpoint-gastroenterology
+    organizations: [harbor-point-gastro, big-pharma, aivo]
+    apps: [conversational-analyst]
+  - dataset: ridgeline-endoscopy
+    organizations: [ridgeline-endoscopy, big-pharma, aivo]
     apps: [conversational-analyst]
 
 reviews:
