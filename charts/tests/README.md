@@ -62,6 +62,19 @@ cannot answer the question:
   containers shipped that way before this check existed (SUP-238), and a golden diff held
   every one of their numbers without a word.
 
+- **No rendered pod spec defines the same key twice** (`duplicate_keys.py`). Several lists in a
+  pod spec are maps to the API server — `env` by name, `volumes` and `containers` by name,
+  `volumeMounts` by mount path, `ports` by number and by name — and server-side apply, which is
+  how the cloud writes a manifest, refuses a document that carries one key twice. A duplicate
+  whose two values agree is invisible to everything else here: it renders, lints, diffs, boots,
+  serves and digests to a stable snapshot. What it breaks is the WRITE, so it surfaces as a
+  published deployment that cannot be reconfigured, long after the listing shipped —
+  `conversational-analyst-agent` 0.5.1 and 0.6.0 set `RAI_PROCESS_ROLE` once in the vendored
+  subchart and once in `back.extraEnv`, and the stand's `unpublish -> reconfigure -> publish`
+  could not run at all (found on SUP-896, fixed in 0.6.1 on SUP-899). Checked on the render of
+  every local case, because the two halves of a duplicate are usually a chart's and a
+  subchart's and only the render holds both.
+
 - **The heaviest pod the charts render is within the `maxPod` the listing declares**
   (`max_pod.py`). `resources.maxPod` is what the cloud requires one node to be able to hold, and
   the LimitRange `max` of the space. Declared below the heaviest pod the charts actually render,

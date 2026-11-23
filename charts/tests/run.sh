@@ -367,6 +367,19 @@ else
   fail "charts/tests/limitrange.py"
 fi
 
+# Admissible and able to start are not the only two questions: a manifest also has to be
+# WRITABLE. Server-side apply refuses a pod spec that carries one key twice, and that is how
+# the cloud reconfigures a live deployment — so a duplicate renders, lints, diffs, boots and
+# digests cleanly, and then makes `unpublish -> reconfigure -> publish` impossible on a stand
+# that is already published. See the file; it is the defect SUP-899 fixed.
+note "no rendered pod spec defines the same key twice"
+if output=$(python3 charts/tests/duplicate_keys.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/duplicate_keys.py"
+fi
+
 # Admissible is not the same as able to start, and nothing here used to ask the second
 # question: 4.0.2 passed every check in this file and five of its fifteen workloads never ran.
 # Three containers, three facts, each one found on a cluster rather than in a render (SUP-711).

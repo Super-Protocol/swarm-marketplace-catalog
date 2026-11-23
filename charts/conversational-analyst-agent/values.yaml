@@ -382,14 +382,21 @@ aivo:
 
     back:
       replicaCount: 1
-      # One process serves HTTP and another drains the queues. Both Deployments are the same
-      # `api` service as far as the config service is concerned, so the role cannot come from
-      # the configuration document: the worker's own Deployment sets RAI_PROCESS_ROLE=worker,
-      # and this is the other half of the pair. Without it the web pod would also drain the
-      # queues and every autopilot run would be started twice.
-      extraEnv:
-        - name: RAI_PROCESS_ROLE
-          value: web
+      # There is deliberately no `extraEnv` setting RAI_PROCESS_ROLE here (SUP-899). The role
+      # does have to be set: one process serves HTTP and another drains the queues, both
+      # Deployments are the same `api` service as far as the config service is concerned, so
+      # the role cannot come from the configuration document, and without it the web pod would
+      # also drain the queues and every autopilot run would be started twice. But the vendored
+      # subchart already emits `RAI_PROCESS_ROLE=web` on this Deployment whenever
+      # `worker.enabled` is true, which it is below — so an entry here is a SECOND definition
+      # of the same name in one container. That is harmless at runtime and stable in the
+      # digest, and refused by server-side apply, which is the only way the cluster is written
+      # to: every `reconfigure` of a published deployment failed with
+      #
+      #   .spec.template.spec.containers[name="retail-ai"].env: duplicate entries for key
+      #
+      # leaving a published stand that could not be reconfigured at all. `charts/tests/duplicate_keys.py`
+      # fails the render if this comes back, here or in any other component.
       resources:
         requests:
           cpu: "1"

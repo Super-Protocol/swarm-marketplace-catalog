@@ -41,7 +41,21 @@ type: application
 #   * The api still has no migrations — the schema arrives through TypeORM
 #     `synchronize` under an advisory lock — so a fresh deployment builds the
 #     1.22.1 schema directly.
-version: 0.6.0
+# 0.6.1 removes one env entry and nothing else. The `retail-ai` back Deployment
+# defined RAI_PROCESS_ROLE twice — the vendored subchart emits it from
+# `worker.enabled`, and `back.extraEnv` added a second, identical entry. Both
+# values were `web`, so the container behaved correctly and the digest was
+# stable; but server-side apply refuses a duplicate key, so EVERY `reconfigure`
+# of a published deployment failed:
+#
+#   .spec.template.spec.containers[name="retail-ai"].env: duplicate entries for key
+#
+# That made the runbook's `unpublish -> reconfigure -> publish` impossible on a
+# published stand, which is how the defect was found (SUP-896, fixed on SUP-899).
+# The role is still set, by the subchart, which is the only place it should come
+# from; `charts/tests/duplicate_keys.py` now fails any render that defines one
+# key twice, in this chart or any other.
+version: 0.6.1
 appVersion: "1.22.1"
 dependencies:
   - name: aivo
