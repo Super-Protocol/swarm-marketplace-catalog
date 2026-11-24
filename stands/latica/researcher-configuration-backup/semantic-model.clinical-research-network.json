@@ -1,0 +1,540 @@
+{
+ "version": 1,
+ "datasets": [
+  {
+   "code": "cb_procedure_monthly",
+   "displayName": "Cypress Bay Digestive Health — examinations by month",
+   "description": "Cypress Bay Digestive Health's aggregate release: one row per site, calendar month and procedure type, with counts only. The grain is a month, so a window that starts or ends mid-month cannot be answered exactly from here.",
+   "datasourceId": "cypressbay_release",
+   "source": {
+    "kind": "table",
+    "schema": "marketplace",
+    "table": "cbdh_release_procedure_monthly"
+   },
+   "timeColumn": "month",
+   "defaultTimeGrain": "month",
+   "rowFilter": null,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "code": "cb_sites",
+   "displayName": "Cypress Bay Digestive Health — sites",
+   "description": "Cypress Bay Digestive Health's clinical sites. Joined to give a site a name rather than an id.",
+   "datasourceId": "cypressbay_release",
+   "source": {
+    "kind": "table",
+    "schema": "marketplace",
+    "table": "cbdh_release_sites"
+   },
+   "timeColumn": null,
+   "defaultTimeGrain": null,
+   "rowFilter": null,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "code": "hp_procedure_monthly",
+   "displayName": "Harbor Point Gastroenterology — examinations by month",
+   "description": "Harbor Point Gastroenterology's aggregate release: one row per site, calendar month and procedure type, with counts only. The grain is a month, so a window that starts or ends mid-month cannot be answered exactly from here.",
+   "datasourceId": "harborpoint_release",
+   "source": {
+    "kind": "table",
+    "schema": "marketplace",
+    "table": "hpg_release_procedure_monthly"
+   },
+   "timeColumn": "month",
+   "defaultTimeGrain": "month",
+   "rowFilter": null,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "code": "hp_sites",
+   "displayName": "Harbor Point Gastroenterology — sites",
+   "description": "Harbor Point Gastroenterology's clinical sites. Joined to give a site a name rather than an id.",
+   "datasourceId": "harborpoint_release",
+   "source": {
+    "kind": "table",
+    "schema": "marketplace",
+    "table": "hpg_release_sites"
+   },
+   "timeColumn": null,
+   "defaultTimeGrain": null,
+   "rowFilter": null,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "code": "rg_procedure_monthly",
+   "displayName": "Ridgeline Endoscopy Partners — examinations by month",
+   "description": "Ridgeline Endoscopy Partners's aggregate release: one row per site, calendar month and procedure type, with counts only. The grain is a month, so a window that starts or ends mid-month cannot be answered exactly from here.",
+   "datasourceId": "ridgeline_release",
+   "source": {
+    "kind": "table",
+    "schema": "marketplace",
+    "table": "rep_release_procedure_monthly"
+   },
+   "timeColumn": "month",
+   "defaultTimeGrain": "month",
+   "rowFilter": null,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "code": "rg_sites",
+   "displayName": "Ridgeline Endoscopy Partners — sites",
+   "description": "Ridgeline Endoscopy Partners's clinical sites. Joined to give a site a name rather than an id.",
+   "datasourceId": "ridgeline_release",
+   "source": {
+    "kind": "table",
+    "schema": "marketplace",
+    "table": "rep_release_sites"
+   },
+   "timeColumn": null,
+   "defaultTimeGrain": null,
+   "rowFilter": null,
+   "status": "published",
+   "proposedBy": null
+  }
+ ],
+ "dimensions": [
+  {
+   "code": "clinical_site",
+   "displayName": "Clinical site",
+   "description": "The site an examination happened at, named rather than coded. Bound to all three releases, each through its own sites table. An EMPTY site is an examination the network did not perform — known only from an outside report — and it carries no preparation score of its own.",
+   "kind": "categorical",
+   "keyType": "string",
+   "memberSource": {
+    "kind": "none"
+   },
+   "synonyms": [
+    "site",
+    "centre",
+    "center",
+    "location"
+   ],
+   "showInReferences": null,
+   "icon": null,
+   "llmVisibility": "full",
+   "timeRole": null,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "code": "network",
+   "displayName": "Clinical network",
+   "description": "Which clinical network a count belongs to. THE CROSS-SOURCE DIMENSION: the same dimension is bound to all three releases on `network_key`, so \"by network\" means the same thing in each of them and a question that covers all three groups by this column.",
+   "kind": "categorical",
+   "keyType": "string",
+   "memberSource": {
+    "kind": "static",
+    "values": [
+     {
+      "key": "cypress-bay",
+      "label": "Cypress Bay Digestive Health"
+     },
+     {
+      "key": "harbor-point",
+      "label": "Harbor Point Gastroenterology"
+     },
+     {
+      "key": "ridgeline",
+      "label": "Ridgeline Endoscopy Partners"
+     }
+    ],
+    "embed": false
+   },
+   "synonyms": [
+    "practice",
+    "clinic",
+    "group",
+    "organisation"
+   ],
+   "showInReferences": null,
+   "icon": null,
+   "llmVisibility": "full",
+   "timeRole": null,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "code": "procedure_type",
+   "displayName": "Procedure type",
+   "description": "The kind of examination. The first three are colonoscopies; a preparation or adenoma rate is computed over those and not over all five.",
+   "kind": "categorical",
+   "keyType": "string",
+   "memberSource": {
+    "kind": "static",
+    "values": [
+     {
+      "key": "Screening colonoscopy",
+      "label": "Screening colonoscopy"
+     },
+     {
+      "key": "Surveillance colonoscopy",
+      "label": "Surveillance colonoscopy"
+     },
+     {
+      "key": "Diagnostic colonoscopy",
+      "label": "Diagnostic colonoscopy"
+     },
+     {
+      "key": "Flexible sigmoidoscopy",
+      "label": "Flexible sigmoidoscopy"
+     },
+     {
+      "key": "EGD",
+      "label": "EGD"
+     }
+    ],
+    "embed": false
+   },
+   "synonyms": [
+    "examination type",
+    "procedure"
+   ],
+   "showInReferences": null,
+   "icon": null,
+   "llmVisibility": "full",
+   "timeRole": null,
+   "status": "published",
+   "proposedBy": null
+  }
+ ],
+ "hierarchies": [],
+ "bindings": [
+  {
+   "dimension": "clinical_site",
+   "dataset": "cb_procedure_monthly",
+   "keyExpr": "site_id",
+   "labelExpr": "site_name",
+   "join": {
+    "dataset": "cb_sites",
+    "on": [
+     {
+      "left": "site_id",
+      "right": "site_id"
+     }
+    ]
+   },
+   "timeGrainExprs": null,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "dimension": "clinical_site",
+   "dataset": "hp_procedure_monthly",
+   "keyExpr": "site_id",
+   "labelExpr": "site_name",
+   "join": {
+    "dataset": "hp_sites",
+    "on": [
+     {
+      "left": "site_id",
+      "right": "site_id"
+     }
+    ]
+   },
+   "timeGrainExprs": null,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "dimension": "clinical_site",
+   "dataset": "rg_procedure_monthly",
+   "keyExpr": "site_id",
+   "labelExpr": "site_name",
+   "join": {
+    "dataset": "rg_sites",
+    "on": [
+     {
+      "left": "site_id",
+      "right": "site_id"
+     }
+    ]
+   },
+   "timeGrainExprs": null,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "dimension": "network",
+   "dataset": "cb_procedure_monthly",
+   "keyExpr": "network_key",
+   "labelExpr": "network",
+   "join": null,
+   "timeGrainExprs": null,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "dimension": "network",
+   "dataset": "hp_procedure_monthly",
+   "keyExpr": "network_key",
+   "labelExpr": "network",
+   "join": null,
+   "timeGrainExprs": null,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "dimension": "network",
+   "dataset": "rg_procedure_monthly",
+   "keyExpr": "network_key",
+   "labelExpr": "network",
+   "join": null,
+   "timeGrainExprs": null,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "dimension": "procedure_type",
+   "dataset": "cb_procedure_monthly",
+   "keyExpr": "procedure_type",
+   "labelExpr": "procedure_type",
+   "join": null,
+   "timeGrainExprs": null,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "dimension": "procedure_type",
+   "dataset": "hp_procedure_monthly",
+   "keyExpr": "procedure_type",
+   "labelExpr": "procedure_type",
+   "join": null,
+   "timeGrainExprs": null,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "dimension": "procedure_type",
+   "dataset": "rg_procedure_monthly",
+   "keyExpr": "procedure_type",
+   "labelExpr": "procedure_type",
+   "join": null,
+   "timeGrainExprs": null,
+   "status": "published",
+   "proposedBy": null
+  }
+ ],
+ "metrics": [
+  {
+   "code": "cb_adenoma_detection_rate",
+   "displayName": "Cypress Bay Digestive Health: adenoma detection rate",
+   "description": "Adenomas among examinations whose preparation was adequate. Derived, and it stays inside this network's release — the model requires a derived metric to stay within one dataset, and each release is a separate gated connection, so there is no single pooled rate to define. Ask for this metric once per network and compare the three.",
+   "dataset": "cb_procedure_monthly",
+   "kind": "derived",
+   "expression": "{cb_adequate_prep_with_adenoma} / {cb_adequate_prep}",
+   "filter": null,
+   "format": {
+    "kind": "percent"
+   },
+   "polarity": "higher_is_better",
+   "additivity": "non_additive",
+   "defaultTimeGrain": null,
+   "llmVisible": true,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "code": "cb_adequate_prep",
+   "displayName": "Cypress Bay Digestive Health: Examinations with adequate preparation",
+   "description": "Structured examinations with a recorded BBPS total of 6 or more. The DENOMINATOR of an adenoma detection rate.",
+   "dataset": "cb_procedure_monthly",
+   "kind": "aggregate",
+   "expression": "sum(prep_adequate)",
+   "filter": null,
+   "format": {
+    "kind": "integer"
+   },
+   "polarity": "neutral",
+   "additivity": "additive",
+   "defaultTimeGrain": null,
+   "llmVisible": true,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "code": "cb_adequate_prep_with_adenoma",
+   "displayName": "Cypress Bay Digestive Health: Of those, with an adenoma",
+   "description": "Examinations that had both an adequate recorded preparation and at least one adenoma. The NUMERATOR that goes with the denominator above.",
+   "dataset": "cb_procedure_monthly",
+   "kind": "aggregate",
+   "expression": "sum(prep_adequate_with_adenoma)",
+   "filter": null,
+   "format": {
+    "kind": "integer"
+   },
+   "polarity": "neutral",
+   "additivity": "additive",
+   "defaultTimeGrain": null,
+   "llmVisible": true,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "code": "cb_prep_missing",
+   "displayName": "Cypress Bay Digestive Health: Excluded for a missing preparation score",
+   "description": "Structured examinations with no BBPS total at all. The size of the exclusion — quote it beside any preparation-qualified rate.",
+   "dataset": "cb_procedure_monthly",
+   "kind": "aggregate",
+   "expression": "sum(prep_missing)",
+   "filter": null,
+   "format": {
+    "kind": "integer"
+   },
+   "polarity": "neutral",
+   "additivity": "additive",
+   "defaultTimeGrain": null,
+   "llmVisible": true,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "code": "hp_adenoma_detection_rate",
+   "displayName": "Harbor Point Gastroenterology: adenoma detection rate",
+   "description": "Adenomas among examinations whose preparation was adequate. Derived, and it stays inside this network's release — the model requires a derived metric to stay within one dataset, and each release is a separate gated connection, so there is no single pooled rate to define. Ask for this metric once per network and compare the three.",
+   "dataset": "hp_procedure_monthly",
+   "kind": "derived",
+   "expression": "{hp_adequate_prep_with_adenoma} / {hp_adequate_prep}",
+   "filter": null,
+   "format": {
+    "kind": "percent"
+   },
+   "polarity": "higher_is_better",
+   "additivity": "non_additive",
+   "defaultTimeGrain": null,
+   "llmVisible": true,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "code": "hp_adequate_prep",
+   "displayName": "Harbor Point Gastroenterology: Examinations with adequate preparation",
+   "description": "Structured examinations with a recorded BBPS total of 6 or more. The DENOMINATOR of an adenoma detection rate.",
+   "dataset": "hp_procedure_monthly",
+   "kind": "aggregate",
+   "expression": "sum(prep_adequate)",
+   "filter": null,
+   "format": {
+    "kind": "integer"
+   },
+   "polarity": "neutral",
+   "additivity": "additive",
+   "defaultTimeGrain": null,
+   "llmVisible": true,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "code": "hp_adequate_prep_with_adenoma",
+   "displayName": "Harbor Point Gastroenterology: Of those, with an adenoma",
+   "description": "Examinations that had both an adequate recorded preparation and at least one adenoma. The NUMERATOR that goes with the denominator above.",
+   "dataset": "hp_procedure_monthly",
+   "kind": "aggregate",
+   "expression": "sum(prep_adequate_with_adenoma)",
+   "filter": null,
+   "format": {
+    "kind": "integer"
+   },
+   "polarity": "neutral",
+   "additivity": "additive",
+   "defaultTimeGrain": null,
+   "llmVisible": true,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "code": "hp_prep_missing",
+   "displayName": "Harbor Point Gastroenterology: Excluded for a missing preparation score",
+   "description": "Structured examinations with no BBPS total at all. The size of the exclusion — quote it beside any preparation-qualified rate.",
+   "dataset": "hp_procedure_monthly",
+   "kind": "aggregate",
+   "expression": "sum(prep_missing)",
+   "filter": null,
+   "format": {
+    "kind": "integer"
+   },
+   "polarity": "neutral",
+   "additivity": "additive",
+   "defaultTimeGrain": null,
+   "llmVisible": true,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "code": "rg_adenoma_detection_rate",
+   "displayName": "Ridgeline Endoscopy Partners: adenoma detection rate",
+   "description": "Adenomas among examinations whose preparation was adequate. Derived, and it stays inside this network's release — the model requires a derived metric to stay within one dataset, and each release is a separate gated connection, so there is no single pooled rate to define. Ask for this metric once per network and compare the three.",
+   "dataset": "rg_procedure_monthly",
+   "kind": "derived",
+   "expression": "{rg_adequate_prep_with_adenoma} / {rg_adequate_prep}",
+   "filter": null,
+   "format": {
+    "kind": "percent"
+   },
+   "polarity": "higher_is_better",
+   "additivity": "non_additive",
+   "defaultTimeGrain": null,
+   "llmVisible": true,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "code": "rg_adequate_prep",
+   "displayName": "Ridgeline Endoscopy Partners: Examinations with adequate preparation",
+   "description": "Structured examinations with a recorded BBPS total of 6 or more. The DENOMINATOR of an adenoma detection rate.",
+   "dataset": "rg_procedure_monthly",
+   "kind": "aggregate",
+   "expression": "sum(prep_adequate)",
+   "filter": null,
+   "format": {
+    "kind": "integer"
+   },
+   "polarity": "neutral",
+   "additivity": "additive",
+   "defaultTimeGrain": null,
+   "llmVisible": true,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "code": "rg_adequate_prep_with_adenoma",
+   "displayName": "Ridgeline Endoscopy Partners: Of those, with an adenoma",
+   "description": "Examinations that had both an adequate recorded preparation and at least one adenoma. The NUMERATOR that goes with the denominator above.",
+   "dataset": "rg_procedure_monthly",
+   "kind": "aggregate",
+   "expression": "sum(prep_adequate_with_adenoma)",
+   "filter": null,
+   "format": {
+    "kind": "integer"
+   },
+   "polarity": "neutral",
+   "additivity": "additive",
+   "defaultTimeGrain": null,
+   "llmVisible": true,
+   "status": "published",
+   "proposedBy": null
+  },
+  {
+   "code": "rg_prep_missing",
+   "displayName": "Ridgeline Endoscopy Partners: Excluded for a missing preparation score",
+   "description": "Structured examinations with no BBPS total at all. The size of the exclusion — quote it beside any preparation-qualified rate.",
+   "dataset": "rg_procedure_monthly",
+   "kind": "aggregate",
+   "expression": "sum(prep_missing)",
+   "filter": null,
+   "format": {
+    "kind": "integer"
+   },
+   "polarity": "neutral",
+   "additivity": "additive",
+   "defaultTimeGrain": null,
+   "llmVisible": true,
+   "status": "published",
+   "proposedBy": null
+  }
+ ]
+}

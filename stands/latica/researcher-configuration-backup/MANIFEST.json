@@ -1,0 +1,49 @@
+{
+ "exportedAt": "2026-11-24T23:03:50.981Z",
+ "stand": "https://researcher-stand.conf-apps.superprotocol.dev",
+ "scopedTo": {
+  "user": "gate-rehearsal@local.test",
+  "note": "dashboards, library and autopilots are this account's tenant and visibility"
+ },
+ "tenants": [
+  {
+   "id": "f3afe2c3-a8f2-4184-9f7c-35bd3dcac402",
+   "name": "Clinical Research Network",
+   "file": "semantic-model.clinical-research-network.json",
+   "counts": {
+    "datasets": 6,
+    "dimensions": 3,
+    "metrics": 12,
+    "hierarchies": 0
+   }
+  },
+  {
+   "id": "b932cafc-55a0-4526-b4fc-5bbc8eac75af",
+   "name": "Latica",
+   "file": "semantic-model.latica.json",
+   "counts": {
+    "datasets": 0,
+    "dimensions": 0,
+    "metrics": 0,
+    "hierarchies": 0
+   }
+  },
+  {
+   "id": "296b9d1d-52fe-4f2f-9547-1fa1ed6f45d4",
+   "name": "Pharma Partner",
+   "file": "semantic-model.pharma-partner.json",
+   "counts": {
+    "datasets": 0,
+    "dimensions": 0,
+    "metrics": 0,
+    "hierarchies": 0
+   }
+  }
+ ],
+ "counts": {
+  "dashboards": 0,
+  "libraryItems": 0,
+  "libraryFolders": 0,
+  "autopilots": 0
+ }
+}

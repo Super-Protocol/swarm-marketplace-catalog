@@ -532,6 +532,32 @@ published as an output **did not match** the password the realm was seeded with 
 Secret is the one that works. An operator following the console alone could not sign in to this
 deployment.
 
+### The cross-source semantic model
+
+The researcher's tenant carries a model over the three releases:
+`researcher-configuration-backup/semantic-model.clinical-research-network.json`, six datasets,
+three dimensions, **nine bindings**, twelve metrics.
+
+The piece this issue asked for is the `network` dimension, bound to **all three** releases on
+`network_key` — one dimension, three bindings — so "by network" means the same thing in each of
+them and the member keys line up. `clinical_site` is bound three times too, each through its own
+release's sites table, so a site has a name rather than an id whichever network it is in.
+
+**What it cannot do is as useful to know as what it can.** A metric belongs to one dataset, a
+dataset belongs to one `datasourceId`, and each release is a separate gated connection whose reader
+cannot read the other two — so there is no single pooled metric to define, and a derived one does
+not help: the model's own validator says *"a derived metric stays within one dataset"*. Each
+network therefore has its own `*_adenoma_detection_rate` and a pooled comparison is three modelled
+queries put side by side. Asked for one chart over all three, the agent reported the limitation
+itself: *"The model does not support querying across multiple datasets in one semantic query."*
+
+What the model buys, given that, is the thing hand-written SQL could not: a **reusable query**
+behind the answer. Before it, the same question was answered from raw SQL and the agent declined
+to chart it — *"a chart block with inline data must include a reusable query, which is not
+applicable here because the figures came from hand-written SQL over raw tables rather than a
+modelled semantic dataset"*. After it, the answer comes back as a chart with a live semantic query
+attached, one per network, and the figures are the same: 38.0% / 46.2% / 26.4%.
+
 ### The withdrawal beat
 
 The one claim on this stand that has to be *performed* rather than described: the data's owner
