@@ -448,6 +448,43 @@ recording the half-finished state as the thing to go back to. `--rollback` refus
 a file — restoring the state a stand is already in is not a rollback — and deliberately does not
 rewrite one, because the file is the record of where to go back *to*.
 
+### Did it start WORKING, as opposed to attesting correctly?
+
+```bash
+APP_BASE=… APP_USER=… PASS_FILE=… MP_ORG=… MP_DEPLOYMENT=… node harness/check-grounded.js
+… MP_WAIT_MIN=30 node harness/check-grounded.js          # how long to allow (default 30)
+… MP_HOST_SSH=user@host node harness/check-grounded.js   # also read the gate's verdicts
+```
+
+`mount-datasets.js` proves a window did not break the attestation. On the 2026-11-24 window
+everything it checks was green — the digest did not move, it still matched what the listing
+declares, the hostname served the bundle — while **the two cards that window had just mounted were
+invisible to the agent**. Mounting a dataset only puts it in the bundle. What turns it into
+something the agent can answer about is the grounding Job, and that Job is not collected into
+evidence, has no status the cloud will report from outside a published space, and legitimately
+takes a long time: `wait_for` gives the API 15 minutes before it gives up, and the pod then
+restarts with up to 6 minutes of backoff. Twenty-two minutes of silence is indistinguishable from
+failure unless you know that.
+
+So this is the other half, and deliberately a separate script with a separate verdict. Three
+facts, in the order they become true:
+
+1. the agent's own API answers at all;
+2. every mounted card is a registered data source under the id the grounding Job derives from the
+   dataset name — **and the system message names it**, which is the independent second signal,
+   because `ensure_prompt` rewrites that message from the bindings at the end of the run. One
+   signal can lie; two agreeing is what told us the Job had not finished rather than that the
+   source list was stale;
+3. the gate has logged an `allowed` verdict for each mounted card since the window — the only
+   thing that says data is really being served rather than merely registered. That log belongs to
+   the dataset's owner and not to the deploying organisation, so there is no API call for it;
+   give `MP_HOST_SSH` and it is read over ssh, or it reports itself unchecked and prints the query.
+
+**A failure here is not a reason to roll back**, and the script says so in its own output.
+Rollback is for an attestation failure — a digest that moved, a workload that is down — where the
+stand is not serving what it claims to serve. A slow or failed grounding is diagnosed with the
+stand up and the data it was already serving still flowing.
+
 The one check none of this can do for you is the gate's own verdict: the access log belongs to the
 dataset's owner, not to the deploying organisation. The script prints the SQL to run against the
 marketplace's PostgreSQL, and an `allowed` row there is the only thing that says a clinic is
