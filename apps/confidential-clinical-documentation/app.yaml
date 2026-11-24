@@ -369,9 +369,18 @@ resources:
 # in those words, and so does the `corpusGating` output.
 #
 # Not required. A deployment with nothing attached is the ordinary case, not a
-# broken one. The binding lives in a Secret, so the attested render is the same
-# either way — which is what lets one declared digest describe a gated deployment
-# and an ungated one alike.
+# broken one, and the binding lives in a Secret so that THIS chart renders the
+# same objects either way.
+#
+# **That does not make one digest cover both, and an earlier version of this
+# listing claimed it did.** The chart's render is unchanged, but the MARKETPLACE
+# adds the gatekeeper egress sidecar's own objects to a deployment that mounts
+# gated data — a ConfigMap, a Deployment, a Service and the Secret holding its
+# client certificate — and the cloud digests those too. Measured here: nine
+# resources ungated, THIRTEEN gated. So a gated deployment and an ungated one
+# cannot share a digest, and the number this listing declares has to be the gated
+# one, because the gated read is the only thing the slot exists for
+# (`apps/tests/gated_digest.py`, SUP-900). See `evidence` below.
 # ---------------------------------------------------------------------------
 data:
   slots:
@@ -750,52 +759,96 @@ outputs:
     value: "https://{{ params.hostname }}/.well-known/swarm-evidence"
 
 evidence:
-  # ---------------------------------------------------------------------------
-  # Measured, not derived.
+  # evidence-configuration: gated
   #
-  # Two deployments of this version on the gpu-blueprints cloud, 2026-11-24 —
-  # `ccd-873g` and `ccd-873h`, two hostnames in two namespaces, the same
-  # parameters — published byte-identical signed snapshots and this digest. NINE
-  # resources in each, across both components: two Deployments, two Services,
-  # two ConfigMaps, two Secrets and the Ingress, each with a JWS. The two
-  # PersistentVolumeClaims the charts render are not in the snapshot; the cloud
-  # does not digest them. Both deployments also reported the same `renderDigest`
-  # (`3f99aff5…`) before either was published, which is the cheaper half of the
-  # same claim.
+  # ---------------------------------------------------------------------------
+  # Measured, not derived, and it describes the GATED configuration. The line
+  # above says so where `apps/tests/gated_digest.py` can read it, because nothing
+  # in the value itself does (SUP-900).
+  #
+  # WHY THE GATED ONE. A digest is a property of a render, and a deployment that
+  # mounts gated data does not render what an ungated one does: the marketplace
+  # adds the gatekeeper egress sidecar's own objects to it. Measured on this
+  # listing rather than assumed —
+  #
+  #   ungated    9 resources   2 ConfigMaps, 2 Deployments, 2 Services,
+  #                            2 Secrets, 1 Ingress
+  #   gated     13 resources   the same nine plus
+  #                            ConfigMap  …-gatekeeper-egress
+  #                            Deployment …-gatekeeper-egress
+  #                            Service    …-gatekeeper-egress
+  #                            Secret     …-gatekeeper-identity
+  #
+  # — so the two cannot share a number, and an ungated one declared here is a
+  # number the gate would compare against a gated deployment and reject. The only
+  # thing this listing's data slot exists for is the gated read.
+  #
+  # An UNGATED deployment of this listing therefore does not match the number on
+  # its own listing page. That is the cheaper half of the trade: nothing refuses
+  # an ungated deployment, because there is no gate in front of it to do the
+  # refusing. The ungated number, recorded in passing because it was measured
+  # first and is a real property of this version:
+  # `6de9bf95f9b782c952df151f7749c6fd7313db88f253f923c9ea1660f097415d`
+  # (`ccd-873g` / `ccd-873h`, render digest `3f99aff5…`).
+  #
+  # THE PAIR. Two deployments of this version on the gpu-blueprints cloud,
+  # 2026-11-24 — `ccd-873j` and `ccd-873k`, two hostnames in two namespaces, the
+  # same parameters, each with the `acme-engineering-handbook` dataset attached
+  # to the `transcripts` slot — published byte-identical signed snapshots of
+  # thirteen resources, each with a JWS, and this digest. Both also reported the
+  # same `renderDigest` (`2935e71a…`) before either was published, which is the
+  # cheaper half of the same claim and differs from the ungated render's
+  # (`3f99aff5…`) exactly as the object counts above say it must.
   #
   # **The pair is strictly sequential here, and that is a property of the cloud
   # rather than of the listing.** The marketplace refuses a second GPU deployment
-  # outright — this epic's cloud has one card — so G was created, published,
-  # measured and removed before H was created. Byte-identity across a
+  # outright — this epic's cloud has one card — so J was created, published,
+  # measured and removed before K was created. Byte-identity across a
   # delete-and-recreate is a stronger claim than across two concurrent
   # namespaces, not a weaker one.
   #
+  # The handbook is a DOCUMENT corpus, not a transcript one, and that is
+  # deliberate: it is this catalogue's only real gated ClickHouse dataset and the
+  # one Confidential RAG measures against. What it contains reaches no attested
+  # object — the four extra objects come from the sidecar, and the binding itself
+  # is in a Secret the platform lifts out — so the digest is the same for any
+  # gated `clickhouse-http/v1` dataset. What it does mean is that a console
+  # pointed at it reports the gate's verdict and then finds no `transcripts`
+  # table, which is a consumer-side mismatch and not a digest one. A tenant
+  # attaches a transcript corpus of their own.
+  #
   # Measured twice over, once per version that changed something the cloud
   # digests: `fc830ac6…` on the first version (`ccd-873d` / `ccd-873e`,
-  # 2026-11-23, byte-identical and never declared) and this one after the review
-  # of PR #112 found that a `single-speaker` verdict told the model "treat it as
-  # dictation by the clinician" — a claim one cluster cannot support. The fix
-  # moved the image, the image digest is a field of a Deployment in the snapshot,
-  # so the snapshot digest moved with it. That is the ordinary reason a digest
-  # moves, and the reason it is measured again rather than carried forward.
+  # 2026-11-23, ungated, byte-identical, never declared) and this after the
+  # review of PR #112 found that a `single-speaker` verdict told the model "treat
+  # it as dictation by the clinician" — a claim one cluster cannot support. The
+  # fix moved the image, the image digest is a field of a Deployment in the
+  # snapshot, so the snapshot digest moved with it. That is the ordinary reason a
+  # digest moves, and the reason it is measured again rather than carried forward.
   #
-  # There is one configuration rather than two. The transcript corpus binding is
-  # in a Secret, whose values the platform lifts out before the snapshot is
-  # taken, so the digest below describes a gated deployment of this version and
-  # an ungated one alike — which is what the gate needs in order to admit either.
-  # `charts/tests/run.sh` checks that property directly against two goldens.
+  # One honest limit on the pair: neither deployment was watched until the gate
+  # ADMITTED the handbook. Admission is not instant — `ccd-873k` still read
+  # `refused` with `502 from …-gatekeeper-egress` when it was deleted, which is
+  # the same eight-minute window Confidential RAG records — and the card was
+  # released rather than held to watch it flip. What that does not affect is the
+  # digest: the sidecar's four objects are in the snapshot from publication,
+  # whatever the gate later decides. What it does mean is that
+  # `matchesExpected: true` against THIS number has not been observed on a
+  # deployment created from a listing that declares it; the first deployment to
+  # do so will be the one that confirms it.
   #
   # ---------------------------------------------------------------------------
   # THE REFERENCE PARAMETER SET it was measured with. The digest holds for this
   # one, and a deployment that answers differently attests its own — expected,
   # not tampering.
   #
-  #   hostname               ccd-873g / ccd-873h .conf-apps.superprotocol.dev
+  #   hostname               ccd-873j / ccd-873k .conf-apps.superprotocol.dev
   #                          (excluded from the snapshot — see `exclude` below)
   #   attribution            measured
   #   audioRetentionHours    24
+  #   data slot transcripts  acme-engineering-handbook   (gated)
   #
-  # Both of those reach attested objects: they are env values on the scribe
+  # The first two reach attested objects: they are env values on the scribe
   # container, which is where a verifier most wants to read them — the floors a
   # speaker label had to clear, and how long a recording is kept. Choosing
   # `strict`, `dictation-only` or another retention attests a different digest,
@@ -804,8 +857,8 @@ evidence:
   # The three generated credentials — `accessPassword`, `sessionKey`,
   # `inferenceKey` — are in Secrets, which the platform lifts out before the
   # snapshot is taken, so they reach no attested object and are not part of this
-  # set.
-  expectedDigest: "6de9bf95f9b782c952df151f7749c6fd7313db88f253f923c9ea1660f097415d"
+  # set. Nor is WHICH gated dataset is attached, per the paragraph above.
+  expectedDigest: "224b1a29cb860f8caf3ceef6893b947d62709c8adb3ca4b11efc39b19c76ad83"
   # ---------------------------------------------------------------------------
   # The hostname is the one field that differs between two deployments of this
   # version, and excluding it is what makes the digest a property of the version

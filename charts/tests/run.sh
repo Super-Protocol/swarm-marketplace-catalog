@@ -2379,10 +2379,19 @@ else
   fail "charts/tests/evidence_drift.py confidential-clinical-documentation"
 fi
 
-# The property this listing's `expectedDigest` rests on, and the one no other check here would
-# notice: attaching a transcript corpus must change nothing the cloud digests. Everything the
-# binding touches is in the Secret, whose values are lifted out before the snapshot is taken.
-note "attaching a transcript corpus changes nothing outside the Secret"
+# What attaching a transcript corpus does to THIS CHART's render: nothing outside the Secret,
+# whose values the platform lifts out before the snapshot is taken.
+#
+# Note carefully what this does NOT say, because the first version of this listing said it and
+# it was wrong: it does not mean a gated deployment and an ungated one attest the same digest.
+# The MARKETPLACE adds the gatekeeper egress sidecar's own objects to a gated deployment — a
+# ConfigMap, a Deployment, a Service and the Secret holding its client certificate — and the
+# cloud digests those too (nine resources ungated, thirteen gated, measured on real
+# deployments). The listing declares the gated number; `apps/tests/gated_digest.py` is what
+# refuses an ungated one. This check is about the chart alone, and it is still worth having:
+# if a patch ever put a connection into an env value, a ConfigMap or an argument, the binding
+# would reach an attested object and no two gated deployments would agree either.
+note "attaching a transcript corpus changes nothing in this chart outside the Secret"
 if diff -u <(strip_secret charts/tests/golden/clinical-doc-stack.yaml) \
             <(strip_secret charts/tests/golden/clinical-doc-stack-bound.yaml) >/tmp/ccd-bind-diff.$$ 2>&1; then
   pass "bound and unbound renders differ in the Secret alone"
