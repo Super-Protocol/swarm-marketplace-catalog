@@ -112,7 +112,11 @@ function verdicts(names) {
   const problems = [];
 
   say('1. the agent API answers');
-  const cookie = await connect();
+  // `let`, because a round that cannot be read takes a fresh session below. It
+  // was a `const`, and so the recovery path threw `Assignment to constant
+  // variable` the first time a 502 reached it — the error handler failing on its
+  // own first use, which is what comes of adding one without exercising it.
+  let cookie = await connect();
   say('   signed in');
 
   say(`2. every mounted card is registered and named in the system message (up to ${WAIT_MS / 60000} min)`);
