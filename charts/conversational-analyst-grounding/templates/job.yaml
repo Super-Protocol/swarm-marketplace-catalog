@@ -75,7 +75,7 @@ metadata:
   # left the Job untouched (CTO review of #94). The model's own key is deliberately NOT in the
   # key: a regenerated credential is not a reason to re-ground, and the Secret's own checksum
   # is not this object's business.
-  name: analyst-grounding-{{ printf "%s|%s|%s|%s|%s" (.Values.bindings | toString) .Values.model.name .Values.model.id (.Values.tenantAlias | toString) (omit .Values.model "apiKey" | toYaml) | sha256sum | trunc 8 }}
+  name: analyst-grounding-{{ printf "%s|%s|%s|%s|%s|%s" (.Values.bindings | toString) .Values.model.name .Values.model.id (.Values.tenantAlias | toString) (.Values.adminUsername | toString) (omit .Values.model "apiKey" | toYaml) | sha256sum | trunc 8 }}
 spec:
   # This waits on the rest of the deployment from inside, so a retry here means the wait
   # itself ran out — rare, and worth a few more attempts before the Job is called failed.
@@ -115,6 +115,14 @@ spec:
             # position: the Job used to take whichever organisation Keycloak listed first.
             - name: TENANT_ALIAS
               value: {{ required "tenantAlias must be set: the alias of the organisation whose tenant this deployment's data and model belong to" .Values.tenantAlias | quote }}
+            # The subject the Job acts as, by name. Required rather than
+            # defaulted: a wrong or missing administrator makes every
+            # model-registry call fail with a permission error on an
+            # installation-scoped resource, and the Job then never reaches the
+            # data sources — which reads from outside as a deployment that
+            # mounted its datasets and grounded none of them (SUP-909).
+            - name: ADMIN_USERNAME
+              value: {{ required "adminUsername must be set: the username the identity bootstrap created the installation administrator under, which is the subject this Job acts as" .Values.adminUsername | quote }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:

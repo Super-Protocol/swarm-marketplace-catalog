@@ -299,6 +299,20 @@ fi
 # A one-line mitigation that a list in the definition can silently drop, for a pre-auth RCE
 # against the component every sign-in goes through. See the file.
 note "the analyst's Keycloak runs with the Base64 intrinsic off"
+# The grounding Job acts as the installation administrator, selected by NAME.
+# It used to take whichever member Keycloak listed first, and the model registry
+# is installation-scoped — so a tenant with a second member who sorted ahead of
+# the administrator made the Job fail its first call and ground nothing, with
+# nothing in the evidence or the cloud's API to say so (SUP-909). The case the
+# test covers is that one: two members, administrator second.
+note "the grounding Job acts as the administrator, by name"
+if output=$(python3 charts/tests/grounding_subject.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/grounding_subject.py"
+fi
+
 if output=$(python3 charts/tests/keycloak_jvm.py conversational-analyst \
       charts/tests/cases/analyst-identity.yaml); then
   printf '%s\n' "$output"
