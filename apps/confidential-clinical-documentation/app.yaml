@@ -751,38 +751,61 @@ outputs:
 
 evidence:
   # ---------------------------------------------------------------------------
-  # NOT DECLARED YET, DELIBERATELY — and this listing is not publishable until it
-  # is. Read this before filling it in.
+  # Measured, not derived.
   #
-  # `fc830ac66fd23ce9adf6f453f9b6e7fbc07eb3628d8262a4469c72538f9af75f` was
-  # measured from two real deployments of this listing (`ccd-873d` / `ccd-873e`,
-  # two hostnames in two namespaces, the same parameters, byte-identical signed
-  # snapshots of nine resources). It is **stale**: the review of PR #112 found
-  # that a `single-speaker` verdict told the model "treat it as dictation by the
-  # clinician", which a one-cluster result cannot support, and fixing that
-  # changed the application image. The image digest is a field of a Deployment in
-  # the snapshot, so the snapshot digest moved with it.
+  # Two deployments of this version on the gpu-blueprints cloud, 2026-11-24 —
+  # `ccd-873g` and `ccd-873h`, two hostnames in two namespaces, the same
+  # parameters — published byte-identical signed snapshots and this digest. NINE
+  # resources in each, across both components: two Deployments, two Services,
+  # two ConfigMaps, two Secrets and the Ingress, each with a JWS. The two
+  # PersistentVolumeClaims the charts render are not in the snapshot; the cloud
+  # does not digest them. Both deployments also reported the same `renderDigest`
+  # (`3f99aff5…`) before either was published, which is the cheaper half of the
+  # same claim.
   #
-  # It is left EMPTY rather than carried forward, because a declared digest that
-  # does not match is worse than none: the gatekeeper refuses every deployment
-  # whose evidence disagrees with the listing, so a stale value here would make
-  # each gated dataset unreadable while the listing page claimed otherwise.
-  # `apps/tests/gated_digest.py` fails on this, which is that check working.
+  # **The pair is strictly sequential here, and that is a property of the cloud
+  # rather than of the listing.** The marketplace refuses a second GPU deployment
+  # outright — this epic's cloud has one card — so G was created, published,
+  # measured and removed before H was created. Byte-identity across a
+  # delete-and-recreate is a stronger claim than across two concurrent
+  # namespaces, not a weaker one.
   #
-  # TO FILL IT IN: deploy this version twice on a cloud with a free
-  # `NVIDIA H100 NVL` or `NVIDIA H200 NVL`, publish each, read
-  # `GET <cloud>/api/v1/deployments/<id>/evidence`, confirm the two digests are
-  # identical, and declare it. The reference parameter set is `attribution:
-  # measured` and `audioRetentionHours: 24` — both reach env values on the scribe
-  # container, so another choice attests its own digest, which is correct rather
-  # than unfortunate. The three generated credentials are in Secrets, which the
-  # platform lifts out before the snapshot is taken, so they are not part of it.
+  # Measured twice over, once per version that changed something the cloud
+  # digests: `fc830ac6…` on the first version (`ccd-873d` / `ccd-873e`,
+  # 2026-11-23, byte-identical and never declared) and this one after the review
+  # of PR #112 found that a `single-speaker` verdict told the model "treat it as
+  # dictation by the clinician" — a claim one cluster cannot support. The fix
+  # moved the image, the image digest is a field of a Deployment in the snapshot,
+  # so the snapshot digest moved with it. That is the ordinary reason a digest
+  # moves, and the reason it is measured again rather than carried forward.
   #
-  # Blocked at the time of writing: the `gpu-blueprints` cloud reports no free
-  # GPU of an accepted type — zero cluster spaces, zero deployments, cloud
-  # connected, token valid, `select-gpu` answering `{"gpuModel": null}`. The card
-  # is not in its inventory, which is not something this listing can fix.
+  # There is one configuration rather than two. The transcript corpus binding is
+  # in a Secret, whose values the platform lifts out before the snapshot is
+  # taken, so the digest below describes a gated deployment of this version and
+  # an ungated one alike — which is what the gate needs in order to admit either.
+  # `charts/tests/run.sh` checks that property directly against two goldens.
+  #
   # ---------------------------------------------------------------------------
+  # THE REFERENCE PARAMETER SET it was measured with. The digest holds for this
+  # one, and a deployment that answers differently attests its own — expected,
+  # not tampering.
+  #
+  #   hostname               ccd-873g / ccd-873h .conf-apps.superprotocol.dev
+  #                          (excluded from the snapshot — see `exclude` below)
+  #   attribution            measured
+  #   audioRetentionHours    24
+  #
+  # Both of those reach attested objects: they are env values on the scribe
+  # container, which is where a verifier most wants to read them — the floors a
+  # speaker label had to clear, and how long a recording is kept. Choosing
+  # `strict`, `dictation-only` or another retention attests a different digest,
+  # and that is correct rather than unfortunate.
+  #
+  # The three generated credentials — `accessPassword`, `sessionKey`,
+  # `inferenceKey` — are in Secrets, which the platform lifts out before the
+  # snapshot is taken, so they reach no attested object and are not part of this
+  # set.
+  expectedDigest: "6de9bf95f9b782c952df151f7749c6fd7313db88f253f923c9ea1660f097415d"
   # ---------------------------------------------------------------------------
   # The hostname is the one field that differs between two deployments of this
   # version, and excluding it is what makes the digest a property of the version
