@@ -318,13 +318,15 @@ datasets:
   #
   # Why they exist as cards of their own rather than as a view on the three
   # above. A deployment grounds every card it mounts into ONE tenant — the
-  # deployment's `primaryOrgAlias` — so an identifying card mounted beside an
-  # outside researcher's work is readable by whichever tenant that happens to be.
-  # The boundary that actually holds is therefore not "who may query which
-  # source" but WHAT IS IN the source: a release that contains no record cannot
-  # be made to yield one, whoever queries it and with whatever tool. The three
-  # cards below are that release, one per practice, each owned and granted by the
-  # practice whose arithmetic it is.
+  # deployment's `primaryOrgAlias` — so what a deployment mounts is a decision
+  # about that tenant, and the way to give two parties different data is to give
+  # them different deployments.
+  #
+  # A release contains no record, so it cannot yield one, whoever queries it and
+  # with whatever tool. That is a property of the data rather than of a
+  # configuration, which is what makes it worth publishing as a card of its own:
+  # one per practice, each owned and granted by the practice whose arithmetic it
+  # is.
   #
   # Each is roughly a thirtieth of its identifying sibling, carries no patient,
   # encounter, clinician or free text, and is still read through the gate — so a

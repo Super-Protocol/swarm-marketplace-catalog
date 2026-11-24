@@ -77,9 +77,9 @@ it collects every value in the source that identifies a patient, a specimen, a p
 clinician and fails if any of them appears anywhere in the release.
 
 Why a second card and not a view: a deployment grounds every card it mounts into one tenant, so
-mounting an identifying card beside an outside researcher's work makes it readable by whichever
-tenant that happens to be. What holds is not who may query a source but what is *in* it — a
-release containing no record cannot be made to yield one.
+what a deployment mounts is a decision about that tenant, and two parties who should hold
+different data need different deployments. A release contains no record, so it cannot yield one —
+a property of the data rather than of a configuration.
 
 Small cells are **not** suppressed: a single examination in one month at one site appears as a
 count of one. A real release would round or suppress it. This one does not, because the property

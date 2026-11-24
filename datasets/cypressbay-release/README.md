@@ -15,14 +15,13 @@ are the other two. The shared material is written here once and applies to all t
 ## Why a release and not a view
 
 A deployment grounds **every** card it mounts into **one** tenant: the deployment's
-`primaryOrgAlias`. So an identifying card mounted beside an outside researcher's work is readable
-by whichever tenant that happens to be, and there is no tool or role restriction in the analyst
-that would stop it — a tenant holding a source can run raw SQL against it.
+`primaryOrgAlias`. So what a deployment mounts is a decision about that tenant, and the way to
+give two parties different data is to give them different deployments.
 
-The boundary that actually holds is therefore not *who may query a source* but **what is in the
-source**. A release that contains no record cannot be made to yield one, whoever queries it and
-with whatever tool. That is the whole argument for these three cards, and it is the reason the
-researcher on the Latica stand holds releases and nothing else.
+**A release contains no record, so it cannot yield one, whoever queries it and with whatever
+tool.** That is the reason these cards exist, and the reason a researcher holds releases and
+nothing else. It is a property of the data rather than of a configuration: nothing has to be set
+correctly for it to stay true, and it does not depend on anybody anticipating the question.
 
 ## What is in it
 
