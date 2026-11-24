@@ -53,6 +53,39 @@ the stand.
 what the right answer is for each, and — for a network with incomplete capture — states the
 rates. None of it is committed, because every number in it is a property of the seed.
 
+## The aggregate release
+
+Each network publishes two cards. One is its record — identifying, granted to the operator it
+chose. The other is a release of **counts**, granted separately, and it is what an outside
+researcher is given:
+
+```bash
+./generate.py  --network ridgeline --out ./out/ridgeline
+./aggregate.py --network ridgeline --corpus ./out/ridgeline --out ./out/ridgeline-release
+```
+
+Four tables, at network × site × month × procedure type: examinations performed, how they were
+captured, bowel preparation including **what was never scored**, adenoma and advanced-histology
+detection, cecal intubation, withdrawal time, surveillance intervals recorded, and the state of
+every recall that fell due. Roughly a thirtieth the size of the corpus it counts.
+
+There is no patient, no encounter, no medical record number, no procedure identifier, no free
+text out of a chart — and **no clinician**. A per-endoscopist detection rate is the most
+sensitive figure this corpus could yield and no question the release exists to answer needs it.
+`aggregate.assert_no_record` checks that against the corpus rather than against this paragraph:
+it collects every value in the source that identifies a patient, a specimen, a procedure or a
+clinician and fails if any of them appears anywhere in the release.
+
+Why a second card and not a view: a deployment grounds every card it mounts into one tenant, so
+what a deployment mounts is a decision about that tenant, and two parties who should hold
+different data need different deployments. A release contains no record, so it cannot yield one —
+a property of the data rather than of a configuration.
+
+Small cells are **not** suppressed: a single examination in one month at one site appears as a
+count of one. A real release would round or suppress it. This one does not, because the property
+the self-test checks is that the researcher's pooled figures come out *exactly* equal to the
+figures computed from the records, and suppression would make them only approximately equal.
+
 ## Checking it
 
 ```bash
@@ -68,10 +101,17 @@ which is what keeps the already-published Cypress Bay corpus byte for byte what 
 three take genuinely different paths through the generator and one network's pass says nothing
 about the others.
 
-`selftest.py` reads each network's own `data.yaml` and fails if the card does not declare exactly
-the tables and columns the schema creates. That check is the reason this runs in CI: a column
-renamed here and not in the card does not fail a render or a lint, it silently teaches the
-consuming agent something false.
+`selftest.py` reads each network's own `data.yaml` — both of them, the identifying card and the
+release card — and fails if either does not declare exactly the tables and columns its schema
+creates. That check is the reason this runs in CI: a column renamed here and not in the card does
+not fail a render or a lint, it silently teaches the consuming agent something false. It matters
+more for the release card than for the other one, because the researcher who reads it holds no
+identifying card to fall back on.
+
+At `--published-size` the self-test also asserts the exact pooled adenoma-detection table the
+stand answered on 2026-11-24 — 1825/4788, 1396/3052, 664/2365 with 1,587 excluded — computed from
+the release's counts and again from the records, and requires the two to be equal and to equal
+those figures. If a change here moves them, the stand's published numbers moved with it.
 
 ## The one rule that is easy to break
 

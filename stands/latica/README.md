@@ -354,31 +354,324 @@ re-render. It does not survive a re-created deployment, which is why `restore-st
 step 0 — before the semantic model, because that is imported per tenant and `adminTenants` only
 lists a tenant the realm already has.
 
-### Showing that a tenant cannot see another's data
+### The three aggregate releases, and why the researcher holds only those
+
+Each clinic publishes two cards. One is its record. The other is a release of **counts** — by
+site, by month, by procedure type — with no patient, encounter, medical record number or clinician
+in it: `cypressbay-release`, `harborpoint-release`, `ridgeline-release`, built by
+`datasets/gi-network-generator/aggregate.py`, each about a thirtieth the size of the record it
+counts.
+
+They exist because of what a release IS, and that is the whole argument for them: a card that
+contains counts and no records cannot produce a record, whoever reads it and however they ask. That
+is a property of the data, which needs nothing configured to stay true, and it is a stronger thing
+to be able to say than any statement about who may query what.
+
+A deployment also grounds **every** card it mounts into **one** tenant — the deployment's
+`primaryOrgAlias`, which on this stand is `cypress-bay` and is an attested parameter — so what a
+deployment mounts is a decision about that tenant. The analyst stand therefore mounts
+`cypressbay-digestive-health`, which is Cypress Bay's own record in Cypress Bay's own tenant, plus
+the three releases, and **not** Harbor Point's or Ridgeline's identifying cards. When those two
+came off, the grounding Job's revoke loop did its job:
+
+```
+  unregistered source harborpoint_gastroenterology, which is no longer bound
+  unregistered source ridgeline_endoscopy, which is no longer bound
+```
+
+and the clinic persona that had been listed those sources an hour earlier now gets
+*"The data source `harborpoint_gastroenterology` does not exist for this tenant… that data source
+contains only aggregate releases"*.
+
+**Say this plainly and never imply otherwise:** the three clinics' *aggregates* are also visible in
+the Cypress Bay tenant, because one deployment grounds everything into one tenant. That is
+acceptable for counts a clinic chose to release, and it is why the releases exist and the records of
+the other two networks do not. A listing cannot yet route one binding to one tenant and another to
+another; until it can, "what this deployment mounts" and "what this tenant holds" are the same
+sentence, and the way to give two parties different data is to give them different deployments.
+
+### Giving the researcher tenant its sources
+
+Nothing grounds a tenant the listing cannot declare, so this does what `ground.py` does, for that
+tenant only:
+
+```bash
+APP_BASE=https://researcher-stand.conf-apps.superprotocol.dev \
+APP_USER=gate-rehearsal@local.test PASS_FILE=./researcher-stand.administratorPassword \
+  node harness/researcher-sources.js --check     # read-only
+  node harness/researcher-sources.js             # register, catalogue, annotate
+```
+
+It registers each release against **the provider the grounding Job already made**
+(`existingProviderId`), so the researcher reads the release through the same gated connection the
+deployment already holds and no credential is read, written or printed anywhere — the script never
+holds one. Then it
+reads each catalogue and annotates every table and column from the dataset card on disk, because
+the catalogue gives names and types while the card gives the meanings: what `prep_missing` is for,
+that `withdrawal_minutes_total` is divided by `withdrawal_recorded` and never by `procedures`, and
+each practice's own coverage caveat. 4 tables and 58 annotations per release. Finally it writes a
+`Domain part` system message scoped to that tenant, whose one job is to say that `network_key` is
+the same key in all three sources.
+
+Reusing another tenant's provider needs `installation.data-source-providers.write`, which an
+organisation administrator does **not** hold — so this is something the **operator** does for the
+researcher, and not something the researcher could do for itself. Worth knowing when writing about
+the arrangement: which party performed an action is part of what the arrangement is.
+
+### The question that only works pooled
+
+Asked as the researcher, on the researcher's own deployment, against three aggregate sources and
+nothing else:
+
+> Compare the adenoma detection rate between the three clinical networks, for screening
+> colonoscopies with an adequate bowel preparation, between 2024-01-01 and 2026-11-30. Break it
+> down by network and by site. Say how many examinations each network had to exclude and why.
+
+| Network | adenoma / adequate prep | rate | excluded, missing prep |
+|---|---|---|---|
+| Cypress Bay Digestive Health | 865 / 2,274 | 38.0% | 0 |
+| Harbor Point Gastroenterology | 665 / 1,438 | 46.2% | 0 |
+| Ridgeline Endoscopy Partners | 292 / 1,105 | 26.4% | **758** |
+
+plus a row per site for all nineteen sites, and the exclusions named: Ridgeline lost 758 of 2,241
+structured examinations to missing preparation scores and another 378 to inadequate preparation.
+
+**Two things about those numbers are worth saying out loud.**
+
+They are *exactly* what the release contains — `selftest.py` recomputes this question from the
+records and from the counts and requires the two to be equal, at the published size, on every
+network.
+
+And they are not the figures the same question produced an hour earlier against the identifying
+cards, which were 1,825/4,788 = 38.1%, 1,396/3,052 = 45.7% and 664/2,365 = 28.1% with 1,587
+excluded. The data did not change — **the denominator did**. Against the records the agent read
+"screening colonoscopies" as every colonoscopy type; against the release, where `procedure_type` is
+a published dimension with its five values written down, it read it as screening colonoscopies.
+Asked to widen it back out, the researcher reproduces the earlier table to the row:
+
+| Network | adenoma / adequate prep | rate | excluded |
+|---|---|---|---|
+| Cypress Bay Digestive Health | 1,825 / 4,788 | 38.1% | 0 |
+| Harbor Point Gastroenterology | 1,396 / 3,052 | 45.7% | 0 |
+| Ridgeline Endoscopy Partners | 664 / 2,365 | 28.1% | 1,587 |
+
+The ranking is the same either way. The lesson is the demonstrable one: a card that names its
+dimensions gets a narrower and more defensible denominator than a card that leaves them implicit,
+and the only way anybody noticed is that both were asked.
+
+### The researcher's own deployment
+
+The researcher does not share the analyst stand. It has a deployment of its own:
+
+| | |
+|---|---|
+| Host | `https://researcher-stand.conf-apps.superprotocol.dev` |
+| Listing | Conversational Analyst **5.0.2**, the same version the stand runs |
+| Mounts | `cypressbay-release`, `harborpoint-release`, `ridgeline-release` — **and nothing else** |
+| Tenants | `research-network` (first, so it is the one the grounding Job grounds), `latica`, `pharma` |
+| Digest | `d391cb85…bf3a`, `matchesExpected: true` |
+
+**The digest is the same number the stand's deployment attests**, and that is worth knowing before
+anybody plans a listing bump around it. Created with a different hostname and a different FIRST
+organisation, this deployment measured the same 63 resources and the same digest as the stand:
+the hostname is excluded by design — the gate binds evidence to the host it fetched it from — and
+the organisation list rides in a Secret, and every Secret in the collected snapshot carries
+metadata only. So a parameter is attested when it reaches a manifest, and these two do not. The
+set that DOES move it is the pinned charts, which is why a grounding-chart bump needs a fresh
+measurement and a hostname does not.
+
+Why a second deployment at all, rather than a fourth tenant on the stand: a deployment grounds
+every card it mounts into one tenant, and what a deployment mounts is therefore a decision about
+that tenant. Giving two parties different data means giving them different deployments. Here the
+researcher's namespace contains no identifying card — so "the researcher holds no clinic record"
+is a fact about what exists rather than a claim about a boundary, and it needs nothing configured
+to stay true.
+
+Bringing it up, in the order the pieces depend on each other:
+
+```bash
+# 1. create it with the three releases bound from the start — a dataset change on a
+#    published space costs a window, and the measured digest only includes the egress
+#    sidecar's objects when a gateway-mode card is attached
+# 2. the deployment's own administrator password is a deployment OUTPUT, not a parameter:
+#    a sensitive parameter reads back empty by design
+# 3. then the realm, and then its tenant's sources
+APP_BASE=https://researcher-stand.conf-apps.superprotocol.dev \
+APP_USER=gate-rehearsal@local.test PASS_FILE=./researcher-stand.administratorPassword \
+  node harness/researcher-sources.js
+```
+
+**Expect to finish the realm bootstrap by hand on a fresh deployment.** On 2026-11-24 this one
+came up with the realm half-built: the bootstrap Job's loop over the `identity` service account's
+realm-management roles answered `401` on one of the eight, `manage-realm` was the one it lost, and
+the rest of the script then uses that service account's own token — so `organizationsEnabled` was
+never set, no organisation was ever created, and the grounding Job sat on
+`waiting for the identity provider: HTTP Error 403` and then `404`. The Job restarted and failed
+the same way each time, so it does not recover on its own. Two scripts close it:
+
+```bash
+KC_BASE=https://researcher-stand.conf-apps.superprotocol.dev/auth \
+KC_PASS_FILE=./researcher-stand.internalSecret \
+  node harness/fix-service-account.js          # CHECK=1 first; reports what is missing
+… ADMIN_USERNAME=gate-rehearsal@local.test APP_HOST=researcher-stand.conf-apps.superprotocol.dev \
+  ORGANIZATIONS='Clinical Research Network|research-network
+Latica|latica
+Pharma Partner|pharma' node harness/finish-bootstrap.js
+```
+
+`finish-bootstrap.js` mirrors the chart from "realm administrator" onward and is a
+create-unless-present at every step, so it is safe on a realm that is partly built and safe to run
+twice. The administrator's membership of the FIRST organisation is the step that decides which
+tenant gets grounded, so it is the one to check afterwards rather than assume.
+
+Two more things that cost time here and are worth writing down. `KC_ADMIN_PASSWORD` and
+`ADMIN_PASSWORD` live in `analyst-keycloak-bootstrap-env`, which is readable with the namespace
+kubeconfig; the realm's `internalSecret` is **not** published as a deployment output, so there is
+no other way to reach Keycloak's own admin API. And the `administratorPassword` this deployment
+published as an output **did not match** the password the realm was seeded with — the one in the
+Secret is the one that works. An operator following the console alone could not sign in to this
+deployment.
+
+### The cross-source semantic model
+
+The researcher's tenant carries a model over the three releases:
+`researcher-configuration-backup/semantic-model.clinical-research-network.json`, six datasets,
+three dimensions, **nine bindings**, twelve metrics.
+
+The piece this issue asked for is the `network` dimension, bound to **all three** releases on
+`network_key` — one dimension, three bindings — so "by network" means the same thing in each of
+them and the member keys line up. `clinical_site` is bound three times too, each through its own
+release's sites table, so a site has a name rather than an id whichever network it is in.
+
+**What it cannot do is as useful to know as what it can.** A metric belongs to one dataset, a
+dataset belongs to one `datasourceId`, and each release is a separate gated connection whose reader
+cannot read the other two — so there is no single pooled metric to define, and a derived one does
+not help: the model's own validator says *"a derived metric stays within one dataset"*. Each
+network therefore has its own `*_adenoma_detection_rate` and a pooled comparison is three modelled
+queries put side by side. Asked for one chart over all three, the agent reported the limitation
+itself: *"The model does not support querying across multiple datasets in one semantic query."*
+
+What the model buys, given that, is the thing hand-written SQL could not: a **reusable query**
+behind the answer. Before it, the same question was answered from raw SQL and the agent declined
+to chart it — *"a chart block with inline data must include a reusable query, which is not
+applicable here because the figures came from hand-written SQL over raw tables rather than a
+modelled semantic dataset"*. After it, the answer comes back as a chart with a live semantic query
+attached, one per network, and the figures are the same: 38.0% / 46.2% / 26.4%.
+
+### The withdrawal beat
+
+The one claim on this stand that has to be *performed* rather than described: the data's owner
+controls access. So it is performed by the owner, on the owner's own account.
+
+The clinics each have a marketplace persona now. They did not before: the catalogue seeder gives
+each publishing organisation one member, `owner@<slug>.seed.local`, which is a synthetic session
+user with no password — so the three clinics owned their cards and no human could act for them.
+
+```bash
+CLINIC_PASS_DIR=. node harness/clinic-admins.js            # sign up, then print the SQL
+CLINIC_PASS_DIR=. node harness/clinic-admins.js --verify    # sign in as each, list its orgs
+```
+
+The script creates the users through the ordinary sign-up and then **prints** the one row per
+clinic that makes each of them an `admin` of it. Printed rather than executed: inviting somebody
+into an organisation requires already being an admin of it, the only existing member cannot sign
+in, so there is no bootstrap path — and a privileged write on somebody else's database should be
+read before it is run. Take a backup first; the one this was tested against is
+`backup-20261124T223326Z-pre-clinic-admins.sql`.
+
+Then the beat itself, with the researcher's deployment reading all three releases:
+
+```bash
+OWNER=harbor-point-admin@local.test PASS_FILE=./harbor-point-admin.password \
+DATASET=harborpoint-release GRANTEE=big-pharma \
+  node harness/withdraw-grant.js            # show the allow-lists
+  node harness/withdraw-grant.js --revoke   # drop the grantee, record what was there
+  node harness/withdraw-grant.js --restore  # put back exactly what was recorded
+```
+
+Measured on 2026-11-24, as `harbor-point-admin@local.test`:
+
+| | |
+|---|---|
+| before | organisations `["aivo","big-pharma","harbor-point-gastro"]` |
+| after `--revoke` | organisations `["aivo","harbor-point-gastro"]` |
+
+and the researcher, asked the same question it had just answered:
+
+| Network | screening with adequate prep | among them, with adenoma |
+|---|---|---|
+| Cypress Bay Digestive Health | 2,274 | 865 |
+| Harbor Point Gastroenterology | **Cannot be read — access is denied** | **Cannot be read — access is denied** |
+| Ridgeline Endoscopy Partners | 1,105 | 292 |
+
+quoting the gate's own words back: *"Conversational Analyst is not allowed to read Harbor Point
+Gastroenterology — Colonoscopy Quality Release (aggregate counts)"*. The other two networks are
+untouched, which is the half of the beat that makes the point: one owner withdrew, and the
+comparison carried on without them.
+
+The clinic's own journal, which is where the owner sees it:
+
+```
+harborpoint-release | allowed | …
+harborpoint-release | denied  | Conversational Analyst is not allowed to read Harbor Point …
+harborpoint-release | allowed | …     ← after --restore
+```
+
+**Do not read a latency off those timestamps.** The ordering is right and the verdicts are right,
+but the recorded times lag the actions by a minute or two in both directions — the marketplace
+collects these events from the gatekeeper rather than being handed each one as it happens, and in
+this run a `denied` was recorded after the restore had already been applied. What the journal
+proves is that the refusal happened and why; how fast it happened is a different measurement and
+this is not it.
+
+After `--restore` the same question answers 1,438 / 665 again.
+
+### What a tenant is given, and what it is not
 
 ```bash
 APP_BASE=https://analyst-stand.conf-apps.superprotocol.dev \
 PEOPLE='[{"label":"Clinic","user":"gate-rehearsal@local.test","passFile":"./stand.administratorPassword"},
          {"label":"Researcher","user":"research-network-admin@local.test","passFile":"./researcher.password"}]' \
+PROBE_PROVIDERS='[{"label":"a clinic connection","id":"<provider id>"}]' \
   node harness/tenant-isolation.js
 ```
 
-Four questions per tenant, and the fourth is the one that matters: given the **datasource id** of a
-clinic's own records — not a secret, it is derived from the published dataset name — can this tenant
-read that source's tables? On 2026-11-24 the installation administrator, who is in Cypress Bay, saw
-all three sources and 11 tables each; the researcher saw `[]`, `[]`, `[]`, was refused the model
-registry outright for want of an installation permission, and got **0 tables for every clinic id it
-was handed**.
+The questions this answers are about **what a tenant holds**, and that is the claim to make. On
+2026-11-24:
 
-Worth being exact about the shape of that last one: the query **succeeds and returns nothing**
-rather than erroring, because the schema catalogue is tenant-scoped. The boundary is real; the
-wording should not imply a refusal where there is an empty answer.
+- a tenant is listed only its own data sources. The installation administrator, who is in Cypress
+  Bay, saw that tenant's sources; the researcher saw its own three and nothing else.
+- a lookup **by id** of a source the tenant does not hold returns nothing, because the schema
+  catalogue is tenant-scoped. Be exact about the shape of it: the query **succeeds and returns an
+  empty list** rather than erroring. The wording should not imply a refusal where there is an empty
+  answer.
+- the model registry is refused outright — `Insufficient permissions` — because registering a model
+  is an installation permission and an organisation administrator does not hold one.
+- a tenant cannot read the **connection configuration** of a source, its own included:
+  `adminDataSourceProvider` is refused with `Insufficient permissions`. That is the one question
+  here about a secret rather than about a row, and `tenant-isolation.js` asks it without printing
+  what it is asking after.
+- a tenant cannot point itself at a connection belonging to another tenant. Reusing an existing
+  provider through `adminRegisterDataSource` requires
+  `installation.data-source-providers.write`, which an organisation administrator does not hold —
+  which is why `researcher-sources.js` is something the **operator** runs for the researcher and
+  not something the researcher could run for itself.
 
-The demo-level version of the same thing is to ask the researcher's own agent. Handed both the id
-and the SQL it answers:
+The demo-level version is to ask the researcher's own agent. Handed both the id and the SQL it
+answers:
 
 > The data source `cypressbay_digestive_health` was not found for your tenant
 > (`01253f79-…`).
+
+**What to say about the arrangement, and nothing beyond it.** The researcher runs on **its own
+deployment, which mounts only the clinics' three aggregate releases** — counts, with no patient,
+encounter or clinician in them. That is the arrangement to describe, because it makes the claim a
+fact about what exists in a namespace rather than a claim about a boundary. Describe what each
+party holds. Do not extend it into a statement about what a party could otherwise reach.
+
+The researcher's user on the ANALYST stand's realm is **disabled** (2026-11-24), and should stay
+that way: the researcher's seat is its own deployment, and two places to sign in as the same party
+is one place too many to keep true.
 
 ### Putting a clinic corpus on the server, and its reader beside it
 
@@ -417,10 +710,15 @@ still reports `allowed` and the card still looks connected. That cost SUP-905 a 
 `harness/check-readers.js` is what proves the isolation rather than asserting it:
 
 ```bash
-READERS='[{"own":"hpg_","user":"hpg_reader","password":"…"},{"own":"rep_","user":"rep_reader","password":"…"}]'
+READERS='[{"own":"hpg_","user":"hpg_reader","password":"…"},
+          {"own":"rep_release_","user":"rep_release_reader","password":"…","tables":4}]'
 docker exec -e VAULT_KEY="$KEY" -e STORAGE_ROW="$ROW" -e READERS="$READERS" \
   marketplace-api-1 node /tmp/check-readers.js
 ```
+
+`tables` is how many tables that dataset has — eleven for a clinic corpus, which is the default,
+and four for an aggregate release. A reader that can see one table more than its own dataset has is
+the failure this check exists for, so the number is a parameter and not an assumption.
 
 Per reader: it reads its own tables; it is refused **every other dataset on the server**, derived
 from `system.tables` rather than from a list somebody has to remember to extend, and probed at a
@@ -444,7 +742,17 @@ MP_ORG=<deploying org id> MP_DEPLOYMENT=<deployment id> \
 MP_ORG=… MP_DEPLOYMENT=… node harness/mount-datasets.js --verify    # the checks alone, read-only
 MP_ORG=… MP_DEPLOYMENT=… node harness/mount-datasets.js --apply --i-have-a-go
 MP_ORG=… MP_DEPLOYMENT=… node harness/mount-datasets.js --rollback --i-have-a-go
+
+# on this cloud, which predates SUP-383, the window has to be held open twice —
+# see "A window does not restart anything on a cloud without SUP-383"
+MP_ORG=… MP_DEPLOYMENT=… node harness/mount-datasets.js --apply --pause --i-have-a-go
+MP_ORG=… MP_DEPLOYMENT=… node harness/mount-datasets.js --resume --pause --i-have-a-go
+MP_ORG=… MP_DEPLOYMENT=… node harness/mount-datasets.js --resume --i-have-a-go
 ```
+
+`MP_DATASETS` is the comma-separated set to mount and it replaces what is there, so it names every
+card the deployment should end up with, not the ones being added. The set as of 2026-11-24 is
+`cypressbay-digestive-health,cypressbay-release,harborpoint-release,ridgeline-release`.
 
 **This is the one script here that takes the stand off the air.** A gated dataset reaches a
 deployment three ways at once and `reconfigure` writes all three — `datasetsJson`, from which the
@@ -591,23 +899,50 @@ Two consequences, both of which cost SUP-909 a day:
 
 The fix, until that cloud is upgraded (**SUP-916**, and read it first — the upgrade moves the
 evidence digest and would cost the stand its gated access), is to delete the two objects by hand
-while the space is unpublished, which changes nothing that is collected:
+inside the window, which changes nothing that is collected. `mount-datasets.js` holds the window
+open for it, in two places, because **the two moments are not interchangeable**:
 
 ```bash
-# the tenant kubeconfig, from the cloud's own GraphQL as the space's owner
-#   { clusterSpaces(filter:{id:{eq:"<space id>"}}) { nodes { kubeConfig } } }
+# the namespace kubeconfig, from the cloud's own GraphQL as the space's owner
+CLOUD_USER=… CLOUD_PASSWORD=… node harness/space-kubeconfig.js                   # list the spaces
+CLOUD_USER=… CLOUD_PASSWORD=… SPACE_ID=… node harness/space-kubeconfig.js > ./stand.kubeconfig
 export KUBECONFIG=./stand.kubeconfig
 
-kubectl delete pod -l app.kubernetes.io/name=swarm-gatekeeper-egress   # rereads the ConfigMap
-kubectl exec <new pod> -- nginx -T   # confirm a listen line per mounted dataset
-kubectl delete job <analyst-grounding-…>                               # so the reconfigure recreates it
+# 1. open the window: unpublish and stop
+MP_ORG=… MP_DEPLOYMENT=… MP_DATASETS=… node harness/mount-datasets.js --apply --pause --i-have-a-go
+kubectl get job
+kubectl delete job <analyst-grounding-…>        # BEFORE the reconfigure: an unchanged spec is
+                                                # re-applied as a no-op, so a Failed Job under the
+                                                # same name would never be retried
+
+# 2. reconfigure and stop again
+MP_ORG=… MP_DEPLOYMENT=… MP_DATASETS=… node harness/mount-datasets.js --resume --pause --i-have-a-go
+kubectl delete pod -l app.kubernetes.io/name=swarm-gatekeeper-egress    # AFTER it: only now does
+kubectl exec <new pod> -- nginx -T | grep -E 'listen|proxy_pass'        # the ConfigMap declare the
+                                                                        # new set
+# 3. publish and check the digest
+MP_ORG=… MP_DEPLOYMENT=… MP_DATASETS=… node harness/mount-datasets.js --resume --i-have-a-go
 ```
 
-Then reconfigure with the **same** parameters and cards, publish, and check. Pods and Jobs are not in
-the evidence snapshot and the ReplicaSet recreates the pod from an unchanged spec, so the measured
-digest does not move — verify that with `--verify` rather than assuming it. `exec` and `delete` are
-both refused while the space is published, which is the freeze working; do this between the unpublish
-and the reconfigure, and write down what you ran.
+**The ordering is the whole point and it is easy to get backwards.** The sidecar mounts
+`nginx.conf` by `subPath`, so only a new pod reads a new config — and the ConfigMap only gains the
+new card's `listen` line at the reconfigure. Restart the pod before that and it comes back with
+exactly the listeners it had, which is a window spent for nothing; after the publish, `delete` is
+refused. There is one moment, and `--resume --pause` is it.
+
+Pods and Jobs are not in the evidence snapshot and the ReplicaSet recreates the pod from an
+unchanged spec, so the measured digest does not move — the 2026-11-24 window that mounted three
+release cards and unmounted two identifying ones left `d391cb85…bf3a` exactly where it was. Verify
+it rather than assuming it. Delete `./stand.kubeconfig` when the window closes: it is a credential
+for a live namespace, and `.gitignore` only keeps it out of the repository.
+
+**Expect the first grounding attempt to fail, and let it.** The gate's admitted-client document is
+pushed on a timer, so for a minute or so after the publish the gate answers `denied — this
+deployment is not currently allowed to read any data here`, the catalogue read fails terminally,
+and `wait_for` spends its fifteen minutes polling a dead job. The pod then restarts under
+`OnFailure` and the second attempt works: on 2026-11-24 the Job went `Complete` at the second
+attempt, 4 sources, 4 tables each. One restart on a grounding Job is normal. Six were normal too —
+what is NOT normal is `BackoffLimitExceeded`.
 
 The one check none of this can do for you is the gate's own verdict: the access log belongs to the
 dataset's owner, not to the deploying organisation. The script prints the SQL to run against the

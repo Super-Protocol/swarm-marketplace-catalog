@@ -313,6 +313,108 @@ datasets:
       provenanceScore: 100
       provenanceAttested: true
 
+  # The three AGGREGATE RELEASES: the same three practices, publishing counts
+  # instead of records.
+  #
+  # Why they exist as cards of their own rather than as a view on the three
+  # above. A deployment grounds every card it mounts into ONE tenant — the
+  # deployment's `primaryOrgAlias` — so what a deployment mounts is a decision
+  # about that tenant, and the way to give two parties different data is to give
+  # them different deployments.
+  #
+  # A release contains no record, so it cannot yield one, whoever queries it and
+  # with whatever tool. That is a property of the data rather than of a
+  # configuration, which is what makes it worth publishing as a card of its own:
+  # one per practice, each owned and granted by the practice whose arithmetic it
+  # is.
+  #
+  # Each is roughly a thirtieth of its identifying sibling, carries no patient,
+  # encounter, clinician or free text, and is still read through the gate — so a
+  # practice can withdraw its grant and watch the questions stop being answered
+  # for it while the other two keep serving. See `stands/latica/README.md`.
+  - path: datasets/cypressbay-release
+    organization: cypress-bay-digestive
+    sourceType: clickhouse
+    visibility: restricted
+    price: Not for sale
+    expectedUpdate: On demand (regenerated from the committed generator)
+    usageTerms: >-
+      Synthetic demonstration data. No real patient is represented and no record is derived from
+      one, so it may be loaded, queried and shown freely. It is not a substitute for real data in
+      any evaluation that claims clinical validity.
+    # Its own reader, granted SELECT on the four `cbdh_release_*` tables and nothing
+    # else — in particular not on this practice's identifying tables, which live
+    # in the same database under their own prefix behind their own account.
+    secrets:
+      readUser: ${CYPRESSBAY_RELEASE_READ_USER}
+      readPassword: ${CYPRESSBAY_RELEASE_READ_PASSWORD}
+    statistics:
+      sizeBytes: "666158"
+      recordCount: "7308"
+      format: ClickHouse MergeTree
+      # Complete capture, so every denominator in it is whole and every rate
+      # computed from it needs no caveat about what was dropped.
+      usability: 9.8
+      provenanceScore: 100
+      provenanceAttested: true
+
+  - path: datasets/harborpoint-release
+    organization: harbor-point-gastro
+    sourceType: clickhouse
+    visibility: restricted
+    price: Not for sale
+    expectedUpdate: On demand (regenerated from the committed generator)
+    usageTerms: >-
+      Synthetic demonstration data. No real patient is represented and no record is derived from
+      one, so it may be loaded, queried and shown freely. It is not a substitute for real data in
+      any evaluation that claims clinical validity.
+    # Its own reader, granted SELECT on the four `hpg_release_*` tables and nothing
+    # else — in particular not on this practice's identifying tables, which live
+    # in the same database under their own prefix behind their own account.
+    secrets:
+      readUser: ${HARBORPOINT_RELEASE_READ_USER}
+      readPassword: ${HARBORPOINT_RELEASE_READ_PASSWORD}
+    statistics:
+      sizeBytes: "157934"
+      recordCount: "1708"
+      format: ClickHouse MergeTree
+      # Complete within its period, and the period is the caveat: the record
+      # begins in June 2022, which `first_procedure_date` publishes on the same
+      # row as the counts so a comparison reaching further back can say so.
+      usability: 9.6
+      provenanceScore: 100
+      provenanceAttested: true
+
+  - path: datasets/ridgeline-release
+    organization: ridgeline-endoscopy
+    sourceType: clickhouse
+    visibility: restricted
+    price: Not for sale
+    expectedUpdate: On demand (regenerated from the committed generator)
+    usageTerms: >-
+      Synthetic demonstration data. No real patient is represented and no record is derived from
+      one, so it may be loaded, queried and shown freely. It is not a substitute for real data in
+      any evaluation that claims clinical validity.
+    # Its own reader, granted SELECT on the four `rep_release_*` tables and nothing
+    # else — in particular not on this practice's identifying tables, which live
+    # in the same database under their own prefix behind their own account.
+    secrets:
+      readUser: ${RIDGELINE_RELEASE_READ_USER}
+      readPassword: ${RIDGELINE_RELEASE_READ_PASSWORD}
+    statistics:
+      sizeBytes: "1136481"
+      recordCount: "12415"
+      format: ClickHouse MergeTree
+      # Higher than the 7.4 on this practice's identifying card, and that is not
+      # a contradiction: the gaps are the same gaps, but here each one is
+      # published AS A COUNT — `prep_missing`, `prep_free_text`,
+      # `surveillance_eligible` beside `interval_recorded` — so a rate computed
+      # from this release can state its own exclusions instead of hiding them.
+      # A measured gap is more usable than an unmeasured one.
+      usability: 8.6
+      provenanceScore: 100
+      provenanceAttested: true
+
   - path: datasets/autonomyx-inflammation-monitoring
     organization: reset-health
     sourceType: clickhouse
@@ -427,6 +529,26 @@ grants:
     organizations: [harbor-point-gastro, big-pharma, aivo]
     apps: [conversational-analyst]
   - dataset: ridgeline-endoscopy
+    organizations: [ridgeline-endoscopy, big-pharma, aivo]
+    apps: [conversational-analyst]
+
+  # The three aggregate releases, each granted by its own practice. The grantee
+  # list is the same shape as the identifying cards' above and for the same
+  # reason: `big-pharma` is the organisation that owns the demonstration
+  # deployment, and `isBindable` wants a grant to the CONSUMING organisation.
+  #
+  # These three are the grants the withdrawal beat moves. A practice that wants
+  # out of the pooled comparison drops `big-pharma` from its own release grant;
+  # the gate stops admitting that card within half a minute, the question is
+  # answered from the other two, and the journal shows where the data stopped.
+  # Its identifying card is not involved and its own operator keeps reading it.
+  - dataset: cypressbay-release
+    organizations: [cypress-bay-digestive, big-pharma, aivo]
+    apps: [conversational-analyst]
+  - dataset: harborpoint-release
+    organizations: [harbor-point-gastro, big-pharma, aivo]
+    apps: [conversational-analyst]
+  - dataset: ridgeline-release
     organizations: [ridgeline-endoscopy, big-pharma, aivo]
     apps: [conversational-analyst]
 
