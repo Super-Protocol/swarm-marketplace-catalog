@@ -313,6 +313,73 @@ commands above name, the `*-runs.json` / `*-signals.json` / `autopilot-*.id` the
 beside itself, the screenshots, the generated corpus and the receiver's own state are all
 ignored.
 
+### The fourth tenant, and why it is made by hand
+
+The stand has four organisations and the listing can only declare three.
+`organizations` in the definition is a fixed three-entry list patched by numeric index — the
+specification's patch paths are dot-notation with numeric indices, so a definition cannot append
+to a list — and a reconfigure re-renders the version a deployment was *created* from, so a new
+listing version reaches only new deployments. The researcher tenant is therefore created directly
+in Keycloak:
+
+```bash
+KC_BASE=https://analyst-stand.conf-apps.superprotocol.dev/auth \
+KC_PASS_FILE=./stand.internalSecret \
+APP_HOST=analyst-stand.conf-apps.superprotocol.dev \
+RESEARCHER_PASS_FILE=./researcher.password \
+  node harness/researcher-tenant.js            # idempotent
+  node harness/researcher-tenant.js --check    # read-only
+```
+
+`KC_PASS_FILE` is the realm administrator's password, which is the deployment's generated
+`internalSecret` — the listing wires `keycloak.auth.adminPassword` to it.
+
+**What makes this honest rather than a shortcut.** The tenant list is **not in the signed
+snapshot**: every Secret in the published evidence carries metadata only, no `data`, including
+`analyst-keycloak-bootstrap-env` where the three declared organisations ride. So the three tenants
+the stand already shows are not attested either, and a fourth created here is no less attested
+than they are. Say that plainly in anything written for a viewer — what the snapshot vouches for
+is the code; what enforces the tenant boundary is the running Keycloak.
+
+The script mirrors `bootstrap-job.yaml` step for step — the organisation with one domain under the
+stand's own host (Keycloak refuses an organisation with no domain and answers 400 without
+explaining), the `/org/{orgId}` group with its `admins` and `members` children, and a member — with
+one deliberate difference. The bootstrap adds the installation administrator to the **first**
+organisation only, so a fourth created to match would be empty and nobody could sign into it. The
+researcher gets its **own** user instead, which is also the correct boundary: it must not be a
+member of any clinic organisation, and the script **refuses to finish if it is**.
+
+The bootstrap Job only ever adds organisations and never prunes, so this one survives every
+re-render. It does not survive a re-created deployment, which is why `restore-stand.js` runs it as
+step 0 — before the semantic model, because that is imported per tenant and `adminTenants` only
+lists a tenant the realm already has.
+
+### Showing that a tenant cannot see another's data
+
+```bash
+APP_BASE=https://analyst-stand.conf-apps.superprotocol.dev \
+PEOPLE='[{"label":"Clinic","user":"gate-rehearsal@local.test","passFile":"./stand.administratorPassword"},
+         {"label":"Researcher","user":"research-network-admin@local.test","passFile":"./researcher.password"}]' \
+  node harness/tenant-isolation.js
+```
+
+Four questions per tenant, and the fourth is the one that matters: given the **datasource id** of a
+clinic's own records — not a secret, it is derived from the published dataset name — can this tenant
+read that source's tables? On 2026-11-24 the installation administrator, who is in Cypress Bay, saw
+all three sources and 11 tables each; the researcher saw `[]`, `[]`, `[]`, was refused the model
+registry outright for want of an installation permission, and got **0 tables for every clinic id it
+was handed**.
+
+Worth being exact about the shape of that last one: the query **succeeds and returns nothing**
+rather than erroring, because the schema catalogue is tenant-scoped. The boundary is real; the
+wording should not imply a refusal where there is an empty answer.
+
+The demo-level version of the same thing is to ask the researcher's own agent. Handed both the id
+and the SQL it answers:
+
+> The data source `cypressbay_digestive_health` was not found for your tenant
+> (`01253f79-…`).
+
 ### Putting a clinic corpus on the server, and its reader beside it
 
 Before a card can be mounted it has to have data behind it and an account that can read exactly

@@ -16,7 +16,15 @@
 //
 //   APP_BASE=https://<the rebuilt stand> APP_USER=… PASS_FILE=… \
 //   IN=../configuration-backup CONFIRM_TARGET=<the same APP_BASE> \
+//   KC_BASE=https://<the rebuilt stand>/auth KC_PASS_FILE=./stand.internalSecret \
+//   APP_HOST=<the stand host> RESEARCHER_PASS_FILE=./researcher.password \
 //   node harness/restore-stand.js
+//
+// The `KC_*` / `APP_HOST` / `RESEARCHER_PASS_FILE` group is for step 0, the
+// researcher tenant: the listing can only declare three organisations, so the
+// fourth is created by hand and a rebuild starts without it. Leave them unset and
+// the restore still runs, and says loudly that the stand it produced has three
+// tenants rather than four.
 //
 // `CONFIRM_TARGET` must repeat `APP_BASE` exactly, and the stand this export
 // was taken FROM is refused by name: on 2026-11-23 its owner configured it by
@@ -24,6 +32,7 @@
 // that needs `ALLOW_LIVE_STAND=yes` and a reason you can defend.
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const { signIn, graphql } = require('./applogin');
 
 const FROZEN = 'analyst-stand.conf-apps.superprotocol.dev';
@@ -79,6 +88,34 @@ const ITEM_FIELDS = ['title', 'description', 'type', 'visibility', 'visualizatio
   const manifest = read(dir, 'MANIFEST.json');
   console.log(`restoring an export of ${manifest.stand} taken ${manifest.exportedAt}`);
   console.log(`            into ${base}`);
+
+  // 0. The researcher tenant, FIRST and in Keycloak rather than in the app.
+  //    The Conversational Analyst listing carries exactly three organisation
+  //    slots — `organizations` is a fixed three-entry list patched by numeric
+  //    index — so the fourth has never been part of any render and a rebuilt
+  //    stand has no trace of it. It has to exist before step 1, because the
+  //    semantic model is imported per tenant and `adminTenants` only lists a
+  //    tenant the realm already has.
+  //
+  //    Skipped rather than fatal when the Keycloak environment is absent: a
+  //    restore that puts the model, the library and the dashboards back is worth
+  //    having even if somebody has not got the realm password to hand. It says
+  //    so rather than leaving the gap to be discovered.
+  if (process.env.KC_BASE && process.env.KC_PASS_FILE && process.env.APP_HOST) {
+    console.log('\n0. the researcher tenant');
+    const result = spawnSync(process.execPath, [path.join(__dirname, 'researcher-tenant.js')], {
+      stdio: 'inherit',
+      env: process.env,
+    });
+    if (result.status !== 0) {
+      throw new Error('researcher-tenant.js failed; the fourth tenant is not in place and step 1 would skip its model');
+    }
+  } else {
+    console.log('\n0. the researcher tenant: SKIPPED — KC_BASE, KC_PASS_FILE and APP_HOST were not all set.');
+    console.log('   This stand will have THREE tenants, not four. Run harness/researcher-tenant.js');
+    console.log('   before relying on anything that needs the researcher, and re-run this script so');
+    console.log('   its semantic model is imported too.');
+  }
 
   const cookie = await signIn({
     base,
