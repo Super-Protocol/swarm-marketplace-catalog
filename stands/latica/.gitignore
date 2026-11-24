@@ -14,6 +14,10 @@
 *.kubeconfig
 *.internalSecret
 *.adminpass
+# `researcher-tenant.js` and the clinic-persona script write the password they
+# generated next to themselves, because the operator needs it to log in as that
+# persona on screen. It is a credential like any other.
+*.password
 *.apiKey
 *.key
 grants.json
