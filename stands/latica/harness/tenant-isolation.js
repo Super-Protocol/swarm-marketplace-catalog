@@ -31,6 +31,17 @@ function required(name) {
   return value;
 }
 
+/** Can a tenant read the CREDENTIAL out of a connection it has been given, or
+ *  out of one it has not? `adminDataSourceProvider` returns `config`, and
+ *  `config` carries the password — so this is the one question in this file that
+ *  is about a secret rather than about a row.
+ *
+ *  `config` IS requested, because asking only for the harmless fields would test
+ *  nothing. It is reduced to two booleans the moment it arrives and the string
+ *  itself is never printed, logged or returned — a probe for a credential leak
+ *  must not be one. */
+const PROVIDER = 'query ($id: ID!) { adminDataSourceProvider(id: $id) { id name type config } }';
+
 const OWN = '{ datasources { id name } }';
 const ADMIN = `{
   adminDataSources(pagination: { limit: 50, offset: 0 }) { items { datasourceId tenantId } }
@@ -74,6 +85,27 @@ const TABLES = 'query ($id: String) { adminSchemaTables(datasourceId: $id) { tab
       const [tables, tablesError] = await ask(TABLES, { id });
       const names = tables ? tables.adminSchemaTables.map((t) => t.tableName) : null;
       console.log(`   tables of ${id.padEnd(30)}: ${names ? `${names.length} table(s)${names.length ? ' ' + JSON.stringify(names.slice(0, 3)) + '…' : ''}` : `refused — ${tablesError}`}`);
+    }
+
+    if (process.env.PROBE_PROVIDERS) {
+      for (const provider of JSON.parse(process.env.PROBE_PROVIDERS)) {
+        const [read, readError] = await ask(PROVIDER, { id: provider.id });
+        let verdict;
+        if (!read) {
+          verdict = `refused — ${readError}`;
+        } else {
+          const found = read.adminDataSourceProvider;
+          let password = false;
+          try {
+            password = Boolean(JSON.parse(found.config || '{}').password);
+          } catch {
+            password = /password/.test(found.config || '');
+          }
+          verdict = `!! READABLE as ${found.name}, password present = ${password}`;
+          if (password) process.exitCode = 1;
+        }
+        console.log(`   provider ${provider.label.padEnd(27)}: ${verdict}`);
+      }
     }
   }
   console.log('');

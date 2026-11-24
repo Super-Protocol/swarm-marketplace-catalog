@@ -6,6 +6,8 @@
 //   MP_ORG=… MP_DEPLOYMENT=… node mount-datasets.js                       # dry run, the default
 //   MP_ORG=… MP_DEPLOYMENT=… node mount-datasets.js --verify               # the post-window checks, alone
 //   MP_ORG=… MP_DEPLOYMENT=… node mount-datasets.js --apply --i-have-a-go
+//   MP_ORG=… MP_DEPLOYMENT=… node mount-datasets.js --apply --pause --i-have-a-go   # unpublish and stop
+//   MP_ORG=… MP_DEPLOYMENT=… node mount-datasets.js --resume --i-have-a-go          # finish that window
 //   MP_ORG=… MP_DEPLOYMENT=… node mount-datasets.js --rollback --i-have-a-go
 //
 // WHY THIS EXISTS AT ALL. A gated dataset reaches a deployment three ways at
@@ -77,6 +79,14 @@ const apply = process.argv.includes('--apply');
 const rollback = process.argv.includes('--rollback');
 const verify = process.argv.includes('--verify');
 const authorised = process.argv.includes('--i-have-a-go');
+// Stop after the unpublish and leave the window open, and later finish one that
+// was left open. Needed on a cloud from before SUP-383, where `unpublish` stops
+// no workloads: the egress sidecar has to be restarted and the previous
+// grounding Job deleted BY HAND between the unpublish and the reconfigure, and
+// both are refused while the space is published. See the stand README,
+// "A window does not restart anything on a cloud without SUP-383".
+const pause = process.argv.includes('--pause');
+const resume = process.argv.includes('--resume');
 
 function required(name) {
   const value = process.env[name];
@@ -328,7 +338,11 @@ async function reconfigure(parameters, datasets) {
   return body;
 }
 
-async function window(datasets, state) {
+/** The first half: take the stand off the air and leave it there.
+ *
+ *  Separate from the second half so a window can be held open while something is
+ *  done by hand inside it — which on a cloud without SUP-383 is not optional. */
+async function openWindow(state) {
   // The last line before anything moves. A rollback deliberately does NOT
   // rewrite it: the file is the record of where to go back TO, and a rollback
   // that overwrote it with the state it is trying to leave would destroy the
@@ -342,11 +356,28 @@ async function window(datasets, state) {
   const [unpublished] = await api('POST', `${BASE}/unpublish`);
   say('  ', unpublished);
   await waitFor('the space to unpublish', (live) => !live.published);
+}
 
+/** The middle: rewrite the parameter set and the mounted cards.
+ *
+ *  Its own step because on a cloud without SUP-383 the egress sidecar has to be
+ *  restarted BETWEEN this and the publish — the ConfigMap only gains the new
+ *  dataset's `listen` line here, and the pod only reads a new config when it is
+ *  a new pod, and `kubectl delete` is refused the moment the space is published
+ *  again. A restart before the reconfigure reads the OLD config and achieves
+ *  nothing, which is a mistake worth making impossible rather than documenting. */
+async function reconfigureStep(datasets, state) {
   const live = await deployment();
   await reconfigure(live.parameters, datasets);
   await waitFor('the workloads to come back', (live) => live.status === 'running', { tries: 60, every: 15000 });
+  if (!rollback) {
+    writeState(state, { reconfiguredAt: new Date().toISOString(), reconfiguredTo: datasets });
+    say('recovery state updated — the reconfigure is done, the publish is not');
+  }
+}
 
+/** The last step: put the stand back on the air and check what came back. */
+async function publishStep(state) {
   await dnsReady();
   const [published] = await api('POST', `${BASE}/publish`);
   say('publish', published);
@@ -364,6 +395,16 @@ async function window(datasets, state) {
   }
 
   return { problems, final };
+}
+
+async function closeWindow(datasets, state) {
+  await reconfigureStep(datasets, state);
+  return publishStep(state);
+}
+
+async function window(datasets, state) {
+  await openWindow(state);
+  return closeWindow(datasets, state);
 }
 
 /** The post-window checks, run on their own.
@@ -418,8 +459,36 @@ async function verifyOnly(saved) {
     }
   }
 
+  // `--resume` finishes a window somebody opened with `--pause`. It needs that
+  // window's own baseline: the digest to compare against and the dataset list to
+  // go back to are from BEFORE the unpublish, and the live deployment no longer
+  // has either.
+  if (resume) {
+    if (!saved) {
+      throw new Error(
+        `no recovery state at ${path.basename(STATE)} — there is no open window to finish. `
+          + 'A window is opened with --apply --pause --i-have-a-go.',
+      );
+    }
+    if (saved.deploymentId !== DEPLOYMENT) {
+      throw new Error(`${path.basename(STATE)} records deployment ${saved.deploymentId}, not this one`);
+    }
+    if (saved.completedAt) {
+      throw new Error(
+        `the window recorded in ${path.basename(STATE)} finished at ${saved.completedAt} — there is `
+          + 'nothing to resume. Start a new one with --apply.',
+      );
+    }
+  }
+
   let state;
-  if (rollback) {
+  if (resume) {
+    state = saved;
+    say(
+      `resuming the window opened at ${state.recordedAt}`
+        + (state.reconfiguredAt ? ` — reconfigured at ${state.reconfiguredAt}, not yet published` : ''),
+    );
+  } else if (rollback) {
     state = saved;
     say(`rolling back to the state recorded at ${state.recordedAt}`);
   } else if (apply && saved && !saved.completedAt) {
@@ -441,7 +510,7 @@ async function verifyOnly(saved) {
   //
   // `--rollback` is deliberately exempt: a stand in that state is exactly when
   // you want to put it back.
-  if (apply && !rollback && state.matchesExpected !== true) {
+  if (apply && !rollback && !resume && state.matchesExpected !== true) {
     throw new Error(
       'this deployment does not match its declared digest BEFORE the window '
         + `(measured ${state.measuredDigest}, declared ${state.declaredDigest}) — the gate is `
@@ -458,13 +527,16 @@ async function verifyOnly(saved) {
   say('parameters: taken from the live deployment verbatim,', Object.keys(live.parameters).length, 'of them');
 
   if (!rollback) {
+    // Checked again on a resume, not only when the window was opened: a grant
+    // can be withdrawn while a window is open, and finding out from the gate
+    // after the publish costs another window.
     say('checking every card is published, gated and bindable before anything goes down');
     if (!(await checkCards(WANTED, { organizationId: ORG, appName: live.appName }))) {
       throw new Error('a card is not publishable into this deployment — nothing was touched');
     }
   }
 
-  if (!apply && !rollback) {
+  if (!apply && !rollback && !resume) {
     say('DRY RUN — nothing was written. Would send:');
     console.log(JSON.stringify({ parameters: live.parameters, datasets: target }, null, 1));
     say('re-run with --apply --i-have-a-go once the freeze is lifted for this window');
@@ -472,7 +544,70 @@ async function verifyOnly(saved) {
   }
   if (!authorised) throw new Error('refusing to move a frozen stand without --i-have-a-go');
 
-  const { problems, final } = await window(target, state);
+  // Held open on purpose. The stand is off the air from here until somebody runs
+  // `--resume`, so the message says that first and in those words: the operator
+  // who reads it is the only thing that will close the window.
+  /** What the operator has to do by hand, and when, on a cloud without SUP-383.
+   *
+   *  Two different lists, because the two moments are different: before the
+   *  reconfigure the ConfigMap still declares the OLD listeners, so a sidecar
+   *  restarted then comes back with exactly the listeners it had. The stale Job
+   *  is the one that can only be removed first — a reconfigure
+   *  server-side-applies the same spec as a no-op when the bindings have not
+   *  changed, so a Failed Job under an unchanged name is never retried. */
+  const byHand = (phase) => {
+    say('');
+    say('THE STAND IS OFF THE AIR AND THE WINDOW IS OPEN.');
+    say('');
+    say('On a cloud from before SUP-383 the unpublish stopped no workloads, so this part is');
+    say('by hand. `kubectl delete` works only while the space is unpublished.');
+    say('');
+    say('  CLOUD_USER=… CLOUD_PASSWORD=… SPACE_ID=… node space-kubeconfig.js > ./stand.kubeconfig');
+    say('  export KUBECONFIG=./stand.kubeconfig');
+    if (phase === 'unpublished') {
+      say('');
+      say('  # the previous grounding Job: a reconfigure re-applies an unchanged spec as a');
+      say('  # no-op, so a Failed one under the same name is never retried');
+      say('  kubectl get job');
+      say('  kubectl delete job <analyst-grounding-…>');
+      say('');
+      say('Then run the reconfigure and stop again, before the publish:');
+      say(`  node ${path.basename(__filename)} --resume --pause --i-have-a-go`);
+    } else {
+      say('');
+      say('  # the egress sidecar, NOW that the ConfigMap declares the new set. It mounts');
+      say('  # nginx.conf by subPath, so only a new pod reads a new config.');
+      say('  kubectl delete pod -l app.kubernetes.io/name=swarm-gatekeeper-egress');
+      say('  kubectl exec <new pod> -- nginx -T | grep -E "listen|proxy_pass"   # one per card');
+      say('');
+      say('Then publish and check the digest:');
+      say(`  node ${path.basename(__filename)} --resume --i-have-a-go`);
+    }
+    say('');
+    say('Or abandon the window and put the stand back as it was:');
+    say(`  node ${path.basename(__filename)} --rollback --i-have-a-go`);
+  };
+
+  if (pause && !rollback && !resume) {
+    await openWindow(state);
+    byHand('unpublished');
+    return;
+  }
+
+  let problems;
+  let final;
+  if (resume) {
+    if (!state.reconfiguredAt) {
+      await reconfigureStep(target, state);
+      if (pause) {
+        byHand('reconfigured');
+        return;
+      }
+    }
+    ({ problems, final } = await publishStep(state));
+  } else {
+    ({ problems, final } = await window(target, state));
+  }
 
   say('');
   say(`status=${final.status} published=${final.published}`);
