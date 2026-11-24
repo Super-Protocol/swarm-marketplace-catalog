@@ -36,6 +36,10 @@ autopilot-*.id
 booker-args*.json
 *.id
 *.meta
+# What `withdraw-grant.js` records before an owner revokes a grant: the two
+# allow-lists as they were, so the restore puts back the list that was there
+# rather than the list somebody retyped.
+.grant-*.json
 # The recovery state `mount-datasets.js` writes before it moves anything: the
 # live parameter set, which is not a secret but is a snapshot of one stand at
 # one moment and is worthless to anybody else.

@@ -396,8 +396,8 @@ Nothing grounds a tenant the listing cannot declare, so this does what `ground.p
 tenant only:
 
 ```bash
-APP_BASE=https://analyst-stand.conf-apps.superprotocol.dev \
-APP_USER=gate-rehearsal@local.test PASS_FILE=./stand.administratorPassword \
+APP_BASE=https://researcher-stand.conf-apps.superprotocol.dev \
+APP_USER=gate-rehearsal@local.test PASS_FILE=./researcher-stand.administratorPassword \
   node harness/researcher-sources.js --check     # read-only
   node harness/researcher-sources.js             # register, catalogue, annotate
 ```
@@ -420,7 +420,8 @@ the arrangement: which party performed an action is part of what the arrangement
 
 ### The question that only works pooled
 
-Asked as the researcher, against three aggregate sources and nothing else:
+Asked as the researcher, on the researcher's own deployment, against three aggregate sources and
+nothing else:
 
 > Compare the adenoma detection rate between the three clinical networks, for screening
 > colonoscopies with an adequate bowel preparation, between 2024-01-01 and 2026-11-30. Break it
@@ -457,6 +458,147 @@ Asked to widen it back out, the researcher reproduces the earlier table to the r
 The ranking is the same either way. The lesson is the demonstrable one: a card that names its
 dimensions gets a narrower and more defensible denominator than a card that leaves them implicit,
 and the only way anybody noticed is that both were asked.
+
+### The researcher's own deployment
+
+The researcher does not share the analyst stand. It has a deployment of its own:
+
+| | |
+|---|---|
+| Host | `https://researcher-stand.conf-apps.superprotocol.dev` |
+| Listing | Conversational Analyst **5.0.2**, the same version the stand runs |
+| Mounts | `cypressbay-release`, `harborpoint-release`, `ridgeline-release` — **and nothing else** |
+| Tenants | `research-network` (first, so it is the one the grounding Job grounds), `latica`, `pharma` |
+| Digest | `d391cb85…bf3a`, `matchesExpected: true` |
+
+**The digest is the same number the stand's deployment attests**, and that is worth knowing before
+anybody plans a listing bump around it. Created with a different hostname and a different FIRST
+organisation, this deployment measured the same 63 resources and the same digest as the stand:
+the hostname is excluded by design — the gate binds evidence to the host it fetched it from — and
+the organisation list rides in a Secret, and every Secret in the collected snapshot carries
+metadata only. So a parameter is attested when it reaches a manifest, and these two do not. The
+set that DOES move it is the pinned charts, which is why a grounding-chart bump needs a fresh
+measurement and a hostname does not.
+
+Why a second deployment at all, rather than a fourth tenant on the stand: a deployment grounds
+every card it mounts into one tenant, and what a deployment mounts is therefore a decision about
+that tenant. Giving two parties different data means giving them different deployments. Here the
+researcher's namespace contains no identifying card — so "the researcher holds no clinic record"
+is a fact about what exists rather than a claim about a boundary, and it needs nothing configured
+to stay true.
+
+Bringing it up, in the order the pieces depend on each other:
+
+```bash
+# 1. create it with the three releases bound from the start — a dataset change on a
+#    published space costs a window, and the measured digest only includes the egress
+#    sidecar's objects when a gateway-mode card is attached
+# 2. the deployment's own administrator password is a deployment OUTPUT, not a parameter:
+#    a sensitive parameter reads back empty by design
+# 3. then the realm, and then its tenant's sources
+APP_BASE=https://researcher-stand.conf-apps.superprotocol.dev \
+APP_USER=gate-rehearsal@local.test PASS_FILE=./researcher-stand.administratorPassword \
+  node harness/researcher-sources.js
+```
+
+**Expect to finish the realm bootstrap by hand on a fresh deployment.** On 2026-11-24 this one
+came up with the realm half-built: the bootstrap Job's loop over the `identity` service account's
+realm-management roles answered `401` on one of the eight, `manage-realm` was the one it lost, and
+the rest of the script then uses that service account's own token — so `organizationsEnabled` was
+never set, no organisation was ever created, and the grounding Job sat on
+`waiting for the identity provider: HTTP Error 403` and then `404`. The Job restarted and failed
+the same way each time, so it does not recover on its own. Two scripts close it:
+
+```bash
+KC_BASE=https://researcher-stand.conf-apps.superprotocol.dev/auth \
+KC_PASS_FILE=./researcher-stand.internalSecret \
+  node harness/fix-service-account.js          # CHECK=1 first; reports what is missing
+… ADMIN_USERNAME=gate-rehearsal@local.test APP_HOST=researcher-stand.conf-apps.superprotocol.dev \
+  ORGANIZATIONS='Clinical Research Network|research-network
+Latica|latica
+Pharma Partner|pharma' node harness/finish-bootstrap.js
+```
+
+`finish-bootstrap.js` mirrors the chart from "realm administrator" onward and is a
+create-unless-present at every step, so it is safe on a realm that is partly built and safe to run
+twice. The administrator's membership of the FIRST organisation is the step that decides which
+tenant gets grounded, so it is the one to check afterwards rather than assume.
+
+Two more things that cost time here and are worth writing down. `KC_ADMIN_PASSWORD` and
+`ADMIN_PASSWORD` live in `analyst-keycloak-bootstrap-env`, which is readable with the namespace
+kubeconfig; the realm's `internalSecret` is **not** published as a deployment output, so there is
+no other way to reach Keycloak's own admin API. And the `administratorPassword` this deployment
+published as an output **did not match** the password the realm was seeded with — the one in the
+Secret is the one that works. An operator following the console alone could not sign in to this
+deployment.
+
+### The withdrawal beat
+
+The one claim on this stand that has to be *performed* rather than described: the data's owner
+controls access. So it is performed by the owner, on the owner's own account.
+
+The clinics each have a marketplace persona now. They did not before: the catalogue seeder gives
+each publishing organisation one member, `owner@<slug>.seed.local`, which is a synthetic session
+user with no password — so the three clinics owned their cards and no human could act for them.
+
+```bash
+CLINIC_PASS_DIR=. node harness/clinic-admins.js            # sign up, then print the SQL
+CLINIC_PASS_DIR=. node harness/clinic-admins.js --verify    # sign in as each, list its orgs
+```
+
+The script creates the users through the ordinary sign-up and then **prints** the one row per
+clinic that makes each of them an `admin` of it. Printed rather than executed: inviting somebody
+into an organisation requires already being an admin of it, the only existing member cannot sign
+in, so there is no bootstrap path — and a privileged write on somebody else's database should be
+read before it is run. Take a backup first; the one this was tested against is
+`backup-20261124T223326Z-pre-clinic-admins.sql`.
+
+Then the beat itself, with the researcher's deployment reading all three releases:
+
+```bash
+OWNER=harbor-point-admin@local.test PASS_FILE=./harbor-point-admin.password \
+DATASET=harborpoint-release GRANTEE=big-pharma \
+  node harness/withdraw-grant.js            # show the allow-lists
+  node harness/withdraw-grant.js --revoke   # drop the grantee, record what was there
+  node harness/withdraw-grant.js --restore  # put back exactly what was recorded
+```
+
+Measured on 2026-11-24, as `harbor-point-admin@local.test`:
+
+| | |
+|---|---|
+| before | organisations `["aivo","big-pharma","harbor-point-gastro"]` |
+| after `--revoke` | organisations `["aivo","harbor-point-gastro"]` |
+
+and the researcher, asked the same question it had just answered:
+
+| Network | screening with adequate prep | among them, with adenoma |
+|---|---|---|
+| Cypress Bay Digestive Health | 2,274 | 865 |
+| Harbor Point Gastroenterology | **Cannot be read — access is denied** | **Cannot be read — access is denied** |
+| Ridgeline Endoscopy Partners | 1,105 | 292 |
+
+quoting the gate's own words back: *"Conversational Analyst is not allowed to read Harbor Point
+Gastroenterology — Colonoscopy Quality Release (aggregate counts)"*. The other two networks are
+untouched, which is the half of the beat that makes the point: one owner withdrew, and the
+comparison carried on without them.
+
+The clinic's own journal, which is where the owner sees it:
+
+```
+harborpoint-release | allowed | …
+harborpoint-release | denied  | Conversational Analyst is not allowed to read Harbor Point …
+harborpoint-release | allowed | …     ← after --restore
+```
+
+**Do not read a latency off those timestamps.** The ordering is right and the verdicts are right,
+but the recorded times lag the actions by a minute or two in both directions — the marketplace
+collects these events from the gatekeeper rather than being handed each one as it happens, and in
+this run a `denied` was recorded after the restore had already been applied. What the journal
+proves is that the refusal happened and why; how fast it happened is a different measurement and
+this is not it.
+
+After `--restore` the same question answers 1,438 / 665 again.
 
 ### What a tenant is given, and what it is not
 
@@ -495,13 +637,15 @@ answers:
 > The data source `cypressbay_digestive_health` was not found for your tenant
 > (`01253f79-…`).
 
-**What to say about the arrangement, and nothing beyond it.** The researcher is a separate
-organisation with its own user, its own data sources and its own system message, and it is given
-the three clinics' **aggregate releases** — counts, with no patient, encounter or clinician in
-them. Under SUP-909 the researcher is being moved onto **its own deployment, which mounts only
-those three releases**; that is the arrangement to describe, because it makes the claim a fact
-about what exists in a namespace rather than a claim about a boundary. Describe what each party
-holds. Do not extend it into a statement about what a party could otherwise reach.
+**What to say about the arrangement, and nothing beyond it.** The researcher runs on **its own
+deployment, which mounts only the clinics' three aggregate releases** — counts, with no patient,
+encounter or clinician in them. That is the arrangement to describe, because it makes the claim a
+fact about what exists in a namespace rather than a claim about a boundary. Describe what each
+party holds. Do not extend it into a statement about what a party could otherwise reach.
+
+The researcher's user on the ANALYST stand's realm is **disabled** (2026-11-24), and should stay
+that way: the researcher's seat is its own deployment, and two places to sign in as the same party
+is one place too many to keep true.
 
 ### Putting a clinic corpus on the server, and its reader beside it
 
