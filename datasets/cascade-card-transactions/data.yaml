@@ -1,0 +1,86 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: DataDefinition
+
+# ---------------------------------------------------------------------------
+# The transaction history `Confidential Transaction Model` was written against,
+# and the reason it is a ClickHouse table is the same platform constraint that
+# shapes every gated dataset here: the marketplace gatekeeper injects ClickHouse
+# credentials into each request it forwards and carries no other protocol.
+#
+# `retail-transactions` looks like this dataset on paper and is not it. Its
+# connection is a placeholder pointing at `ch.acme-data.internal`, it provides
+# `clickhouse-native/v1` — which that listing's slot does not accept — it is
+# `access.mode: direct`, and nothing is behind it. This one is real, gated, and
+# has rows.
+#
+# The columns are TabFormer's own spelling, so a deployment reading this dataset
+# answers nothing in the listing's "Your transactions" section. That is the
+# point of the choice: the column parameters exist for an institution whose
+# extract is spelled its own way, and a demonstration that must also explain a
+# column mapping demonstrates two things badly.
+# ---------------------------------------------------------------------------
+
+metadata:
+  name: cascade-card-transactions
+  title: Cascade Card Transactions
+  description: >-
+    Card-present and card-not-present authorisations from a mid-sized US card issuer — 320,176
+    transactions over 1,200 cardholders and 34 months, with merchant category, city, state and
+    postcode, entry mode and a fraud label on about two rows in a thousand. The columns carry
+    the public TabFormer corpus's own names, so a deployment of a transaction model reads it
+    without a column mapping. Published under the gate: the issuer hands out no database
+    credentials, and every read is admitted against the signed evidence the reading deployment
+    published.
+  category: finance
+  tags:
+    - transactions
+    - payments
+    - fraud
+    - foundation-model
+    - gated
+
+spec:
+  secrets:
+    - name: readUser
+      title: ClickHouse read-only user
+      description: >-
+        A user with SELECT on the one transaction table and nothing else, read-only, and
+        visible only from inside the stand's own subnet. The gate holds it; a consumer never
+        sees it.
+    - name: readPassword
+      title: ClickHouse read-only password
+
+  access:
+    # An authorisation history is the canonical thing an institution may not export, so the
+    # gate is the whole reason this card can be offered at all: the consumer is given a local
+    # address, every request through it is admitted against the evidence their deployment
+    # published, and access stops the moment that evidence stops matching what was approved.
+    mode: gateway
+
+  provides:
+    - interface: clickhouse-http/v1
+      connection:
+        static:
+          # The stand's own subnet, reachable by the gate and by nothing else — the NSG does
+          # not open 8123 to the internet. See README.md for which server this is.
+          host: 10.10.1.10
+          port: 8123
+          database: cascade_tx
+          username: "{{ secrets.readUser }}"
+          password: "{{ secrets.readPassword }}"
+          tls: false
+
+  # No `schema:` here, and it is a limitation of the specification rather than a
+  # choice. Four of this table's fourteen columns are `Merchant Name`,
+  # `Merchant City`, `Merchant State` and `Is Fraud?` — TabFormer's spelling,
+  # which the model's tokenizer reads — and `Use Chip` beside them. The
+  # specification's column-name pattern is `^[a-zA-Z_][a-zA-Z0-9_]*$`, so a
+  # space and a question mark cannot be declared at all. A schema naming only
+  # the nine declarable columns would describe a table that does not exist, and
+  # that is worse than describing none: a consumer would read it as the whole
+  # table. The columns are in README.md, in the generator, and in the
+  # `CREATE TABLE` the README carries.
+  #
+  # Nothing is lost in matching: `Confidential Transaction Model` declares its
+  # slot with no schema constraint, deliberately and for the same reason, so
+  # compatibility here is the interface and nothing else.

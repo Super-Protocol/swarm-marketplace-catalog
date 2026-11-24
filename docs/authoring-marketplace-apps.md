@@ -325,6 +325,14 @@ defaults fields no template writes. Deploy the version, read the evidence its de
 declare that value. Adding the block does not change the rendered manifests, so a digest measured on
 the version without it is valid for the version with it.
 
+**If the slot accepts an interface the gatekeeper can serve, the number has to be the GATED one**,
+measured with a `access.mode: gateway` dataset bound — a deployment that mounts gated data gains
+the egress sidecar's objects and the cloud digests them, so an ungated number is one no gated
+deployment can produce, and the gate compares the declared number against exactly those. Say which
+configuration it is with a `# evidence-configuration: gated` comment inside the `evidence` block;
+`apps/tests/gated_digest.py` reads it. The whole procedure, in the order the steps have to happen,
+is [measuring-a-gated-digest.md](measuring-a-gated-digest.md).
+
 `cli/evidence-preview.js <app> [datasets…]` renders the application twice, as two different consumers
 under two different hostnames in two different namespaces, and reports every field that differed.
 Those fields are the candidates for exclusion. It cannot tell you the digest to declare; it tells you

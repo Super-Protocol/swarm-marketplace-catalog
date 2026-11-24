@@ -355,6 +355,33 @@ evidence:
   # below is the no-gated-data configuration, which is what every deployment of
   # this listing is today; the first gated deployment has to re-measure and
   # re-declare.
+  #
+  # ---------------------------------------------------------------------------
+  # WHICH CONFIGURATION THIS NUMBER IS, and what replaces it. The value below is
+  # UNGATED, and `apps/tests/gated_digest.py` therefore exempts this listing by
+  # name rather than passing it: the gate compares a declared digest only against
+  # a deployment that mounts gateway-mode data, so this number refuses every
+  # gated read of this listing — which is the one thing its `clickhouse-http/v1`
+  # slot is for. SUP-900 replaces it with the gated number and records this one
+  # as the ungated value, the way `apps/confidential-rag/app.yaml` did.
+  #
+  # The measurement is a deployment and not an edit, so it waits for the card:
+  # `gpu-blueprints-node-3-et9j` is deallocated (SUP-903) and SUP-900 shares the
+  # window SUP-873 opens. THE REFERENCE PARAMETER SET it will be measured with,
+  # recorded now so the window is spent on the card and not on deciding:
+  #
+  #   hostname     sc-900a / sc-900b .conf-apps.superprotocol.dev
+  #                (excluded from the snapshot — see `exclude` below)
+  #   token        generated, separately in each deployment. It is in a Secret,
+  #                whose DATA is not in the snapshot, so it cannot move the digest
+  #   batchKey     batch        (this listing's default)
+  #   labelKey     cell_type    (this listing's default)
+  #   data slot `matrices`   kestrel-pbmc-panel   (gated, clickhouse-http/v1)
+  #
+  # `kestrel-pbmc-panel` names its columns `batch` and `cell_type` on purpose, so
+  # the two data parameters stay at their defaults and the gated and ungated
+  # renders differ by the sidecar and by nothing else.
+  # ---------------------------------------------------------------------------
   expectedDigest: "3e03a7196d77d9e0b9f8340a976d372337fc2e5474f591530e6f84b41730979a"
   # ---------------------------------------------------------------------------
   # The hostname is the one field that differs between two deployments of this

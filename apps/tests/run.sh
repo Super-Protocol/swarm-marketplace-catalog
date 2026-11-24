@@ -23,7 +23,10 @@
 #   gated_digest.py  a definition that declares a data slot declares an
 #                `evidence.expectedDigest`, because the marketplace admits a
 #                deployment to the gatekeeper only when its version has one
-#                (SUP-711).
+#                (SUP-711) — and, when the slot accepts an interface the gate
+#                can serve, says in the evidence block that the number was
+#                measured GATED, because an ungated one is a number no gated
+#                deployment can produce (SUP-900).
 #
 # Only apps/ is covered. datasets/ and interfaces/ have schemas of their own and
 # no check yet; adding them is the same shape of work.
@@ -177,7 +180,14 @@ done
 # and no digest produces deployments that can never read a gated dataset — and
 # nothing in the render, the schema or the deployment says so. Three versions of
 # conversational-analyst shipped that way (SUP-711).
-note "a listing that mounts gated data declares a digest"
+#
+# Declaring one is not enough either. A deployment that mounts gated data gains
+# the egress sidecar's objects and the cloud digests them, so a number measured
+# with nothing attached is one no gated deployment can reproduce — and the gate
+# compares the declared number against exactly those deployments. Two notebook
+# listings shipped that way (SUP-900), so the check also reads the
+# `# evidence-configuration:` line the evidence block has to carry.
+note "a listing that mounts gated data declares a gated digest"
 if output=$(python3 "$here/gated_digest.py"); then
   printf '%s\n' "$output"
 else

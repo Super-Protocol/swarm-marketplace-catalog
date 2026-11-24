@@ -47,6 +47,17 @@ organizations:
   - slug: platform-team
     name: Platform Team
     verifiedPublisher: true
+  # The two data owners behind the gated cards the notebook listings read
+  # (SUP-900). Separate organisations, for the same reason the three clinics
+  # are: the boundary those two listings exist to demonstrate is the tenant, so
+  # the lab whose matrices they are and the issuer whose authorisations they are
+  # cannot be the same publisher as the application.
+  - slug: kestrel-genomics
+    name: Kestrel Genomics
+    verifiedPublisher: true
+  - slug: cascade-card-services
+    name: Cascade Card Services
+    verifiedPublisher: true
   # Publishes nothing. It is here because it is granted to — it owns the deployments on the
   # demonstration stand, and `isBindable` wants a grant to the organisation that owns the
   # DEPLOYMENT. The seeder resolves every slug a grant names against this list and throws on one
@@ -310,6 +321,62 @@ datasets:
       provenanceScore: 94
       provenanceAttested: true
 
+  # The gated matrix `Confidential Single Cell Analysis` reads. Three ClickHouse
+  # tables rather than an `.h5ad` in a bucket, because the gate is an HTTP proxy
+  # in front of ClickHouse and an object store cannot be gated at all — so until
+  # this card existed that listing's confidentiality claim could not be shown
+  # (SUP-900).
+  - path: datasets/kestrel-pbmc-panel
+    organization: kestrel-genomics
+    sourceType: clickhouse
+    visibility: restricted
+    price: Not for sale
+    expectedUpdate: On demand (regenerated from the committed generator)
+    usageTerms: >-
+      Synthetic demonstration data. No cell, donor or measurement comes from a real experiment
+      and none is derived from one, so it may be loaded, queried and shown freely. The gene
+      symbols are real HGNC symbols; the counts are not measurements and are not a substitute
+      for them in any evaluation that claims biological validity.
+    secrets:
+      readUser: ${KESTREL_READ_USER}
+      readPassword: ${KESTREL_READ_PASSWORD}
+    statistics:
+      sizeBytes: "4399467"
+      recordCount: "1104105"
+      format: ClickHouse MergeTree
+      usability: 9.6
+      provenanceScore: 100
+      provenanceAttested: true
+
+  # The gated authorisation history `Confidential Transaction Model` reads. Its
+  # columns carry TabFormer's own spelling, which is what every column parameter
+  # on that listing defaults to, so a deployment reading this card answers none
+  # of them.
+  - path: datasets/cascade-card-transactions
+    organization: cascade-card-services
+    sourceType: clickhouse
+    visibility: restricted
+    price: Not for sale
+    expectedUpdate: On demand (regenerated from the committed generator)
+    usageTerms: >-
+      Synthetic demonstration data. No cardholder, merchant or transaction is real or derived
+      from a real one, so it may be loaded, queried and shown freely. It is not a substitute for
+      a real portfolio in any evaluation that claims predictive validity.
+    secrets:
+      readUser: ${CASCADE_READ_USER}
+      readPassword: ${CASCADE_READ_PASSWORD}
+    statistics:
+      sizeBytes: "7575218"
+      recordCount: "320176"
+      format: ClickHouse MergeTree
+      # Lower than its sibling on purpose: 47,790 card-not-present rows carry no
+      # postcode, exactly as TabFormer's own do, and the model's ZIP-prefix token
+      # is therefore absent on 15% of the table. The card says where the gap is;
+      # the score says there is one.
+      usability: 9.2
+      provenanceScore: 100
+      provenanceAttested: true
+
 grants:
   # The corpus and the listing that reads it. Granted to the operator's own
   # organisation as well as the owner's, because the deployment that mounts it is
@@ -350,6 +417,17 @@ grants:
   - dataset: ridgeline-endoscopy
     organizations: [ridgeline-endoscopy, big-pharma, aivo]
     apps: [conversational-analyst]
+
+  # The two gated cards the notebook listings read, and the listings that read
+  # them. Granted to the owner's organisation and to `big-pharma`, which is the
+  # organisation that owns the deployments on this stand — `isBindable` wants a
+  # grant to the CONSUMING organisation, not to the one the data describes.
+  - dataset: kestrel-pbmc-panel
+    organizations: [kestrel-genomics, big-pharma]
+    apps: [confidential-single-cell-analysis]
+  - dataset: cascade-card-transactions
+    organizations: [cascade-card-services, big-pharma]
+    apps: [confidential-transaction-model]
 
 reviews:
   - app: ollama-webui

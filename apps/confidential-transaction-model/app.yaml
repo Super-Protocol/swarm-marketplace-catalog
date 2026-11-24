@@ -612,6 +612,39 @@ evidence:
   # snapshot is therefore not this one. The digest below is the no-dataset
   # configuration, which is what both measurements were; the first gated
   # deployment has to re-measure and re-declare.
+  #
+  # ---------------------------------------------------------------------------
+  # WHICH CONFIGURATION THIS NUMBER IS, and what replaces it. The value below is
+  # UNGATED, and `apps/tests/gated_digest.py` therefore exempts this listing by
+  # name rather than passing it: the gate compares a declared digest only against
+  # a deployment that mounts gateway-mode data, so this number refuses every
+  # gated read of this listing — and `clickhouse-http/v1` is the ONLY interface
+  # its slot accepts, so a gated read is the only read it has. SUP-900 replaces
+  # it with the gated number and records this one as the ungated value, the way
+  # `apps/confidential-rag/app.yaml` did.
+  #
+  # The measurement is a deployment and not an edit, so it waits for the card:
+  # `gpu-blueprints-node-3-et9j` is deallocated (SUP-903) and SUP-900 shares the
+  # window SUP-873 opens. THE REFERENCE PARAMETER SET it will be measured with,
+  # recorded now so the window is spent on the card and not on deciding:
+  #
+  #   hostname     tfm-900a / tfm-900b .conf-apps.superprotocol.dev
+  #                (excluded from the snapshot — see `exclude` below)
+  #   token        generated, separately in each deployment. It is in a Secret,
+  #                whose DATA is not in the snapshot, so it cannot move the digest
+  #   table        transactions   (this listing's default)
+  #   maxRows      25000000       (this listing's default; the table has 320,176)
+  #   every col*   this listing's defaults, which are TabFormer's own names
+  #   minCoverage  0.5            (this listing's default)
+  #   data slot `transactions`   cascade-card-transactions   (gated)
+  #
+  # `cascade-card-transactions` carries TabFormer's column spelling on purpose, so
+  # all eleven column parameters stay at their defaults and the gated and ungated
+  # renders differ by the sidecar and by nothing else. Its vocabulary coverage is
+  # about 0.97, well clear of the 0.5 floor, so the notebook's coverage check
+  # passes and the gated read can be shown doing real work rather than merely
+  # returning rows.
+  # ---------------------------------------------------------------------------
   expectedDigest: "8ea5156096c9e17f78fed6c45ec2e22f17180e5472f0e859e40bc8b44bd1cd3e"
   # ---------------------------------------------------------------------------
   # The hostname is the one field that differs between two deployments of this
