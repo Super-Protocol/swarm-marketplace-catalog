@@ -8,6 +8,10 @@
 # the rest are what the marketplace and the identity provider hand back.
 *.token
 .mp.token
+# The namespace-scoped kubeconfig the cloud issues for a space. The README's
+# by-hand sidecar recipe writes `./stand.kubeconfig` right here, and it is a
+# credential for a live namespace.
+*.kubeconfig
 *.internalSecret
 *.adminpass
 *.apiKey
