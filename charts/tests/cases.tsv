@@ -76,3 +76,6 @@ rag-stack-unbound	confidential-rag
 rag-stack-no-uploads	confidential-rag		
 vuln-analysis-engine	swarm-model-server		
 vuln-analysis-stack	confidential-vulnerability-analysis		
+clinical-doc-engine	swarm-model-server		
+clinical-doc-stack	confidential-clinical-documentation		
+clinical-doc-stack-bound	confidential-clinical-documentation		

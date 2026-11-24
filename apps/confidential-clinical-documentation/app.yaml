@@ -1,0 +1,874 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: AppDefinition
+
+# ---------------------------------------------------------------------------
+# Confidential Clinical Documentation — the fifth listing of the blueprint-port
+# epic (SUP-837), and the one whose input is the most sensitive thing any of
+# them touch: a recording of a patient telling a clinician what is wrong with
+# them.
+#
+# What it is: NVIDIA's open ambient-provider reference architecture — upload a
+# consultation recording, get a transcript with its speakers separated, and have
+# a SOAP or progress note generated from it with citations back to the audio —
+# running inside a confidential cluster space, on components whose licences a
+# tenant can read, reaching nothing outside itself. What it is NOT is an NVIDIA
+# product; the naming follows docs/ported-listings.md.
+#
+# THE SUBSTITUTION IS LARGE, AND IT IS WHAT MAKES THE LISTING POSSIBLE AT ALL.
+# Upstream's own README asks for ≈ 400 GB across five A100s: a Parakeet 1.1B ASR
+# NIM at 75 GB, and Llama-3.3-Nemotron-Super-49B on two H100s. One H100 NVL is
+# 94 GB. So this is not a licence exercise — recognition and diarization had to
+# come off the card entirely, onto the CPU, and the measurement below is what
+# says whether that is a product or an excuse. Measured on a real deployment of
+# this listing it is 16–19 seconds of wall clock per minute of audio: a
+# fifteen-minute consultation is transcribed and attributed in about four and a
+# half minutes, and the note is written in ten to twenty seconds after that.
+#
+# THE PORT'S REAL FINDING IS NOT THE SUBSTITUTION. It is that upstream guesses
+# who was speaking, in three places, silently:
+#
+#   1. `format_transcript_with_speakers` fell back to keyword matching whenever
+#      speaker roles were unknown — a line containing "my symptoms" made that
+#      speaker the Patient, a line containing "recommend" made them the Provider
+#      — and printed the guess into the prompt as fact;
+#   2. the UI's `getSpeakerLabel` fell back to `speaker 0 = Provider`,
+#      `1 = Patient`, which is a coin toss on a cluster index displayed as a
+#      finding;
+#   3. the role-detection prompt asked the model to "be generous".
+#
+# And the streaming path — upstream's default — never called role detection at
+# all, so the keyword guess was the ordinary path rather than the fallback.
+#
+# **A clinical note built on any of those is fluent, correctly structured, and
+# puts the patient's symptoms in the clinician's mouth.** Nothing raises. Every
+# probe is green. The note arrives in seconds and a human signs it. That is this
+# epic's standing failure mode in its worst-shaped instance yet, and it is why
+# this deployment MEASURES its speaker attribution, declares the floors it has to
+# clear, and drops the labels rather than showing uncertain ones. The verdict is
+# on the transcript, in the UI, in the prompt and in the log.
+#
+# It also measured one thing upstream has wrong rather than merely unchecked:
+# `add_speaker_diarization_to_config(config, True, 2)` asserts two speakers. On a
+# dictated monologue that returns TWO — one voice split into a conversation that
+# did not happen. Clustering on a distance threshold returns one.
+#
+# WHAT LEAVES THIS DEPLOYMENT: nothing. Not a model host, not a vendor API, not
+# a telemetry endpoint. The recognition and diarization weights are inside the
+# image digest below, pinned file by file by sha256; generation is a Service in
+# the same namespace; and the egress guard's allowlist is EMPTY — the same guard
+# the vulnerability-analysis listing uses to admit one host, admitting none.
+# ---------------------------------------------------------------------------
+
+metadata:
+  name: confidential-clinical-documentation
+  title: Confidential Clinical Documentation
+  description: >-
+    Turn a recorded consultation into a clinical note without the recording leaving confidential
+    hardware. Upload the audio, get a transcript with the clinician and the patient separated,
+    and have a SOAP or progress note drafted from it with citations back to what was said. The
+    deployment reaches nothing: speech recognition and speaker separation run on its own CPU from
+    models inside its signed image, generation runs on open weights on the card beside it, and
+    the egress allowlist is empty — which is a rule in the published evidence rather than a
+    promise. Speaker attribution is measured rather than assumed: a transcript whose separation
+    does not clear the deployment's declared floors loses its speaker labels instead of showing
+    uncertain ones, because a note that attributes the patient's symptoms to the clinician reads
+    exactly like a good one. Every note is a draft for a clinician to read, correct and sign.
+    Based on the open-source NVIDIA Ambient Provider reference architecture (Apache-2.0),
+    rebuilt on open components.
+  version: "0.1.0"
+  category: healthcare
+  # Our fork — the code and the model weights the image is built from, with MODIFICATIONS.md
+  # recording what differs from upstream and why. Not the upstream repository: the guardrails
+  # ask for the thing an auditor can read the shipped behaviour out of.
+  sourceRepo: https://github.com/Super-Protocol/confidential-clinical-documentation
+  # The software stack. Every set of weights this listing serves is named with its own licence
+  # in the description, the README and on the console: MIT for recognition, MIT and CC-BY-4.0
+  # for diarization, Apache-2.0 for generation.
+  license: Apache-2.0
+  tags:
+    - healthcare
+    - clinical-documentation
+    - ambient-scribe
+    - speech-to-text
+    - speaker-diarization
+    - phi
+    - attestation
+    - confidential
+
+ui:
+  sections:
+    - id: access
+      title: Access
+      description: >-
+        The console is the only thing served on the hostname, and it is the only way in. The
+        scribe behind it is bound to loopback inside its pod — not reachable from another pod,
+        let alone from the internet — so this password is the whole of what stands in front of
+        your recordings and your notes.
+      fields:
+        - parameterId: hostname
+          widget: hostname
+        - parameterId: accessPassword
+          widget: password
+
+    - id: attribution
+      title: Speaker attribution
+      description: >-
+        How sure this deployment has to be about who was speaking before it says so. This is the
+        most consequential choice on the page: a note generated from a transcript whose speakers
+        were separated wrongly is fluent, correctly structured, and attributes the patient's
+        symptoms to the clinician. Nothing about it looks wrong.
+      fields:
+        - parameterId: attribution
+          widget: select
+
+    - id: retention
+      title: Recordings
+      description: >-
+        How long the audio itself is kept. The transcript's text and timecodes are unaffected by
+        this — what ages out is the recording, which is the protected health information. The
+        cost of a short retention is that the audio player and the citations back to it stop
+        working for older notes.
+      fields:
+        - parameterId: audioRetentionHours
+          widget: select
+
+    - id: internal
+      title: Internal credentials
+      description: >-
+        Generated for you and surfaced as secret outputs. Nothing here is typed by a person in
+        the ordinary case.
+      fields:
+        - parameterId: sessionKey
+          widget: password
+        - parameterId: inferenceKey
+          widget: password
+
+parameters:
+  - id: hostname
+    type: string
+    title: Hostname
+    description: Where the console is served. The marketplace writes the DNS for a zone it holds.
+    required: true
+    validation:
+      pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+
+  - id: accessPassword
+    type: string
+    title: Access password for the console
+    description: >-
+      Collected by a form and carried in a signed session cookie. Generated unless you set one;
+      either way it is in the credentials dialog, never in the manifests.
+    sensitive: true
+    generated: true
+
+  # ---------------------------------------------------------------------------
+  # The choice this listing exists to put in front of a person.
+  #
+  # One parameter, three floors behind it, because the floors are a judgement
+  # about how much attribution error a clinical reader will tolerate and that
+  # judgement should be made once rather than three times in a form.
+  #
+  # Measured on four synthesised fixtures inside the image: assigned-word
+  # fraction 98.5–99.3 %, per-sentence speaker purity 98.0–100 %, speech coverage
+  # 85–97 %, word-weighted attribution accuracy 97.2–98.7 %. "Measured" sits
+  # below that range with room, because a floor that trips on good audio teaches
+  # a clinician to ignore the banner — which is worse than having no banner.
+  # ---------------------------------------------------------------------------
+  - id: attribution
+    type: string
+    title: How sure the deployment must be about who spoke
+    description: >-
+      Below the chosen floors a transcript arrives with NO speaker labels, a stated reason, and
+      note generation told in words that the transcript is unattributed and must not be
+      attributed. Nothing is silently guessed at any setting.
+    required: true
+    default: measured
+    options:
+      source:
+        type: static
+        values:
+          - value: measured
+            label: "Measured — the floors this deployment's own fixtures clear with room (the default)"
+          - value: strict
+            label: "Strict — refuse attribution on anything less than near-perfect separation"
+          - value: dictation-only
+            label: "Dictation only — no speaker separation at all; nothing is ever attributed"
+
+  # ---------------------------------------------------------------------------
+  # The privacy choice. A recording is the protected health information; a
+  # transcript is a derivative of it, and a note is a clinical record.
+  #
+  # Deleting the audio is not free: the UI's player and the citations that seek
+  # into it stop working, which is a real loss when a clinician is checking a
+  # note against what was actually said. So this is a decision rather than a
+  # default, and the listing says what each end of it costs.
+  # ---------------------------------------------------------------------------
+  - id: audioRetentionHours
+    type: integer
+    title: How long a recording is kept
+    description: >-
+      After this the audio file is deleted by a sweep that runs every fifteen minutes and once at
+      startup. The transcript keeps its text and its timecodes either way, so a note can still be
+      generated and read — what stops working is playback.
+    required: true
+    default: 24
+    options:
+      source:
+        type: static
+        values:
+          - value: 0
+            label: "Delete as soon as the transcript exists — no playback, no citations into audio"
+          - value: 24
+            label: "24 hours — long enough to check a note against the recording (the default)"
+          - value: 168
+            label: "7 days"
+          - value: 720
+            label: "30 days"
+          - value: -1
+            label: "Keep indefinitely — you are choosing to hold recordings until you delete them"
+
+  - id: sessionKey
+    type: string
+    title: Session signing key
+    description: >-
+      Signs the console's session cookie. Rotating it signs everybody out; it is never sent to a
+      browser.
+    sensitive: true
+    generated: true
+    validation:
+      minLength: 32
+
+  - id: inferenceKey
+    type: string
+    title: Inference endpoint key
+    description: >-
+      Authenticates the scribe to the generation endpoint inside this deployment. That endpoint
+      is on no public address, but an unauthenticated inference endpoint is an unauthenticated
+      inference endpoint, and the client has to carry a key regardless.
+    sensitive: true
+    generated: true
+
+resources:
+  # ---------------------------------------------------------------------------
+  # The cluster space quota, not a hint: it becomes the namespace's quota, and
+  # under-declared it evicts the heaviest pod and reads as "the app is broken".
+  #
+  # Every pod's limits, summed, measured off the real renders
+  # (`charts/tests/max_pod.py` holds the per-pod half):
+  #
+  #   Pod / container                             CPU    Memory   Volume
+  #   inference — vLLM, 1x GPU, 80 GiB of VRAM      8      32Gi     32Gi
+  #   inference — weights fetcher (init)           (2)   (512Mi)      —    not summed
+  #   scribe — the ported application               6      12Gi     40Gi
+  #   scribe — console, the front door            0.5     512Mi       —
+  #   scribe — egress guard                      0.25     256Mi       —
+  #   scribe — prepare (init)                    (0.1)   (128Mi)      —    not summed
+  #   ------------------------------------------- ----   ------   ------
+  #   sum of rendered pods                      14.75   44.75Gi     72Gi
+  #
+  # Five things that are easy to get wrong here and are not:
+  #
+  # 1. An init container is NOT summed — init containers run before the regular
+  #    ones — but a pod's demand is its containers' limits summed OR its heaviest
+  #    init container, whichever is larger. Both pods' regular containers dwarf
+  #    their init.
+  # 2. NOTHING SURGES. Both Deployments hold a ReadWriteOnce volume and are
+  #    therefore `Recreate`; a rolling update would leave the replacement Pending
+  #    on a volume the running pod holds, for ever. So there is no second copy of
+  #    any pod to budget for.
+  # 3. The marketplace's own egress sidecar IS in this quota's headroom, because
+  #    this listing has a data slot: a deployment that mounts gated data gains a
+  #    250m / 128Mi Deployment of its own (SUP-840). It is small, and it is the
+  #    reason the headroom below is not rounding.
+  # 4. The scribe's 12Gi is the recognition model in memory (int8, about 800 MiB),
+  #    the two ONNX diarization models, and a decoded recording held as float32 —
+  #    a two-hour consultation is about 460 MiB, doubled while it is being
+  #    concatenated. Measured peak on a five-minute consultation is well under
+  #    3 GiB; 12Gi is sized for the two-hour case this listing accepts.
+  # 5. **THE SCRIBE'S SIX CORES ARE A CEILING THIS EPIC'S CLOUD IMPOSED, NOT A
+  #    PREFERENCE.** The first deployment of this listing asked for eight, which
+  #    made the pod 8.75 cores beside a generation engine already holding eight on
+  #    the node with the card. It never scheduled: `ready: 0` for fifty minutes,
+  #    with no reason anywhere — a cluster space has no pod-level visibility and
+  #    the cloud's deployment endpoint reports the count and nothing else. 6 + 8
+  #    is the shape the vulnerability-analysis listing is known to be placeable
+  #    with here. It costs nothing measurable: recognition and diarization run at
+  #    16–19 s per minute of audio on five threads, the same as on six.
+  #
+  # 16 and 48Gi against a measured 14.75 and 44.75: about a core and three
+  # gigabytes, which is deliberate rather than rounding. A quota is fixed when
+  # the cluster space is created and a reconfigure re-renders the version the
+  # deployment was created from, so room a later version needs has to be asked
+  # for now or not at all.
+  min:
+    cpu: "16"
+    memory: "48Gi"
+    # Not the 72Gi sum: a storage quota equal to it fails at the last volume
+    # rather than the first, which reads as one broken service rather than as a
+    # quota. And a quota is not capacity — the storage class has to be able to
+    # place each claim, which is the other half of why the scribe's volume is
+    # 40Gi and not 100.
+    storage: "88Gi"
+  # The heaviest SINGLE pod, which is a different quantity from the quota and the
+  # one a node has to be able to hold. Without it the cloud assumes the whole
+  # 16/48Gi lands on one pod and refuses the listing on any cloud whose nodes are
+  # smaller than its entire quota (SUP-824). It is the engine on both dimensions:
+  # 8 cores and 32Gi, against the scribe pod's 6.75 and 12.75Gi.
+  maxPod:
+    cpu: "8"
+    memory: "32Gi"
+  recommended:
+    cpu: "22"
+    memory: "64Gi"
+    storage: "120Gi"
+  gpu:
+    # Generation is vLLM. Without a card the engine does not start, and a
+    # deployment that cannot call a model transcribes perfectly and writes no
+    # note at all.
+    #
+    # RECOGNITION AND DIARIZATION DO NOT WANT A CARD, and that is a declaration
+    # rather than an omission: the device plugin gives one GPU to exactly one
+    # container, so an LLM server and a GPU ASR service cannot both request
+    # `nvidia.com/gpu: 1`. The engine holds it; everything else is on the CPU,
+    # and the chart refuses a GPU request on any other container because a pod
+    # that asks for a card it cannot get stays Pending for ever beside an engine
+    # that then cannot start either.
+    required: true
+    minCount: 1
+    minVram: "80Gi"
+    # nvidia-smi product names, which hw-measurement writes to
+    # device.swarm.io/gpu-product. Placement requires this exact string, so a
+    # different card of the same family needs its own entry and a plausible guess
+    # is worse than no entry at all. H100 NVL is the card this epic's cloud has,
+    # measured inside a cluster space on it (SUP-868); H200 NVL is what the
+    # model-serving listings run on.
+    types:
+      - NVIDIA H100 NVL
+      - NVIDIA H200 NVL
+
+# ---------------------------------------------------------------------------
+# One data slot, and what it is for is worth being exact about.
+#
+# The ordinary path into this deployment is an upload: a recording goes in
+# through the console and never leaves. That needs no slot and no data owner.
+#
+# The slot is for the OTHER case, and it is the one the gatekeeper was built for.
+# A consultation already transcribed — by another system, by a human typist — is
+# somebody's data, and a health system's compliance function is exactly the body
+# that will not hand it over on a promise. Through the gate they do not have to:
+# they approve THIS deployment against the evidence it published, serve it the
+# rows, and withdraw them the moment that evidence changes. A note is then drafted
+# inside the enclave from a consultation whose audio never existed here.
+#
+# `clickhouse-http/v1` is the only interface a gated dataset can be served over
+# today — the gate injects `x-clickhouse-user` / `x-clickhouse-key` into every
+# request it forwards and rewrites the database the caller named — and that is a
+# platform fact rather than a property of this listing. It also decides what CAN
+# be gated: a transcript is rows and is gateable; **an audio corpus in object
+# storage is not**, whatever a dataset's `access.mode` says. The README says so
+# in those words, and so does the `corpusGating` output.
+#
+# Not required. A deployment with nothing attached is the ordinary case, not a
+# broken one, and the binding lives in a Secret so that THIS chart renders the
+# same objects either way.
+#
+# **That does not make one digest cover both, and an earlier version of this
+# listing claimed it did.** The chart's render is unchanged, but the MARKETPLACE
+# adds the gatekeeper egress sidecar's own objects to a deployment that mounts
+# gated data — a ConfigMap, a Deployment, a Service and the Secret holding its
+# client certificate — and the cloud digests those too. Measured here: nine
+# resources ungated, THIRTEEN gated. So a gated deployment and an ungated one
+# cannot share a digest, and the number this listing declares has to be the gated
+# one, because the gated read is the only thing the slot exists for
+# (`apps/tests/gated_digest.py`, SUP-900). See `evidence` below.
+# ---------------------------------------------------------------------------
+data:
+  slots:
+    - name: transcripts
+      title: Consultation transcripts
+      description: >-
+        Consultations already transcribed elsewhere: one row per utterance, with the
+        consultation's identifier, who spoke, when they started and stopped, and what they said.
+        The speaker labels are yours — this deployment shows them as yours, says which source
+        they came from, and does not second-guess them. Attach more than one and the first is
+        read; the console names what it read. Nothing attached is the ordinary case: upload a
+        recording instead.
+      required: false
+      multiple: true
+      accepts:
+        - interface: clickhouse-http/v1
+      schema:
+        tables:
+          - columns:
+              - name: transcript_id
+                type: string
+              - name: speaker
+                type: string
+              - name: start_seconds
+                type: number
+              - name: end_seconds
+                type: number
+              - name: text
+                type: string
+              - name: recorded_at
+                type: timestamp
+
+components:
+  # ---------------------------------------------------------------------------
+  # 1. Generation. The open-inference component, cluster-internal, no hostname of
+  #    its own, and the one container in this listing that holds the card. Every
+  #    NIM question the epic had about serving open weights was answered there
+  #    once (SUP-839) so that five listings do not answer it five times and
+  #    acquire five sets of bugs.
+  # ---------------------------------------------------------------------------
+  - name: inference
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: swarm-model-server
+      version: "0.4.0"
+    images:
+      - name: docker.io/vllm/vllm-openai
+        digest: sha256:0fec7ec5f3e6bc168e54899935fb0557da908a4832a1dbc88e2debcf2f889416
+      - name: docker.io/library/python
+        digest: sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
+    deployment:
+      values:
+        base:
+          # The listing's own console is what gets a hostname; this answers inside the cluster
+          # space, on a Service name the scribe's attested configuration writes down.
+          ingress:
+            enabled: false
+          apiKey: ""
+          model:
+            # Qwen3-Coder 30B A3B Instruct (FP8), Apache-2.0, and the name is worth a sentence:
+            # it is a general instruction-following model whose training emphasised code, and
+            # note generation here is a templated extraction task over a transcript rather than
+            # a creative one. It is also the only preset in this chart that is BOTH measured on
+            # real hardware and large enough for the work — which matters more than the name,
+            # because a preset whose numbers came from a sibling model's run is a resource
+            # declaration nobody can reproduce.
+            preset: qwen3-coder-30b-a3b-instruct-fp8
+            # The context length and the share of the card are the DEPLOYMENT's choices, not the
+            # model's, so the chart does not default them from the preset. 65536 is the preset's
+            # measured window; a two-hour consultation transcript is about 25k tokens, so a note
+            # prompt with the whole transcript in it fits with room for the generation.
+            maxModelLen: 65536
+            gpuMemoryUtilization: 0.85
+          # The preset's own measured sizing, which the preset does NOT apply for us. Without
+          # it a 30B engine runs in the chart's default container and is OOMKilled while
+          # loading, which reads as a GPU problem.
+          resources:
+            cpu: "8"
+            memory: 32Gi
+        patches:
+          - op: replace
+            path: apiKey
+            value: "{{ params.inferenceKey }}"
+
+  # ---------------------------------------------------------------------------
+  # 2. The scribe, its console and its egress guard — one pod, three containers.
+  #    The image is built from our fork and carries the recognition and
+  #    diarization weights; the console and the guard are rendered into a
+  #    ConfigMap the cloud digests, so the code that decides who gets in and what
+  #    may leave is in the evidence rather than inside a second image digest a
+  #    verifier would have to take on trust.
+  # ---------------------------------------------------------------------------
+  - name: scribe
+    source:
+      type: helm
+      repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
+      chart: confidential-clinical-documentation
+      version: "0.1.0"
+    images:
+      - name: ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server
+        digest: sha256:20424f033e017b8a79f1cf5dde3f7f03389a56a36f0f2bc4b6c86c4ba1d6169c
+    deployment:
+      values:
+        base:
+          name: confidential-clinical-doc
+          hostname: ""
+          console:
+            password: ""
+            sessionKey: ""
+          scribe:
+            audioRetentionHours: 24
+            diarization:
+              enabled: true
+              floors:
+                assignedWordFraction: 0.9
+                segmentPurity: 0.85
+                speechCoverage: 0.3
+          inference:
+            url: http://swarm-model-server:8000/v1
+            model: qwen3-coder-30b-a3b-instruct-fp8
+            licence: Apache-2.0
+            apiKey: ""
+          corpus:
+            bindingJson: ""
+          egress:
+            enabled: true
+            # Empty, and the chart refuses a value. This is the listing's whole egress claim.
+            allowHost: ""
+        patches:
+          - op: replace
+            path: hostname
+            value: "{{ params.hostname }}"
+
+          - op: replace
+            path: console.password
+            value: "{{ params.accessPassword }}"
+
+          - op: replace
+            path: console.sessionKey
+            value: "{{ params.sessionKey }}"
+
+          - op: replace
+            path: inference.apiKey
+            value: "{{ params.inferenceKey }}"
+
+          - op: replace
+            path: scribe.audioRetentionHours
+            value: "{{ params.audioRetentionHours }}"
+
+          # The resolved data slot. A Secret in the chart, and the one value that differs
+          # between two deployments of this version at the same parameters — which is why it
+          # being in a Secret is what lets one digest describe both.
+          - op: replace
+            path: corpus.bindingJson
+            value: "{{ data.transcripts | json }}"
+
+          # ---------------------------------------------------------------------
+          # The three attribution settings. One parameter, three floors, because
+          # the floors are one judgement rather than three.
+          # ---------------------------------------------------------------------
+          - op: replace
+            path: scribe.diarization.floors.assignedWordFraction
+            value: 0.95
+            when: "params.attribution == 'strict'"
+
+          - op: replace
+            path: scribe.diarization.floors.segmentPurity
+            value: 0.95
+            when: "params.attribution == 'strict'"
+
+          - op: replace
+            path: scribe.diarization.floors.speechCoverage
+            value: 0.4
+            when: "params.attribution == 'strict'"
+
+          # Dictation only: nothing is separated and nothing is ever attributed. The transcript
+          # says so, and the note generation is told it is reading one voice.
+          - op: replace
+            path: scribe.diarization.enabled
+            value: false
+            when: "params.attribution == 'dictation-only'"
+
+outputs:
+  - id: consoleUrl
+    title: Open the console
+    type: url
+    value: "https://{{ params.hostname }}"
+
+  - id: accessPassword
+    title: Access password
+    # `secret`, so it is surfaced only to people who may deploy for the organisation, masked,
+    # with one-click copy.
+    type: secret
+    value: "{{ params.accessPassword }}"
+
+  - id: signIn
+    title: How to sign in
+    type: string
+    value: >-
+      Open the console above and paste the access password into the form. The session is a signed
+      cookie with a twelve-hour life; there is no other way in, and nothing else on the hostname
+      answers without it except a health check that reports liveness and nothing about any
+      consultation.
+
+  - id: howToStart
+    title: Drafting your first note
+    type: string
+    value: >-
+      Sign in, drop a consultation recording onto the page, and watch the transcript arrive
+      sentence by sentence. Any container ffmpeg reads is accepted — wav, mp3, m4a, flac, ogg,
+      opus, webm — up to 500 MB, which is about two hours of 16-bit audio. When the recording is
+      done being read, the speakers are separated and the banner above the transcript says what
+      the separation found and whether it is being used. Then pick a template — SOAP, progress
+      note, or one of your own — and generate. The note streams in section by section with its
+      reasoning beside it, and every section cites the timecodes it came from.
+
+  - id: clinicalReview
+    title: What this produces, and what it does not
+    type: string
+    value: >-
+      A DRAFT for a clinician to read, correct and sign. Nothing here is a clinical decision, a
+      diagnosis, or a document that is safe to file unreviewed. The deployment makes no clinical
+      claim of any kind, holds no regulatory clearance, and is not a medical device. Two specific
+      things to check in every note: that the facts in it are in the transcript, and — when the
+      banner above the transcript says the speakers were not reliably separated — that nothing in
+      the note has been attributed to a person at all. In that state the generation is explicitly
+      told not to attribute, and a note that nevertheless names who said something is a note to
+      correct.
+
+  - id: whatLeaves
+    title: What leaves this deployment, exactly
+    type: string
+    value: >-
+      Nothing. There is no external host in this deployment's configuration — not a model host,
+      not a vendor API, not a telemetry endpoint — and the loopback guard in front of the
+      scribe's HTTP clients carries an EMPTY allowlist and refuses every request, plain HTTP
+      included, with a 403 it counts. The guard's code is `egress_guard.py` in the attested
+      ConfigMap, which means the rule and the thing enforcing it are the same artefact and both
+      are inside the signed evidence; the console shows what it has refused. The recognition and
+      diarization weights are inside the image digest this listing pins, fetched at build time
+      against a manifest that names every file by sha256, so a fresh deployment does not reach
+      huggingface.co either. Generation is a Service in this namespace with no public address.
+      One honest limit: a cluster space is provisioned with the platform's own network policies,
+      which admit the public internet minus the private ranges, and a Kubernetes NetworkPolicy a
+      chart renders can only widen what is permitted — so a listing cannot narrow its namespace
+      below that. The guard is in front of the client for that reason, and it binds the
+      application rather than the kernel.
+
+  - id: whatTouchesYourData
+    title: What touches your data
+    type: string
+    value: >-
+      Three models, all of them inside this cluster space. Speech recognition is Distil-Whisper
+      large-v3 (MIT) running int8 on this pod's CPU. Speaker separation is pyannote
+      segmentation 3.0 (MIT) with NVIDIA NeMo TitaNet-Large embeddings (CC-BY-4.0) through
+      sherpa-onnx (Apache-2.0), also on the CPU. Note generation is Qwen3-Coder 30B A3B Instruct
+      FP8 (Apache-2.0) served by vLLM on the card this deployment reserves, on a Service with no
+      public address. No component needs an NVIDIA AI Enterprise entitlement, an NGC credential
+      or any other vendor account. The recognition and diarization weights travel inside the
+      image and are covered by its digest; the generation weights are fetched once, at first
+      boot, against a manifest that names every file by sha256 — and that manifest is inside the
+      deployment's own signed evidence, so what was admitted and the rule that admitted it are
+      both verifiable.
+
+  - id: speedAndSize
+    title: How long a consultation takes
+    type: string
+    value: >-
+      Measured on a real deployment of this version, on consultation-length recordings of three
+      to five and a half minutes: 16 to 19 seconds of wall clock per minute of audio for
+      recognition and speaker separation together. A fifteen-minute consultation is therefore
+      transcribed and attributed in about four and a half minutes and a thirty-minute one in
+      about nine, and a SOAP or progress note is generated from it in 10 to 20 seconds. Every
+      transcript carries its own figures, so you can check these against your own recordings
+      rather than trusting them: `secondsPerAudioMinute` is on the transcript and in the pod log.
+      TWO HONEST CAVEATS. The FIRST request after a pod starts is much slower — six to eight
+      minutes for a five-minute consultation — because the recognition and diarization models
+      load on first use and the generation engine is still warming; it is the second and later
+      consultations that run at the figures above. And ONE RECORDING IS PROCESSED AT A TIME on
+      purpose: both engines are threaded across the whole CPU allocation, so a second concurrent
+      job makes both slower rather than one faster. All of this is the price of taking
+      recognition off the GPU — upstream's own README asks for 400 GB across five A100s, and this
+      listing runs on one card by giving it entirely to generation.
+
+  - id: attributionPolicy
+    title: How speaker attribution is decided
+    type: string
+    value: >-
+      Every transcript is scored on four numbers computed from the result itself: how many
+      speakers were found, what fraction of words fell inside a speaker turn, how well speaker
+      changes line up with sentence boundaries, and how much of the recording was identified as
+      speech. Those are compared against the floors your "speaker attribution" setting chose. A
+      transcript that clears them is labelled, and one further step is taken: the deployment's
+      own model is asked which speaker is the clinician and which the patient, with an explicit
+      "cannot tell" answer available and a reply that names one speaker as both people refused. A
+      transcript that misses a floor arrives with NO labels, a stated reason, and the note
+      generation told in words that it is reading an unattributed transcript and must not
+      attribute. One voice is reported as a dictation rather than as an error. The score travels
+      on the transcript, is shown above it, and is in the pod log as one JSON line per
+      consultation.
+
+  - id: whatSurvives
+    title: What is stored, and what a tenant can delete
+    type: string
+    value: >-
+      Three things, all on this deployment's own volume. The RECORDING is deleted on the
+      retention you chose — a sweep runs every fifteen minutes and once at startup, so a pod that
+      was down past an expiry does not resurrect a kept file. The TRANSCRIPT and the NOTE are
+      kept until deleted; both survive a restart, which upstream's do not — it holds them in
+      memory, so an eviction loses every draft while the recording, the sensitive artefact,
+      persists. Deleting a transcript deletes its recording with it, because "delete" has to
+      reach the audio or it means nothing; notes are deleted one at a time, since a note a
+      clinician has signed is a clinical record and removing one as a side effect of tidying up
+      audio is not a decision this deployment makes for you. Unpublishing a deployment stops the
+      gateway serving its hostnames and deletes its workloads; it does NOT delete the volume, so
+      everything above survives an unpublish and is removed when the deployment is deleted.
+
+  - id: corpusGating
+    title: What the gate can and cannot protect
+    type: string
+    value: >-
+      The "Consultation transcripts" slot is served through the marketplace gatekeeper, which
+      means a data owner approves this deployment against the evidence it published and can
+      withdraw access the moment that evidence changes — and the deployment reports the gate's
+      verdict rather than quietly returning less. One platform limit, stated plainly: the gate
+      speaks ClickHouse over HTTP and nothing else, so a transcript corpus held as rows can be
+      gated and AN AUDIO CORPUS IN OBJECT STORAGE CANNOT, whatever a dataset's access mode says.
+      Recordings therefore reach this deployment by upload, under the tenant's own control, and
+      are never pulled from anywhere.
+
+  - id: corpusBound
+    title: The attached transcript corpus
+    type: string
+    value: >-
+      A consultation transcript corpus is attached. The console lists what this deployment is
+      currently allowed to read and will say `refused` with the gate's own message if that
+      approval is withdrawn. Importing a consultation creates a transcript whose speaker labels
+      are the data owner's: the deployment shows them as theirs, names the source, and does not
+      re-separate or second-guess them. No recording exists in this deployment for an imported
+      consultation.
+    when: "data.transcripts.count > 0"
+
+  - id: corpusUnbound
+    title: No transcript corpus is attached
+    type: string
+    value: >-
+      This is the ordinary case. Upload recordings through the console and they are transcribed
+      here. If you also hold consultations already transcribed by another system, attach them to
+      the "Consultation transcripts" slot with a reconfigure and the console will list them for
+      import.
+    when: "data.transcripts.count == 0"
+
+  - id: licences
+    title: Licences of what this runs
+    type: string
+    value: >-
+      The application is Apache-2.0: our fork of NVIDIA's open ambient-provider reference
+      architecture, at github.com/Super-Protocol/confidential-clinical-documentation, with its
+      modifications recorded in MODIFICATIONS.md and the licence files carried inside the image
+      at /licenses — including upstream's third-party notices. Recognition is faster-whisper
+      (MIT) over CTranslate2 (MIT) serving Distil-Whisper large-v3 weights (MIT). Diarization is
+      sherpa-onnx (Apache-2.0) over pyannote segmentation 3.0 (MIT, CNRS) and NVIDIA NeMo
+      TitaNet-Large (CC-BY-4.0 — attribution required, and given here, in /licenses/models and
+      on the console). Generation is vLLM (Apache-2.0) serving Qwen3-Coder 30B A3B Instruct FP8
+      (Apache-2.0, no user-count ceiling and no extra terms). Four NVIDIA-proprietary packages
+      upstream vendors into its UI — the Kaizen UI design system and the NVIDIA brand icons —
+      are removed from our fork rather than redistributed; see MODIFICATIONS.md §6. Upstream is
+      maintained by NVIDIA and this fork does not track it automatically; a sync is a deliberate
+      act recorded in MODIFICATIONS.md. NVIDIA is a trademark of NVIDIA Corporation, and this
+      listing is not produced, endorsed or supported by NVIDIA.
+
+  - id: evidenceBundle
+    title: Published evidence
+    type: url
+    value: "https://{{ params.hostname }}/.well-known/swarm-evidence"
+
+evidence:
+  # evidence-configuration: gated
+  #
+  # ---------------------------------------------------------------------------
+  # Measured, not derived, and it describes the GATED configuration. The line
+  # above says so where `apps/tests/gated_digest.py` can read it, because nothing
+  # in the value itself does (SUP-900).
+  #
+  # WHY THE GATED ONE. A digest is a property of a render, and a deployment that
+  # mounts gated data does not render what an ungated one does: the marketplace
+  # adds the gatekeeper egress sidecar's own objects to it. Measured on this
+  # listing rather than assumed —
+  #
+  #   ungated    9 resources   2 ConfigMaps, 2 Deployments, 2 Services,
+  #                            2 Secrets, 1 Ingress
+  #   gated     13 resources   the same nine plus
+  #                            ConfigMap  …-gatekeeper-egress
+  #                            Deployment …-gatekeeper-egress
+  #                            Service    …-gatekeeper-egress
+  #                            Secret     …-gatekeeper-identity
+  #
+  # — so the two cannot share a number, and an ungated one declared here is a
+  # number the gate would compare against a gated deployment and reject. The only
+  # thing this listing's data slot exists for is the gated read.
+  #
+  # An UNGATED deployment of this listing therefore does not match the number on
+  # its own listing page. That is the cheaper half of the trade: nothing refuses
+  # an ungated deployment, because there is no gate in front of it to do the
+  # refusing. The ungated number, recorded in passing because it was measured
+  # first and is a real property of this version:
+  # `6de9bf95f9b782c952df151f7749c6fd7313db88f253f923c9ea1660f097415d`
+  # (`ccd-873g` / `ccd-873h`, render digest `3f99aff5…`).
+  #
+  # THE PAIR. Two deployments of this version on the gpu-blueprints cloud,
+  # 2026-11-24 — `ccd-873j` and `ccd-873k`, two hostnames in two namespaces, the
+  # same parameters, each with the `acme-engineering-handbook` dataset attached
+  # to the `transcripts` slot — published byte-identical signed snapshots of
+  # thirteen resources, each with a JWS, and this digest. Both also reported the
+  # same `renderDigest` (`2935e71a…`) before either was published, which is the
+  # cheaper half of the same claim and differs from the ungated render's
+  # (`3f99aff5…`) exactly as the object counts above say it must.
+  #
+  # **The pair is strictly sequential here, and that is a property of the cloud
+  # rather than of the listing.** The marketplace refuses a second GPU deployment
+  # outright — this epic's cloud has one card — so J was created, published,
+  # measured and removed before K was created. Byte-identity across a
+  # delete-and-recreate is a stronger claim than across two concurrent
+  # namespaces, not a weaker one.
+  #
+  # The handbook is a DOCUMENT corpus, not a transcript one, and that is
+  # deliberate: it is this catalogue's only real gated ClickHouse dataset and the
+  # one Confidential RAG measures against. What it contains reaches no attested
+  # object — the four extra objects come from the sidecar, and the binding itself
+  # is in a Secret the platform lifts out — so the digest is the same for any
+  # gated `clickhouse-http/v1` dataset. What it does mean is that a console
+  # pointed at it reports the gate's verdict and then finds no `transcripts`
+  # table, which is a consumer-side mismatch and not a digest one. A tenant
+  # attaches a transcript corpus of their own.
+  #
+  # Measured twice over, once per version that changed something the cloud
+  # digests: `fc830ac6…` on the first version (`ccd-873d` / `ccd-873e`,
+  # 2026-11-23, ungated, byte-identical, never declared) and this after the
+  # review of PR #112 found that a `single-speaker` verdict told the model "treat
+  # it as dictation by the clinician" — a claim one cluster cannot support. The
+  # fix moved the image, the image digest is a field of a Deployment in the
+  # snapshot, so the snapshot digest moved with it. That is the ordinary reason a
+  # digest moves, and the reason it is measured again rather than carried forward.
+  #
+  # One honest limit on the pair: neither deployment was watched until the gate
+  # ADMITTED the handbook. Admission is not instant — `ccd-873k` still read
+  # `refused` with `502 from …-gatekeeper-egress` when it was deleted, which is
+  # the same eight-minute window Confidential RAG records — and the card was
+  # released rather than held to watch it flip. What that does not affect is the
+  # digest: the sidecar's four objects are in the snapshot from publication,
+  # whatever the gate later decides. What it does mean is that
+  # `matchesExpected: true` against THIS number has not been observed on a
+  # deployment created from a listing that declares it; the first deployment to
+  # do so will be the one that confirms it.
+  #
+  # ---------------------------------------------------------------------------
+  # THE REFERENCE PARAMETER SET it was measured with. The digest holds for this
+  # one, and a deployment that answers differently attests its own — expected,
+  # not tampering.
+  #
+  #   hostname               ccd-873j / ccd-873k .conf-apps.superprotocol.dev
+  #                          (excluded from the snapshot — see `exclude` below)
+  #   attribution            measured
+  #   audioRetentionHours    24
+  #   data slot transcripts  acme-engineering-handbook   (gated)
+  #
+  # The first two reach attested objects: they are env values on the scribe
+  # container, which is where a verifier most wants to read them — the floors a
+  # speaker label had to clear, and how long a recording is kept. Choosing
+  # `strict`, `dictation-only` or another retention attests a different digest,
+  # and that is correct rather than unfortunate.
+  #
+  # The three generated credentials — `accessPassword`, `sessionKey`,
+  # `inferenceKey` — are in Secrets, which the platform lifts out before the
+  # snapshot is taken, so they reach no attested object and are not part of this
+  # set. Nor is WHICH gated dataset is attached, per the paragraph above.
+  expectedDigest: "224b1a29cb860f8caf3ceef6893b947d62709c8adb3ca4b11efc39b19c76ad83"
+  # ---------------------------------------------------------------------------
+  # The hostname is the one field that differs between two deployments of this
+  # version, and excluding it is what makes the digest a property of the version
+  # rather than of the deployment. Declared here as well as in the chart's own
+  # annotation, because the listing page shows only what the definition declares
+  # — a digest displayed beside "no exclusions" answers the only question that
+  # matters about it wrongly.
+  exclude:
+    - match:
+        kind: Ingress
+        name: confidential-clinical-doc
+      fields:
+        - /spec/rules/0/host

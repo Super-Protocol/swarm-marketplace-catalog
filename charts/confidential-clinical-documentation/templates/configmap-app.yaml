@@ -1,0 +1,21 @@
+{{- include "ccd.validate" . -}}
+{{- /*
+The code that serves the door and the code that refuses every way out, as data the cloud digests
+and signs.
+
+This is the point of rendering them here rather than baking them into the image: a verifier
+reading this deployment's evidence can read the authentication and the egress rule themselves,
+rather than taking a second image digest on trust. The rule and the thing enforcing the rule are
+the same artefact.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ccd.name" . }}-app
+  labels:
+    {{- include "ccd.labels" . | nindent 4 }}
+data:
+  console.py: |
+{{ .Files.Get "files/console.py" | indent 4 }}
+  egress_guard.py: |
+{{ .Files.Get "files/egress_guard.py" | indent 4 }}

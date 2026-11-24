@@ -1,0 +1,1291 @@
+---
+# Source: confidential-clinical-documentation/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: confidential-clinical-doc-secrets
+  labels:
+    app.kubernetes.io/name: confidential-clinical-doc
+    app.kubernetes.io/instance: ccd
+    app.kubernetes.io/managed-by: Helm
+type: Opaque
+stringData:
+  console-password: "ACCESS-PASSWORD-FOR-THE-GOLDEN"
+  console-session-key: "SESSION-SIGNING-KEY-FOR-THE-GOLDEN-01234"
+  # Authenticates this deployment to the generation endpoint beside it. That endpoint is on no
+  # public address, but an unauthenticated inference endpoint is an unauthenticated inference
+  # endpoint, and the client has to carry a key regardless.
+  inference-api-key: "INFERENCE-KEY-FOR-THE-GOLDEN"
+  # The resolved `transcripts` data slot. Empty when nothing is attached, which is a supported
+  # state: the deployment comes up and the console says no corpus is attached.
+  corpus-binding: "[{\"name\":\"acme-consultations\",\"connection\":{\"host\":\"mp-gatekeeper-egress\",\"port\":9501,\"database\":\"acme_clinic\",\"username\":\"gateway\"}}]"
+---
+# Source: confidential-clinical-documentation/templates/configmap-app.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: confidential-clinical-doc-app
+  labels:
+    app.kubernetes.io/name: confidential-clinical-doc
+    app.kubernetes.io/instance: ccd
+    app.kubernetes.io/managed-by: Helm
+data:
+  console.py: |
+    #!/usr/bin/env python3
+    """The deployment's front door: a sign-in form, a session cookie, and a proxy to the scribe.
+    
+    What is behind this door is recorded patient-clinician conversation and the clinical notes
+    drawn from it — protected health information in the strictest sense, which is why there is a
+    door at all. Upstream has none: its API and its UI are published on port 80 with no
+    authentication of any kind, and the API's CORS policy grants credentials to every origin.
+    
+    Five things here are not incidental.
+    
+    **The credential is collected with a form and carried in a cookie.** HTTP Basic does not
+    survive a single-page console: the manifest and the icons are fetched in a mode where the
+    browser sends no credentials, so the prompt returns for ever, and ingress-nginx strips
+    `Authorization` when it performs basic auth itself, so the app behind it authenticates nobody.
+    
+    **The session is a signed assertion, not a row.** `HMAC-SHA256(key, "v1|<expiry>")`, verified
+    in constant time. No store to run, no state to lose on a restart, and nothing per-deployment in
+    any rendered object: the key is in a Secret, which the platform lifts out before the evidence
+    snapshot is taken.
+    
+    **The scribe is on loopback and on no Service.** It is reachable from this process and from
+    nothing else in the cluster — not from another pod, let alone from the internet — so this
+    session check is the whole of what stands in front of it, and that is the only reason it is safe
+    for the scribe to have no authentication of its own.
+    
+    **This is a streaming proxy, not a redirect.** Transcription and note generation are
+    server-sent-event streams that run for minutes, and a recording is an upload of up to half a
+    gigabyte. Both are relayed chunk by chunk in both directions, with buffering off, so a
+    transcript appears sentence by sentence through the door rather than arriving in one lump when
+    the stream closes.
+    
+    **Nothing leaves.** The egress guard beside this process admits no host at all — its allowlist
+    is empty, which is a statement a reader can check rather than take. `/_console/guard` reports
+    what it has refused.
+    
+    Only `/healthz` is outside the session. It reports liveness and nothing about any consultation.
+    
+    stdlib plus what the scribe image already carries (fastapi, httpx, uvicorn) — this runs in that
+    image, from a ConfigMap the cloud digests and signs, so the code serving the door is in the
+    evidence beside the code doing the work.
+    """
+    
+    from __future__ import annotations
+    
+    import asyncio
+    import hashlib
+    import hmac
+    import json
+    import logging
+    import os
+    import re
+    import time
+    import urllib.parse
+    from typing import Any
+    
+    import httpx
+    from fastapi import FastAPI, Form, Request, Response
+    from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+    
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s console %(message)s",
+    )
+    logger = logging.getLogger("console")
+    
+    PASSWORD = os.environ.get("CONSOLE_PASSWORD", "")
+    SESSION_KEY = os.environ.get("CONSOLE_SESSION_KEY", "").encode()
+    SESSION_TTL = int(os.environ.get("CONSOLE_SESSION_TTL_SECONDS", 12 * 3600))
+    COOKIE = "ccd_session"
+    
+    SCRIBE_URL = os.environ.get("SCRIBE_API_URL", "http://127.0.0.1:8000").rstrip("/")
+    GUARD_URL = os.environ.get("EGRESS_GUARD_URL", "").rstrip("/")
+    
+    # A transcription is minutes of CPU work on a long recording, and a note generation is an LLM
+    # stream; neither should be cut off by a proxy timeout. The connect timeout stays short because
+    # a scribe that is not listening should be reported at once rather than waited for.
+    UPSTREAM_TIMEOUT = httpx.Timeout(
+        connect=5.0,
+        read=float(os.environ.get("PROXY_READ_TIMEOUT_SECONDS", 3600)),
+        write=float(os.environ.get("PROXY_WRITE_TIMEOUT_SECONDS", 900)),
+        pool=10.0,
+    )
+    RELAY_CHUNK_BYTES = 65536
+    
+    # ---------------------------------------------------------------------------
+    # The gated transcript corpus
+    # ---------------------------------------------------------------------------
+    # The resolved `transcripts` data slot, as JSON, from a Secret. For a gated dataset it carries
+    # a plain local address and NO credential — the gate injects the publisher's own and rewrites
+    # the database the caller named — so a consumer who reads every object in their namespace
+    # learns the shape of the data and no way to reach it outside the gate.
+    CORPUS_BINDING = os.environ.get("CORPUS_BINDING_JSON", "")
+    CORPUS_TABLE = os.environ.get("CORPUS_TABLE", "transcripts")
+    CORPUS_ID_COLUMN = os.environ.get("CORPUS_ID_COLUMN", "transcript_id")
+    CORPUS_SPEAKER_COLUMN = os.environ.get("CORPUS_SPEAKER_COLUMN", "speaker")
+    CORPUS_START_COLUMN = os.environ.get("CORPUS_START_COLUMN", "start_seconds")
+    CORPUS_END_COLUMN = os.environ.get("CORPUS_END_COLUMN", "end_seconds")
+    CORPUS_TEXT_COLUMN = os.environ.get("CORPUS_TEXT_COLUMN", "text")
+    CORPUS_RECORDED_COLUMN = os.environ.get("CORPUS_RECORDED_AT_COLUMN", "recorded_at")
+    CORPUS_LIST_LIMIT = int(os.environ.get("CORPUS_LIST_LIMIT", 500))
+    CORPUS_SEGMENT_LIMIT = int(os.environ.get("CORPUS_SEGMENT_LIMIT", 20000))
+    CORPUS_TIMEOUT = float(os.environ.get("CORPUS_TIMEOUT_SECONDS", 60))
+    
+    # A corpus identifier is interpolated into a SQL string literal, so it is validated here
+    # rather than escaped there. Anything outside this alphabet is refused, not quoted.
+    CORPUS_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:@/#-]{0,190}$")
+    
+    # What the deployment says about itself. Every value is rendered from the listing's own
+    # parameters, so the panel a reader sees and the digest the cloud signed describe the same thing.
+    ABOUT: dict[str, Any] = {
+        "title": os.environ.get("CONSOLE_TITLE", "Confidential Clinical Documentation"),
+        "generationModel": os.environ.get("ABOUT_GENERATION_MODEL", ""),
+        "generationLicence": os.environ.get("ABOUT_GENERATION_LICENCE", ""),
+        "asrModel": os.environ.get("ABOUT_ASR_MODEL", ""),
+        "asrLicence": os.environ.get("ABOUT_ASR_LICENCE", ""),
+        "diarizationModels": os.environ.get("ABOUT_DIARIZATION_MODELS", ""),
+        "diarizationLicences": os.environ.get("ABOUT_DIARIZATION_LICENCES", ""),
+        "diarizationFloors": {
+            "assignedWordFraction": os.environ.get("DIARIZATION_FLOOR_ASSIGNED_WORD_FRACTION", ""),
+            "segmentPurity": os.environ.get("DIARIZATION_FLOOR_SEGMENT_PURITY", ""),
+            "speechCoverage": os.environ.get("DIARIZATION_FLOOR_SPEECH_COVERAGE", ""),
+        },
+        "audioRetentionHours": os.environ.get("AUDIO_RETENTION_HOURS", ""),
+        "egressAllowHost": os.environ.get("EGRESS_ALLOW_HOST", ""),
+        "sourceRepo": os.environ.get("ABOUT_SOURCE_REPO", ""),
+        "upstream": os.environ.get("ABOUT_UPSTREAM", ""),
+        "clinicalReviewRequired": True,
+    }
+    
+    if not PASSWORD or not SESSION_KEY:
+        # Refuse to start rather than serve an open door. A console that came up without a
+        # password would pass every probe in the chart and publish a clinical archive.
+        raise SystemExit(
+            "console: CONSOLE_PASSWORD and CONSOLE_SESSION_KEY are required; refusing to serve "
+            "an unauthenticated interface on a public hostname"
+        )
+    
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    _client: httpx.AsyncClient | None = None
+    
+    
+    @app.on_event("startup")
+    async def _open_client() -> None:
+        global _client
+        # One connection pool for the life of the process. `trust_env=False` so no HTTP_PROXY
+        # from the pod's environment can redirect a consultation anywhere.
+        _client = httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT, trust_env=False,
+                                    follow_redirects=False)
+    
+    
+    @app.on_event("shutdown")
+    async def _close_client() -> None:
+        if _client is not None:
+            await _client.aclose()
+    
+    
+    # ---------------------------------------------------------------------------
+    # The session
+    # ---------------------------------------------------------------------------
+    def issue(ttl: int = SESSION_TTL) -> str:
+        expiry = int(time.time()) + ttl
+        payload = f"v1|{expiry}"
+        mac = hmac.new(SESSION_KEY, payload.encode(), hashlib.sha256).hexdigest()
+        return f"{payload}|{mac}"
+    
+    
+    def valid(token: str | None) -> bool:
+        if not token:
+            return False
+        parts = token.split("|")
+        if len(parts) != 3 or parts[0] != "v1":
+            return False
+        payload, mac = f"{parts[0]}|{parts[1]}", parts[2]
+        expected = hmac.new(SESSION_KEY, payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, mac):
+            return False
+        try:
+            return int(parts[1]) > time.time()
+        except ValueError:
+            return False
+    
+    
+    def signed_in(request: Request) -> bool:
+        return valid(request.cookies.get(COOKIE))
+    
+    
+    LOGIN_PAGE = """<!doctype html>
+    <html lang="en"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>__TITLE__</title>
+    <style>
+     :root{color-scheme:dark}
+     body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0d1117;color:#e8edf2;
+          font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+     form{width:min(92vw,23rem);padding:2rem;background:#161b22;border:1px solid #2a323c;border-radius:12px}
+     h1{margin:0 0 .25rem;font-size:1.15rem}
+     p{margin:0 0 1.5rem;color:#9aa7b4;font-size:.86rem}
+     label{display:block;margin-bottom:.4rem;font-size:.8rem;color:#9aa7b4}
+     input{width:100%;box-sizing:border-box;padding:.6rem .7rem;background:#0d1117;color:#e8edf2;
+           border:1px solid #2a323c;border-radius:8px;font-size:.95rem}
+     button{margin-top:1.1rem;width:100%;padding:.65rem;border:0;border-radius:8px;background:#2dd4bf;
+            color:#0d1117;font-size:.95rem;font-weight:600;cursor:pointer}
+     .err{margin:.9rem 0 0;color:#f85149;font-size:.84rem}
+     .note{margin:1.4rem 0 0;color:#6b7885;font-size:.76rem}
+    </style></head>
+    <body><form method="post" action="/login">
+     <h1>__TITLE__</h1>
+     <p>This deployment holds recorded consultations and the notes drawn from them. Sign in to continue.</p>
+     <label for="password">Access password</label>
+     <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
+     <button type="submit">Sign in</button>
+     __ERROR__
+     <p class="note">Notes produced here are drafts for a clinician to read, correct and sign.</p>
+    </form></body></html>
+    """
+    
+    
+    def login_page(error: bool = False) -> HTMLResponse:
+        markup = LOGIN_PAGE.replace("__TITLE__", ABOUT["title"])
+        markup = markup.replace(
+            "__ERROR__", '<p class="err">That password was not accepted.</p>' if error else ""
+        )
+        # 401 on a failed attempt, 200 on a first visit: a monitor should be able to tell the
+        # difference without parsing the body.
+        return HTMLResponse(markup, status_code=401 if error else 200)
+    
+    
+    @app.get("/healthz")
+    async def healthz() -> JSONResponse:
+        """Liveness, and nothing about any consultation. Reachable by anybody who finds the name."""
+        return JSONResponse({"status": "ok"})
+    
+    
+    @app.post("/login")
+    async def login(password: str = Form("")) -> Response:
+        # Constant-time, so a wrong answer takes as long as a right one.
+        if not hmac.compare_digest(password.encode(), PASSWORD.encode()):
+            # A deliberate, fixed delay — not rate limiting, which one process cannot do honestly,
+            # but enough that an online guess against this door is not free. `asyncio.sleep` and
+            # not `time.sleep`: this handler runs on the event loop, and blocking it would stop the
+            # whole console for every wrong password, uploads and streams included.
+            await asyncio.sleep(0.5)
+            return login_page(error=True)
+        redirect = RedirectResponse("/", status_code=303)
+        redirect.set_cookie(COOKIE, issue(), max_age=SESSION_TTL, httponly=True,
+                            # Served over TLS by the cloud's gateway and on no other scheme.
+                            secure=True, samesite="lax", path="/")
+        return redirect
+    
+    
+    @app.post("/logout")
+    async def logout() -> Response:
+        redirect = RedirectResponse("/", status_code=303)
+        redirect.delete_cookie(COOKIE, path="/")
+        return redirect
+    
+    
+    # ---------------------------------------------------------------------------
+    # What the deployment is
+    # ---------------------------------------------------------------------------
+    @app.get("/_console/about")
+    async def about(request: Request) -> JSONResponse:
+        if not signed_in(request):
+            return JSONResponse({"error": "not signed in"}, status_code=401)
+        # `corpusBound` is resolved here rather than at import, and that is not tidiness: the
+        # listing renders an UNBOUND slot as the JSON document `[]`, which is a non-empty string.
+        # Testing the string said "a corpus is attached" on every deployment that had none, while
+        # `/_console/corpus` beside it correctly said `unbound`. A panel that contradicts the thing
+        # it is a summary of is worse than no panel.
+        return JSONResponse({**ABOUT, "corpusBound": bool(_binding())})
+    
+    
+    @app.get("/_console/guard")
+    async def guard(request: Request) -> JSONResponse:
+        """What the egress guard has admitted and refused. Its allowlist is empty by design."""
+        if not signed_in(request):
+            return JSONResponse({"error": "not signed in"}, status_code=401)
+        if not GUARD_URL or _client is None:
+            return JSONResponse({"enabled": False})
+        try:
+            answer = await _client.get(f"{GUARD_URL}/_guard/status", timeout=5.0)
+            return JSONResponse({"enabled": True, **answer.json()})
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"enabled": True, "error": str(exc)[:200]})
+    
+    
+    # ---------------------------------------------------------------------------
+    # The gated transcript corpus
+    # ---------------------------------------------------------------------------
+    def _binding() -> dict[str, Any]:
+        if not CORPUS_BINDING.strip():
+            return {}
+        try:
+            parsed = json.loads(CORPUS_BINDING)
+        except json.JSONDecodeError:
+            logger.error("the corpus binding is not JSON; the slot is treated as unbound")
+            return {}
+        # The slot is `multiple: true`, so the binding is a list; the first entry is used and the
+        # console says which one it read.
+        if isinstance(parsed, list):
+            return parsed[0] if parsed else {}
+        if isinstance(parsed, dict):
+            entries = parsed.get("datasets") or parsed.get("items")
+            if isinstance(entries, list):
+                return entries[0] if entries else {}
+            return parsed
+        return {}
+    
+    
+    def _connection(binding: dict[str, Any]) -> dict[str, Any]:
+        return binding.get("connection") or {}
+    
+    
+    async def _query(sql: str) -> list[dict[str, Any]]:
+        """One ClickHouse HTTP query, through the gate when the dataset is gated.
+    
+        The database travels as a query parameter rather than inside the SQL: the gate rewrites the
+        database the caller named, and a name baked into the statement is a name it cannot rewrite.
+        A gated binding carries no password — the gate holds the publisher's own — so the absence
+        of one, not the hostname, is what decides whether credentials are sent.
+        """
+        binding = _binding()
+        conn = _connection(binding)
+        if not conn.get("host"):
+            raise RuntimeError("no transcript corpus is attached to this deployment")
+        scheme = "https" if conn.get("tls") else "http"
+        url = (f"{scheme}://{conn['host']}:{int(conn.get('port') or 8123)}/?"
+               + urllib.parse.urlencode({"database": conn.get("database") or "default",
+                                         "default_format": "JSONEachRow"}))
+        headers = {"Content-Type": "text/plain; charset=utf-8"}
+        if conn.get("password"):
+            headers["x-clickhouse-user"] = str(conn.get("username") or "")
+            headers["x-clickhouse-key"] = str(conn.get("password"))
+    
+        assert _client is not None
+        answer = await _client.post(url, content=sql.encode("utf-8"), headers=headers,
+                                    timeout=CORPUS_TIMEOUT)
+        if answer.status_code != 200:
+            # ClickHouse and the gate both answer with a readable body, and it is the most useful
+            # thing a tenant whose access was just withdrawn can be shown. Carried, trimmed.
+            raise RuntimeError(f"{answer.status_code} from {conn['host']}: "
+                               f"{answer.text.strip()[:400] or 'no message'}")
+        return [json.loads(line) for line in answer.text.splitlines() if line.strip()]
+    
+    
+    @app.get("/_console/corpus")
+    async def corpus(request: Request) -> JSONResponse:
+        """The consultations this deployment is currently allowed to read."""
+        if not signed_in(request):
+            return JSONResponse({"error": "not signed in"}, status_code=401)
+        binding = _binding()
+        if not binding:
+            return JSONResponse({"bound": False, "verdict": "unbound", "transcripts": [],
+                                 "message": "No transcript corpus is attached. Attach one with a "
+                                            "reconfigure, or upload a recording instead."})
+        try:
+            rows = await _query(
+                f"SELECT {CORPUS_ID_COLUMN} AS id, count() AS segments, "
+                f"min({CORPUS_RECORDED_COLUMN}) AS recorded_at "
+                f"FROM {CORPUS_TABLE} GROUP BY {CORPUS_ID_COLUMN} "
+                f"ORDER BY recorded_at DESC LIMIT {CORPUS_LIST_LIMIT}")
+        except Exception as exc:  # noqa: BLE001
+            # A withdrawn approval looks exactly like this, and it is a first-class answer rather
+            # than a log line: without it a tenant whose access was cut sees an empty list.
+            return JSONResponse({"bound": True, "verdict": "refused", "transcripts": [],
+                                 "message": str(exc)[:400]}, status_code=200)
+        return JSONResponse({"bound": True, "verdict": "admitted",
+                             "dataset": binding.get("name") or binding.get("id") or "",
+                             "transcripts": rows})
+    
+    
+    @app.post("/_console/corpus/{corpus_id}/import")
+    async def corpus_import(corpus_id: str, request: Request) -> JSONResponse:
+        """Read one consultation from the corpus and hand it to the scribe as a transcript."""
+        if not signed_in(request):
+            return JSONResponse({"error": "not signed in"}, status_code=401)
+        if not CORPUS_ID_PATTERN.match(corpus_id):
+            return JSONResponse({"error": "that is not a transcript identifier"}, status_code=400)
+        binding = _binding()
+        if not binding:
+            return JSONResponse({"error": "no transcript corpus is attached"}, status_code=409)
+    
+        quoted = corpus_id.replace("\\", "\\\\").replace("'", "\\'")
+        try:
+            rows = await _query(
+                f"SELECT {CORPUS_START_COLUMN} AS start, {CORPUS_END_COLUMN} AS end, "
+                f"{CORPUS_TEXT_COLUMN} AS text, {CORPUS_SPEAKER_COLUMN} AS speaker, "
+                f"toString({CORPUS_RECORDED_COLUMN}) AS recorded_at "
+                f"FROM {CORPUS_TABLE} WHERE {CORPUS_ID_COLUMN} = '{quoted}' "
+                f"ORDER BY {CORPUS_START_COLUMN} LIMIT {CORPUS_SEGMENT_LIMIT}")
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)[:400]}, status_code=502)
+        if not rows:
+            return JSONResponse({"error": "no segments for that identifier"}, status_code=404)
+    
+        payload = {
+            "source": (binding.get("name") or binding.get("id") or "the attached corpus"),
+            "name": corpus_id,
+            "recorded_at": rows[0].get("recorded_at") or "",
+            "segments": [{"start": float(r.get("start") or 0), "end": float(r.get("end") or 0),
+                          "text": str(r.get("text") or ""), "speaker": r.get("speaker")}
+                         for r in rows if str(r.get("text") or "").strip()],
+        }
+        assert _client is not None
+        answer = await _client.post(f"{SCRIBE_URL}/api/transcribe/import", json=payload)
+        return JSONResponse(_json_or_text(answer), status_code=answer.status_code)
+    
+    
+    def _json_or_text(answer: httpx.Response) -> Any:
+        try:
+            return answer.json()
+        except ValueError:
+            return {"error": answer.text.strip()[:400] or "no message"}
+    
+    
+    # ---------------------------------------------------------------------------
+    # Everything else is the scribe, behind the session
+    # ---------------------------------------------------------------------------
+    # Hop-by-hop headers, which belong to one connection and must not be forwarded.
+    HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
+                  "trailer", "transfer-encoding", "upgrade", "host", "content-length"}
+    
+    
+    @app.api_route("/{path:path}",
+                   methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+    async def proxy(path: str, request: Request) -> Response:
+        if not signed_in(request):
+            # A browser asking for a page gets the sign-in form; anything else — the UI's own
+            # `fetch`, a stream that outlived its session — gets a 401 it can act on, because an
+            # HTML login page arriving where JSON was expected is a parse error, not a prompt.
+            wants_html = "text/html" in (request.headers.get("accept") or "")
+            if request.method in ("GET", "HEAD") and wants_html:
+                return login_page()
+            return JSONResponse({"error": "not signed in"}, status_code=401)
+    
+        url = f"{SCRIBE_URL}/{path}"
+        if request.url.query:
+            url = f"{url}?{request.url.query}"
+        headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP}
+        # The session cookie is this door's, not the scribe's; the scribe has no use for it and no
+        # reason to see it.
+        headers.pop("cookie", None)
+    
+        assert _client is not None
+        upstream = _client.build_request(
+            request.method, url, headers=headers,
+            # Streamed, not read: a recording is up to half a gigabyte and reading it into this
+            # process first would double the memory for no purpose.
+            content=request.stream() if request.method in ("POST", "PUT", "PATCH") else None,
+        )
+        try:
+            answer = await _client.send(upstream, stream=True)
+        except httpx.ConnectError:
+            return JSONResponse(
+                {"error": "the scribe is not answering yet; it loads its models on first use"},
+                status_code=503)
+        except httpx.HTTPError as exc:
+            return JSONResponse({"error": f"the scribe did not answer: {exc}"}, status_code=502)
+    
+        out_headers = {k: v for k, v in answer.headers.items() if k.lower() not in HOP_BY_HOP}
+        # Server-sent events reach the browser as they are produced, which is the whole point of a
+        # transcript that appears sentence by sentence. Without this ingress-nginx buffers the
+        # response and the UI sits blank until the stream closes.
+        if "text/event-stream" in (answer.headers.get("content-type") or ""):
+            out_headers["X-Accel-Buffering"] = "no"
+            out_headers["Cache-Control"] = "no-cache"
+    
+        async def relay():
+            try:
+                async for chunk in answer.aiter_raw(RELAY_CHUNK_BYTES):
+                    yield chunk
+            finally:
+                await answer.aclose()
+    
+        return StreamingResponse(relay(), status_code=answer.status_code, headers=out_headers)
+    
+  egress_guard.py: |
+    #!/usr/bin/env python3
+    """The one way out of this deployment, and in this listing there is none.
+    
+    This file is shared with `confidential-vulnerability-analysis`, where it admits exactly one
+    external host. Here its allowlist is **empty**, and that is the point: a deployment holding
+    recorded consultations should reach nothing at all, and an allowlist with no entries is a claim
+    a reader can check rather than a sentence they have to believe. Every request — any host, any
+    port, plain HTTP included — is refused with a 403 and counted.
+    
+    The scribe needs nothing external. Its recognition and diarization models are inside its image,
+    pinned by sha256; its generation endpoint is a Service in this namespace; its transcript corpus,
+    when one is attached, is reached through the marketplace gatekeeper at a local address. There is
+    no model host, no vendor API and no telemetry destination to admit.
+    
+    Three choices in here are deliberate.
+    
+    **It is a CONNECT proxy and nothing else.** A plain proxied request (``GET http://host/path``)
+    is refused, so there is no cleartext path out at all. It is an allowlist, not an inspection
+    point, and it holds no certificate for anything.
+    
+    **The host and the port are matched exactly.** No wildcards, no suffix matching: a wildcard is
+    how an allowlist stops being one. The hostname is resolved HERE, after the match, so a refused
+    request does not even cause a DNS lookup — which is itself a disclosure to whoever runs the
+    resolver.
+    
+    **It is code in a ConfigMap rather than a configuration file for a third-party proxy.** The
+    cloud digests and signs the manifests, so this file is inside the deployment's published
+    evidence: the rule, and the thing that enforces the rule, are the same artefact and a verifier
+    reads it rather than taking a squid.conf and a container image on trust.
+    
+    Why this exists at all rather than a NetworkPolicy: a cluster space is provisioned with the
+    platform's own policy set, which admits ``0.0.0.0/0`` minus the private ranges, and Kubernetes
+    NetworkPolicies are additive — a policy a chart renders can only widen what is permitted. A
+    listing therefore cannot narrow its namespace's egress, and the enforcement point available to
+    it is in front of the client.
+    
+    stdlib only, so it runs in the scribe image with nothing installed.
+    """
+    
+    from __future__ import annotations
+    
+    import asyncio
+    import json
+    import logging
+    import os
+    import sys
+    import time
+    
+    LISTEN_ADDRESS = os.environ.get("EGRESS_LISTEN_ADDRESS", "127.0.0.1")
+    LISTEN_PORT = int(os.environ.get("EGRESS_LISTEN_PORT", "3128"))
+    ALLOW_HOST = os.environ.get("EGRESS_ALLOW_HOST", "")
+    ALLOW_PORT = int(os.environ.get("EGRESS_ALLOW_PORT", "443"))
+    
+    # A request line plus headers. Anything past this is not a proxy request a client of ours sends.
+    MAX_HEADER_BYTES = 8192
+    # How long a client may take to send its request line.
+    REQUEST_TIMEOUT_SECONDS = 30.0
+    # How long an established tunnel may sit with no bytes in either direction. An OSV lookup is one
+    # request and one response.
+    IDLE_TIMEOUT_SECONDS = 120.0
+    RELAY_CHUNK_BYTES = 65536
+    
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s egress-guard %(message)s",
+    )
+    logger = logging.getLogger("egress-guard")
+    
+    STATUS: dict[str, object] = {
+        "allowHost": ALLOW_HOST,
+        "allowPort": ALLOW_PORT,
+        # Explicit, so a reader of `/_guard/status` does not have to infer a deny-all policy from
+        # an empty string that could equally be a value somebody forgot to set.
+        "policy": "refuse-everything" if not ALLOW_HOST else "allow-one-host",
+        "admitted": 0,
+        "refused": 0,
+        "lastRefused": "",
+        "lastRefusedAt": "",
+        "startedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    
+    # Served on loopback, to the console in the same pod, so an operator can see what this process
+    # decided without reading a log. It is the only non-CONNECT request this process answers.
+    STATUS_PATH = "/_guard/status"
+    
+    
+    def _refuse_response(reason: str) -> bytes:
+        body = json.dumps({"error": "refused by the deployment's egress guard", "reason": reason})
+        return (
+            "HTTP/1.1 403 Forbidden\r\n"
+            "Content-Type: application/json\r\n"
+            f"Content-Length: {len(body)}\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            f"{body}"
+        ).encode()
+    
+    
+    def _status_response() -> bytes:
+        body = json.dumps(STATUS)
+        return (
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: application/json\r\n"
+            f"Content-Length: {len(body)}\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            f"{body}"
+        ).encode()
+    
+    
+    def _record_refusal(target: str) -> None:
+        STATUS["refused"] = int(STATUS["refused"]) + 1  # type: ignore[arg-type]
+        STATUS["lastRefused"] = target
+        STATUS["lastRefusedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    
+    
+    def parse_target(request_line: str) -> tuple[str, str, str]:
+        """Split a request line into (method, host, port). Non-CONNECT lines return empty host."""
+        parts = request_line.split()
+        if len(parts) < 2:
+            return ("", "", "")
+        method, target = parts[0].upper(), parts[1]
+        if method != "CONNECT":
+            return (method, "", "")
+        host, _, port = target.rpartition(":")
+        if not host or not port:
+            return (method, "", "")
+        return (method, host, port)
+    
+    
+    def admitted(host: str, port: str) -> bool:
+        """Exact host, exact port. Nothing else, and no normalisation that could widen either."""
+        if not ALLOW_HOST:
+            return False
+        if host != ALLOW_HOST:
+            return False
+        try:
+            return int(port) == ALLOW_PORT
+        except ValueError:
+            return False
+    
+    
+    async def _relay(src: asyncio.StreamReader, dst: asyncio.StreamWriter) -> None:
+        try:
+            while True:
+                chunk = await asyncio.wait_for(src.read(RELAY_CHUNK_BYTES), IDLE_TIMEOUT_SECONDS)
+                if not chunk:
+                    break
+                dst.write(chunk)
+                await dst.drain()
+        except (asyncio.TimeoutError, ConnectionResetError, BrokenPipeError):
+            pass
+        finally:
+            dst.close()
+    
+    
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            try:
+                head = await asyncio.wait_for(
+                    reader.readuntil(b"\r\n\r\n"), REQUEST_TIMEOUT_SECONDS
+                )
+            except asyncio.IncompleteReadError as error:
+                head = error.partial
+            except (asyncio.TimeoutError, asyncio.LimitOverrunError):
+                writer.close()
+                return
+    
+            if len(head) > MAX_HEADER_BYTES:
+                _record_refusal("oversized request")
+                writer.write(_refuse_response("the request head is larger than this guard accepts"))
+                await writer.drain()
+                writer.close()
+                return
+    
+            request_line = head.split(b"\r\n", 1)[0].decode("latin-1", "replace")
+    
+            if request_line.startswith("GET " + STATUS_PATH):
+                writer.write(_status_response())
+                await writer.drain()
+                writer.close()
+                return
+    
+            method, host, port = parse_target(request_line)
+            if not host:
+                # A plain proxied request, or something that is not a proxy request at all. Refused
+                # rather than forwarded: there is no cleartext path out of this deployment.
+                _record_refusal(request_line[:200])
+                logger.warning("refused: %s", request_line[:200])
+                writer.write(
+                    _refuse_response(
+                        f"only CONNECT to {ALLOW_HOST}:{ALLOW_PORT} is admitted; "
+                        f"{method or 'that'} is not"
+                    )
+                )
+                await writer.drain()
+                writer.close()
+                return
+    
+            if not admitted(host, port):
+                _record_refusal(f"{host}:{port}")
+                logger.warning("refused: CONNECT %s:%s", host, port)
+                writer.write(
+                    _refuse_response(
+                        f"{host}:{port} is not the one host this deployment may reach "
+                        f"({ALLOW_HOST}:{ALLOW_PORT})"
+                    )
+                )
+                await writer.drain()
+                writer.close()
+                return
+    
+            try:
+                # Resolved here, after the match: a refused request causes no lookup either.
+                upstream_reader, upstream_writer = await asyncio.wait_for(
+                    asyncio.open_connection(ALLOW_HOST, ALLOW_PORT), REQUEST_TIMEOUT_SECONDS
+                )
+            except Exception as error:  # noqa: BLE001 — any failure is one answer to the client
+                logger.error("upstream %s:%s unreachable: %s", ALLOW_HOST, ALLOW_PORT, error)
+                writer.write(
+                    _refuse_response(f"{ALLOW_HOST}:{ALLOW_PORT} could not be reached: {error}")
+                )
+                await writer.drain()
+                writer.close()
+                return
+    
+            STATUS["admitted"] = int(STATUS["admitted"]) + 1  # type: ignore[arg-type]
+            logger.info("admitted: CONNECT %s:%s", host, port)
+            writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            await writer.drain()
+            await asyncio.gather(
+                _relay(reader, upstream_writer),
+                _relay(upstream_reader, writer),
+            )
+        except Exception as error:  # noqa: BLE001 — one bad connection is not the guard's life
+            logger.error("connection failed: %s", error)
+            try:
+                writer.close()
+            except Exception:  # noqa: BLE001
+                pass
+    
+    
+    async def main() -> None:
+        # Modified by Super Protocol, 2026, for this listing, and the difference from the
+        # vulnerability-analysis copy of this file is one line of policy.
+        #
+        # There, an empty allowlist is a misconfiguration: that deployment needs public
+        # vulnerability intelligence, every lookup would fail with a 403, and the reports would say
+        # "no data" without saying why — so the guard refuses to start and the chart refuses to
+        # render. HERE AN EMPTY ALLOWLIST IS THE CONFIGURATION. This deployment reaches nothing:
+        # its models are in its image, its generation endpoint is a Service in its namespace, and
+        # its transcript corpus arrives through the gatekeeper at a local address. The chart
+        # refuses an allowlist with an ENTRY in it, which is the opposite validation.
+        #
+        # So the guard starts, says what it is, and refuses everything. The alternative — not
+        # running it at all — would leave the deployment's egress claim resting on the absence of a
+        # container rather than on a rule in the signed evidence.
+        if not ALLOW_HOST:
+            logger.info("the allowlist is empty: every request will be refused, by design")
+    
+        server = await asyncio.start_server(handle, LISTEN_ADDRESS, LISTEN_PORT)
+        logger.info(
+            "listening on %s:%s — admitting CONNECT %s:%s and nothing else",
+            LISTEN_ADDRESS,
+            LISTEN_PORT,
+            ALLOW_HOST,
+            ALLOW_PORT,
+        )
+        async with server:
+            await server.serve_forever()
+    
+    
+    if __name__ == "__main__":
+        asyncio.run(main())
+---
+# Source: confidential-clinical-documentation/templates/pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: confidential-clinical-doc-data
+  labels:
+    app.kubernetes.io/name: confidential-clinical-doc
+    app.kubernetes.io/instance: ccd
+    app.kubernetes.io/managed-by: Helm
+spec:
+  accessModes:
+    - "ReadWriteOnce"
+  resources:
+    requests:
+      storage: "40Gi"
+---
+# Source: confidential-clinical-documentation/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: confidential-clinical-doc-console
+  labels:
+    app.kubernetes.io/name: confidential-clinical-doc
+    app.kubernetes.io/instance: ccd
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: console
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: confidential-clinical-doc
+    app.kubernetes.io/instance: ccd
+    app.kubernetes.io/component: scribe
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+---
+# Source: confidential-clinical-documentation/templates/scribe.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: confidential-clinical-doc
+  labels:
+    app.kubernetes.io/name: confidential-clinical-doc
+    app.kubernetes.io/instance: ccd
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: scribe
+spec:
+  replicas: 1
+  # The volume is held open by the running pod, so a rolling update would leave the replacement
+  # Pending on it for ever while the old pod serves.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: confidential-clinical-doc
+      app.kubernetes.io/instance: ccd
+      app.kubernetes.io/component: scribe
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: confidential-clinical-doc
+        app.kubernetes.io/instance: ccd
+        app.kubernetes.io/component: scribe
+    spec:
+      securityContext:
+        fsGroup: 1000
+      initContainers:
+        # The volume arrives owned by root on this cloud's storage class, and every container
+        # here runs as 1000. `fsGroup` handles the group, but a directory the application
+        # expects to create on its first write is a directory it fails to create; making them
+        # here is cheaper than discovering it at the first upload.
+        - name: prepare
+          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:20424f033e017b8a79f1cf5dde3f7f03389a56a36f0f2bc4b6c86c4ba1d6169c"
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -ec]
+          args:
+            - mkdir -p /data/uploads /data/state/transcripts /data/state/notes
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 1000
+          resources:
+            requests: { cpu: 100m, memory: 128Mi, nvidia.com/gpu: "0" }
+            limits: { cpu: 100m, memory: 128Mi, nvidia.com/gpu: "0" }
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        # -------------------------------------------------------------------
+        - name: scribe
+          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:20424f033e017b8a79f1cf5dde3f7f03389a56a36f0f2bc4b6c86c4ba1d6169c"
+          imagePullPolicy: IfNotPresent
+          command: [uvicorn]
+          args:
+            - ambient_scribe.main:app
+            - --host
+            - "127.0.0.1"
+            - --port
+            - "8000"
+            # One worker. Recognition and diarization are threaded across the whole CPU
+            # allocation, so a second worker would make two transcriptions slower rather than
+            # one faster — and the persisted stores are loaded into each worker's memory at
+            # import, so two workers would disagree about which notes exist.
+            - --workers
+            - "1"
+            - --timeout-keep-alive
+            - "75"
+          env:
+            - name: API_TITLE
+              value: "Confidential Clinical Documentation"
+            # The generation endpoint. By reference for the key: an env *value* is rendered into
+            # this Deployment and published in the evidence snapshot, a `secretKeyRef` is a
+            # pointer to something the platform sealed.
+            - name: OPENAI_BASE_URL
+              value: "http://swarm-model-server:8000/v1"
+            - name: LLM_MODEL
+              value: "qwen3-coder-30b-a3b-instruct-fp8"
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef: { name: confidential-clinical-doc-secrets, key: inference-api-key }
+            - name: LLM_TIMEOUT_SECONDS
+              value: "600"
+            - name: LLM_LICENCE
+              value: "Apache-2.0"
+            # Recognition. A directory and never a model name: a name would make the first
+            # transcription of a fresh deployment reach huggingface.co, and this deployment
+            # reaches nothing. The weights are inside the image digest above.
+            - name: ASR_MODEL_DIR
+              value: "/models/asr"
+            - name: ASR_COMPUTE_TYPE
+              value: "int8"
+            - name: ASR_THREADS
+              value: "5"
+            - name: ASR_BEAM_SIZE
+              value: "1"
+            - name: ASR_LANGUAGE
+              value: "en"
+            # Diarization, and the floors that decide whether its answer is shown. Upstream has
+            # no floors and attributes unconditionally; a transcript with no speaker separation
+            # still produces a fluent, well-structured note that puts the patient's symptoms in
+            # the clinician's mouth.
+            - name: ENABLE_SPEAKER_DIARIZATION
+              value: "true"
+            - name: DIARIZATION_SEGMENTATION_MODEL
+              value: "/models/diarization/segmentation.onnx"
+            - name: DIARIZATION_EMBEDDING_MODEL
+              value: "/models/diarization/embedding.onnx"
+            - name: DIARIZATION_THRESHOLD
+              value: "0.5"
+            - name: DIARIZATION_FLOOR_ASSIGNED_WORD_FRACTION
+              value: "0.9"
+            - name: DIARIZATION_FLOOR_SEGMENT_PURITY
+              value: "0.85"
+            - name: DIARIZATION_FLOOR_SPEECH_COVERAGE
+              value: "0.3"
+            - name: ENABLE_STREAMING
+              value: "true"
+            - name: UPLOAD_DIR
+              value: /data/uploads
+            - name: STATE_DIR
+              value: /data/state
+            # `int64` before `quote`, and it is not cosmetic. Helm parses a large number out of
+            # values.yaml as a float64 and `quote` then renders it in SCIENTIFIC NOTATION —
+            # `"5.24288e+08"` — which pydantic refuses as an integer and the container dies on
+            # import with a validation error. The pod then never becomes ready, and on a cluster
+            # space there is no pod-level visibility to read the reason out of. Found in kind
+            # after fifty minutes of `ready: 0` on a real cloud; the same trap bit SUP-890.
+            - name: MAX_FILE_SIZE
+              value: "524288000"
+            # How long a recording is kept for playback. The transcript's text and timecodes are
+            # unaffected; what ages out is the audio, which is the protected health information.
+            - name: AUDIO_RETENTION_HOURS
+              value: "24"
+            - name: RETENTION_SWEEP_SECONDS
+              value: "900"
+            # Empty. The UI is served by this same process, so nothing legitimate is
+            # cross-origin — and the console in front of this API carries a session cookie, so a
+            # wildcard here would be a cross-site request away from somebody else's page
+            # reading a consultation.
+            - name: CORS_ALLOW_ORIGINS
+              value: ""
+            - name: SYSTEM_PROMPT
+              value: "You are documenting a clinical consultation from its transcript. Write only what the transcript supports. Where the transcript does not say something, say that it does not. This note is a draft for a clinician to read, correct and sign."
+            # Every HTTP client in this container goes through the guard, which admits nothing.
+            # NO_PROXY is what keeps the generation call inside the cluster space: routed
+            # through the guard it would be refused like everything else.
+            - name: HTTPS_PROXY
+              value: "http://127.0.0.1:3128"
+            - name: HTTP_PROXY
+              value: "http://127.0.0.1:3128"
+            - name: NO_PROXY
+              value: "localhost,127.0.0.1,::1,.svc,.svc.cluster.local,.cluster.local,swarm-model-server"
+            # Pinned to the cores this container is granted, not to the host's. The chart
+            # convention from SUP-882: a library that sizes its pool from `nproc` starts a
+            # thread per host core inside the quota and spends the request being throttled.
+            # CTranslate2 and onnxruntime both do exactly that.
+            - name: OMP_NUM_THREADS
+              value: "5"
+            - name: MKL_NUM_THREADS
+              value: "5"
+            - name: NUMEXPR_MAX_THREADS
+              value: "5"
+            - name: TOKENIZERS_PARALLELISM
+              value: "false"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: LOG_LEVEL
+              value: "INFO"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 1000
+          # No `ports:` and no Service. The scribe listens on loopback, so there is nothing to
+          # declare and nothing for another pod to reach.
+          #
+          # The probes are `exec` for the same reason: a kubelet httpGet probe connects to the
+          # POD's address, which this process does not listen on, so an httpGet probe would fail
+          # every time while the scribe answered the console perfectly. And they call python
+          # rather than curl — there is no curl in this image, and a probe naming a binary the
+          # image does not carry fails identically to a dead process.
+          startupProbe:
+            exec:
+              command: [python3, -c, "import os,urllib.request;[os.environ.pop(k,None) for k in ('HTTP_PROXY','HTTPS_PROXY','http_proxy','https_proxy')];urllib.request.urlopen('http://127.0.0.1:8000/api/health/',timeout=10)"]
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: [python3, -c, "import os,urllib.request;[os.environ.pop(k,None) for k in ('HTTP_PROXY','HTTPS_PROXY','http_proxy','https_proxy')];urllib.request.urlopen('http://127.0.0.1:8000/api/health/',timeout=15)"]
+            periodSeconds: 20
+            timeoutSeconds: 20
+            failureThreshold: 4
+          # Slack on the timeouts, deliberately: this endpoint is served by the same event loop
+          # that is relaying a transcription, and a busy process answering slowly is not a dead
+          # one. The RAG port lost a deploy cycle to exactly this (SUP-840). It also does NOT
+          # call the model — a health check that does turns an engine still loading its weights
+          # into a restarted pod.
+          livenessProbe:
+            exec:
+              command: [python3, -c, "import os,urllib.request;[os.environ.pop(k,None) for k in ('HTTP_PROXY','HTTPS_PROXY','http_proxy','https_proxy')];urllib.request.urlopen('http://127.0.0.1:8000/api/health/',timeout=25)"]
+            periodSeconds: 30
+            timeoutSeconds: 30
+            failureThreshold: 6
+          resources:
+            limits:
+              cpu: "6"
+              memory: 12Gi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: "6"
+              memory: 12Gi
+              nvidia.com/gpu: "0"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+        # -------------------------------------------------------------------
+        - name: console
+          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:20424f033e017b8a79f1cf5dde3f7f03389a56a36f0f2bc4b6c86c4ba1d6169c"
+          imagePullPolicy: IfNotPresent
+          command: [uvicorn]
+          args:
+            - console:app
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8080"
+            # One worker: the session is a signed assertion rather than a stored row, so more
+            # would be free — but every request is a relay to one loopback process and a second
+            # worker adds nothing but a way to race the corpus import.
+            - --workers
+            - "1"
+            # An upload is a POST with a half-gigabyte body, and the default keep-alive timeout
+            # is what cuts it off on a slow link.
+            - --timeout-keep-alive
+            - "75"
+          env:
+            - name: PYTHONPATH
+              value: /opt/app
+            - name: CONSOLE_TITLE
+              value: "Confidential Clinical Documentation"
+            - name: CONSOLE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: confidential-clinical-doc-secrets, key: console-password }
+            - name: CONSOLE_SESSION_KEY
+              valueFrom:
+                secretKeyRef: { name: confidential-clinical-doc-secrets, key: console-session-key }
+            - name: CONSOLE_SESSION_TTL_SECONDS
+              value: "43200"
+            - name: SCRIBE_API_URL
+              value: "http://127.0.0.1:8000"
+            - name: PROXY_READ_TIMEOUT_SECONDS
+              value: "3600"
+            - name: EGRESS_GUARD_URL
+              value: "http://127.0.0.1:3128"
+            - name: EGRESS_ALLOW_HOST
+              value: ""
+            # The resolved transcript corpus binding. By reference, and in a Secret: for an
+            # ungated dataset it carries the owner's own credentials, and it is the one value
+            # that differs between two deployments of this version — both of which are reasons
+            # for it to be in the one place the platform lifts out before the snapshot is taken.
+            - name: CORPUS_BINDING_JSON
+              valueFrom:
+                secretKeyRef: { name: confidential-clinical-doc-secrets, key: corpus-binding }
+            - name: CORPUS_TABLE
+              value: "transcripts"
+            - name: CORPUS_ID_COLUMN
+              value: "transcript_id"
+            - name: CORPUS_SPEAKER_COLUMN
+              value: "speaker"
+            - name: CORPUS_START_COLUMN
+              value: "start_seconds"
+            - name: CORPUS_END_COLUMN
+              value: "end_seconds"
+            - name: CORPUS_TEXT_COLUMN
+              value: "text"
+            - name: CORPUS_RECORDED_AT_COLUMN
+              value: "recorded_at"
+            # What the console tells a clinician about the deployment they are using. Plain
+            # configuration, not a credential, and attested with everything else — so the panel
+            # and the signed evidence describe the same deployment.
+            - name: ABOUT_GENERATION_MODEL
+              value: "qwen3-coder-30b-a3b-instruct-fp8"
+            - name: ABOUT_GENERATION_LICENCE
+              value: "Apache-2.0"
+            - name: ABOUT_ASR_MODEL
+              value: "Distil-Whisper large-v3 (faster-whisper, int8, CPU)"
+            - name: ABOUT_ASR_LICENCE
+              value: "MIT"
+            - name: ABOUT_DIARIZATION_MODELS
+              value: "sherpa-onnx with pyannote segmentation 3.0 and NVIDIA NeMo TitaNet-Large, on the CPU"
+            - name: ABOUT_DIARIZATION_LICENCES
+              value: "Apache-2.0 (sherpa-onnx), MIT (segmentation), CC-BY-4.0 (TitaNet-Large)"
+            - name: DIARIZATION_FLOOR_ASSIGNED_WORD_FRACTION
+              value: "0.9"
+            - name: DIARIZATION_FLOOR_SEGMENT_PURITY
+              value: "0.85"
+            - name: DIARIZATION_FLOOR_SPEECH_COVERAGE
+              value: "0.3"
+            - name: AUDIO_RETENTION_HOURS
+              value: "24"
+            - name: ABOUT_SOURCE_REPO
+              value: "https://github.com/Super-Protocol/confidential-clinical-documentation"
+            - name: ABOUT_UPSTREAM
+              value: https://github.com/NVIDIA-AI-Blueprints/ambient-provider
+            # There is deliberately no ABOUT_EXPECTED_DIGEST here. That env value would be
+            # rendered into this Deployment, the Deployment is in the evidence snapshot, and the
+            # snapshot is what the digest is OVER — so a console displaying the digest it should
+            # match changes that digest by displaying it. It cost the RAG port a deploy cycle to
+            # notice. The deployment's own digest is at the evidence URL the listing links.
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: LOG_LEVEL
+              value: "INFO"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 1000
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          # The one route outside the session, and it reports liveness and nothing about any
+          # consultation — it is reachable from the public hostname by anybody who finds the name.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 4
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: 500m
+              memory: 512Mi
+              nvidia.com/gpu: "0"
+          volumeMounts:
+            - name: app
+              mountPath: /opt/app
+              readOnly: true
+        # -------------------------------------------------------------------
+        - name: egress
+          image: "ghcr.io/super-protocol/confidential-clinical-documentation/scribe-server@sha256:20424f033e017b8a79f1cf5dde3f7f03389a56a36f0f2bc4b6c86c4ba1d6169c"
+          imagePullPolicy: IfNotPresent
+          command: [python3, /opt/app/egress_guard.py]
+          env:
+            - name: EGRESS_LISTEN_ADDRESS
+              value: "127.0.0.1"
+            - name: EGRESS_LISTEN_PORT
+              value: "3128"
+            # Empty, and `ccd.validate` refuses a value. This deployment reaches nothing.
+            - name: EGRESS_ALLOW_HOST
+              value: ""
+            - name: EGRESS_ALLOW_PORT
+              value: "443"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: LOG_LEVEL
+              value: "INFO"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            privileged: false
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 1000
+          # Loopback, so the probe is `exec` — and it asks the guard's own status route, which
+          # is the one non-CONNECT request the guard answers.
+          startupProbe:
+            exec:
+              command: [python3, -c, "import os,urllib.request;[os.environ.pop(k,None) for k in ('HTTP_PROXY','HTTPS_PROXY','http_proxy','https_proxy')];urllib.request.urlopen('http://127.0.0.1:3128/_guard/status',timeout=5)"]
+            periodSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            exec:
+              command: [python3, -c, "import os,urllib.request;[os.environ.pop(k,None) for k in ('HTTP_PROXY','HTTPS_PROXY','http_proxy','https_proxy')];urllib.request.urlopen('http://127.0.0.1:3128/_guard/status',timeout=5)"]
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
+          resources:
+            limits:
+              cpu: 250m
+              memory: 256Mi
+              nvidia.com/gpu: "0"
+            requests:
+              cpu: 250m
+              memory: 256Mi
+              nvidia.com/gpu: "0"
+          volumeMounts:
+            - name: app
+              mountPath: /opt/app
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: confidential-clinical-doc-data
+        - name: app
+          configMap:
+            name: confidential-clinical-doc-app
+---
+# Source: confidential-clinical-documentation/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: confidential-clinical-doc
+  labels:
+    app.kubernetes.io/name: confidential-clinical-doc
+    app.kubernetes.io/instance: ccd
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    # Declared on the object as well as in the listing's `evidence.exclude`. The annotation is
+    # what the cloud reads when it digests the namespace; the definition's copy is what the
+    # listing page shows. A digest displayed beside "no exclusions" answers the only question
+    # that matters about it wrongly.
+    swarm.io/exclude-evidence-fields: "/spec/rules/0/host"
+    # A recording is uploaded through this hostname. Without the body size the default 1 MiB
+    # limit refuses every real consultation with a 413 that comes from nginx rather than from the
+    # deployment.
+    nginx.ingress.kubernetes.io/proxy-body-size: "512m"
+    # Buffering off in both directions, and this is not a performance preference. Transcription
+    # and note generation are server-sent-event streams: buffered, the browser sits blank for
+    # minutes and then receives the whole transcript at once, which reads as a hung deployment.
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: "nginx"
+  rules:
+    - host: "scribe.conf-apps.superprotocol.dev"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: confidential-clinical-doc-console
+                port:
+                  number: 80

@@ -1,0 +1,13 @@
+# The generation endpoint this listing composes: `swarm-model-server` with no ingress of its own,
+# on the card. It is the SAME component shape the vulnerability-analysis listing deploys, and it
+# is goldened here separately because the listing pins its own chart version and its own images.
+ingress:
+  enabled: false
+apiKey: INFERENCE-KEY-FOR-THE-GOLDEN
+model:
+  preset: qwen3-coder-30b-a3b-instruct-fp8
+  maxModelLen: 65536
+  gpuMemoryUtilization: 0.85
+resources:
+  cpu: "8"
+  memory: 32Gi

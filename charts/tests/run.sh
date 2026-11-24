@@ -21,14 +21,15 @@ cd "$root"
 # only for the label: those charts address one another by `<release>-<subchart>` and the
 # listing resolves the same names through `{{ components.agent.release }}`, so a golden taken
 # under a different release name would not be the deployment anybody gets.
-release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; rapids-singlecell-notebook) printf 'sc' ;; transaction-model-notebook) printf 'tfm' ;; text-embeddings-server|milvus-standalone|confidential-rag) printf 'rag' ;; confidential-vulnerability-analysis) printf 'va' ;; patroni-postgresql) printf 'pg' ;; swarm-model-server) printf 'ms' ;; swarm-doc-ingest) printf 'di' ;; conversational-analyst-*) printf 'analyst' ;; *) printf 'cr' ;; esac; }
-namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; rapids-singlecell-notebook) printf 'single-cell' ;; transaction-model-notebook) printf 'transaction-model' ;; text-embeddings-server|milvus-standalone|confidential-rag) printf 'confidential-rag' ;; confidential-vulnerability-analysis) printf 'vuln-analysis' ;; patroni-postgresql) printf 'patroni' ;; swarm-model-server) printf 'model-server' ;; swarm-doc-ingest) printf 'doc-ingest' ;; conversational-analyst-*) printf 'conversational-analyst' ;; *) printf 'confidential-router' ;; esac; }
+release_for()   { case "$1" in confidential-s3) printf 'cs3' ;; confidential-clinical-documentation) printf 'ccd' ;; rapids-singlecell-notebook) printf 'sc' ;; transaction-model-notebook) printf 'tfm' ;; text-embeddings-server|milvus-standalone|confidential-rag) printf 'rag' ;; confidential-vulnerability-analysis) printf 'va' ;; patroni-postgresql) printf 'pg' ;; swarm-model-server) printf 'ms' ;; swarm-doc-ingest) printf 'di' ;; conversational-analyst-*) printf 'analyst' ;; *) printf 'cr' ;; esac; }
+namespace_for() { case "$1" in confidential-s3) printf 'confidential-s3' ;; confidential-clinical-documentation) printf 'clinical-doc' ;; rapids-singlecell-notebook) printf 'single-cell' ;; transaction-model-notebook) printf 'transaction-model' ;; text-embeddings-server|milvus-standalone|confidential-rag) printf 'confidential-rag' ;; confidential-vulnerability-analysis) printf 'vuln-analysis' ;; patroni-postgresql) printf 'patroni' ;; swarm-model-server) printf 'model-server' ;; swarm-doc-ingest) printf 'doc-ingest' ;; conversational-analyst-*) printf 'conversational-analyst' ;; *) printf 'confidential-router' ;; esac; }
 
 RELEASE=cr
 NAMESPACE=confidential-router
 CHARTS=(confidential-router-api confidential-router-litellm confidential-router-ollama confidential-router-ui confidential-s3 patroni-postgresql swarm-model-server rapids-singlecell-notebook transaction-model-notebook swarm-doc-ingest
         conversational-analyst-platform conversational-analyst-embeddings conversational-analyst-identity conversational-analyst-agent conversational-analyst-gateway conversational-analyst-grounding
-        text-embeddings-server milvus-standalone confidential-rag confidential-vulnerability-analysis)
+        text-embeddings-server milvus-standalone confidential-rag confidential-vulnerability-analysis
+        confidential-clinical-documentation)
 
 update="${UPDATE:-}"
 failures=0
@@ -89,6 +90,7 @@ for chart in "${CHARTS[@]}"; do
     milvus-standalone) values="charts/tests/cases/rag-vectors.yaml" ;;
     confidential-rag) values="charts/tests/cases/rag-stack.yaml" ;;
     confidential-vulnerability-analysis) values="charts/tests/cases/vuln-analysis-stack.yaml" ;;
+    confidential-clinical-documentation) values="charts/tests/cases/clinical-doc-stack.yaml" ;;
   esac
   if output=$(helm lint "charts/$chart" --values "$values" 2>&1); then
     pass "$chart"
@@ -2326,6 +2328,138 @@ else
   printf '%s\n' "$output"
   fail "charts/tests/cva_console.py"
 fi
+
+
+# ---------------------------------------------------------------------------
+# Confidential Clinical Documentation (SUP-873), ported from NVIDIA's open
+# ambient-provider reference architecture. Two components; the listing's own
+# chart renders one pod with three containers, an attested door and an egress
+# allowlist with nothing in it.
+#
+# The diarization floors are this listing's subject rather than a tuning knob: a
+# transcript with no speaker separation still produces a fluent, correctly
+# structured note that attributes the patient's symptoms to the clinician, and
+# nothing in a render says so. What the floors are, that they reach the
+# container, and that none of them is zero, are asked directly below.
+# ---------------------------------------------------------------------------
+
+note "every image the clinical-documentation listing renders is declared by its listing"
+if output=$(python3 charts/tests/declared_images.py confidential-clinical-documentation \
+      scribe confidential-clinical-documentation charts/tests/cases/clinical-doc-stack.yaml \
+      inference swarm-model-server charts/tests/cases/clinical-doc-engine.yaml); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/declared_images.py confidential-clinical-documentation"
+fi
+
+note "the heaviest pod the clinical-documentation listing renders is within its declared maxPod"
+if output=$(python3 charts/tests/max_pod.py confidential-clinical-documentation \
+      scribe:confidential-clinical-documentation:clinical-doc-stack \
+      inference:swarm-model-server:clinical-doc-engine); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/max_pod.py confidential-clinical-documentation"
+fi
+
+note "two consumers of the clinical-documentation listing attest the same snapshot"
+if output=$(python3 charts/tests/evidence_drift.py confidential-clinical-documentation \
+      charts/tests/cases/clinical-doc-stack.yaml confidential-clinical-documentation \
+      'hostname={t}.conf-apps.superprotocol.dev' \
+      'console.password=ACCESS-{t}' \
+      'console.sessionKey=SESSION-SIGNING-KEY-FOR-THE-GOLDEN-{t}' \
+      'inference.apiKey=INFERENCE-{t}'); then
+  # The three generated credentials ARE varied here, unlike the single-cell and
+  # transaction-model cases: they are in a Secret, whose values the snapshot drops, and
+  # varying them is what proves none of them leaked into an attested object on the way.
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/evidence_drift.py confidential-clinical-documentation"
+fi
+
+# What attaching a transcript corpus does to THIS CHART's render: nothing outside the Secret,
+# whose values the platform lifts out before the snapshot is taken.
+#
+# Note carefully what this does NOT say, because the first version of this listing said it and
+# it was wrong: it does not mean a gated deployment and an ungated one attest the same digest.
+# The MARKETPLACE adds the gatekeeper egress sidecar's own objects to a gated deployment — a
+# ConfigMap, a Deployment, a Service and the Secret holding its client certificate — and the
+# cloud digests those too (nine resources ungated, thirteen gated, measured on real
+# deployments). The listing declares the gated number; `apps/tests/gated_digest.py` is what
+# refuses an ungated one. This check is about the chart alone, and it is still worth having:
+# if a patch ever put a connection into an env value, a ConfigMap or an argument, the binding
+# would reach an attested object and no two gated deployments would agree either.
+note "attaching a transcript corpus changes nothing in this chart outside the Secret"
+if diff -u <(strip_secret charts/tests/golden/clinical-doc-stack.yaml) \
+            <(strip_secret charts/tests/golden/clinical-doc-stack-bound.yaml) >/tmp/ccd-bind-diff.$$ 2>&1; then
+  pass "bound and unbound renders differ in the Secret alone"
+else
+  fail "bound and unbound renders differ outside the Secret"
+  sed 's/^/        /' /tmp/ccd-bind-diff.$$
+fi
+rm -f /tmp/ccd-bind-diff.$$
+
+# The card, the door, the floors and the one env value that would make every note fail while
+# every probe stayed green. None of them is visible in a golden diff. See the file.
+note "the clinical-documentation chart's claims are true of its own manifests"
+if output=$(python3 charts/tests/clinical_doc.py); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "charts/tests/clinical_doc.py"
+fi
+
+# Each of these is a configuration that renders cleanly and then fails in the cluster, or works
+# while being something other than what the listing says it is.
+base_ccd=(helm template ccd charts/confidential-clinical-documentation --namespace clinical-doc --values charts/tests/cases/clinical-doc-stack.yaml)
+
+refuses "a console with no password" "the console is the whole of what stands in front" \
+  "${base_ccd[@]}" --set console.password=
+
+refuses "a session key short enough to guess" "shorter than 32 characters" \
+  "${base_ccd[@]}" --set console.sessionKey=short
+
+refuses "a scribe bound to the pod address" "must be 127.0.0.1" \
+  "${base_ccd[@]}" --set scribe.listenAddress=0.0.0.0
+
+refuses "an ingress with no class" "served by nothing" \
+  "${base_ccd[@]}" --set ingress.className=
+
+refuses "a generation endpoint with no model name" "inference.model is required" \
+  "${base_ccd[@]}" --set inference.model=
+
+refuses "a generation URL the OpenAI client cannot use" "must end in /v1" \
+  "${base_ccd[@]}" --set inference.url=http://swarm-model-server:8000
+
+# The one that matters most, and the only check in this file whose failure mode is a deployment
+# that works: a floor of zero passes every diarization result, including one that put both
+# people in one cluster.
+refuses "a diarization floor of zero" "a floor of zero means every diarization result passes" \
+  "${base_ccd[@]}" --set scribe.diarization.floors.segmentPurity=0
+
+refuses "a diarization floor above one" "is a fraction and cannot exceed 1.0" \
+  "${base_ccd[@]}" --set scribe.diarization.floors.assignedWordFraction=1.5
+
+refuses "a speaker COUNT where a distance threshold belongs" "not a speaker count" \
+  "${base_ccd[@]}" --set scribe.diarization.threshold=2
+
+# A Pod that asks for the one card stays Pending for ever beside a generation engine that then
+# cannot start either, and the cloud reports `ready: 0` with no reason.
+refuses "a GPU request on the pod that is not the engine" "gives the one card to exactly one container" \
+  "${base_ccd[@]}" --set 'scribe.resources.limits.nvidia\.com/gpu=1'
+
+# An allowlist with an entry in it is a claim this listing does not make.
+refuses "an egress allowlist with a host in it" "this deployment reaches nothing" \
+  "${base_ccd[@]}" --set egress.allowHost=api.example.com
+
+refuses "a guard on the pod address, which is an egress path for the whole space" "must be 127.0.0.1" \
+  "${base_ccd[@]}" --set egress.listenAddress=0.0.0.0
+
+# An ingress-side 413 is an error the deployment never sees and a clinician cannot act on.
+refuses "an ingress body limit below the upload the scribe accepts" "the error a clinician reads would come from nginx" \
+  "${base_ccd[@]}" --set ingress.maxBodySize=8m
 
 note "Result"
 if [ "$failures" -eq 0 ]; then

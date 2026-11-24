@@ -1,0 +1,435 @@
+{{- $name := include "ccd.name" . -}}
+{{- include "ccd.validate" . -}}
+{{- /*
+One pod, three containers, one volume.
+
+  scribe   the ported application — recognition, diarization and note generation, plus the
+           built UI — bound to 127.0.0.1, on no Service and no Ingress
+  console  the only thing a hostname reaches: a sign-in form, a session cookie, and a
+           streaming proxy to the scribe
+  egress   the loopback CONNECT guard, admitting NOTHING
+
+They share the pod for two reasons that are both load-bearing rather than tidy. The console
+reads the gated transcript corpus and hands it to the scribe over loopback, and the volume is
+ReadWriteOnce, so a second pod could not mount it beside this one. And `scribe` and `egress`
+listening on loopback only is a property a Service would hand away: nothing else in the cluster
+space can reach either, which is why it is safe for the scribe to carry no authentication of its
+own.
+
+THE CARD IS NOT HERE. One H100 reaches exactly one container, and that container is the
+generation engine in the `swarm-model-server` component. Recognition and diarization run on this
+pod's CPU, which is a measured decision and not a compromise: 16–19 s of wall clock per minute of
+audio, measured on a real deployment of this listing, against an engine that would otherwise not
+start at all. `ccd.validate`
+refuses a GPU request on any container in this pod, because a Pod that asks for a card it cannot
+get stays Pending for ever beside an engine that then cannot start either.
+*/ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ccd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scribe
+spec:
+  replicas: 1
+  # The volume is held open by the running pod, so a rolling update would leave the replacement
+  # Pending on it for ever while the old pod serves.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "ccd.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: scribe
+  template:
+    metadata:
+      labels:
+        {{- include "ccd.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: scribe
+    spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        # The volume arrives owned by root on this cloud's storage class, and every container
+        # here runs as 1000. `fsGroup` handles the group, but a directory the application
+        # expects to create on its first write is a directory it fails to create; making them
+        # here is cheaper than discovering it at the first upload.
+        - name: prepare
+          image: {{ include "ccd.imageRef" .Values.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [/bin/sh, -ec]
+          args:
+            - mkdir -p /data/uploads /data/state/transcripts /data/state/notes
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            requests: { cpu: 100m, memory: 128Mi, nvidia.com/gpu: "0" }
+            limits: { cpu: 100m, memory: 128Mi, nvidia.com/gpu: "0" }
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        # -------------------------------------------------------------------
+        - name: scribe
+          image: {{ include "ccd.imageRef" .Values.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [uvicorn]
+          args:
+            - ambient_scribe.main:app
+            - --host
+            - {{ .Values.scribe.listenAddress | quote }}
+            - --port
+            - {{ .Values.scribe.port | quote }}
+            # One worker. Recognition and diarization are threaded across the whole CPU
+            # allocation, so a second worker would make two transcriptions slower rather than
+            # one faster — and the persisted stores are loaded into each worker's memory at
+            # import, so two workers would disagree about which notes exist.
+            - --workers
+            - "1"
+            - --timeout-keep-alive
+            - "75"
+          env:
+            - name: API_TITLE
+              value: {{ .Values.console.title | quote }}
+            # The generation endpoint. By reference for the key: an env *value* is rendered into
+            # this Deployment and published in the evidence snapshot, a `secretKeyRef` is a
+            # pointer to something the platform sealed.
+            - name: OPENAI_BASE_URL
+              value: {{ .Values.inference.url | quote }}
+            - name: LLM_MODEL
+              value: {{ .Values.inference.model | quote }}
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ $name }}-secrets, key: inference-api-key }
+            - name: LLM_TIMEOUT_SECONDS
+              value: {{ .Values.inference.timeoutSeconds | quote }}
+            - name: LLM_LICENCE
+              value: {{ .Values.inference.licence | quote }}
+            # Recognition. A directory and never a model name: a name would make the first
+            # transcription of a fresh deployment reach huggingface.co, and this deployment
+            # reaches nothing. The weights are inside the image digest above.
+            - name: ASR_MODEL_DIR
+              value: {{ .Values.scribe.asr.modelDir | quote }}
+            - name: ASR_COMPUTE_TYPE
+              value: {{ .Values.scribe.asr.computeType | quote }}
+            - name: ASR_THREADS
+              value: {{ .Values.scribe.threads | int64 | quote }}
+            - name: ASR_BEAM_SIZE
+              value: {{ .Values.scribe.asr.beamSize | int64 | quote }}
+            - name: ASR_LANGUAGE
+              value: {{ .Values.scribe.asr.language | quote }}
+            # Diarization, and the floors that decide whether its answer is shown. Upstream has
+            # no floors and attributes unconditionally; a transcript with no speaker separation
+            # still produces a fluent, well-structured note that puts the patient's symptoms in
+            # the clinician's mouth.
+            - name: ENABLE_SPEAKER_DIARIZATION
+              value: {{ .Values.scribe.diarization.enabled | quote }}
+            - name: DIARIZATION_SEGMENTATION_MODEL
+              value: {{ .Values.scribe.diarization.segmentationModel | quote }}
+            - name: DIARIZATION_EMBEDDING_MODEL
+              value: {{ .Values.scribe.diarization.embeddingModel | quote }}
+            - name: DIARIZATION_THRESHOLD
+              value: {{ .Values.scribe.diarization.threshold | quote }}
+            - name: DIARIZATION_FLOOR_ASSIGNED_WORD_FRACTION
+              value: {{ .Values.scribe.diarization.floors.assignedWordFraction | quote }}
+            - name: DIARIZATION_FLOOR_SEGMENT_PURITY
+              value: {{ .Values.scribe.diarization.floors.segmentPurity | quote }}
+            - name: DIARIZATION_FLOOR_SPEECH_COVERAGE
+              value: {{ .Values.scribe.diarization.floors.speechCoverage | quote }}
+            - name: ENABLE_STREAMING
+              value: {{ .Values.scribe.streaming | quote }}
+            - name: UPLOAD_DIR
+              value: /data/uploads
+            - name: STATE_DIR
+              value: /data/state
+            # `int64` before `quote`, and it is not cosmetic. Helm parses a large number out of
+            # values.yaml as a float64 and `quote` then renders it in SCIENTIFIC NOTATION —
+            # `"5.24288e+08"` — which pydantic refuses as an integer and the container dies on
+            # import with a validation error. The pod then never becomes ready, and on a cluster
+            # space there is no pod-level visibility to read the reason out of. Found in kind
+            # after fifty minutes of `ready: 0` on a real cloud; the same trap bit SUP-890.
+            - name: MAX_FILE_SIZE
+              value: {{ .Values.scribe.maxFileSizeBytes | int64 | quote }}
+            # How long a recording is kept for playback. The transcript's text and timecodes are
+            # unaffected; what ages out is the audio, which is the protected health information.
+            - name: AUDIO_RETENTION_HOURS
+              value: {{ .Values.scribe.audioRetentionHours | quote }}
+            - name: RETENTION_SWEEP_SECONDS
+              value: {{ .Values.scribe.retentionSweepSeconds | int64 | quote }}
+            # Empty. The UI is served by this same process, so nothing legitimate is
+            # cross-origin — and the console in front of this API carries a session cookie, so a
+            # wildcard here would be a cross-site request away from somebody else's page
+            # reading a consultation.
+            - name: CORS_ALLOW_ORIGINS
+              value: ""
+            - name: SYSTEM_PROMPT
+              value: {{ .Values.scribe.systemPrompt | quote }}
+            {{- if .Values.egress.enabled }}
+            # Every HTTP client in this container goes through the guard, which admits nothing.
+            # NO_PROXY is what keeps the generation call inside the cluster space: routed
+            # through the guard it would be refused like everything else.
+            - name: HTTPS_PROXY
+              value: {{ printf "http://%s:%d" .Values.egress.listenAddress (.Values.egress.port | int) | quote }}
+            - name: HTTP_PROXY
+              value: {{ printf "http://%s:%d" .Values.egress.listenAddress (.Values.egress.port | int) | quote }}
+            - name: NO_PROXY
+              {{- /* The engine's bare Service name, taken from `inference.url` rather than
+                     written twice, so a listing that moves the engine cannot leave this
+                     behind. */}}
+              value: {{ printf "%s,%s" .Values.egress.noProxy (.Values.inference.url | trimPrefix "https://" | trimPrefix "http://" | splitList "/" | first | splitList ":" | first) | quote }}
+            {{- end }}
+            # Pinned to the cores this container is granted, not to the host's. The chart
+            # convention from SUP-882: a library that sizes its pool from `nproc` starts a
+            # thread per host core inside the quota and spends the request being throttled.
+            # CTranslate2 and onnxruntime both do exactly that.
+            - name: OMP_NUM_THREADS
+              value: {{ .Values.scribe.threads | int64 | quote }}
+            - name: MKL_NUM_THREADS
+              value: {{ .Values.scribe.threads | int64 | quote }}
+            - name: NUMEXPR_MAX_THREADS
+              value: {{ .Values.scribe.threads | int64 | quote }}
+            - name: TOKENIZERS_PARALLELISM
+              value: "false"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # No `ports:` and no Service. The scribe listens on loopback, so there is nothing to
+          # declare and nothing for another pod to reach.
+          #
+          # The probes are `exec` for the same reason: a kubelet httpGet probe connects to the
+          # POD's address, which this process does not listen on, so an httpGet probe would fail
+          # every time while the scribe answered the console perfectly. And they call python
+          # rather than curl — there is no curl in this image, and a probe naming a binary the
+          # image does not carry fails identically to a dead process.
+          startupProbe:
+            exec:
+              command: [python3, -c, {{ include "ccd.httpProbe" (dict "port" .Values.scribe.port "path" "/api/health/" "timeout" 10) | quote }}]
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: [python3, -c, {{ include "ccd.httpProbe" (dict "port" .Values.scribe.port "path" "/api/health/" "timeout" 15) | quote }}]
+            periodSeconds: 20
+            timeoutSeconds: 20
+            failureThreshold: 4
+          # Slack on the timeouts, deliberately: this endpoint is served by the same event loop
+          # that is relaying a transcription, and a busy process answering slowly is not a dead
+          # one. The RAG port lost a deploy cycle to exactly this (SUP-840). It also does NOT
+          # call the model — a health check that does turns an engine still loading its weights
+          # into a restarted pod.
+          livenessProbe:
+            exec:
+              command: [python3, -c, {{ include "ccd.httpProbe" (dict "port" .Values.scribe.port "path" "/api/health/" "timeout" 25) | quote }}]
+            periodSeconds: 30
+            timeoutSeconds: 30
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.scribe.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+        # -------------------------------------------------------------------
+        - name: console
+          image: {{ include "ccd.imageRef" .Values.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [uvicorn]
+          args:
+            - console:app
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8080"
+            # One worker: the session is a signed assertion rather than a stored row, so more
+            # would be free — but every request is a relay to one loopback process and a second
+            # worker adds nothing but a way to race the corpus import.
+            - --workers
+            - "1"
+            # An upload is a POST with a half-gigabyte body, and the default keep-alive timeout
+            # is what cuts it off on a slow link.
+            - --timeout-keep-alive
+            - "75"
+          env:
+            - name: PYTHONPATH
+              value: /opt/app
+            - name: CONSOLE_TITLE
+              value: {{ .Values.console.title | quote }}
+            - name: CONSOLE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ $name }}-secrets, key: console-password }
+            - name: CONSOLE_SESSION_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ $name }}-secrets, key: console-session-key }
+            - name: CONSOLE_SESSION_TTL_SECONDS
+              value: {{ .Values.console.sessionTtlSeconds | int64 | quote }}
+            - name: SCRIBE_API_URL
+              value: {{ printf "http://127.0.0.1:%d" (.Values.scribe.port | int) | quote }}
+            - name: PROXY_READ_TIMEOUT_SECONDS
+              value: {{ .Values.console.proxyReadTimeoutSeconds | int64 | quote }}
+            {{- if .Values.egress.enabled }}
+            - name: EGRESS_GUARD_URL
+              value: {{ printf "http://%s:%d" .Values.egress.listenAddress (.Values.egress.port | int) | quote }}
+            - name: EGRESS_ALLOW_HOST
+              value: {{ .Values.egress.allowHost | quote }}
+            {{- end }}
+            # The resolved transcript corpus binding. By reference, and in a Secret: for an
+            # ungated dataset it carries the owner's own credentials, and it is the one value
+            # that differs between two deployments of this version — both of which are reasons
+            # for it to be in the one place the platform lifts out before the snapshot is taken.
+            - name: CORPUS_BINDING_JSON
+              valueFrom:
+                secretKeyRef: { name: {{ $name }}-secrets, key: corpus-binding }
+            - name: CORPUS_TABLE
+              value: {{ .Values.corpus.table | quote }}
+            - name: CORPUS_ID_COLUMN
+              value: {{ .Values.corpus.idColumn | quote }}
+            - name: CORPUS_SPEAKER_COLUMN
+              value: {{ .Values.corpus.speakerColumn | quote }}
+            - name: CORPUS_START_COLUMN
+              value: {{ .Values.corpus.startColumn | quote }}
+            - name: CORPUS_END_COLUMN
+              value: {{ .Values.corpus.endColumn | quote }}
+            - name: CORPUS_TEXT_COLUMN
+              value: {{ .Values.corpus.textColumn | quote }}
+            - name: CORPUS_RECORDED_AT_COLUMN
+              value: {{ .Values.corpus.recordedAtColumn | quote }}
+            # What the console tells a clinician about the deployment they are using. Plain
+            # configuration, not a credential, and attested with everything else — so the panel
+            # and the signed evidence describe the same deployment.
+            - name: ABOUT_GENERATION_MODEL
+              value: {{ .Values.inference.model | quote }}
+            - name: ABOUT_GENERATION_LICENCE
+              value: {{ .Values.inference.licence | quote }}
+            - name: ABOUT_ASR_MODEL
+              value: {{ .Values.scribe.asr.title | quote }}
+            - name: ABOUT_ASR_LICENCE
+              value: {{ .Values.scribe.asr.licence | quote }}
+            - name: ABOUT_DIARIZATION_MODELS
+              value: {{ .Values.scribe.diarization.title | quote }}
+            - name: ABOUT_DIARIZATION_LICENCES
+              value: {{ .Values.scribe.diarization.licence | quote }}
+            - name: DIARIZATION_FLOOR_ASSIGNED_WORD_FRACTION
+              value: {{ .Values.scribe.diarization.floors.assignedWordFraction | quote }}
+            - name: DIARIZATION_FLOOR_SEGMENT_PURITY
+              value: {{ .Values.scribe.diarization.floors.segmentPurity | quote }}
+            - name: DIARIZATION_FLOOR_SPEECH_COVERAGE
+              value: {{ .Values.scribe.diarization.floors.speechCoverage | quote }}
+            - name: AUDIO_RETENTION_HOURS
+              value: {{ .Values.scribe.audioRetentionHours | quote }}
+            - name: ABOUT_SOURCE_REPO
+              value: {{ .Values.console.about.sourceRepo | quote }}
+            - name: ABOUT_UPSTREAM
+              value: https://github.com/NVIDIA-AI-Blueprints/ambient-provider
+            # There is deliberately no ABOUT_EXPECTED_DIGEST here. That env value would be
+            # rendered into this Deployment, the Deployment is in the evidence snapshot, and the
+            # snapshot is what the digest is OVER — so a console displaying the digest it should
+            # match changes that digest by displaying it. It cost the RAG port a deploy cycle to
+            # notice. The deployment's own digest is at the evidence URL the listing links.
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          # The one route outside the session, and it reports liveness and nothing about any
+          # consultation — it is reachable from the public hostname by anybody who finds the name.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 4
+          resources:
+            {{- toYaml .Values.console.resources | nindent 12 }}
+          volumeMounts:
+            - name: app
+              mountPath: /opt/app
+              readOnly: true
+        {{- if .Values.egress.enabled }}
+        # -------------------------------------------------------------------
+        - name: egress
+          image: {{ include "ccd.imageRef" .Values.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [python3, /opt/app/egress_guard.py]
+          env:
+            - name: EGRESS_LISTEN_ADDRESS
+              value: {{ .Values.egress.listenAddress | quote }}
+            - name: EGRESS_LISTEN_PORT
+              value: {{ .Values.egress.port | int64 | quote }}
+            # Empty, and `ccd.validate` refuses a value. This deployment reaches nothing.
+            - name: EGRESS_ALLOW_HOST
+              value: {{ .Values.egress.allowHost | quote }}
+            - name: EGRESS_ALLOW_PORT
+              value: {{ .Values.egress.allowPort | int64 | quote }}
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # Loopback, so the probe is `exec` — and it asks the guard's own status route, which
+          # is the one non-CONNECT request the guard answers.
+          startupProbe:
+            exec:
+              command: [python3, -c, {{ include "ccd.httpProbe" (dict "port" .Values.egress.port "path" "/_guard/status" "timeout" 5) | quote }}]
+            periodSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            exec:
+              command: [python3, -c, {{ include "ccd.httpProbe" (dict "port" .Values.egress.port "path" "/_guard/status" "timeout" 5) | quote }}]
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
+          resources:
+            {{- toYaml .Values.egress.resources | nindent 12 }}
+          volumeMounts:
+            - name: app
+              mountPath: /opt/app
+              readOnly: true
+        {{- end }}
+      volumes:
+        - name: data
+          {{- if .Values.scribe.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ $name }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: app
+          configMap:
+            name: {{ $name }}-app
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

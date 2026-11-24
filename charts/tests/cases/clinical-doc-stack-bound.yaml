@@ -1,0 +1,23 @@
+# The same deployment with a transcript corpus attached. The binding is the only value that
+# differs between two deployments of this version at the same parameters, and it is in the
+# Secret — which is what `attaching a transcript corpus changes nothing outside the Secret`
+# below checks against this golden and the unbound one. If a patch ever put a connection into an
+# env value, a ConfigMap or an argument, the declared digest would become a property of whether
+# somebody attached data, and the gate would then refuse exactly the deployments that mounted it.
+name: confidential-clinical-doc
+hostname: scribe.conf-apps.superprotocol.dev
+ingress:
+  className: nginx
+image:
+  digest: sha256:20424f033e017b8a79f1cf5dde3f7f03389a56a36f0f2bc4b6c86c4ba1d6169c
+  tag: 1.0.0-sp.277b74e
+console:
+  password: ACCESS-PASSWORD-FOR-THE-GOLDEN
+  sessionKey: SESSION-SIGNING-KEY-FOR-THE-GOLDEN-01234
+inference:
+  url: http://swarm-model-server:8000/v1
+  model: qwen3-coder-30b-a3b-instruct-fp8
+  licence: Apache-2.0
+  apiKey: INFERENCE-KEY-FOR-THE-GOLDEN
+corpus:
+  bindingJson: '[{"name":"acme-consultations","connection":{"host":"mp-gatekeeper-egress","port":9501,"database":"acme_clinic","username":"gateway"}}]'

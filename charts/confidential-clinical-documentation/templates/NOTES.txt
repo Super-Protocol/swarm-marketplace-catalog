@@ -1,0 +1,17 @@
+{{ .Values.console.title }} is deployed.
+
+  console        https://{{ .Values.hostname }}
+  generation     {{ .Values.inference.model }} ({{ .Values.inference.licence }}) at {{ .Values.inference.url }}
+  recognition    {{ .Values.scribe.asr.title }} — on this pod's CPU, from the image
+  diarization    {{ if .Values.scribe.diarization.enabled }}{{ .Values.scribe.diarization.title }}, floors
+                 {{ .Values.scribe.diarization.floors.assignedWordFraction }} assigned words /
+                 {{ .Values.scribe.diarization.floors.segmentPurity }} segment purity /
+                 {{ .Values.scribe.diarization.floors.speechCoverage }} speech coverage{{ else }}DISABLED — no transcript will be attributed{{ end }}
+  egress         {{ if .Values.egress.enabled }}guarded, and the allowlist is empty: this deployment reaches nothing{{ else }}UNGUARDED{{ end }}
+  recordings     kept {{ if lt (.Values.scribe.audioRetentionHours | float64) 0.0 }}indefinitely{{ else }}{{ .Values.scribe.audioRetentionHours }} h{{ end }}, then deleted; transcripts and notes persist
+
+Nothing else is served on that hostname and there is no other way in. The scribe listens on
+127.0.0.1 and has no Service.
+
+A note this produces is a draft for a clinician to read, correct and sign. It carries no
+clinical authority and the console says so.

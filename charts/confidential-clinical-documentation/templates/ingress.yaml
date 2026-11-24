@@ -1,0 +1,47 @@
+{{- $name := include "ccd.name" . -}}
+{{- include "ccd.validate" . -}}
+{{- /*
+The one public address, and the one object in this chart that carries it — which is what makes a
+single evidence exclusion enough to turn the digest into a property of the version rather than of
+the deployment. Nothing else in the chart is rendered from the hostname.
+
+`ingressClassName` is set and validated: an Ingress without one is created, its hostname is
+registered with the cloud, DNS is written for it, and nothing serves it. It reads as a DNS fault
+for an hour.
+*/ -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ccd.labels" . | nindent 4 }}
+  annotations:
+    # Declared on the object as well as in the listing's `evidence.exclude`. The annotation is
+    # what the cloud reads when it digests the namespace; the definition's copy is what the
+    # listing page shows. A digest displayed beside "no exclusions" answers the only question
+    # that matters about it wrongly.
+    swarm.io/exclude-evidence-fields: "/spec/rules/0/host"
+    # A recording is uploaded through this hostname. Without the body size the default 1 MiB
+    # limit refuses every real consultation with a 413 that comes from nginx rather than from the
+    # deployment.
+    nginx.ingress.kubernetes.io/proxy-body-size: {{ .Values.ingress.maxBodySize | quote }}
+    # Buffering off in both directions, and this is not a performance preference. Transcription
+    # and note generation are server-sent-event streams: buffered, the browser sits blank for
+    # minutes and then receives the whole transcript at once, which reads as a hung deployment.
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  rules:
+    - host: {{ .Values.hostname | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}-console
+                port:
+                  number: 80

@@ -1,0 +1,241 @@
+# ---------------------------------------------------------------------------------------------
+# Confidential Clinical Documentation — the ambient clinical documentation agent, ported.
+#
+# A recorded consultation goes in and a clinical note comes out, inside a confidential cluster
+# space, on components whose licences a tenant can read. Upstream (NVIDIA's `ambient-provider`,
+# Apache-2.0) needs an NGC credential, two NIM containers and about 400 GB of GPU across five
+# A100s by its own README. Nothing here needs a vendor account, and only the generation endpoint
+# — a separate component — wants a card.
+#
+# THE ONE THING TO UNDERSTAND BEFORE CHANGING ANY VALUE BELOW is why the diarization floors
+# exist. A transcript with no speaker separation still produces a fluent, correctly structured
+# SOAP note. It just attributes the patient's symptoms to the clinician and the clinician's plan
+# to the patient. Nothing raises, every probe stays green, the note arrives in seconds, and a
+# clinician signs it. Upstream attributes unconditionally and, in three places, guesses who was
+# speaking when it does not know. Here every transcript is scored against the floors below, and a
+# transcript that misses one loses its speaker labels rather than showing uncertain ones.
+# `scribe.diarization.floors` is therefore not a tuning knob; it is the listing's subject.
+# ---------------------------------------------------------------------------------------------
+
+name: confidential-clinical-doc
+hostname: ""
+
+ingress:
+  className: nginx
+  # A consultation recording. 500 MiB is `scribe.maxFileSizeBytes` with room above it; the
+  # validation refuses a limit below it, because an ingress-side 413 is an error the deployment
+  # never sees and the clinician cannot act on.
+  maxBodySize: 512m
+
+# One image: the API, the built UI and the recognition and diarization weights, all covered by
+# this digest. Built from our fork by its own CI, with a GitHub build attestation the catalog's
+# pin gate verifies.
+image:
+  registry: ghcr.io
+  repository: super-protocol/confidential-clinical-documentation/scribe-server
+  digest: sha256:20424f033e017b8a79f1cf5dde3f7f03389a56a36f0f2bc4b6c86c4ba1d6169c
+  tag: 1.0.0-sp.277b74e
+  pullPolicy: IfNotPresent
+
+# ---------------------------------------------------------------------------------------------
+# The front door
+# ---------------------------------------------------------------------------------------------
+console:
+  title: Confidential Clinical Documentation
+  password: ""
+  sessionKey: ""
+  sessionTtlSeconds: 43200
+  # A transcription of a long consultation is minutes of CPU work relayed as it happens, so the
+  # proxy's read timeout is an hour rather than the default seconds.
+  proxyReadTimeoutSeconds: 3600
+  about:
+    sourceRepo: https://github.com/Super-Protocol/confidential-clinical-documentation
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+      nvidia.com/gpu: "0"
+    limits:
+      cpu: 500m
+      memory: 512Mi
+      nvidia.com/gpu: "0"
+
+# ---------------------------------------------------------------------------------------------
+# The application
+# ---------------------------------------------------------------------------------------------
+scribe:
+  # Loopback, and validated. The scribe has no authentication of its own; the console's session
+  # check is the whole of what stands in front of it, and that is only true while this is
+  # 127.0.0.1.
+  listenAddress: 127.0.0.1
+  port: 8000
+  # 500 MiB. A two-hour consultation as 16-bit 16 kHz WAV is about 230 MiB; as m4a from a
+  # dictaphone, a few tens.
+  maxFileSizeBytes: 524288000
+  # How long a recording is kept for playback, after which it is deleted and the transcript keeps
+  # its text and its timecodes. The audio is the protected health information; the transcript is
+  # a derivative of it. 0 deletes as soon as the transcript exists; a negative number keeps
+  # indefinitely, which the listing describes rather than hides.
+  audioRetentionHours: 24
+  retentionSweepSeconds: 900
+  streaming: true
+  # The threads CTranslate2 and onnxruntime are allowed, pinned to this container's allocation
+  # rather than the host's core count. Five against a limit of six: the one spare is the console,
+  # the guard and the event loop relaying a stream while the engines run.
+  threads: 5
+  systemPrompt: >-
+    You are documenting a clinical consultation from its transcript. Write only what the
+    transcript supports. Where the transcript does not say something, say that it does not. This
+    note is a draft for a clinician to read, correct and sign.
+  asr:
+    # A directory inside the image, never a model name: a name would make the first
+    # transcription of a fresh deployment reach huggingface.co.
+    modelDir: /models/asr
+    # int8 on the CPU. Measured at 16–19 s of wall clock per minute of audio on a real
+    # deployment of this listing, recognition and diarization together. (The same fixtures on a
+    # workstation run at 21–23; the figure this chart and the listing quote is the deployment's,
+    # because that is the one a tenant gets.)
+    computeType: int8
+    # Greedy. A beam of five costs about four times the wall clock for a difference this
+    # application's own measurement could not see on clinical English.
+    beamSize: 1
+    language: en
+    title: Distil-Whisper large-v3 (faster-whisper, int8, CPU)
+    licence: MIT
+  diarization:
+    enabled: true
+    segmentationModel: /models/diarization/segmentation.onnx
+    embeddingModel: /models/diarization/embedding.onnx
+    # An embedding-distance threshold, NOT a speaker count, and the difference is measurable.
+    # Upstream passes 2 with the comment "2 is just a hint"; the clusterer takes it as an
+    # instruction, and on a dictated monologue it returns TWO speakers — one voice split into a
+    # conversation that did not happen. On a threshold, the same audio returns one, and both
+    # two-speaker fixtures still return exactly two at every value from 0.4 to 0.7.
+    threshold: 0.5
+    # What a diarization result has to clear before a speaker label is shown to anybody or a
+    # role is inferred. Measured on four fixtures: assigned-word fraction 98.5–99.3 %, segment
+    # purity 98.0–100 %, speech coverage 85–97 %. The floors sit below the measured range with
+    # room, because a floor that trips on good audio teaches a clinician to ignore the banner.
+    #
+    # A floor of zero is refused by `ccd.validate`: it would be upstream's behaviour with a
+    # reassuring field name.
+    floors:
+      # Words that fell inside some speaker turn. Low means the segmenter called most of the
+      # audio non-speech and the words it did place are a minority report.
+      assignedWordFraction: 0.9
+      # Per-sentence agreement with that sentence's majority speaker. A Whisper segment is a
+      # sentence and a sentence has one speaker; a diarizer flipping mid-sentence scores low
+      # here even when the overall split looks plausible. This is the one that catches a
+      # result nothing else would.
+      segmentPurity: 0.85
+      # Share of the recording identified as speech. Near zero is silence or a format problem.
+      speechCoverage: 0.3
+    title: >-
+      sherpa-onnx with pyannote segmentation 3.0 and NVIDIA NeMo TitaNet-Large, on the CPU
+    licence: Apache-2.0 (sherpa-onnx), MIT (segmentation), CC-BY-4.0 (TitaNet-Large)
+  # Six cores and twelve gigabytes, and the six is a measured ceiling rather than a preference.
+  # The generation engine on this epic's cloud takes eight cores on the node that holds the card,
+  # and a pod asking for 8.75 beside it is a pod that stays Pending — the cloud reports
+  # `ready: 0` with no reason and there is no pod-level visibility to read it out of. The
+  # vulnerability-analysis listing's 6 + 8 is the shape known to be placeable here, so this
+  # listing uses the same. It costs nothing measurable: five threads run at the same rate as six
+  # on this work, because CTranslate2's scaling saturates before then — 16–19 s per minute of
+  # audio either way. The eight cores were headroom nobody could place.
+  resources:
+    requests:
+      cpu: "6"
+      memory: 12Gi
+      # Zero, and validated. The device plugin gives the one card to exactly one container, and
+      # that container is the generation engine. A GPU request here is not a tuning mistake that
+      # costs throughput — it is a Pod that stays Pending for ever beside an engine that then
+      # cannot start either.
+      nvidia.com/gpu: "0"
+    limits:
+      cpu: "6"
+      memory: 12Gi
+      nvidia.com/gpu: "0"
+  persistence:
+    enabled: true
+    # Recordings at up to 500 MiB each plus their transcripts and notes — about eighty
+    # consultations held at once at the default retention, and the retention is what keeps it
+    # from growing. 40Gi rather than 100: a quota is not capacity, and this listing's engine
+    # already holds a 32Gi volume on the same cloud. A claim the storage class cannot place
+    # leaves the PVC Pending and the pod with it, which reads as "the app is broken".
+    size: 40Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+
+# ---------------------------------------------------------------------------------------------
+# The way out, and there is none
+# ---------------------------------------------------------------------------------------------
+egress:
+  enabled: true
+  listenAddress: 127.0.0.1
+  port: 3128
+  # EMPTY, and `ccd.validate` refuses a value. The models are in the image, the generation
+  # endpoint is a Service in this namespace, and the transcript corpus is reached through the
+  # gatekeeper at a local address. There is nothing to admit, and an allowlist with no entries
+  # is a claim a reader can check rather than one they have to believe.
+  allowHost: ""
+  allowPort: 443
+  noProxy: localhost,127.0.0.1,::1,.svc,.svc.cluster.local,.cluster.local
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+      nvidia.com/gpu: "0"
+    limits:
+      cpu: 250m
+      memory: 256Mi
+      nvidia.com/gpu: "0"
+
+# ---------------------------------------------------------------------------------------------
+# Generation — an OpenAI-compatible endpoint in this namespace
+# ---------------------------------------------------------------------------------------------
+inference:
+  url: http://swarm-model-server:8000/v1
+  model: ""
+  licence: ""
+  apiKey: ""
+  # A SOAP note is generated section by section; a long consultation on one card is minutes of
+  # generation, and a client timeout shorter than that is a note that fails after the work.
+  timeoutSeconds: 600
+
+# ---------------------------------------------------------------------------------------------
+# The gated transcript corpus
+# ---------------------------------------------------------------------------------------------
+# Consultations already transcribed elsewhere, served to this deployment by the marketplace
+# gatekeeper because the data owner approved its published evidence. Column names are
+# configuration because the owner's table is the owner's table.
+corpus:
+  # The resolved `transcripts` data slot, as JSON. A Secret and nowhere else: for an ungated
+  # dataset it carries the owner's own credentials, and it is the one value that differs between
+  # two deployments of this version.
+  bindingJson: ""
+  table: transcripts
+  idColumn: transcript_id
+  speakerColumn: speaker
+  startColumn: start_seconds
+  endColumn: end_seconds
+  textColumn: text
+  recordedAtColumn: recorded_at
+
+logLevel: INFO
+
+podSecurityContext:
+  # The volume arrives owned by root on this cloud's storage class and every container runs as
+  # 1000. Without this the init container's first `mkdir` fails and the pod never starts — which
+  # cost an earlier port in this epic a deploy cycle.
+  fsGroup: 1000
+securityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+  privileged: false
+  capabilities:
+    drop: [ALL]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

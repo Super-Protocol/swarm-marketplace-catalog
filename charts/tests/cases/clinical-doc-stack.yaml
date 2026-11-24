@@ -1,0 +1,19 @@
+# Confidential Clinical Documentation: the scribe, the console in front of it and the egress
+# guard beside it, which is the shape every deployment of this listing has. There is no second
+# shape — the models are fixed and inside the image, and the only choices a tenant makes that
+# reach the render are the retention and the diarization floors.
+name: confidential-clinical-doc
+hostname: scribe.conf-apps.superprotocol.dev
+ingress:
+  className: nginx
+image:
+  digest: sha256:20424f033e017b8a79f1cf5dde3f7f03389a56a36f0f2bc4b6c86c4ba1d6169c
+  tag: 1.0.0-sp.277b74e
+console:
+  password: ACCESS-PASSWORD-FOR-THE-GOLDEN
+  sessionKey: SESSION-SIGNING-KEY-FOR-THE-GOLDEN-01234
+inference:
+  url: http://swarm-model-server:8000/v1
+  model: qwen3-coder-30b-a3b-instruct-fp8
+  licence: Apache-2.0
+  apiKey: INFERENCE-KEY-FOR-THE-GOLDEN

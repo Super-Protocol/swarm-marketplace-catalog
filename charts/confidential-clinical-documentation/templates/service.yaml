@@ -1,0 +1,28 @@
+{{- $name := include "ccd.name" . -}}
+{{- include "ccd.validate" . -}}
+{{- /*
+One Service, and it reaches the console only.
+
+There is no Service for the scribe and none for the egress guard. Both listen on 127.0.0.1, so
+there is nothing for a Service to select — and that is the point rather than an omission: the
+scribe has no authentication of its own, and a ClusterIP in front of it would make an archive of
+consultations reachable from every other workload in the namespace. A namespace is not a trust
+boundary once a second workload is in it.
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-console
+  labels:
+    {{- include "ccd.labels" . | nindent 4 }}
+    app.kubernetes.io/component: console
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "ccd.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: scribe
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
