@@ -26,6 +26,10 @@
 // the restore still runs, and says loudly that the stand it produced has three
 // tenants rather than four.
 //
+// Step 0b gives that tenant its data sources, because the deployment's grounding
+// Job grounds only its own. It reads the dataset cards from `CARDS`, which
+// defaults to this repository's `datasets/` directory.
+//
 // `CONFIRM_TARGET` must repeat `APP_BASE` exactly, and the stand this export
 // was taken FROM is refused by name: on 2026-11-23 its owner configured it by
 // hand and said in so many words that it must not be disturbed. Overriding
@@ -115,6 +119,37 @@ const ITEM_FIELDS = ['title', 'description', 'type', 'visibility', 'visualizatio
     console.log('   This stand will have THREE tenants, not four. Run harness/researcher-tenant.js');
     console.log('   before relying on anything that needs the researcher, and re-run this script so');
     console.log('   its semantic model is imported too.');
+  }
+
+  // 0b. And its sources. The deployment's grounding Job registers every mounted
+  //     card into ONE tenant — the deployment's `primaryOrgAlias`, an attested
+  //     parameter — so nothing grounds the tenant that was created by hand. This
+  //     is the same three things `ground.py` does (register, read the catalogue,
+  //     annotate from the card), for that tenant only.
+  //
+  //     After step 0 and before the model, in that order: a semantic model binds
+  //     to a data source, and importing one into a tenant whose sources are not
+  //     registered yet binds it to nothing.
+  //
+  //     It needs the cards on disk, so it is skipped rather than fatal when they
+  //     are not where it expects — a restore run from a tarball somewhere else
+  //     should still put the dashboards back.
+  const cards = process.env.CARDS || path.join(__dirname, '..', '..', '..', 'datasets');
+  if (fs.existsSync(cards)) {
+    console.log('\n0b. the researcher tenant\'s sources');
+    const result = spawnSync(process.execPath, [path.join(__dirname, 'researcher-sources.js')], {
+      stdio: 'inherit',
+      env: { ...process.env, CARDS: cards },
+    });
+    if (result.status !== 0) {
+      console.log('   researcher-sources.js failed. The researcher tenant exists and holds no data;');
+      console.log('   its semantic model will import and bind to nothing. Fix this before');
+      console.log('   demonstrating anything from the researcher\'s side.');
+    }
+  } else {
+    console.log(`\n0b. the researcher tenant's sources: SKIPPED — no dataset cards at ${cards}.`);
+    console.log('   Set CARDS to the repository\'s datasets directory and re-run, or run');
+    console.log('   harness/researcher-sources.js by hand.');
   }
 
   const cookie = await signIn({

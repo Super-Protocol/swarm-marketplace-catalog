@@ -402,7 +402,14 @@ DDL = """-- {network} — aggregate release.
 -- Small cells are NOT suppressed. See aggregate.py's docstring: the figures here
 -- are exactly equal to the figures computed from the records, which is the
 -- property the self-test checks, and suppression would make them approximate.
--- A real release would suppress; say so rather than implying otherwise.
+-- A real release would suppress. Say that rather than implying otherwise.
+--
+-- No comment or string in this file may contain a SEMICOLON other than the ones
+-- that end a statement. The loader splits schema.sql on that character, because
+-- ClickHouse's HTTP interface runs exactly one statement per request — so one
+-- inside a comment starts a statement that is an English sentence, and the server
+-- rejects it with a syntax error quoting the prose. Found the hard way, loading
+-- this very file. selftest.py checks it now.
 
 CREATE DATABASE IF NOT EXISTS {db};
 

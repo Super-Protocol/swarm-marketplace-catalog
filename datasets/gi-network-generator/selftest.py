@@ -172,6 +172,18 @@ def check_release(corpus: str, tables: dict[str, list[dict]], profile, published
 
     for name in aggregate.TABLES:
         check(len(rows[name]) > 0, f"{name} is not empty ({len(rows[name]):,} rows)")
+
+    # The loader splits schema.sql on the statement separator, because
+    # ClickHouse's HTTP interface runs exactly one statement per request. A
+    # separator inside a comment therefore starts a statement that is an English
+    # sentence, and the load fails with a syntax error quoting the prose. This
+    # cost one load of the stand.
+    prose = [
+        line
+        for line in aggregate.DDL.split("\n")
+        if line.strip().startswith("--") and ";" in line
+    ]
+    check(not prose, f"no comment in the release schema carries a statement separator {prose[:2]}")
     check(
         len(rows["procedure_monthly"]) < len(tables["procedures"]),
         f"the release is smaller than the record it counts "
