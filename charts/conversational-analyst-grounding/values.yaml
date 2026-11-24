@@ -26,6 +26,12 @@ api:
 # tenant because a name sorted differently is a silent failure of the only boundary this
 # product enforces.
 tenantAlias: ""
+# The username the identity bootstrap created the installation administrator
+# under. The grounding Job acts as that user by name: the model registry is an
+# installation-scoped permission, so acting as whoever Keycloak happens to list
+# first in the organisation fails as soon as the tenant has a second member
+# (SUP-909).
+adminUsername: ""
 
 # Who the job acts as. The agent takes the caller's identity from `x-auth-subject`, the
 # header the authenticating proxy stamps on every request that reaches it from outside; this

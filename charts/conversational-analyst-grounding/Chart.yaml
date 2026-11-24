@@ -41,5 +41,5 @@ type: application
 # `SchemaAnnotationTarget` (still lower case `table`/`column`). The schema diff
 # across the 51 commits is additive apart from two dashboard field signatures the
 # Job does not call.
-version: 0.6.0
+version: 0.7.0
 appVersion: "1.22.1"

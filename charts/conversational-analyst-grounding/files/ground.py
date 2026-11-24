@@ -41,6 +41,10 @@ KEYCLOAK_CLIENT_ID = os.environ["KEYCLOAK_CLIENT_ID"]
 KEYCLOAK_CLIENT_SECRET = os.environ["KEYCLOAK_CLIENT_SECRET"]
 # The alias of the organisation whose tenant this deployment's data and model belong to.
 TENANT_ALIAS = os.environ["TENANT_ALIAS"]
+#: The username the identity bootstrap created the installation administrator
+#: under. The subject this Job acts as, selected by name — see `identity()` for
+#: what went wrong when it was selected by position.
+ADMIN_USERNAME = os.environ["ADMIN_USERNAME"]
 
 MODEL_NAME = os.environ["MODEL_NAME"]
 MODEL_ID = os.environ["MODEL_ID"]
@@ -129,9 +133,39 @@ def identity():
         raise RuntimeError(
             f"organization {TENANT_ALIAS} ({tenant}) has no member yet; the identity bootstrap has not finished"
         )
-    # The administrator the bootstrap created is its only member at this point. `sub` in a
-    # Keycloak token is the user's id, which is what the api matches `x-auth-subject` on.
-    return tenant, members[0]["id"], members[0].get("username", "")
+
+    # By USERNAME and not by position (SUP-909). This used to be `members[0]`,
+    # justified by "the administrator the bootstrap created is its only member at
+    # this point" — true the moment a deployment is created and false as soon as
+    # anybody else joins the tenant. `main()` calls `ensure_model` before
+    # `ensure_sources`, every model-registry operation on the agent is
+    # `@RequirePermission('installation.llm-models.*')`, and an ordinary member of
+    # the organisation does not have an installation permission. So a second
+    # member sorting ahead of the administrator means the Job's FIRST registry
+    # call is refused, on every restart until `backoffLimit` is spent, and it
+    # never reaches `ensure_sources`.
+    #
+    # What that looks like from outside is a deployment whose evidence is
+    # perfect, whose workloads are all ready, and which has registered none of
+    # the datasets it mounted — with no Job status the platform will show for a
+    # published space. It cost the Latica stand two windows and a day to find
+    # (`cypress-bay-admin@local.test` sorts before `gate-rehearsal@local.test`).
+    #
+    # So the administrator is named, and its absence is fatal rather than
+    # silently substituted: acting as the wrong subject is how this failed in the
+    # first place.
+    subject = next((member for member in members if member.get("username") == ADMIN_USERNAME), None)
+    if subject is None:
+        present = ", ".join(sorted(str(member.get("username")) for member in members))
+        raise RuntimeError(
+            f"{ADMIN_USERNAME!r} is not a member of organization {TENANT_ALIAS} ({tenant}); it has: {present}. "
+            "This Job has to act as the installation administrator — the model registry is an "
+            "installation-scoped permission that an ordinary member of the organisation does not hold — "
+            "and acting as whoever happened to be listed first is what this check exists to prevent."
+        )
+    # `sub` in a Keycloak token is the user's id, which is what the api matches
+    # `x-auth-subject` on.
+    return tenant, subject["id"], subject.get("username", "")
 
 
 def wait_for(what, attempt_fn, attempts=180, delay=5):
