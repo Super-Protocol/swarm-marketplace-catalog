@@ -94,29 +94,39 @@ derived from the charts. Two things make it stable:
   that way.
 
 The declared digest is
-`3e03a7196d77d9e0b9f8340a976d372337fc2e5474f591530e6f84b41730979a`, measured on
-2026-11-22 from the signed evidence of two deployments on the `gpu-blueprints`
-cloud — `sc-842a` and `sc-842b`, two hostnames in two namespaces. The snapshots
-were byte-identical: six resources each (two ConfigMaps, the Deployment, the
-Ingress, the Secret, the Service).
+`9942e5d8956673b4d272f381c0c362727323e19f4dccddc87509c68d2301791f`, and it describes the
+**gated** configuration: a deployment with a `clickhouse-http/v1` dataset attached. Measured on
+2026-11-24 from the signed evidence of two deployments on the `gpu-blueprints` cloud —
+`sc-900a` and `sc-900b`, two hostnames in two namespaces, each with
+[Kestrel PBMC Immune Panel](../../datasets/kestrel-pbmc-panel/) bound. The snapshots were
+byte-identical: the same 121,459 bytes of resource JSON, 279 JSON Pointers each, zero differing
+fields. **Ten** resources: 3 ConfigMaps, 2 Deployments, the Ingress, 2 Secrets, 2 Services.
 
-One caveat that belongs to the platform rather than to this listing: a
-deployment that mounts **gated** data gains three objects the marketplace adds
-itself (the egress sidecar's ConfigMap, Deployment and Service), so its snapshot
-is not the snapshot of a deployment with nothing attached. The digest above is
-the no-gated-data configuration, which is what every deployment of this listing
-is today. The first gated deployment has to re-measure and re-declare — and
-that is true of every gated listing in this catalogue, not only this one.
+It is the gated number on purpose. The marketplace hands the gate the `expectedDigest` of the
+version a deployment was created from, and the gate fetches that deployment's own evidence and
+compares — so the only deployments this value is ever checked against are the ones that mount
+gateway-mode data. An ungated number would refuse every gated read, which is the one thing the
+`clickhouse-http/v1` slot exists for.
 
-Until it does, a gated read of this listing is **expected to fail**: the gate
-compares the declared number against the evidence of a deployment that mounts
-gateway-mode data, and this number is not that deployment's. There is now a card
-to measure it against — [Kestrel PBMC Immune
-Panel](../../datasets/kestrel-pbmc-panel/), the first gated single-cell matrix
-in this catalogue, published and granted to this listing — and
-`apps/tests/gated_digest.py` exempts this definition by name until SUP-900 has
-spent its GPU window and declared the gated value.
-`docs/measuring-a-gated-digest.md` is the procedure.
+What that costs: a deployment with an `.h5ad` dataset, or with nothing attached, does **not**
+match the number on this page. Nothing refuses it — there is no gate in front of it to do the
+refusing. The ungated digest, for the record, is
+`3e03a7196d77d9e0b9f8340a976d372337fc2e5474f591530e6f84b41730979a`: six resources, measured on
+`sc-842a` / `sc-842b` on 2026-11-22, and not declared.
+
+The four extra objects are the egress sidecar's ConfigMap, Deployment and Service **and the
+Secret holding its client certificate**. Four, counted on a published snapshot — an earlier
+version of this file said three, which was a reading of the platform's source rather than a
+count.
+
+A real read, inside a deployment, through the sidecar: `sc_workspace.load_matrix()` over
+`clickhouse-http/v1` assembled the whole 1,800 × 933 matrix from `sc_counts`, `sc_cells` and
+`sc_genes` — 1,101,372 non-zero counts, nine annotated populations, `batch` and `cell_type`
+resolved. The connection it opened names
+`confidential-single-cell-analysi-gatekeeper-egress` and carries no credential of the lab's.
+Admission is not instant: for a few minutes after a number is declared the read fails with a
+`502` from the deployment's own egress sidecar, because the gate has not yet been told about the
+client.
 
 ## What it deliberately does not do
 

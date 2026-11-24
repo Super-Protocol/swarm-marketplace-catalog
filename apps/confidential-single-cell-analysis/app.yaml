@@ -35,7 +35,7 @@ metadata:
     reading the dataset you attach rather than a corpus off the public internet. The deployment
     publishes signed evidence of the exact environment it is running, down to the sha256 of every
     Python wheel.
-  version: "0.2.0"
+  version: "0.2.1"
   category: life-sciences
   # What an auditor should read: the workflow, its authors and its licence are
   # upstream's. What we changed is in the chart's
@@ -335,45 +335,63 @@ outputs:
     when: "data.matrices.count == 0"
 
 evidence:
-  # ---------------------------------------------------------------------------
-  # Measured, not derived. Two deployments of this version on the gpu-blueprints
-  # cloud, 2026-11-22 — `sc-842a` and `sc-842b`, two hostnames in two namespaces
-  # — published byte-identical signed snapshots and this digest. Six resources
-  # in each: two ConfigMaps, the Deployment, the Ingress, the Secret and the
-  # Service.
-  #
-  # Declaring it is not documentation. The marketplace admits a deployment to the
-  # gatekeeper only when its listing version carries one, so a listing with a
-  # data slot and no digest produces deployments the gate has never heard of
-  # (SUP-711, and `apps/tests/gated_digest.py`).
-  #
-  # One caveat the measurement cannot cover, and it belongs to the platform
-  # rather than to this listing: a deployment that mounts GATED data gains three
-  # objects the marketplace adds itself — the egress sidecar's ConfigMap,
-  # Deployment and Service (`gatekeeper/egress-sidecar.ts`) — which are part of
-  # what the cloud digests. Its snapshot is therefore not this one. The digest
-  # below is the no-gated-data configuration, which is what every deployment of
-  # this listing is today; the first gated deployment has to re-measure and
-  # re-declare.
+  # evidence-configuration: gated
   #
   # ---------------------------------------------------------------------------
-  # WHICH CONFIGURATION THIS NUMBER IS, and what replaces it. The value below is
-  # UNGATED, and `apps/tests/gated_digest.py` therefore exempts this listing by
-  # name rather than passing it: the gate compares a declared digest only against
-  # a deployment that mounts gateway-mode data, so this number refuses every
+  # Measured, not derived, and it describes the GATED configuration.
+  #
+  # Two deployments of this render on the gpu-blueprints cloud, 2026-11-24 —
+  # `sc-900a` and `sc-900b`, two hostnames in two namespaces with two separately
+  # generated sign-in tokens, each with `kestrel-pbmc-panel` attached — published
+  # signed snapshots that are byte-identical: the same digest AND the same 121,459
+  # bytes of resource JSON, compared field by field as JSON Pointers rather than
+  # by the digest alone. 279 pointers each, zero differing values, no object
+  # present on one side only.
+  #
+  # TEN resources in each, where the ungated measurement had six: 3 ConfigMaps,
+  # 2 Deployments, the Ingress, 2 Secrets, 2 Services. The four the marketplace
+  # adds for a gated deployment are the egress sidecar's ConfigMap, Deployment and
+  # Service **and the Secret holding its client certificate** — four objects, not
+  # the three an earlier version of this comment claimed. That was a reading of
+  # `gatekeeper/egress-sidecar.ts`; this is a count of a published snapshot.
+  #
+  # **It is the gated configuration on purpose.** The marketplace hands the gate
+  # the `expectedDigest` of the listing version a deployment was created from and
+  # the gate fetches that deployment's own evidence and compares, so the only
+  # deployments this number is ever checked against are the ones that mount
+  # gateway-mode data. Declaring the ungated number would therefore refuse every
   # gated read of this listing — which is the one thing its `clickhouse-http/v1`
-  # slot is for. SUP-900 replaces it with the gated number and records this one
-  # as the ungated value, the way `apps/confidential-rag/app.yaml` did.
+  # slot exists for, and which is what SUP-900 was raised to fix.
   #
-  # The measurement is a deployment and not an edit, so it waits for the card:
-  # `gpu-blueprints-node-3-et9j` is deallocated (SUP-903) and SUP-900 shares the
-  # window SUP-873 opens. THE REFERENCE PARAMETER SET it will be measured with,
-  # recorded now so the window is spent on the card and not on deciding:
+  # What that costs: an UNGATED deployment of this listing — one with an
+  # `s3-h5ad/v1` dataset, or nothing attached — does not match the number on its
+  # own listing page. Nothing refuses it, because there is no gate in front of it
+  # to do the refusing, and README.md says which configuration the digest is.
+  # **The ungated digest, for the record, is
+  # `3e03a7196d77d9e0b9f8340a976d372337fc2e5474f591530e6f84b41730979a`** — six
+  # resources, measured on `sc-842a` / `sc-842b` on 2026-11-22 (SUP-842), and not
+  # declared.
+  #
+  # Checked against the gate and not only against itself: both measurement
+  # deployments read `matchesExpected: false` while the listing still declared the
+  # ungated number, and `sc-900b` — created after this number was the declared one
+  # — read `matchesExpected: true` and the gate admitted it. A real read ran inside
+  # the deployment through the sidecar: `sc_workspace.load_matrix()` over
+  # `clickhouse-http/v1` assembled the whole 1,800 x 933 matrix, 1,101,372 non-zero
+  # counts, nine annotated populations, `batch` and `cell_type` resolved. Admission
+  # is not instant — for a few minutes after the number is declared the read fails
+  # with a `502` from this deployment's own egress sidecar, because the gate has
+  # not yet been told about the client.
+  #
+  # ---------------------------------------------------------------------------
+  # THE REFERENCE PARAMETER SET it was measured with. The digest holds for this
+  # one, and a deployment that answers differently attests its own — expected,
+  # not tampering.
   #
   #   hostname     sc-900a / sc-900b .conf-apps.superprotocol.dev
   #                (excluded from the snapshot — see `exclude` below)
-  #   token        generated, separately in each deployment. It is in a Secret,
-  #                whose DATA is not in the snapshot, so it cannot move the digest
+  #   token        generated, separately in each. It is in a Secret, whose DATA is
+  #                not in the snapshot, so it cannot move the digest
   #   batchKey     batch        (this listing's default)
   #   labelKey     cell_type    (this listing's default)
   #   data slot `matrices`   kestrel-pbmc-panel   (gated, clickhouse-http/v1)
@@ -381,8 +399,7 @@ evidence:
   # `kestrel-pbmc-panel` names its columns `batch` and `cell_type` on purpose, so
   # the two data parameters stay at their defaults and the gated and ungated
   # renders differ by the sidecar and by nothing else.
-  # ---------------------------------------------------------------------------
-  expectedDigest: "3e03a7196d77d9e0b9f8340a976d372337fc2e5474f591530e6f84b41730979a"
+  expectedDigest: "9942e5d8956673b4d272f381c0c362727323e19f4dccddc87509c68d2301791f"
   # ---------------------------------------------------------------------------
   # The hostname is the one field that differs between two deployments of this
   # version, and excluding it is what makes the digest a property of the version
