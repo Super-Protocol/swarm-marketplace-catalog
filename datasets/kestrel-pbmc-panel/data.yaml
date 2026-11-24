@@ -1,0 +1,131 @@
+apiVersion: swarm.cloud/v1alpha1
+kind: DataDefinition
+
+# ---------------------------------------------------------------------------
+# The first single-cell corpus in this catalogue, and it exists for the same
+# reason `acme-engineering-handbook` does: the marketplace gatekeeper speaks
+# ClickHouse over HTTP and nothing else, so a matrix a lab wants to GATE has to
+# BE ClickHouse tables.
+#
+# `Confidential Single Cell Analysis` accepts two interfaces and prefers the
+# gateable one. `s3-h5ad/v1` is the format a lab's matrices already exist in,
+# and it CANNOT be gated — the gate is an HTTP proxy in front of ClickHouse, so
+# an `.h5ad` in a bucket is bound straight into the enclave with credentials of
+# its own. `clickhouse-http/v1` is the one where the owner hands out nothing and
+# every read is admitted against the evidence the deployment published. Nothing
+# in this catalogue was that shape, so until this dataset existed the listing's
+# confidentiality claim could not be shown at all (SUP-900).
+#
+# The long form below is what `sc_workspace._read_matrix_from_clickhouse`
+# assembles: `sc_cells` becomes `obs`, `sc_genes` becomes `var` and fixes the
+# gene order, and `sc_counts` becomes a CSR matrix. The reader tolerates a
+# missing `sc_genes`; this dataset carries it, because the panel's order is part
+# of what the dataset is.
+# ---------------------------------------------------------------------------
+
+metadata:
+  name: kestrel-pbmc-panel
+  title: Kestrel PBMC Immune Panel
+  description: >-
+    Single-cell expression of a 933-gene targeted immune panel across 1,800 peripheral blood
+    mononuclear cells — four preparation runs, twelve donors, two sites — in the long form a
+    confidential analysis reads directly: one row per cell, one per gene, one per non-zero
+    count. Nine annotated populations, a real per-run capture effect for batch integration to
+    correct, and three donors sampled during an acute viral episode. Published under the gate:
+    the lab hands out no database credentials, and every read is admitted against the signed
+    evidence the reading deployment published.
+  category: life-sciences
+  tags:
+    - single-cell
+    - transcriptomics
+    - immunology
+    - pbmc
+    - rapids
+    - gated
+
+spec:
+  secrets:
+    - name: readUser
+      title: ClickHouse read-only user
+      description: >-
+        A user with SELECT on the three panel tables and nothing else, read-only, and visible
+        only from inside the stand's own subnet. The gate holds it; a consumer never sees it.
+    - name: readPassword
+      title: ClickHouse read-only password
+
+  access:
+    # The point of this dataset. The lab hands out no credentials: a consumer is given a local
+    # address inside their own namespace, every request through it is admitted against the
+    # evidence their deployment published, and access stops the moment that evidence stops
+    # matching what was approved.
+    mode: gateway
+
+  provides:
+    - interface: clickhouse-http/v1
+      connection:
+        static:
+          # The stand's own subnet, reachable by the gate and by nothing else — the NSG does
+          # not open 8123 to the internet. See README.md for which server this is.
+          host: 10.10.1.10
+          port: 8123
+          database: kestrel_sc
+          username: "{{ secrets.readUser }}"
+          password: "{{ secrets.readPassword }}"
+          tls: false
+
+  schema:
+    tables:
+      # `sc_counts` first, because it is the table the application's data slot
+      # constrains: one unnamed table providing cell_id:string, gene:string,
+      # count:number. The slot matcher assigns constraints to distinct tables, so
+      # the other two are declared for a reader rather than for the match.
+      - name: sc_counts
+        description: >-
+          One row per non-zero measurement. Zeroes are absent rather than stored, which is what
+          makes a 1,800 x 933 matrix 1.1 million rows instead of 1.68 million.
+        columns:
+          - name: cell_id
+            type: string
+            description: The cell this count belongs to — a row of `sc_cells`.
+          - name: gene
+            type: string
+            description: The gene measured — a row of `sc_genes`, by HGNC symbol.
+          - name: count
+            type: integer
+            description: Unique molecular identifiers assigned to this gene in this cell.
+      - name: sc_cells
+        description: >-
+          One row per cell, and the columns a deployment groups by. `batch` is the preparation
+          run and `cell_type` the annotation; both are what the listing's two data parameters
+          default to, so a deployment reading this dataset answers neither.
+        columns:
+          - name: cell_id
+            type: string
+            description: Stable cell barcode, unique across the four runs.
+          - name: batch
+            type: string
+            description: Preparation run — `run_a` to `run_d`. The batch key for integration.
+          - name: donor
+            type: string
+            description: Donor identifier, `D01` to `D12`. Crosses every run.
+          - name: site
+            type: string
+            description: Which of the two laboratories prepared the sample.
+          - name: cell_type
+            type: string
+            description: >-
+              Annotated population: CD4 T, CD8 T, NK, B, Plasma, CD14 Mono, CD16 Mono, cDC or
+              Platelet. The annotation a clustering is compared against.
+      - name: sc_genes
+        description: >-
+          One row per gene on the panel, in panel order — which is the order the assembled
+          matrix is indexed by.
+        columns:
+          - name: gene
+            type: string
+            description: HGNC symbol. Real symbols, so prefix flags and TF scoring work.
+          - name: panel_class
+            type: string
+            description: >-
+              Why the gene is on the panel: mitochondrial, ribosomal, antigen-presentation,
+              surface, transcription-factor, signalling, lineage or housekeeping.

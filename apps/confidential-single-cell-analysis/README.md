@@ -108,6 +108,16 @@ the no-gated-data configuration, which is what every deployment of this listing
 is today. The first gated deployment has to re-measure and re-declare — and
 that is true of every gated listing in this catalogue, not only this one.
 
+Until it does, a gated read of this listing is **expected to fail**: the gate
+compares the declared number against the evidence of a deployment that mounts
+gateway-mode data, and this number is not that deployment's. There is now a card
+to measure it against — [Kestrel PBMC Immune
+Panel](../../datasets/kestrel-pbmc-panel/), the first gated single-cell matrix
+in this catalogue, published and granted to this listing — and
+`apps/tests/gated_digest.py` exempts this definition by name until SUP-900 has
+spent its GPU window and declared the gated value.
+`docs/measuring-a-gated-digest.md` is the procedure.
+
 ## What it deliberately does not do
 
 - **It does not download the blueprint's example corpus.** Upstream's notebooks

@@ -1233,8 +1233,13 @@ outputs:
     when: "data.corpus.count == 0"
 
 evidence:
+  # evidence-configuration: gated
+  #
   # ---------------------------------------------------------------------------
-  # Measured, not derived, and it describes the GATED configuration.
+  # Measured, not derived, and it describes the GATED configuration. The line above
+  # says so where `apps/tests/gated_digest.py` can read it, which is how the next
+  # listing is stopped from declaring an ungated number the gate will refuse
+  # (SUP-900).
   #
   # Two deployments of 0.1.9 on the gpu-blueprints cloud, 2026-11-23 —
   # `rag-895a` and `rag-895b`, two hostnames in two namespaces, each with the

@@ -1398,6 +1398,16 @@ outputs:
 # kind — they ARE configuration, so what this deployment may reach cannot be widened without
 # the digest saying so.
 evidence:
+  # evidence-configuration: gated
+  #
+  # Gated: both measurement deployments below had `cypressbay-digestive-health` bound, and
+  # that card is `access.mode: gateway`, so each of them carried the egress sidecar's four
+  # objects and this number includes them. It has to be the gated one — the gate compares
+  # this value against a deployment that mounts gateway-mode data and nothing else does, so
+  # an ungated number here would refuse every clinic read this listing exists to make.
+  # `apps/tests/gated_digest.py` reads the line above and holds the next listing to it
+  # (SUP-900).
+  #
   # THE REFERENCE CONFIGURATION'S DIGEST — not a value every deployment reproduces, and the
   # listing page should say so (option 2, decided on SUP-711; the presentation change is
   # SUP-871).
