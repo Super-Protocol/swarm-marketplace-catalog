@@ -119,18 +119,36 @@ function verdicts(names) {
   const deadline = Date.now() + WAIT_MS;
   let missing = wanted;
   let named = [];
+  // A failed round is "no reading this minute", never the verdict. The whole
+  // point of this script is to wait out a grounding Job that legitimately takes
+  // tens of minutes, and the sign-in path on this stand answers 502
+  // intermittently — so an unguarded read inside the loop ends the wait early
+  // and reports a failure that is the probe's, not the stand's. That is exactly
+  // what happened on its first real use.
+  let rounds = 0;
+  let failures = 0;
   for (;;) {
-    const sources = (await graphql({ base: BASE, cookie, query: Q_SOURCES })).adminDataSources.items
-      .map((s) => s.datasourceId);
-    missing = wanted.filter((id) => !sources.includes(id));
-    const domain = ((await graphql({ base: BASE, cookie, query: Q_MESSAGES })).adminSystemMessages.items
-      .find((m) => m.name === 'Domain part') || {}).text || '';
-    named = wanted.filter((id) => domain.includes(`\`${id}\``));
-    say(`   sources ${sources.length}/${wanted.length}, named in the prompt ${named.length}/${wanted.length}`);
-    if (missing.length === 0 && named.length === wanted.length) break;
+    rounds += 1;
+    try {
+      const sources = (await graphql({ base: BASE, cookie, query: Q_SOURCES })).adminDataSources.items
+        .map((s) => s.datasourceId);
+      const domain = ((await graphql({ base: BASE, cookie, query: Q_MESSAGES })).adminSystemMessages.items
+        .find((m) => m.name === 'Domain part') || {}).text || '';
+      missing = wanted.filter((id) => !sources.includes(id));
+      named = wanted.filter((id) => domain.includes(`\`${id}\``));
+      say(`   sources ${sources.length}/${wanted.length}, named in the prompt ${named.length}/${wanted.length}`);
+      if (missing.length === 0 && named.length === wanted.length) break;
+    } catch (error) {
+      failures += 1;
+      say(`   round ${rounds} could not be read (${error.message.slice(0, 60)}); carrying on`);
+      // A session can expire or be refused mid-wait; take a fresh one rather
+      // than spending the rest of the allowance on a dead cookie.
+      cookie = await connect().catch(() => cookie);
+    }
     if (Date.now() >= deadline) break;
     await sleep(60000);
   }
+  if (failures > 0) say(`   (${failures} of ${rounds} rounds could not be read)`);
   if (missing.length > 0) problems.push(`never registered as a data source: ${missing.join(', ')}`);
   const unnamed = wanted.filter((id) => !named.includes(id));
   if (unnamed.length > 0) problems.push(`not named in the Domain part system message: ${unnamed.join(', ')}`);
