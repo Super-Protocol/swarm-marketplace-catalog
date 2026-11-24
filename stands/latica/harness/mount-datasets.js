@@ -61,6 +61,12 @@ const STATE = process.env.MP_STATEFILE || path.join(__dirname, `.mount-${DEPLOYM
 // slot, because the Conversational Analyst listing declares one (`datasets`,
 // `multiple: true`).
 const SLOT = process.env.MP_SLOT || 'datasets';
+
+/** How long to let a published hostname start serving its evidence bundle. The
+ *  gateway-sync worker runs about once a minute, so this is several of its
+ *  passes — long enough that a slow one is not a false alarm, short enough that
+ *  a hostname which is genuinely dark is reported inside the window. */
+const LIVE_BUNDLE_WAIT_MS = Number(process.env.MP_BUNDLE_WAIT_MS || 240000);
 const WANTED = (process.env.MP_DATASETS
   || 'cypressbay-digestive-health,harborpoint-gastroenterology,ridgeline-endoscopy')
   .split(',')
@@ -267,27 +273,52 @@ function digestHex(digest) {
  *  cloud's API, the gate reads this, and a stand whose hostname serves a stale or
  *  missing bundle is dark to the gate while the marketplace still looks right. */
 async function checkLiveEvidence(host, expected) {
-  let bundle;
-  try {
-    const response = await fetch(`https://${host}/.well-known/swarm-evidence`, {
-      signal: AbortSignal.timeout(20000),
-    });
-    if (!response.ok) return [`/.well-known/swarm-evidence on ${host} answered ${response.status}`];
-    bundle = await response.json();
-  } catch (error) {
-    return [`/.well-known/swarm-evidence on ${host} could not be read: ${error.message}`];
-  }
+  // Retried, because `publish` returning does not mean the gateway is serving
+  // the hostname yet: the gateway-sync worker picks a newly locked space up on
+  // its own pass, about once a minute, so a single fetch a second after publish
+  // reaches nothing. The first run of this against a real window got
+  // `fetch failed` here and ordered a rollback of a stand that was, a minute
+  // later, serving the right bundle — the same once-a-minute worker that cost
+  // SUP-459 its window, in a second place.
+  //
+  // A fetch that fails is therefore "not yet" and is retried. A bundle that
+  // parses and carries the WRONG digest is not: no amount of waiting turns a
+  // mismatch into a match, and reporting it late is worse than reporting it now.
+  const deadline = Date.now() + LIVE_BUNDLE_WAIT_MS;
+  let attempt = 0;
+  for (;;) {
+    attempt += 1;
+    let bundle;
+    let why;
+    try {
+      const response = await fetch(`https://${host}/.well-known/swarm-evidence`, {
+        signal: AbortSignal.timeout(20000),
+      });
+      if (response.ok) bundle = await response.json();
+      else why = `answered ${response.status}`;
+    } catch (error) {
+      why = `could not be read: ${error.message}`;
+    }
 
-  const payload = JSON.parse(
-    Buffer.from(String(bundle.jws).split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'),
-  );
-  const served = digestHex(payload.evidenceDigest);
-  const wanted = digestHex(expected);
-  say(`  live bundle on ${host}: ${payload.evidenceDigest}`);
-  if (wanted && served !== wanted) {
-    return [`${host} serves ${served}, but the cloud measured ${wanted}`];
+    if (bundle) {
+      const payload = JSON.parse(
+        Buffer.from(String(bundle.jws).split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'),
+      );
+      const served = digestHex(payload.evidenceDigest);
+      const wanted = digestHex(expected);
+      say(`  live bundle on ${host}: ${payload.evidenceDigest}${attempt > 1 ? ` (after ${attempt} attempts)` : ''}`);
+      if (wanted && served !== wanted) {
+        return [`${host} serves ${served}, but the cloud measured ${wanted}`];
+      }
+      return [];
+    }
+
+    if (Date.now() >= deadline) {
+      return [`/.well-known/swarm-evidence on ${host} ${why} — still, after ${attempt} attempts`];
+    }
+    say(`  ${host} is not serving its bundle yet (${why}); the gateway picks it up on its own pass`);
+    await sleep(15000);
   }
-  return [];
 }
 
 async function reconfigure(parameters, datasets) {
