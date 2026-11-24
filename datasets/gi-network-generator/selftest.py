@@ -72,6 +72,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+import aggregate  # noqa: E402
 import constants  # noqa: E402
 import generate  # noqa: E402
 import notes  # noqa: E402
@@ -85,6 +86,215 @@ failures: list[str] = []
 #: Suppresses the `ok` lines. The seed sweep runs the same assertions over a
 #: dozen corpora and only the failures are worth reading.
 QUIET = False
+
+
+#: The pooled adenoma-detection table the stand answered on 2026-11-24 and
+#: reported on SUP-909, per network: (examinations with an adenoma, examinations
+#: with an adequate preparation, examinations excluded for a missing preparation
+#: score). Over the three colonoscopy types, structured capture only, between
+#: the two dates in ADR_WINDOW.
+#:
+#: It is pinned here because the aggregate release exists to answer exactly this
+#: question for a researcher who holds no records, and "the counts reproduce the
+#: records" is a weaker claim than "the counts reproduce THE ANSWER WE SHOWED".
+#: If a change to the generator moves these, the stand's published figures moved
+#: with it and the issue they were reported on is now wrong — which is the thing
+#: worth failing a build over.
+#: Column names that identify a patient, a specimen, a single procedure or a
+#: clinician. Taken from the identifying corpus's own schema, and asserted
+#: ABSENT from the aggregate release's card. A name check and a value check are
+#: different checks: `aggregate.assert_no_record` catches an identifier that
+#: reached the data, this catches a column that was declared to carry one.
+IDENTIFYING_COLUMNS = {
+    "patient_id", "mrn", "family_name", "given_name", "date_of_birth", "sex",
+    "phone", "email", "address_line", "postal_code", "primary_provider_id",
+    "encounter_id", "procedure_id", "provider_id", "finding_id", "pathology_id",
+    "accession_number", "pathologist_id", "recommendation_id", "recall_id",
+    "outreach_id", "document_id", "document_filename", "assigned_coordinator_id",
+    "recommending_provider_id", "assigned_abstractor_id", "npi", "provider_name",
+}
+
+PUBLISHED_ADR = {
+    "cypress-bay": (1825, 4788, 0),
+    "harbor-point": (1396, 3052, 0),
+    "ridgeline": (664, 2365, 1587),
+}
+ADR_WINDOW = ("2024-01-01", "2026-11-30")
+
+
+def adr_from_records(tables: dict[str, list[dict]]) -> tuple[int, int, int]:
+    """The researcher's question answered from the identifying corpus — the thing
+    only a tenant holding the records can do."""
+    start, end = ADR_WINDOW
+    adenoma = {row["procedure_id"] for row in tables["pathology"] if row["adenoma"] == "1"}
+    numerator = denominator = excluded = 0
+    for row in tables["procedures"]:
+        if row["procedure_type"] not in aggregate.COLONOSCOPY_TYPES:
+            continue
+        if not start <= row["procedure_date"] <= end:
+            continue
+        if row["report_source"] != aggregate.STRUCTURED:
+            continue
+        if aggregate.null(row["bbps_total"]):
+            excluded += 1
+        elif int(row["bbps_total"]) >= aggregate.ADEQUATE_BBPS:
+            denominator += 1
+            if row["procedure_id"] in adenoma:
+                numerator += 1
+    return numerator, denominator, excluded
+
+
+def adr_from_release(rows: dict[str, list[list]]) -> tuple[int, int, int]:
+    """The same question answered from the aggregate release — the thing the
+    researcher's tenant can do, holding counts and nothing else.
+
+    The month filter works because the window starts and ends on month
+    boundaries, which is a property of the question and is asserted below rather
+    than assumed."""
+    start, end = ADR_WINDOW
+    at = {name: index for index, name in enumerate(aggregate.release_columns("procedure_monthly"))}
+    numerator = denominator = excluded = 0
+    for row in rows["procedure_monthly"]:
+        if row[at["procedure_type"]] not in aggregate.COLONOSCOPY_TYPES:
+            continue
+        if not start <= row[at["month"]] <= end:
+            continue
+        denominator += row[at["prep_adequate"]]
+        numerator += row[at["prep_adequate_with_adenoma"]]
+        excluded += row[at["prep_missing"]]
+    return numerator, denominator, excluded
+
+
+def check_release(corpus: str, tables: dict[str, list[dict]], profile, published: bool) -> None:
+    """The aggregate release: that it answers the question, that it answers it
+    with the SAME NUMBERS as the records, and that it carries no record."""
+    rows = aggregate.aggregate(corpus, profile)
+
+    for name in aggregate.TABLES:
+        check(len(rows[name]) > 0, f"{name} is not empty ({len(rows[name]):,} rows)")
+    check(
+        len(rows["procedure_monthly"]) < len(tables["procedures"]),
+        f"the release is smaller than the record it counts "
+        f"({len(rows['procedure_monthly']):,} rows against {len(tables['procedures']):,})",
+    )
+
+    # `adr_from_release` filters whole months, so it can only agree with a
+    # day-level filter over the records if the window IS whole months. Asserted
+    # rather than assumed: a window ending mid-month would make the two figures
+    # differ for a reason that has nothing to do with the release.
+    start, end = ADR_WINDOW
+    last = dt.date.fromisoformat(end)
+    month_end = (last.replace(day=28) + dt.timedelta(days=4)).replace(day=1) - dt.timedelta(days=1)
+    check(
+        start.endswith("-01") and last == month_end,
+        f"the question's window {start}..{end} is whole months, so a monthly grain "
+        f"can answer it exactly",
+    )
+
+    from_records = adr_from_records(tables)
+    from_release = adr_from_release(rows)
+    check(
+        from_records == from_release,
+        f"the release answers the adenoma-detection question exactly as the records do "
+        f"{from_release} (records {from_records})",
+    )
+    if published:
+        check(
+            from_release == PUBLISHED_ADR[profile.key],
+            f"it answers it with the figures reported on SUP-909 {PUBLISHED_ADR[profile.key]} "
+            f"— got {from_release}",
+        )
+
+    at = {name: index for index, name in enumerate(aggregate.release_columns("network_profile"))}
+    header = rows["network_profile"][0]
+    check(
+        header[at["patients"]] == len(tables["patients"])
+        and header[at["procedures"]] == len(tables["procedures"]),
+        "the release's own header row counts the corpus it was built from",
+    )
+    check(
+        profile.coverage_note in header,
+        "the release carries this network's coverage caveat, so a researcher holding "
+        "no records still reads it",
+    )
+
+    # Rule 1 of aggregate.py, exercised rather than read. It raises SystemExit on
+    # a leak, so a pass is silence.
+    try:
+        aggregate.assert_no_record(corpus, rows)
+        leaked = None
+    except SystemExit as error:
+        leaked = str(error)
+    check(leaked is None, f"the release contains no value that identifies a record{'' if leaked is None else f': {leaked}'}")
+
+    # And the inverse, so that the check above is not vacuous: a release that
+    # DID carry a patient identifier must be caught.
+    sentinel = tables["patients"][0]["mrn"]
+    poisoned = {name: [list(row) for row in table] for name, table in rows.items()}
+    poisoned["sites"][0][3] = sentinel
+    try:
+        aggregate.assert_no_record(corpus, poisoned)
+        caught = False
+    except SystemExit:
+        caught = True
+    check(caught, "a release with a medical record number in it fails that check")
+
+    # The release card is the researcher's ONLY knowledge of this database, and
+    # the researcher holds no identifying card to fall back on — so the same
+    # card-versus-schema comparison the identifying card gets, plus the one check
+    # only an aggregate needs: that no column it declares is an identifier.
+    card_path = os.path.join(os.path.dirname(HERE), profile.release_dataset, "data.yaml")
+    try:
+        import yaml
+    except ImportError:
+        print("  skip  PyYAML not installed — release card checks skipped")
+        return
+    card = yaml.safe_load(open(card_path, encoding="utf-8"))
+    prefix = profile.release_prefix
+    card_tables = {
+        table["name"]: [column["name"] for column in table["columns"]]
+        for table in card["spec"]["schema"]["tables"]
+    }
+    schema_tables = {prefix + name: aggregate.release_columns(name) for name in aggregate.TABLES}
+    check(
+        set(card_tables) == set(schema_tables),
+        f"the release card declares exactly the tables the release creates "
+        f"(card only: {sorted(set(card_tables) - set(schema_tables))}, "
+        f"release only: {sorted(set(schema_tables) - set(card_tables))})",
+    )
+    mismatched = [
+        name for name in sorted(set(card_tables) & set(schema_tables))
+        if card_tables[name] != schema_tables[name]
+    ]
+    check(not mismatched, f"every release table's columns match its card in name and order {mismatched}")
+    incomplete = [
+        f"{table['name']}.{column['name']}"
+        for table in card["spec"]["schema"]["tables"]
+        for column in table["columns"]
+        if column.get("role") not in ("measure", "dimension") or not column.get("description")
+    ]
+    check(not incomplete, f"every release column declares a role and a description {incomplete[:5]}")
+    identifying = sorted(
+        name
+        for columns in card_tables.values()
+        for name in columns
+        if name in IDENTIFYING_COLUMNS
+    )
+    check(
+        not identifying,
+        f"the release card declares no column that identifies a patient, a specimen, "
+        f"a single procedure or a clinician {identifying}",
+    )
+    flat = " ".join(open(card_path, encoding="utf-8").read().split())
+    check(
+        " ".join(profile.coverage_note.split()) in flat,
+        "the release card publishes this network's coverage caveat in its own text",
+    )
+    check(
+        card["spec"]["access"]["mode"] == "gateway",
+        "the release is reached through the gate like every other card here, so a "
+        "withdrawn grant stops it",
+    )
 
 
 def check(condition: bool, message: str) -> None:
@@ -688,6 +898,19 @@ def check_network(network: str, args) -> None:
         ).stdout
         check("MRN:" in text, f"{sample} extracts as text with its identifiers intact")
         check("?" not in text.replace("? ", ""), f"{sample} extracts without mojibake")
+
+    print("\nthe aggregate release")
+    check_release(
+        first,
+        tables,
+        profile,
+        published=args.patients is None and args.seed is None,
+    )
+    second_release = aggregate.aggregate(second, profile)
+    check(
+        aggregate.aggregate(first, profile) == second_release,
+        "the release of two byte-identical corpora is identical",
+    )
 
     if args.seeds > 1:
         print(f"\nthe same placement assertions over {args.seeds} seeds")

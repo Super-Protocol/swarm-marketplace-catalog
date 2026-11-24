@@ -77,6 +77,28 @@ class NetworkProfile:
     table_prefix: str
     """Prefix on every table name. Part of the published column names."""
 
+    release_dataset: str
+    """The directory and published `metadata.name` of this network's AGGREGATE
+    RELEASE card — the counts-only extract the practice is willing to hand to an
+    outside researcher. A separate card with a separate owner's grant, because it
+    is a separate decision from publishing the record."""
+
+    release_prefix: str
+    """Prefix on the aggregate release's tables. It extends `table_prefix` so that
+    a name read in a query still says which network it belongs to, and the two
+    cards are kept apart by their GRANTS rather than by their names: every reader
+    this stand creates is granted SELECT table by table, enumerated from the
+    corpus directory it loaded (`stands/latica/harness/load-corpus.js`), never by
+    wildcard. So the release reader holds exactly the four tables below and the
+    identifying reader holds exactly its own eleven."""
+
+    coverage_note: str
+    """What an outside reader has to know about this practice's record before
+    comparing it with another's, in one sentence. It is published on the
+    aggregate card, because the aggregate is the only thing the researcher holds
+    — a caveat that lives only in the identifying card's documentation is a
+    caveat the researcher never sees."""
+
     mrn_prefix: str
     """What the medical record number on this practice's documents starts with."""
 
@@ -223,6 +245,14 @@ CYPRESS_BAY = NetworkProfile(
     network_name="Cypress Bay Digestive Health",
     network_short="CBDH",
     table_prefix="cbdh_",
+    release_dataset="cypressbay-release",
+    release_prefix="cbdh_release_",
+    coverage_note=(
+        "Complete capture. Every structured examination carries a bowel-preparation "
+        "score and a withdrawal time, every surveillance interval reached the "
+        "structured record, and the feed is current to the as-of date. No "
+        "examination has to be excluded from a preparation-quality denominator."
+    ),
     mrn_prefix="CB-",
     accession_prefix="CP",
     state="FL",
@@ -316,6 +346,15 @@ HARBOR_POINT = NetworkProfile(
     network_name="Harbor Point Gastroenterology",
     network_short="HPG",
     table_prefix="hpg_",
+    release_dataset="harborpoint-release",
+    release_prefix="hpg_release_",
+    coverage_note=(
+        "Complete capture over a short history. The record begins in June 2022 "
+        "because the practice does, so any comparison reaching further back is "
+        "comparing a full network with a partial one. Within that period nothing "
+        "is missing: every examination carries its preparation score and its "
+        "withdrawal time, and every surveillance interval reached the record."
+    ),
     mrn_prefix="HP-",
     accession_prefix="HPG",
     state="MA",
@@ -417,6 +456,18 @@ RIDGELINE = NetworkProfile(
     network_name="Ridgeline Endoscopy Partners",
     network_short="REP",
     table_prefix="rep_",
+    release_dataset="ridgeline-release",
+    release_prefix="rep_release_",
+    coverage_note=(
+        "Incomplete capture, declared. About a third of structured examinations "
+        "carry no bowel-preparation score, a fifth describe the preparation in "
+        "prose instead of scoring it, nearly half carry no withdrawal time, and "
+        "about a fifth of surveillance intervals never reached the structured "
+        "record — so those patients generate no recall at all. The feed also runs "
+        "about two months behind, so the most recent months are thinner than they "
+        "will be. Any rate computed here must say what it excluded; the "
+        "prep_missing counts in this release are what it excluded."
+    ),
     mrn_prefix="RG-",
     accession_prefix="RDG",
     state="CO",
