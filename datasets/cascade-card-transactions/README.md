@@ -71,14 +71,25 @@ nothing to say teaches the reader that it never has anything to say:
 |---|---|---|
 | `mcc` | 0.9847 | 1.5% of rows use a real MCC outside `KNOWN_MCCS` — software, charity, subscription |
 | `state` | 0.9933 | cards used in Toronto, Vancouver and Montreal: `ON`, `BC`, `QC` tokenise to `STATE_XX` |
+| `zip3` | 0.9933 | the same foreign rows: `M5H`, `V6B`, `H3B` have no numeric prefix to tokenise |
 | `entrymode` | 1.0000 | every row is one of the three modes the tokenizer maps |
 | `user` | 1.0000 | 1,200 cardholders, inside the vocabulary's `CUST_0`–`CUST_2999` |
 | `card` | 1.0000 | at most four cards per holder, inside `CARD_0`–`CARD_9` |
-| `zip3` | 0.8507 | 47,790 card-not-present rows carry no postcode, exactly as TabFormer's do |
 
-Overall ≈ 0.97. The fraud rate is 0.210% — close to TabFormer's own one-in-a-thousand and
-deliberately not the comfortable few percent that would make a baseline classifier look like a
-fraud model.
+**Overall 0.9952**, against a 0.5 floor — verified against a real gated read from a deployment,
+not computed here (SUP-900). The fraud rate is 0.210% — close to TabFormer's own
+one-in-a-thousand and deliberately not the comfortable few percent that would make a baseline
+classifier look like a fraud model.
+
+One thing the table does **not** say, and it matters more than any number in it: **47,790 rows
+(14.9%) carry no postcode at all**, exactly as TabFormer's card-not-present rows do, and
+`coverage()` counts them as covered. It fills an absent `Zip` to `00000` and asks whether the
+3-digit prefix is numeric, so every one of those rows tokenises — to `ZIP3_0`, one shared
+bucket. That is a real property of the shipped tokenizer worth knowing before anybody reads a
+ZIP feature's importance: a seventh of this table is one postcode as far as the model is
+concerned. An earlier version of this README published `zip3` as 0.8507, which is the fraction
+of rows that carry a postcode — a true number about the data, and the wrong answer to the
+question the table asks.
 
 ## Where it runs
 

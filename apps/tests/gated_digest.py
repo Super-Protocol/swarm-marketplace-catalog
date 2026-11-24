@@ -88,13 +88,13 @@ CONFIGURATION = re.compile(r'^\s*#\s*evidence-configuration:\s*(\S+)\s*$')
 KNOWN_GAPS = {'rag-agent': 'SUP-877'}
 
 # Listings whose declared digest was measured with no dataset attached, so the gate refuses
-# every gated deployment of them. Both are waiting on one shared GPU window to be re-measured
-# gated, which is a deployment each and not an edit; SUP-900 owns the window and declares the
-# numbers.
-CONFIGURATION_GAPS = {
-    'confidential-single-cell-analysis': 'SUP-900',
-    'confidential-transaction-model': 'SUP-900',
-}
+# every gated deployment of them.
+#
+# The list is EMPTY, and the check above fails a definition that is on it and passes, so it
+# stays empty by itself. The two notebook listings were on it for one day: SUP-900 measured
+# both gated pairs in the card window of 2026-11-24 and declared the numbers, which is the
+# only thing that ever takes a listing off this list.
+CONFIGURATION_GAPS: dict[str, str] = {}
 
 
 def definitions(arguments: list[str]) -> list[pathlib.Path]:
@@ -132,7 +132,18 @@ def configuration(path: pathlib.Path) -> tuple[str | None, str | None]:
     except StopIteration:
         return None, 'declares no top-level `evidence:` block'
 
-    found = [match.group(1) for match in map(CONFIGURATION.match, lines[start:]) if match]
+    # Stop at the next top-level key rather than at the end of the file. `evidence:` happens to
+    # be last in every definition here today, so scanning to EOF gave the same answer — and
+    # would have attributed a marker in a later block to this one the first time somebody moved
+    # it. A top-level key is a line starting in column 0 that is neither blank nor a comment.
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        line = lines[index]
+        if line[:1] not in {'', ' ', '\t', '#'}:
+            end = index
+            break
+
+    found = [match.group(1) for match in map(CONFIGURATION.match, lines[start:end]) if match]
     if not found:
         return None, None
     if len(found) > 1:

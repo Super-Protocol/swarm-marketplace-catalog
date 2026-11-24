@@ -217,8 +217,9 @@ PUBLISHED_DIGEST = '150c38bd13253a1a8ac179ffb94dd1f4fe7ef50b5ab41f8bec1768fad7b4
 PUBLISHED_COVERAGE = {
     'mcc': 0.9847,
     'state': 0.9933,
-    'zip3': 0.8507,
+    'zip3': 0.9933,
 }
+PUBLISHED_OVERALL = 0.9952
 PUBLISHED_FRAUD_RATE = 0.00210
 
 README = pathlib.Path(__file__).resolve().parents[1] / 'README.md'
@@ -283,10 +284,20 @@ def selftest() -> int:
     unknown = {mcc for mcc, _, _ in UNKNOWN_CATEGORIES}
     foreign = {state for state, _, _ in FOREIGN}
     online = sum(1 for row in rows if row[7] == 'Online Transaction')
+    # `zip3` is measured the way the deployment measures it, which is NOT "has a
+    # postcode". `tfm_workspace.coverage()` does `Zip.fillna('00000')[:3]` and asks
+    # whether that is digits, so a card-not-present row with no postcode is filled
+    # to `000` and COUNTS AS COVERED — it tokenises, into one shared bucket. What
+    # misses is a postcode that is not numeric at all, which here is only the
+    # foreign ones. Published as 0.8507 when this card shipped, which was the
+    # fraction of rows carrying a postcode: a true number about the data and the
+    # wrong answer to what the deployment prints. Corrected against a real read
+    # (SUP-900): the deployment reports 99.33%.
     measured = {
         'mcc': 1 - sum(1 for row in rows if row[12] in unknown) / len(rows),
         'state': 1 - sum(1 for row in rows if row[10] in foreign) / len(rows),
-        'zip3': 1 - online / len(rows),
+        'zip3': sum(1 for row in rows
+                    if (row[11] or '00000')[:3].isdigit()) / len(rows),
     }
     print('  vocabulary coverage this table should report:')
     for field, expected in PUBLISHED_COVERAGE.items():
@@ -295,8 +306,15 @@ def selftest() -> int:
                 f'{field} coverage is {measured[field]:.4f}, README.md publishes {expected}')
     print('    entrymode  1.0000   user 1.0000   card 1.0000')
 
+    overall = (measured['mcc'] + measured['state'] + measured['zip3'] + 3.0) / 6
+    print(f'    overall    {overall:.4f}')
+    require(round(overall, 4) == PUBLISHED_OVERALL,
+            f'overall coverage is {overall:.4f}, README.md publishes {PUBLISHED_OVERALL}')
+
     require(all(row[11] is None for row in rows if row[7] == 'Online Transaction'),
-            'a card-not-present row carries a postcode, which is what zip3 coverage explains')
+            'a card-not-present row carries a postcode, which is what the ZIP bucket explains')
+    absent = sum(1 for row in rows if row[11] is None)
+    print(f'  no postcode  {absent:,} rows ({absent / len(rows) * 100:.1f}%) — tokenised as `000`')
 
     fraud = sum(1 for row in rows if row[13] == 'Yes') / len(rows)
     require(round(fraud, 5) == PUBLISHED_FRAUD_RATE,

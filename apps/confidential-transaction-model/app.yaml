@@ -45,7 +45,7 @@ metadata:
     down to the sha256 of every Python wheel, and the data owner can withdraw access the moment
     that changes. Based on NVIDIA's open-source transaction-foundation-model developer example
     (Apache-2.0), rebuilt as our own image.
-  version: "0.1.2"
+  version: "0.1.3"
   # What an auditor should read: the notebooks, the tokenizer and their licence
   # are upstream's; what we changed is in the chart's
   # files/notebooks/PROVENANCE.md (copied into every deployment's workspace) and
@@ -588,50 +588,72 @@ outputs:
     when: "data.transactions.count == 0"
 
 evidence:
-  # ---------------------------------------------------------------------------
-  # Measured, not derived. Two deployments of this version on the gpu-blueprints
-  # cloud, 2026-11-23 — `tfm-870e` and `tfm-870f`, two hostnames in two
-  # namespaces with two different sign-in tokens — published byte-identical
-  # signed snapshots: the same digest AND the same 218,066 bytes of resource
-  # JSON, compared field by field rather than by the digest alone. Six resources
-  # in each: two ConfigMaps, the Deployment, the Ingress, the Secret and the
-  # Service — the PVC is not collected into evidence by the cloud. A third
-  # deployment, from a listing carrying this number, answered
-  # `matchesExpected: true`.
-  #
-  # It cannot be computed from the chart, because a cluster defaults fields no
-  # template writes. And declaring it is not documentation: the marketplace
-  # admits a deployment to the gatekeeper only when its listing version carries
-  # one, so a listing with a data slot and no digest produces deployments the
-  # gate has never heard of (SUP-711, and `apps/tests/gated_digest.py`).
-  #
-  # One caveat the measurement cannot cover, and it belongs to the platform
-  # rather than to this listing: a deployment that mounts GATED data gains three
-  # objects the marketplace adds itself — the egress sidecar's ConfigMap,
-  # Deployment and Service — which are part of what the cloud digests. Its
-  # snapshot is therefore not this one. The digest below is the no-dataset
-  # configuration, which is what both measurements were; the first gated
-  # deployment has to re-measure and re-declare.
+  # evidence-configuration: gated
   #
   # ---------------------------------------------------------------------------
-  # WHICH CONFIGURATION THIS NUMBER IS, and what replaces it. The value below is
-  # UNGATED, and `apps/tests/gated_digest.py` therefore exempts this listing by
-  # name rather than passing it: the gate compares a declared digest only against
-  # a deployment that mounts gateway-mode data, so this number refuses every
-  # gated read of this listing — and `clickhouse-http/v1` is the ONLY interface
-  # its slot accepts, so a gated read is the only read it has. SUP-900 replaces
-  # it with the gated number and records this one as the ungated value, the way
-  # `apps/confidential-rag/app.yaml` did.
+  # Measured, not derived, and it describes the GATED configuration.
   #
-  # The measurement is a deployment and not an edit, so it waits for the card:
-  # `gpu-blueprints-node-3-et9j` is deallocated (SUP-903) and SUP-900 shares the
-  # window SUP-873 opens. THE REFERENCE PARAMETER SET it will be measured with,
-  # recorded now so the window is spent on the card and not on deciding:
+  # Two deployments of this render on the gpu-blueprints cloud, 2026-11-24 —
+  # `tfm-900a` and `tfm-900b`, two hostnames in two namespaces with two separately
+  # generated sign-in tokens, each with `cascade-card-transactions` attached —
+  # published signed snapshots that are byte-identical: the same digest AND the
+  # same 221,684 bytes of resource JSON, compared field by field as JSON Pointers
+  # rather than by the digest alone. 309 pointers each, zero differing values, no
+  # object present on one side only.
+  #
+  # TEN resources in each, where the ungated measurement had six: 3 ConfigMaps,
+  # 2 Deployments, the Ingress, 2 Secrets, 2 Services. The PVC is still not
+  # collected. The four the marketplace adds for a gated deployment are the egress
+  # sidecar's ConfigMap, Deployment and Service **and the Secret holding its client
+  # certificate** — four objects, not the three an earlier version of this comment
+  # claimed.
+  #
+  # **It is the gated configuration on purpose, and for this listing there is no
+  # other choice to make.** `clickhouse-http/v1` is the only interface its slot
+  # accepts, so a gated read is the only read through the slot it has; an ungated
+  # number here would refuse all of them. The gate compares this value against a
+  # deployment that mounts gateway-mode data and against nothing else.
+  #
+  # What that costs: a deployment with NOTHING attached — reading a .csv or
+  # .parquet extract uploaded into the workspace, which is a supported and useful
+  # configuration — does not match the number on its own listing page. Nothing
+  # refuses it, because there is no gate in front of it. **The ungated digest, for
+  # the record, is
+  # `8ea5156096c9e17f78fed6c45ec2e22f17180e5472f0e859e40bc8b44bd1cd3e`** — six
+  # resources, measured on `tfm-870e` / `tfm-870f` on 2026-11-23 (SUP-870), and not
+  # declared.
+  #
+  # Checked against the gate and not only against itself: both measurement
+  # deployments read `matchesExpected: false` while the listing still declared the
+  # ungated number, and `tfm-900b` — created after this number was the declared one
+  # — read `matchesExpected: true`, the gate admitted it, and a read inside the
+  # deployment through the sidecar returned the whole table: 320,176 rows, 1,200
+  # cardholders, 2023-2025, 672 fraud rows, and `check_coverage` 99.52% against the
+  # 50% floor. Admission is not instant — for a few minutes after the number is
+  # declared the read fails with a `502` from this deployment's own egress sidecar,
+  # because the gate has not yet been told about the client.
+  #
+  # ONE DEFECT THAT MEASUREMENT FOUND, and it is not in this number. The gated read
+  # reaches ClickHouse and returns every row, and then the workbench crashes on its
+  # own next line: `tfm_workspace._read_from_clickhouse` calls
+  # `cudf.DataFrame.from_pandas`, which does not exist in this image —
+  # `cudf.from_pandas` is the call. That line is on the gated path and only on it,
+  # which is why no deployment had executed it before: SUP-870 measured ungated and
+  # ran the notebooks on an uploaded extract, which goes through `cudf.read_csv`.
+  # Fixing it edits the loader in an attested ConfigMap, so it moves this digest and
+  # the fixed build has to be re-measured; it is therefore a separate change with a
+  # separate version, not something to fold in here. Until it ships, a gated
+  # deployment of this listing is admitted by the gate and fails in the notebook.
+  #
+  # ---------------------------------------------------------------------------
+  # THE REFERENCE PARAMETER SET it was measured with. The digest holds for this
+  # one, and a deployment that answers differently attests its own — expected,
+  # not tampering.
   #
   #   hostname     tfm-900a / tfm-900b .conf-apps.superprotocol.dev
   #                (excluded from the snapshot — see `exclude` below)
-  #   token        generated, separately in each deployment. It is in a Secret,
-  #                whose DATA is not in the snapshot, so it cannot move the digest
+  #   token        generated, separately in each. It is in a Secret, whose DATA is
+  #                not in the snapshot, so it cannot move the digest
   #   table        transactions   (this listing's default)
   #   maxRows      25000000       (this listing's default; the table has 320,176)
   #   every col*   this listing's defaults, which are TabFormer's own names
@@ -640,12 +662,8 @@ evidence:
   #
   # `cascade-card-transactions` carries TabFormer's column spelling on purpose, so
   # all eleven column parameters stay at their defaults and the gated and ungated
-  # renders differ by the sidecar and by nothing else. Its vocabulary coverage is
-  # about 0.97, well clear of the 0.5 floor, so the notebook's coverage check
-  # passes and the gated read can be shown doing real work rather than merely
-  # returning rows.
-  # ---------------------------------------------------------------------------
-  expectedDigest: "8ea5156096c9e17f78fed6c45ec2e22f17180e5472f0e859e40bc8b44bd1cd3e"
+  # renders differ by the sidecar and by nothing else.
+  expectedDigest: "517224a645c3c08b60844b9b52bfc37dc970283ac48e8bd74695750083ce277a"
   # ---------------------------------------------------------------------------
   # The hostname is the one field that differs between two deployments of this
   # version, and excluding it is what makes the digest a property of the version
