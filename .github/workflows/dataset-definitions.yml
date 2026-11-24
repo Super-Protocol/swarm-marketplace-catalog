@@ -80,3 +80,36 @@ jobs:
         run: |
           python3 datasets/gi-network-generator/selftest.py \
             --network ${{ matrix.network }} --published-size --seeds 8
+
+  gated-cards:
+    name: ${{ matrix.dataset }} self-test
+    runs-on: ubuntu-latest
+    # The two cards the notebook listings read under the gate (SUP-900). One job
+    # each, for the same reason the clinic networks get one each: a failure should
+    # name the corpus it is about.
+    strategy:
+      fail-fast: false
+      matrix:
+        dataset: [kestrel-pbmc-panel, cascade-card-transactions]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # PyYAML parses the dataset card for the card-versus-schema comparison. The
+      # generators themselves use nothing outside the standard library on purpose:
+      # a corpus that has to be regenerated on the stand should need a pip install
+      # of nothing at all.
+      - name: Install what the self-test reads with
+        run: python -m pip install --disable-pip-version-check pyyaml
+
+      # Asserts, rather than prints: byte-level reproducibility across two builds
+      # in one process, the row counts and sha256 the card publishes, referential
+      # integrity between the tables, that the card declares exactly the columns
+      # the generator writes, and the value domains the shipped checkpoints depend
+      # on — the `MT-`/`RPS` prefixes and GATA3 for the panel, the vocabulary
+      # coverage table for the transactions.
+      - name: Self-test
+        run: python3 datasets/${{ matrix.dataset }}/generate/generate.py --self-test

@@ -204,6 +204,112 @@ COLUMNS = [
     'Merchant Name', 'Merchant City', 'Merchant State', 'Zip', 'MCC', 'Is Fraud?',
 ]
 
+# What README.md publishes. Changing the generator means changing these,
+# deliberately: "the same seed produces the same bytes" is the only claim a
+# consumer can check without the stand, and a digest nobody asserts is a comment.
+PUBLISHED_ROWS = 320_176
+PUBLISHED_DIGEST = '150c38bd13253a1a8ac179ffb94dd1f4fe7ef50b5ab41f8bec1768fad7b431a5'
+
+# The coverage table in README.md, to four places. These are the numbers a
+# deployment's own `check_coverage()` will print, and the card explains each
+# shortfall by name — so a generator change that moves one silently makes the
+# card's explanation wrong.
+PUBLISHED_COVERAGE = {
+    'mcc': 0.9847,
+    'state': 0.9933,
+    'zip3': 0.8507,
+}
+PUBLISHED_FRAUD_RATE = 0.00210
+
+README = pathlib.Path(__file__).resolve().parents[1] / 'README.md'
+
+
+def selftest() -> int:
+    """Assert what the card claims. Returns a process exit code."""
+    failures: list[str] = []
+
+    def require(condition: bool, message: str) -> None:
+        if not condition:
+            failures.append(message)
+
+    rows = build()
+    text = tabseparated(rows)
+
+    # 1. Byte-level reproducibility, from two builds in one process — the stand
+    #    regenerates by calling this twice, not from a fresh interpreter each time.
+    require(tabseparated(build()) == text,
+            'a second build in the same process differs from the first')
+
+    actual = hashlib.sha256(text.encode('utf-8')).hexdigest()
+    require(len(rows) == PUBLISHED_ROWS,
+            f'{len(rows):,} rows, the card publishes {PUBLISHED_ROWS:,}')
+    require(actual == PUBLISHED_DIGEST,
+            f'sha256 {actual} , the card publishes {PUBLISHED_DIGEST}')
+    print(f'  transactions {len(rows):,} rows  sha256 {actual}')
+    print(f'  columns      {", ".join(COLUMNS)}')
+
+    require(all(len(row) == len(COLUMNS) for row in rows),
+            'a row is not as wide as the declared column list')
+
+    # 2. The columns. `data.yaml` cannot declare them — the specification's
+    #    column-name pattern forbids a space and a question mark — so README.md's
+    #    CREATE TABLE is the card, and this is the check that it still describes
+    #    the table this writes.
+    readme = README.read_text()
+    for column in COLUMNS:
+        require(f'`{column}`' in readme,
+                f'README.md does not name the column `{column}`')
+
+    # 3. The value domains the shipped checkpoint's vocabulary depends on. Every
+    #    one of these is a token: a value outside the domain does not fail, it
+    #    tokenises to a catch-all and the model reads something it never trained
+    #    on. Measured here rather than asserted from the generator's parameters.
+    users = {row[0] for row in rows}
+    require(max(users) <= 2999, f'a User index is {max(users)}; the vocabulary ends at CUST_2999')
+    require(max(row[1] for row in rows) <= 9, 'a Card index is above CARD_9')
+    require(all(row[7] in {name for name, _ in ENTRY_MODES} for row in rows),
+            'an entry mode is outside the three the tokenizer maps')
+    require(all(row[13] in {'Yes', 'No'} for row in rows),
+            'a fraud label is neither Yes nor No')
+    require(all(len(row[5]) == 5 and row[5][2] == ':' and row[5].replace(':', '').isdigit()
+                for row in rows), 'a Time is not HH:MM')
+    require(all(row[6].startswith('$') or row[6].startswith('-$') or row[6].startswith('$-')
+                for row in rows), 'an Amount is not written as a dollar figure')
+    require(all(row[11] is None or (len(row[11]) == 5 and row[11].isdigit())
+                or row[10] in {state for state, _, _ in FOREIGN} for row in rows),
+            'a domestic Zip is neither absent nor five digits')
+
+    # 4. The coverage table. These are the numbers the deployment will print.
+    unknown = {mcc for mcc, _, _ in UNKNOWN_CATEGORIES}
+    foreign = {state for state, _, _ in FOREIGN}
+    online = sum(1 for row in rows if row[7] == 'Online Transaction')
+    measured = {
+        'mcc': 1 - sum(1 for row in rows if row[12] in unknown) / len(rows),
+        'state': 1 - sum(1 for row in rows if row[10] in foreign) / len(rows),
+        'zip3': 1 - online / len(rows),
+    }
+    print('  vocabulary coverage this table should report:')
+    for field, expected in PUBLISHED_COVERAGE.items():
+        print(f'    {field:10} {measured[field]:.4f}')
+        require(round(measured[field], 4) == expected,
+                f'{field} coverage is {measured[field]:.4f}, README.md publishes {expected}')
+    print('    entrymode  1.0000   user 1.0000   card 1.0000')
+
+    require(all(row[11] is None for row in rows if row[7] == 'Online Transaction'),
+            'a card-not-present row carries a postcode, which is what zip3 coverage explains')
+
+    fraud = sum(1 for row in rows if row[13] == 'Yes') / len(rows)
+    require(round(fraud, 5) == PUBLISHED_FRAUD_RATE,
+            f'the fraud rate is {fraud:.5f}, README.md publishes {PUBLISHED_FRAUD_RATE}')
+    print(f'  fraud        {fraud * 100:.3f}%   cardholders {len(users)}   '
+          f'period {rows[0][2]}-{max(row[2] for row in rows)}')
+
+    for failure in failures:
+        print(f'  FAIL  {failure}')
+    print('  everything the card claims holds' if not failures
+          else f'  {len(failures)} claim(s) do not hold')
+    return 1 if failures else 0
+
 
 def tabseparated(rows: list[tuple]) -> str:
     """TabSeparated, with `\\N` for the absent postcode — ClickHouse's NULL."""
@@ -223,28 +329,11 @@ def main() -> int:
     parser.add_argument('--self-test', action='store_true')
     arguments = parser.parse_args()
 
+    if arguments.self_test:
+        return selftest()
+
     rows = build()
     text = tabseparated(rows)
-
-    if arguments.self_test:
-        print(f'  transactions {len(rows):,} rows  sha256 '
-              f'{hashlib.sha256(text.encode("utf-8")).hexdigest()}')
-        print(f'  columns      {", ".join(COLUMNS)}')
-        fraud = sum(1 for row in rows if row[13] == 'Yes')
-        online = sum(1 for row in rows if row[7] == 'Online Transaction')
-        unknown = {mcc for _, _, mcc_names in [(0, 0, UNKNOWN_CATEGORIES)] for mcc, _, _ in mcc_names}
-        foreign = {state for state, _, _ in FOREIGN}
-        print(f'  cardholders  {len({row[0] for row in rows})}, '
-              f'cards per holder up to {max(row[1] for row in rows) + 1}')
-        print(f'  period       {rows[0][2]} to {max(row[2] for row in rows)}')
-        print(f'  fraud        {fraud:,} rows ({fraud / len(rows) * 100:.3f}%)')
-        print('  vocabulary coverage this table should report:')
-        print(f'    mcc        {1 - sum(1 for row in rows if row[12] in unknown) / len(rows):.4f}')
-        print(f'    state      {1 - sum(1 for row in rows if row[10] in foreign) / len(rows):.4f}')
-        print('    entrymode  1.0000   user 1.0000   card 1.0000')
-        print(f'    zip3       {1 - online / len(rows):.4f}  '
-              f'({online:,} card-not-present rows carry no postcode)')
-        return 0
 
     if not arguments.out:
         parser.error('one of --out or --self-test')

@@ -30,6 +30,13 @@ rather than similar data:
 | `sc_genes` | 933 | `29297cc83ce087e12d150b9acdf50a73d53ae9688443793de79fa0ded069a416` |
 | `sc_counts` | 1,101,372 | `371f1fab57d310ae0e0452aad648132c2b4c290c7017b0086d868a1f799a71a7` |
 
+`--self-test` **asserts** those numbers rather than printing them, along with referential
+integrity between the three tables, that `data.yaml` declares exactly the columns the generator
+writes, that the panel still carries an `MT-` prefix, an `RPS` prefix and `GATA3` by name, and
+the QC property below. It runs in CI on every change under `datasets/`
+(`.github/workflows/dataset-definitions.yml`), because a column renamed here and not in the card
+fails nothing — it quietly teaches a consumer something false.
+
 ## Why it is three ClickHouse tables and not an `.h5ad` in a bucket
 
 Because an `.h5ad` in a bucket **cannot be gated**. The marketplace gatekeeper is an HTTP proxy

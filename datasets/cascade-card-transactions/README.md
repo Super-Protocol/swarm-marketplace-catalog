@@ -26,6 +26,12 @@ Deterministic — one seed, one table, byte for byte:
 |---|---|
 | 320,176 | `150c38bd13253a1a8ac179ffb94dd1f4fe7ef50b5ab41f8bec1768fad7b431a5` |
 
+`--self-test` **asserts** those numbers rather than printing them, along with the coverage table
+below, the fraud rate, the value domains the checkpoint's vocabulary depends on, and that this
+README still names every column the generator writes — which matters more here than for a card
+with a `schema:` block, because this README *is* the schema. It runs in CI on every change under
+`datasets/` (`.github/workflows/dataset-definitions.yml`).
+
 ## The columns, and why they are spelled like that
 
 TabFormer's own names, which is what

@@ -270,11 +270,32 @@ def digest(text: str) -> str:
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--out-dir', help='write sc_cells.tsv, sc_genes.tsv and sc_counts.tsv here')
-    parser.add_argument('--self-test', action='store_true')
-    arguments = parser.parse_args()
+# What the dataset card and README publish. Changing the generator means changing
+# these, deliberately: "the same seed produces the same bytes" is the only claim a
+# consumer can check without the stand, and a digest nobody asserts is a comment.
+PUBLISHED = {
+    'sc_cells': (1_800, '33d23f35c277a8df9dddf6543b4928f00f227bc14e83835c8b246bf148a188a5'),
+    'sc_genes': (933, '29297cc83ce087e12d150b9acdf50a73d53ae9688443793de79fa0ded069a416'),
+    'sc_counts': (1_101_372, '371f1fab57d310ae0e0452aad648132c2b4c290c7017b0086d868a1f799a71a7'),
+}
+
+# What README.md says the QC step removes. It is the one number in the card that
+# is a property of the data rather than of the generator's parameters, and the
+# reason the degraded cells are there at all.
+PUBLISHED_HIGH_MT_CELLS = 56
+
+CARD = pathlib.Path(__file__).resolve().parents[1] / 'data.yaml'
+
+
+def selftest() -> int:
+    """Assert what the card claims. Returns a process exit code."""
+    import yaml
+
+    failures: list[str] = []
+
+    def require(condition: bool, message: str) -> None:
+        if not condition:
+            failures.append(message)
 
     cells, genes, counts = build()
     tables = {
@@ -283,26 +304,121 @@ def main() -> int:
         'sc_counts': tabseparated(counts),
     }
 
+    # 1. Byte-level reproducibility, measured rather than asserted from one run:
+    #    two independent builds in one process, because a generator that reuses a
+    #    module-level RNG is reproducible from a fresh interpreter and not from
+    #    the second call — and the stand regenerates by calling this twice.
+    again = build()
+    for index, name in enumerate(('sc_cells', 'sc_genes', 'sc_counts')):
+        require(tabseparated(again[index]) == tables[name],
+                f'{name}: a second build in the same process differs from the first')
+
+    for name, text in tables.items():
+        rows, expected = PUBLISHED[name]
+        actual = digest(text)
+        require(text.count('\n') == rows,
+                f'{name}: {text.count(chr(10)):,} rows, the card publishes {rows:,}')
+        require(actual == expected,
+                f'{name}: sha256 {actual} , the card publishes {expected}')
+        print(f'  {name:10} {text.count(chr(10)):8,} rows  sha256 {actual}')
+
+    # 2. Referential integrity. `_read_matrix_from_clickhouse` maps counts onto
+    #    `sc_cells` and `sc_genes` and DROPS whatever it cannot place, silently —
+    #    so an orphan row is not an error anywhere downstream, it is a count that
+    #    quietly never reaches the matrix.
+    cell_ids = {row[0] for row in cells}
+    gene_names = {row[0] for row in genes}
+    require(len(cell_ids) == len(cells), 'sc_cells: a cell_id repeats')
+    require(len(gene_names) == len(genes), 'sc_genes: a gene repeats')
+    orphan_cells = {row[0] for row in counts} - cell_ids
+    orphan_genes = {row[1] for row in counts} - gene_names
+    require(not orphan_cells, f'sc_counts: {len(orphan_cells)} cell_id(s) not in sc_cells')
+    require(not orphan_genes, f'sc_counts: {len(orphan_genes)} gene(s) not in sc_genes')
+    require(all(row[2] > 0 for row in counts), 'sc_counts: a stored count is not positive')
+
+    # 3. The card versus the schema. A consumer builds its whole idea of this
+    #    database from the card, so a column renamed here and not there does not
+    #    fail a render — it teaches the consumer something false.
+    card = yaml.safe_load(CARD.read_text())
+    declared = {
+        table['name']: [column['name'] for column in table['columns']]
+        for table in card['spec']['schema']['tables']
+    }
+    generated = {
+        'sc_cells': ['cell_id', 'batch', 'donor', 'site', 'cell_type'],
+        'sc_genes': ['gene', 'panel_class'],
+        'sc_counts': ['cell_id', 'gene', 'count'],
+    }
+    require(set(declared) == set(generated),
+            f'data.yaml declares tables {sorted(declared)}, the generator writes '
+            f'{sorted(generated)}')
+    for name, columns in generated.items():
+        require(declared.get(name) == columns,
+                f'data.yaml declares {name} as {declared.get(name)}, the generator writes '
+                f'{columns}')
+    require(len(cells[0]) == len(generated['sc_cells']),
+            'sc_cells: the row width does not match the declared column list')
+
+    # 4. The populations the card names, and the QC property it claims.
+    populations: dict[str, int] = {}
+    for row in cells:
+        populations[row[4]] = populations.get(row[4], 0) + 1
+    require(set(populations) == {name for name, _, _ in POPULATIONS},
+            f'sc_cells carries populations {sorted(populations)}')
+    print('  populations ' + ', '.join(
+        f'{name} {populations.get(name, 0)}' for name, _, _ in POPULATIONS))
+
+    family = {gene: family_of(gene) for gene in gene_names}
+    total: dict[str, int] = {}
+    mitochondrial: dict[str, int] = {}
+    for cell_id, gene, count in counts:
+        total[cell_id] = total.get(cell_id, 0) + count
+        if family[gene] == 'mitochondrial':
+            mitochondrial[cell_id] = mitochondrial.get(cell_id, 0) + count
+    high = sum(1 for cell_id in total
+               if 100 * mitochondrial.get(cell_id, 0) / total[cell_id] >= 20)
+    require(high == PUBLISHED_HIGH_MT_CELLS,
+            f'{high} cells are above the notebook\'s pct_counts_MT < 20 cut, README.md '
+            f'publishes {PUBLISHED_HIGH_MT_CELLS}')
+    print(f'  {len(cells):,} cells x {len(genes):,} genes, '
+          f'{len(counts) / len(cells):.0f} genes detected per cell, '
+          f'{high} above the pct_counts_MT cut')
+
+    # 5. The genes the ported notebooks reach for by name. A panel that scores
+    #    nothing against CollecTRI, or has no `MT-` prefix to flag, runs
+    #    perfectly and demonstrates the opposite of what it looks like.
+    require(any(gene.startswith('MT-') for gene in gene_names),
+            'no MT- gene on the panel: rsc.pp.flag_gene_family would flag nothing')
+    require(any(gene.startswith('RPS') for gene in gene_names),
+            'no RPS gene on the panel: the RIBO flag would find nothing')
+    require('GATA3' in gene_names,
+            'GATA3 is not on the panel, and 02_regulatory_activity.ipynb plots it by name')
+
+    for failure in failures:
+        print(f'  FAIL  {failure}')
+    print('  everything the card claims holds' if not failures
+          else f'  {len(failures)} claim(s) do not hold')
+    return 1 if failures else 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--out-dir', help='write sc_cells.tsv, sc_genes.tsv and sc_counts.tsv here')
+    parser.add_argument('--self-test', action='store_true')
+    arguments = parser.parse_args()
+
     if arguments.self_test:
-        for name, text in tables.items():
-            rows = text.count('\n')
-            print(f'  {name:10} {rows:8,} rows  sha256 {digest(text)}')
-        populations: dict[str, int] = {}
-        for _, _, _, _, population in cells:
-            populations[population] = populations.get(population, 0) + 1
-        print('  populations ' + ', '.join(
-            f'{name} {populations.get(name, 0)}' for name, _, _ in POPULATIONS))
-        per_cell = len(counts) / len(cells)
-        print(f'  {len(cells):,} cells x {len(genes):,} genes, '
-              f'{per_cell:.0f} genes detected per cell, {len(counts):,} non-zero entries')
-        for family, _ in FAMILIES:
-            total = sum(count for _, gene, count in counts
-                        if family_of(gene) == family)
-            print(f'    {family:22} {total / sum(c for _, _, c in counts) * 100:5.1f}% of counts')
-        return 0
+        return selftest()
 
     if not arguments.out_dir:
         parser.error('one of --out-dir or --self-test')
+
+    cells, genes, counts = build()
+    tables = {
+        'sc_cells': tabseparated(cells),
+        'sc_genes': tabseparated(genes),
+        'sc_counts': tabseparated(counts),
+    }
 
     directory = pathlib.Path(arguments.out_dir)
     directory.mkdir(parents=True, exist_ok=True)
