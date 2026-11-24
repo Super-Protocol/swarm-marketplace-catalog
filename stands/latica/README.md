@@ -485,6 +485,63 @@ Rollback is for an attestation failure — a digest that moved, a workload that 
 stand is not serving what it claims to serve. A slow or failed grounding is diagnosed with the
 stand up and the data it was already serving still flowing.
 
+### Do not demonstrate during a window
+
+For the twenty-five seconds or so that the space is unpublished, **the gate refuses the stand every
+dataset it has**, and the refusal is logged against the clinic:
+
+```
+cypressbay-digestive-health | denied | this deployment is not currently allowed to read any data here
+```
+
+That is `clientsFor` doing its job rather than a fault: it builds the admitted-client document only
+from deployments that are `published`, so an unpublished deployment is simply absent from it and the
+gate has nothing to admit. A question asked in that gap comes back with no data, and a `denied` row
+sits in the clinic's own access log afterwards — which is the one place a viewer might look and the
+worst possible moment for them to look there.
+
+So: no dialog, no autopilot run and no screen-share for the length of a window. The autopilots are on
+a schedule, so a window that overlaps one leaves a `denied` behind with nobody at the keyboard.
+
+### A window does not restart anything on a cloud without SUP-383
+
+`azure-test` runs a build from before 2026-11-17 (its deployment evidence collects no `Role`,
+`RoleBinding`, `ServiceAccount`, `DaemonSet`, `CronJob`, `HorizontalPodAutoscaler` or
+`PodDisruptionBudget`, all of which SUP-385 and SUP-400 added that day). On such a build `unpublish`
+withdraws attestation and releases hostnames and **stops no workloads** — every pod keeps running
+across the whole window.
+
+Two consequences, both of which cost SUP-909 a day:
+
+- **The egress sidecar never reloads.** It mounts `nginx.conf` by `subPath`, so only a new pod reads
+  a new config. Mount a dataset and the ConfigMap gains its `listen` line, the Service gains its
+  port, and the running nginx keeps the listeners it had at startup — so the new dataset has no
+  listener and the grounding Job's catalogue read cannot connect. The stand ran for 30 hours with
+  one listener while its ConfigMap declared three.
+- **A failed Job is never retried.** `BackoffLimitExceeded` is terminal, the old Job object is not
+  deleted by the unpublish, and a reconfigure server-side-applies the same spec as a no-op — so
+  further windows do nothing at all.
+
+The fix, until that cloud is upgraded (**SUP-916**, and read it first — the upgrade moves the
+evidence digest and would cost the stand its gated access), is to delete the two objects by hand
+while the space is unpublished, which changes nothing that is collected:
+
+```bash
+# the tenant kubeconfig, from the cloud's own GraphQL as the space's owner
+#   { clusterSpaces(filter:{id:{eq:"<space id>"}}) { nodes { kubeConfig } } }
+export KUBECONFIG=./stand.kubeconfig
+
+kubectl delete pod -l app.kubernetes.io/name=swarm-gatekeeper-egress   # rereads the ConfigMap
+kubectl exec <new pod> -- nginx -T   # confirm a listen line per mounted dataset
+kubectl delete job <analyst-grounding-…>                               # so the reconfigure recreates it
+```
+
+Then reconfigure with the **same** parameters and cards, publish, and check. Pods and Jobs are not in
+the evidence snapshot and the ReplicaSet recreates the pod from an unchanged spec, so the measured
+digest does not move — verify that with `--verify` rather than assuming it. `exec` and `delete` are
+both refused while the space is published, which is the freeze working; do this between the unpublish
+and the reconfigure, and write down what you ran.
+
 The one check none of this can do for you is the gate's own verdict: the access log belongs to the
 dataset's owner, not to the deploying organisation. The script prints the SQL to run against the
 marketplace's PostgreSQL, and an `allowed` row there is the only thing that says a clinic is
