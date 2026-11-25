@@ -256,6 +256,77 @@ test('DRY_RUN reports the plan and writes nothing', async () => {
   });
 });
 
+// --- the semantic model, which is decided in the plan and not in the writes --
+//
+// It has to be: `adminSemanticModelImport(mode: replace)` marks as invalid
+// every library item whose query names an entity the import removed, so a model
+// that re-imported on every run would be a write with a cost, and deciding it
+// inside the write phase is how it would have stayed out of both the plan and
+// DRY_RUN (CTO review of #134).
+
+const CLINIC_MODEL = JSON.parse(fs.readFileSync(
+  path.join(BACKUP, 'semantic-model.cypress-bay-digestive-health.json'), 'utf8',
+));
+
+test('DRY_RUN says the model has to be imported on a stand that has none', async () => {
+  const dir = exportDirectory();
+  await withStand(SEED, async (stand) => {
+    const result = await restore(stand, dir, { DRY_RUN: 'yes' });
+    assert.equal(result.status, 0, result.out);
+    assert.match(result.out, /semantic model 1 to import, 0 already right, 3 empty/);
+    assert.match(result.out, /Cypress Bay Digestive Health: 4 dataset\(s\)/);
+    assert.deepEqual(stand.mutations(), []);
+  });
+});
+
+test('DRY_RUN says the model is already right on a stand that holds it', async () => {
+  const dir = exportDirectory();
+  const seed = { ...SEED, models: { 'Cypress Bay Digestive Health': CLINIC_MODEL } };
+  await withStand(seed, async (stand) => {
+    const result = await restore(stand, dir, { DRY_RUN: 'yes' });
+    assert.equal(result.status, 0, result.out);
+    assert.match(result.out, /semantic model 0 to import, 1 already right, 3 empty/);
+    assert.deepEqual(stand.mutations(), []);
+  });
+});
+
+test('a model that is already right is not re-imported', async () => {
+  const dir = exportDirectory();
+  const seed = { ...SEED, models: { 'Cypress Bay Digestive Health': CLINIC_MODEL } };
+  await withStand(seed, async (stand) => {
+    const result = await restore(stand, dir);
+    assert.equal(result.status, 0, result.out);
+    assert.match(result.out, /Cypress Bay Digestive Health: already this model/);
+    assert.ok(
+      !stand.mutations().some((one) => one.token === 'adminSemanticModelImport('),
+      'the model was re-imported over an identical one',
+    );
+  });
+});
+
+test('a model that drifted IS re-imported, once', async () => {
+  const dir = exportDirectory();
+  const drifted = { ...CLINIC_MODEL, datasets: CLINIC_MODEL.datasets.slice(0, 3) };
+  const seed = { ...SEED, models: { 'Cypress Bay Digestive Health': drifted } };
+  await withStand(seed, async (stand) => {
+    const first = await restore(stand, dir);
+    assert.equal(first.status, 0, first.out);
+    assert.equal(
+      stand.mutations().filter((one) => one.token === 'adminSemanticModelImport(').length,
+      1,
+      first.out,
+    );
+    assert.equal(stand.store.models.size, 1);
+    const clinic = stand.store.tenants.find((one) => one.name === 'Cypress Bay Digestive Health');
+    assert.equal(stand.store.models.get(clinic.id).datasets.length, 4);
+
+    stand.reset();
+    const second = await restore(stand, dir);
+    assert.equal(second.status, 0, second.out);
+    assert.deepEqual(stand.mutations().map((one) => one.token), []);
+  });
+});
+
 test('a drifted item is corrected in place and nothing is duplicated', async () => {
   const dir = exportDirectory();
   await withStand(SEED, async (stand) => {

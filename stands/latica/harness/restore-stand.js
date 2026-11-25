@@ -281,18 +281,45 @@ const patchOf = (source, keys) => Object.fromEntries(keys.map((key) => [key, sou
   const kcReady = Boolean(process.env.KC_BASE && process.env.KC_PASS_FILE && process.env.APP_HOST);
   const researchPresent = live.tenants.some((one) => one.name === RESEARCH_TENANT);
 
-  // 1. Every tenant whose model has to be imported must exist, or be the one
-  //    step 0 is about to create.
+  // 1. The semantic model, per tenant: the tenant has to exist (or be the one
+  //    step 0 is about to create), and whether its model is ALREADY the
+  //    exported one is decided here rather than in the write phase.
+  //
+  //    That is not a cosmetic move. `adminSemanticModelImport(mode: replace)`
+  //    marks as invalid every library item whose query names an entity the
+  //    import removed, so a needless re-import is not free — and deciding it
+  //    inside the write phase is exactly how a model that re-imported on every
+  //    single run would have stayed invisible to both `DRY_RUN` and the plan.
+  //    It is the 15 → 37 mistake in another place: a write nobody counted.
+  const modelPlan = [];
   for (const tenant of manifest.tenants ?? []) {
-    const model = read(dir, tenant.file);
-    if ((model.datasets ?? []).length === 0) continue;
-    if (live.tenants.some((one) => one.name === tenant.name)) continue;
-    if (tenant.name === RESEARCH_TENANT && kcReady) continue;
-    refuse(tenant.name === RESEARCH_TENANT
-      ? `the export carries a semantic model for "${RESEARCH_TENANT}" and that tenant does not exist here. `
-        + 'Set KC_BASE, KC_PASS_FILE and APP_HOST so step 0 can create it'
-      : `no tenant named "${tenant.name}" on ${base}, and nothing here would create one — `
-        + `its model (${tenant.counts?.datasets ?? '?'} datasets) could not be imported`);
+    const document = read(dir, tenant.file);
+    if ((document.datasets ?? []).length === 0) {
+      modelPlan.push({ ...tenant, document, state: 'empty' });
+      continue;
+    }
+    const target = live.tenants.find((one) => one.name === tenant.name);
+    if (!target) {
+      if (tenant.name === RESEARCH_TENANT && kcReady) {
+        // Step 0 creates it, and a tenant created a moment ago has no model.
+        modelPlan.push({ ...tenant, document, state: 'import', note: 'step 0 creates this tenant' });
+      } else {
+        refuse(tenant.name === RESEARCH_TENANT
+          ? `the export carries a semantic model for "${RESEARCH_TENANT}" and that tenant does not exist here. `
+            + 'Set KC_BASE, KC_PASS_FILE and APP_HOST so step 0 can create it'
+          : `no tenant named "${tenant.name}" on ${base}, and nothing here would create one — `
+            + `its model (${tenant.counts?.datasets ?? '?'} datasets) could not be imported`);
+      }
+      continue;
+    }
+    try {
+      const current = (await q(C.SEMANTIC, { t: target.id })).adminSemanticModelExport;
+      const same = R.signature(current) === R.signature(document);
+      modelPlan.push({ ...tenant, document, targetId: target.id, state: same ? 'same' : 'import' });
+    } catch (error) {
+      refuse(`the semantic model of "${tenant.name}" cannot be read, so whether it needs importing `
+        + `cannot be decided: ${error.message.slice(0, 160)}`);
+    }
   }
 
   // 2. Keycloak's admin API, reached now rather than discovered to be
@@ -443,6 +470,13 @@ const patchOf = (source, keys) => Object.fromEntries(keys.map((key) => [key, sou
   );
 
   console.log('\nplan');
+  const toImport = modelPlan.filter((one) => one.state === 'import');
+  console.log(`  semantic model ${toImport.length} to import, `
+    + `${modelPlan.filter((one) => one.state === 'same').length} already right, `
+    + `${modelPlan.filter((one) => one.state === 'empty').length} empty`);
+  for (const one of toImport) {
+    console.log(`    ${one.name}: ${one.document.datasets.length} dataset(s)${one.note ? ` — ${one.note}` : ''}`);
+  }
   for (const [name, plan] of Object.entries({
     folders: folderPlan, 'library items': itemPlan, dashboards: boardPlan,
     'tool servers': mcpPlan, autopilots: pilotPlan,
@@ -505,30 +539,28 @@ const patchOf = (source, keys) => Object.fromEntries(keys.map((key) => [key, sou
     }
   }
 
-  // 1. The semantic model, per tenant, through the product's own import. A
-  //    rebuilt stand has different tenant ids, so each file is matched to the
-  //    tenant of the same NAME rather than to the id it was exported under. The
-  //    live model is read first: `replace` is idempotent in effect, but a model
-  //    that already matches is not re-imported, so a second run of this script
-  //    really does write nothing.
+  // 1. The semantic model, per tenant, through the product's own import, and
+  //    only where the plan said it was needed. A rebuilt stand has different
+  //    tenant ids, so each file is matched to the tenant of the same NAME
+  //    rather than to the id it was exported under — and for the tenant step 0
+  //    has just created, that id did not exist when the plan was computed, so
+  //    it is resolved here.
   console.log('\n1. the semantic model');
   const tenantsNow = (await q(C.TENANTS)).adminTenants;
-  for (const tenant of manifest.tenants ?? []) {
-    const document = read(dir, tenant.file);
-    if ((document.datasets ?? []).length === 0) {
-      console.log(`  ${tenant.name}: empty model, nothing to import`);
+  for (const planned of modelPlan) {
+    if (planned.state === 'empty') {
+      console.log(`  ${planned.name}: empty model, nothing to import`);
       continue;
     }
-    const target = tenantsNow.find((one) => one.name === tenant.name);
-    if (!target) throw new Error(`no tenant named "${tenant.name}" on ${base}`);
-    const current = (await q(C.SEMANTIC, { t: target.id })).adminSemanticModelExport;
-    if (R.signature(current) === R.signature(document)) {
-      console.log(`  ${tenant.name}: already this model`);
+    if (planned.state === 'same') {
+      console.log(`  ${planned.name}: already this model`);
       done.unchanged += 1;
       continue;
     }
-    const result = await write(IMPORT_MODEL, { doc: document, mode: 'replace', t: target.id });
-    console.log(`  ${tenant.name}: ${JSON.stringify(result.adminSemanticModelImport)}`);
+    const targetId = planned.targetId ?? tenantsNow.find((one) => one.name === planned.name)?.id;
+    if (!targetId) throw new Error(`no tenant named "${planned.name}" on ${base}`);
+    const result = await write(IMPORT_MODEL, { doc: planned.document, mode: 'replace', t: targetId });
+    console.log(`  ${planned.name}: ${JSON.stringify(result.adminSemanticModelImport)}`);
     done.updated += 1;
   }
 
@@ -596,13 +628,16 @@ const patchOf = (source, keys) => Object.fromEntries(keys.map((key) => [key, sou
     done.updated += 1;
   }
   for (const wanted of itemPlan.create) {
-    const input = pick(wanted, ['title', 'description', 'type', 'visibility', 'visualizationSpec', 'kind',
-      'query', 'parameterValues', 'customSql', 'customBindings', 'datasourceId', 'aiContext', 'modelId']);
-    input.sourceThreadId = wanted.source.sourceThreadId ?? undefined;
-    input.sourceMessageId = wanted.source.sourceMessageId ?? undefined;
+    // `pick` and not `patchOf` here: on a create an absent field takes the
+    // product's own default, which is what the export's null meant.
+    const input = {
+      ...pick(wanted, ['title', 'description', 'type', 'visibility', 'visualizationSpec', 'kind',
+        'query', 'parameterValues', 'customSql', 'customBindings', 'datasourceId', 'aiContext', 'modelId']),
+      ...pick(wanted.source, ['sourceThreadId', 'sourceMessageId']),
+    };
     if (wanted.tags.length > 0) input.tags = wanted.tags;
     if (wanted.folderPath) input.folderId = folderIdByPath.get(wanted.folderPath) ?? null;
-    const created = (await write(SAVE_ITEM, { i: pick(input, Object.keys(input)) })).saveToLibrary;
+    const created = (await write(SAVE_ITEM, { i: input })).saveToLibrary;
     itemIdByOldId.set(wanted.source.id, created.id);
     console.log(`  item ${created.title} → ${created.id}`);
     done.created += 1;
@@ -895,7 +930,16 @@ const patchOf = (source, keys) => Object.fromEntries(keys.map((key) => [key, sou
         d: boardId, i: cell.itemKey, p: { x: cell.x, y: cell.y, w: cell.w, h: cell.h },
       })).addItemToDashboard.layout);
       const minted = after.map((one) => one.id).find((id) => !placed.has(id));
-      if (!minted) continue;
+      if (!minted) {
+        // The call answered and no cell appeared, so there is nothing to bind a
+        // filter to and nothing to move. Said out loud rather than skipped: a
+        // board that comes back one widget short, silently, is the failure mode
+        // this whole issue is about.
+        console.log(`    ! addItemToDashboard on ${wanted.title} minted no layout cell for item ${cell.itemKey}`);
+        done.manual.push(`dashboard "${wanted.title}": a widget for library item ${cell.itemKey} was not placed `
+          + '— add it by hand');
+        continue;
+      }
       placed.add(minted);
       if (cell.layoutItemId) layoutIdByOldId.set(cell.layoutItemId, minted);
     }
@@ -1015,12 +1059,21 @@ const patchOf = (source, keys) => Object.fromEntries(keys.map((key) => [key, sou
     const liveSubs = (existing.eventSubscriptions ?? [])
       .map((one) => ({ eventId: one.eventId, daysOfWeek: one.daysOfWeek ?? null }));
     if (R.signature(wantedSubs) !== R.signature(liveSubs)) {
-      await write(UPDATE_DASHBOARD, {
-        id: boardId,
-        i: { eventSubscriptions: wantedSubs.map((one) => pick(one, ['eventId', 'daysOfWeek'])) },
-      }).catch((error) => console.log(`    ! updateDashboard subscriptions: ${error.message.slice(0, 160)}`));
-      console.log(`    ${wantedSubs.length} subscription(s) set on ${wanted.title}`);
-      done.updated += 1;
+      try {
+        await write(UPDATE_DASHBOARD, {
+          id: boardId,
+          i: { eventSubscriptions: wantedSubs.map((one) => pick(one, ['eventId', 'daysOfWeek'])) },
+        });
+        console.log(`    ${wantedSubs.length} subscription(s) set on ${wanted.title}`);
+        done.updated += 1;
+      } catch (error) {
+        // Not fatal — a board without its subscriptions still renders — but not
+        // a line in a log either: the next run would try again, and until it
+        // does the board is not watching what it was watching.
+        console.log(`    ! updateDashboard subscriptions: ${error.message.slice(0, 160)}`);
+        done.manual.push(`dashboard "${wanted.title}": its ${wantedSubs.length} event subscription(s) were `
+          + `refused (${error.message.slice(0, 100)}) — set them by hand or re-run`);
+      }
     }
 
     const counted = R.counts(widgets);

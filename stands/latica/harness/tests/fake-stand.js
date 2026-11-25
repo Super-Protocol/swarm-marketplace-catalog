@@ -38,6 +38,9 @@ const json = (response, body) => {
  * @param seed.sources      `datasourceId`s mounted on the deployment
  * @param seed.mcpCatalogue slug → the tools that server answers with, or absent
  *                          for a server that refuses the probe
+ * @param seed.models       tenant NAME → the semantic model that tenant already
+ *                          holds, so a restore can be planned against a stand
+ *                          whose model is already right
  */
 function fakeStand(seed = {}) {
   const store = {
@@ -56,6 +59,11 @@ function fakeStand(seed = {}) {
     autopilots: [],
     mcpServers: [],
   };
+  for (const [name, model] of Object.entries(seed.models ?? {})) {
+    const tenant = store.tenants.find((one) => one.name === name);
+    if (!tenant) throw new Error(`seeded a model for "${name}", which is not one of this stand's tenants`);
+    store.models.set(tenant.id, model);
+  }
   const catalogue = new Map(Object.entries(seed.mcpCatalogue ?? {}));
   /** Every mutation the restore performed, in order. The idempotency assertion
    *  is `calls.filter(isMutation).length === 0` on the second run. */
