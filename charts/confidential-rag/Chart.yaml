@@ -30,6 +30,18 @@ type: application
 # nothing published. Each batch now runs under a timeout, progress is published per batch, and a
 # stall is its own verdict rather than a refusal: the source served the documents, the index did
 # not take them, and those want different people looking.
+# 0.2.2 is the indexer's `/healthz`, which answered the whole status. It is the one route on
+# :8085 that takes no credential — the kubelet carries none — and it returned `dict(STATE)`:
+# the gate's verdict and its message, the bound dataset names and their interfaces, the
+# document and chunk counts, both collection names, the timestamps and the uploads
+# configuration. The comment above it said it returned "the probe's three fields and nothing
+# about what is indexed", so the code and the comment disagreed and the comment was the one
+# that got read (SUP-897). Not a regression — 0.1.8 served the same payload unkeyed on both
+# `/status` and `/healthz` — but the hole left in the bearer boundary 0.2.1 drew. It answers
+# `{"ok": true}` now; the probes read the status code and no field of the body, so nothing
+# about them changes. `charts/tests/rag_instruments.py` asks the running handler rather than
+# the source, because the source is where the wrong comment was.
+#
 # 0.2.1 is the document name, which 0.2.0 destroyed, plus the three items parked against the
 # next re-measure of this listing's digest.
 #
@@ -97,7 +109,7 @@ type: application
 #
 # And `login()` called `time.sleep(0.5)` on the event loop: every wrong password froze the whole
 # console for half a second, streaming answers included. It awaits now.
-version: 0.2.1
+version: 0.2.2
 # The upstream release this is a port of. The image is built from
 # Super-Protocol/confidential-rag at branch confidential/2.6.2 — see MODIFICATIONS.md there for
 # what differs, which is the open embedding, reranking and generation engines and nothing about

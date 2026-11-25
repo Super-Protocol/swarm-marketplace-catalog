@@ -2,6 +2,28 @@ apiVersion: swarm.cloud/v1alpha1
 kind: AppDefinition
 
 # ---------------------------------------------------------------------------
+# 0.1.10 closes the last unauthenticated route on the indexer's port.
+#
+# `/healthz` on :8085 is the one route that takes no credential, because the
+# kubelet carries none — and it answered `dict(STATE)`: the gate's verdict and
+# its message, the bound dataset names and their interfaces, the document and
+# chunk counts, both collection names, the timestamps and the uploads
+# configuration. The comment above it said it returned "the probe's three fields
+# and nothing about what is indexed", and the comment is what reviewers read
+# (SUP-897). Not a regression — 0.1.8 served that payload unkeyed on `/status`
+# as well — but it is the hole left in the bearer boundary 0.1.9 drew, and a
+# boundary with one route through it is not one. `/healthz` answers
+# `{"ok": true}` now; everything the console shows stays on `/status`, behind
+# the key with every other route. The chart's probes read the status code and no
+# field of the body, so nothing about readiness or liveness changes.
+#
+# Chart `confidential-rag` 0.2.2 and nothing else: the code is rendered into the
+# `-app` ConfigMap, so the image is untouched and the re-measure this needs is
+# the ConfigMap's. `charts/tests/rag_instruments.py` asks the running handler
+# what it serves rather than reading the file, because the file is where the
+# comment that described the fixed behaviour already was.
+#
+# ---------------------------------------------------------------------------
 # 0.1.9 is the document NAME, which 0.1.8 destroyed, and the three items parked
 # against the next re-measure of this listing's digest. One change, one
 # re-measure, because every item in it moves `expectedDigest` and a re-measure
@@ -220,7 +242,7 @@ metadata:
     deployment publishes cryptographic proof of which embedder and which model touch your data, and
     the data owner can withdraw access the moment that changes. Based on the open-source NVIDIA RAG
     reference architecture (Apache-2.0), rebuilt on open components.
-  version: "0.1.9"
+  version: "0.1.10"
   category: ai-inference
   # Our fork — the code the image is built from — and not the upstream repository.
   sourceRepo: https://github.com/Super-Protocol/confidential-rag
@@ -940,7 +962,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-rag
-      version: "0.2.1"
+      version: "0.2.2"
     images:
       - name: ghcr.io/super-protocol/confidential-rag/rag-server
         # Built from f118cd8, the commit that corrects the retriever score:
@@ -1234,6 +1256,15 @@ outputs:
 
 evidence:
   # evidence-configuration: gated
+  #
+  # ---------------------------------------------------------------------------
+  # **NOT RE-MEASURED FOR 0.1.10. The value below is 0.1.9's.** 0.1.10 moves the
+  # `-app` ConfigMap, which is in the snapshot, so the digest has moved with it
+  # and a gated deployment of 0.1.10 reads `matchesExpected: false` and has its
+  # corpus refused until this number is replaced. Measuring it takes two gated
+  # deployments on the epic's single card, and the card is deallocated: SUP-897,
+  # SUP-891 and SUP-913 are measured together in one window (SUP-903). **Do not
+  # seed 0.1.10 to any marketplace before the measured number is in here.**
   #
   # ---------------------------------------------------------------------------
   # Measured, not derived, and it describes the GATED configuration. The line above

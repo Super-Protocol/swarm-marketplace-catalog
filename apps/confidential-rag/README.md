@@ -194,6 +194,15 @@ single-page console, because the manifest and the icons are fetched in a mode wh
 attaches no credentials, and ingress-nginx strips `Authorization` when it performs basic auth
 itself.
 
+**Inside the cluster space there is a second door, and it is keyed too.** The indexer's own port
+carries `POST /documents` and `DELETE /documents/<id>`, which write the collection whose answers
+are cited beside the gated corpus, so every route on it needs a bearer token the deployment
+generates and gives to the console and to the indexer in a Secret — a namespace stops being a
+trust boundary the moment a second workload is in it. The one exception is the health probe, which
+takes no credential because the kubelet carries none; from 0.1.10 it answers `{"ok": true}` and
+nothing else. Until then it answered the whole status — the gate's verdict, the attached dataset's
+name, the document and chunk counts — which was the one route through that boundary (SUP-897).
+
 The console and the indexer run from the pipeline's image with their code taken from a ConfigMap
 the cloud digests and signs. That is deliberate: a second image would mean a tenant verifying this
 deployment had to take another digest on trust, where this way the code that decides who may read
@@ -203,6 +212,13 @@ the corpus is in the snapshot in full.
 
 `evidence.expectedDigest` describes the **gated configuration**: a deployment with a dataset
 attached to the `corpus` slot.
+
+**0.1.10 is not measured yet, and the declared number is 0.1.9's.** 0.1.10 moves the ConfigMap the
+console's and the indexer's code is carried in, and that ConfigMap is in the snapshot, so the
+digest has moved with it: a gated deployment of 0.1.10 reads `matchesExpected: false` and its
+corpus stays refused until the measured number is declared. It takes two gated deployments on the
+epic's single card, which is deallocated and raised once for all three listings that need a
+re-measure (SUP-903). Do not seed 0.1.10 anywhere before that number is in the definition.
 
 `1556ad836b9998cb80c118298e290dd76a00368051e97cbcb3cd98694c030233`, measured on two deployments
 of 0.1.9 on the `gpu-blueprints` cloud on 2026-11-23 — `rag-895a` and `rag-895b`, two hostnames in

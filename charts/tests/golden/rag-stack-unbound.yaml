@@ -1182,7 +1182,9 @@ data:
     # whose answers are cited beside the gated corpus, and `POST /documents` /
     # `DELETE /documents/<id>` on this port took anything that could reach them. A namespace is
     # not a trust boundary once a second workload is in it (SUP-895). `/healthz` stays open —
-    # the kubelet carries no credential, and it reports liveness and nothing about the corpus.
+    # the kubelet carries no credential — and from 0.1.10 it reports liveness and nothing about
+    # the corpus, which is what this comment claimed while the route answered `dict(STATE)`
+    # (SUP-897). See `LIVENESS`.
     CORPUS_API_KEY = os.environ.get("CORPUS_API_KEY", "")
     UPLOAD_MAX_BYTES = int(os.environ.get("UPLOAD_MAX_BYTES", 64 * 1024 * 1024))
     # How many chunk rows the listing and the delete will read in one query. A document of a
@@ -1239,6 +1241,26 @@ data:
         },
     }
     STATE_LOCK = threading.Lock()
+    
+    # What `/healthz` answers, and the whole of it.
+    #
+    # `/healthz` is the one route on :8085 that takes no credential, because the kubelet carries
+    # none. Until 0.1.10 it answered `dict(STATE)` — the gate's verdict and its message, the bound
+    # dataset names and their interfaces, the document and chunk counts, both collection names, the
+    # timestamps and the uploads configuration — which is the corpus described to anything in the
+    # namespace that can reach the port, and to whoever the probe path is exposed to beyond that.
+    # The comment on it said it returned "the probe's three fields and nothing about what is
+    # indexed"; the code returned everything (SUP-897).
+    #
+    # Liveness is all a probe reads. The startup, readiness and liveness probes in this chart are
+    # `httpGet` on this path and act on the STATUS CODE — no field of this body reaches a decision —
+    # so there is nothing for a payload to carry, and `{"ok": true}` is enough for a person curling
+    # it to tell this server from a proxy answering for it. Everything the console shows stays on
+    # `/status`, behind the key with every other route.
+    #
+    # A new key here is a disclosure, not a feature: anything added to this dict is published
+    # unauthenticated. `charts/tests/rag_instruments.py` asserts the served body against this.
+    LIVENESS: dict[str, Any] = {"ok": True}
     
     # One embedder, two cores, and two things that want it: the gated corpus rebuild
     # and an upload. They write different collections, so they do not race over the
@@ -2063,7 +2085,10 @@ data:
     
         So every route but `/healthz` now needs the bearer token the chart generates and gives
         to the console and to this pod from the same Secret. `/healthz` stays open because the
-        kubelet carries no credential and it reports liveness and nothing about the corpus.
+        kubelet carries no credential, and from 0.1.10 it reports liveness and nothing about the
+        corpus — until then it answered the whole of `STATE`, so the one route that took no
+        credential published the gate's verdict, the bound dataset names and the counts
+        (SUP-897). `LIVENESS` is what it answers now.
         """
     
         protocol_version = "HTTP/1.1"
@@ -2112,12 +2137,10 @@ data:
         def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's own naming
             route = self.route()
             if route == "/healthz":
-                # Open, and liveness only: the probe's three fields and nothing about what is
-                # indexed. `/status`, which carries the gate's verdict and the document list,
+                # Open, and liveness only — see `LIVENESS` for why it is this and not `STATE`.
+                # `/status`, which carries the gate's verdict, the counts and the document list,
                 # is behind the key with everything else.
-                with STATE_LOCK:
-                    payload = dict(STATE)
-                self.respond(200, payload)
+                self.respond(200, dict(LIVENESS))
                 return
             if not self.admitted():
                 return
