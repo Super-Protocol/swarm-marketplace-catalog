@@ -53,6 +53,7 @@ on `azure-test` and reading the namespace (SUP-711, 2026-11-21):
 from __future__ import annotations
 
 import ast
+import base64
 import json
 import pathlib
 import re
@@ -78,7 +79,7 @@ MEMORY_FLOOR_MIB = 2048
 # What the JVM needs that is not heap: metaspace (capped at 256m by `kc.sh`), the code cache,
 # G1's remembered sets and card table, ~60 thread stacks, Netty's direct buffers and the native
 # allocator's own arenas. Measured on the pinned image as the gap between the container's peak
-# and the heap capacity G1 reported at the time — 406 MiB with a 1434 MiB heap and 606 MiB with
+# and the heap capacity G1 reported at the time — 435 MiB with a 1434 MiB heap and 609 MiB with
 # a 768 MiB one, the smaller heap paying for it in four times the collections — and the larger
 # of the two is what has to be left outside, rounded up.
 #
@@ -138,6 +139,28 @@ def check_garage_rpc_secret() -> list[str]:
     return failures
 
 
+def env_values(document: dict) -> dict[str, str]:
+    """The plain-text environment a ConfigMap or Secret contributes through `envFrom`.
+
+    Which field holds plain text depends on the kind: a Secret's `data` is base64 and its
+    `stringData` is not, a ConfigMap's is the other way round. Reading the wrong one does not
+    raise — it yields a string no flag pattern matches — so the caller would report a heap cap
+    with no `-Xmx` instead of the value that is really there. `stringData` wins where both carry
+    a key, because that is what the API server does when it merges them.
+    """
+    secret = document.get("kind") == "Secret"
+    plain = dict((document.get("stringData") if secret else document.get("data")) or {})
+    encoded = (document.get("data") if secret else document.get("binaryData")) or {}
+    for key, value in encoded.items():
+        if key in plain:
+            continue
+        try:
+            plain[key] = base64.b64decode(value, validate=True).decode()
+        except (ValueError, UnicodeDecodeError):
+            continue
+    return {key: str(value) for key, value in plain.items()}
+
+
 def heap_flags(documents: list[dict], container: dict) -> tuple[list[str], list[str]]:
     """Every value of JAVA_OPTS_KC_HEAP the Keycloak container is given, and where from.
 
@@ -161,10 +184,10 @@ def heap_flags(documents: list[dict], container: dict) -> tuple[list[str], list[
             continue
         if document["metadata"]["name"] not in named:
             continue
-        data = document.get("data") or document.get("stringData") or {}
+        data = env_values(document)
         if HEAP_FLAG in data:
             sources.append(f"{document['kind']}/{document['metadata']['name']}")
-            values.append(str(data[HEAP_FLAG]))
+            values.append(data[HEAP_FLAG])
     return values, sources
 
 
@@ -267,7 +290,7 @@ def check_keycloak_sizing() -> list[str]:
                 f"keycloak: -Xmx is {heap_mib:.0f}Mi under a {limit} limit, leaving "
                 f"{limit_mib - heap_mib:.0f}Mi for metaspace, the code cache, G1's bookkeeping, "
                 f"the thread stacks, the direct buffers and the native arenas — measured at up "
-                f"to 606Mi, so at least {NONHEAP_RESERVE_MIB}Mi has to be left outside the heap"
+                f"to 609Mi, so at least {NONHEAP_RESERVE_MIB}Mi has to be left outside the heap"
             )
         else:
             print(
