@@ -5,7 +5,7 @@ kind: Secret
 metadata:
   name: transaction-model-notebook
   labels:
-    helm.sh/chart: transaction-model-notebook-0.1.2
+    helm.sh/chart: transaction-model-notebook-0.1.3
     app.kubernetes.io/name: transaction-model-notebook
     app.kubernetes.io/instance: tfm
     app.kubernetes.io/version: "0.1.0"
@@ -22,7 +22,7 @@ kind: ConfigMap
 metadata:
   name: transaction-model-notebook
   labels:
-    helm.sh/chart: transaction-model-notebook-0.1.2
+    helm.sh/chart: transaction-model-notebook-0.1.3
     app.kubernetes.io/name: transaction-model-notebook
     app.kubernetes.io/instance: tfm
     app.kubernetes.io/version: "0.1.0"
@@ -436,7 +436,18 @@ data:
             query = f'SELECT {select} FROM {_quote(table)}'
   
         # `canonicalise` sorts, so a most-recent-first read needs no reversing here.
-        return cudf.DataFrame.from_pandas(client.query_df(query))
+        #
+        # `cudf.from_pandas`, the module-level function. There is no
+        # `cudf.DataFrame.from_pandas` in this image — and that is what this line said
+        # from the listing's first version (0.1.3, chart 0.1.2) until 0.1.4. Because
+        # the line is on the gated path and only on it, every render, every golden,
+        # every schema pass and every ungated deployment went over it: the FIRST gated
+        # read any deployment ever performed returned all 320,176 rows out of
+        # ClickHouse and then raised `AttributeError: type object 'DataFrame' has no
+        # attribute 'from_pandas'` (SUP-900 measuring, SUP-913 fixing).
+        # `charts/tests/transaction_workspace.py` now stubs cuDF without that
+        # attribute and exercises this branch, so the stub cannot hide it again.
+        return cudf.from_pandas(client.query_df(query))
   
   
     def _wanted_columns() -> list[str]:
@@ -831,7 +842,7 @@ kind: ConfigMap
 metadata:
   name: transaction-model-notebook-notebooks
   labels:
-    helm.sh/chart: transaction-model-notebook-0.1.2
+    helm.sh/chart: transaction-model-notebook-0.1.3
     app.kubernetes.io/name: transaction-model-notebook
     app.kubernetes.io/instance: tfm
     app.kubernetes.io/version: "0.1.0"
@@ -4385,7 +4396,7 @@ kind: PersistentVolumeClaim
 metadata:
   name: transaction-model-notebook-workspace
   labels:
-    helm.sh/chart: transaction-model-notebook-0.1.2
+    helm.sh/chart: transaction-model-notebook-0.1.3
     app.kubernetes.io/name: transaction-model-notebook
     app.kubernetes.io/instance: tfm
     app.kubernetes.io/version: "0.1.0"
@@ -4404,7 +4415,7 @@ kind: Service
 metadata:
   name: transaction-model-notebook
   labels:
-    helm.sh/chart: transaction-model-notebook-0.1.2
+    helm.sh/chart: transaction-model-notebook-0.1.3
     app.kubernetes.io/name: transaction-model-notebook
     app.kubernetes.io/instance: tfm
     app.kubernetes.io/version: "0.1.0"
@@ -4427,7 +4438,7 @@ kind: Deployment
 metadata:
   name: transaction-model-notebook
   labels:
-    helm.sh/chart: transaction-model-notebook-0.1.2
+    helm.sh/chart: transaction-model-notebook-0.1.3
     app.kubernetes.io/name: transaction-model-notebook
     app.kubernetes.io/instance: tfm
     app.kubernetes.io/version: "0.1.0"
@@ -4450,7 +4461,7 @@ spec:
       annotations:
         # The loader and the notebooks are mounted, not baked, so a change to
         # either has to roll the pod for anything to notice.
-        checksum/workspace: 48aa754c6ca15357556e2644151867b2b903f71b409742c348b57c8e6bc104f8
+        checksum/workspace: fc05ddd6f9251eb234a852d307928d6ab4ad35d070a3e7b35aaff479fc4aa9fc
       labels:
         app.kubernetes.io/name: transaction-model-notebook
         app.kubernetes.io/instance: tfm
@@ -4653,7 +4664,7 @@ kind: Ingress
 metadata:
   name: transaction-model-notebook
   labels:
-    helm.sh/chart: transaction-model-notebook-0.1.2
+    helm.sh/chart: transaction-model-notebook-0.1.3
     app.kubernetes.io/name: transaction-model-notebook
     app.kubernetes.io/instance: tfm
     app.kubernetes.io/version: "0.1.0"
