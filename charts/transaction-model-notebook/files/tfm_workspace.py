@@ -334,7 +334,9 @@ def _read_from_clickhouse(entry: dict, limit: int):
         query = f'SELECT {select} FROM {_quote(table)}'
 
     # `canonicalise` sorts, so a most-recent-first read needs no reversing here.
-    return cudf.DataFrame.from_pandas(client.query_df(query))
+    # Module-level `cudf.from_pandas`: `cudf.DataFrame` has no such attribute in
+    # this image (SUP-913).
+    return cudf.from_pandas(client.query_df(query))
 
 
 def _wanted_columns() -> list[str]:

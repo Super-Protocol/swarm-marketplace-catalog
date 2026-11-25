@@ -140,14 +140,43 @@ def report(ok: bool, label: str, detail: str = '') -> None:
 
 
 def stub_cudf() -> None:
-    """pandas, under cuDF's name, with the three entry points the loader uses."""
+    """pandas, under cuDF's name, with the entry points the loader uses — and
+    **nothing cuDF does not have**.
+
+    The second half is the point, and it was learned the expensive way. This stub
+    used to end with
+
+        cudf.DataFrame.from_pandas = staticmethod(lambda frame: frame)
+
+    which invented an attribute the real module does not carry (`hasattr(
+    cudf.DataFrame, 'from_pandas')` is `False` in the pinned image; the call is
+    `cudf.from_pandas`). The loader's gated branch called the invented one, so
+    this check passed, the goldens passed, the schema passed — and the first gated
+    read any deployment ever performed raised `AttributeError` after returning all
+    320,176 rows (SUP-900 found it, SUP-913 fixed it). A stub that is more generous
+    than the thing it stands in for tests nothing; it launders a defect.
+
+    So `from_pandas` is a module-level function here, as it is in cuDF, and
+    `check_gated_read` asserts that `cudf.DataFrame` still has no attribute of
+    that name. Every conversion is recorded in `CONVERSIONS`, because "the frame
+    the gated path returns came off a device transfer" is otherwise invisible:
+    under this stub a converted frame and an unconverted one are the same object.
+    """
     cudf = types.ModuleType('cudf')
     cudf.DataFrame = pandas.DataFrame
     cudf.Series = pandas.Series
     cudf.to_datetime = pandas.to_datetime
     cudf.read_csv = pandas.read_csv
     cudf.read_parquet = pandas.read_parquet
-    cudf.DataFrame.from_pandas = staticmethod(lambda frame: frame)
+    cudf.CONVERSIONS = []
+
+    def from_pandas(frame):
+        if not isinstance(frame, pandas.DataFrame):
+            raise TypeError(f'cudf.from_pandas takes a pandas object, not {type(frame).__name__}')
+        cudf.CONVERSIONS.append(len(frame))
+        return frame
+
+    cudf.from_pandas = from_pandas
     sys.modules['cudf'] = cudf
 
 
@@ -425,6 +454,152 @@ def check_local_extract() -> None:
                    'an empty deployment says what to attach', str(error))
 
 
+def stub_clickhouse(frame, total: int | None = None) -> dict:
+    """`clickhouse_connect`, answering out of one pandas frame.
+
+    The real library is not installed for this check and would need a server if it
+    were. What is worth asserting is on this side of it anyway: which statements
+    the loader sends, what it opens the connection with, and that what comes back
+    is converted onto the device and canonicalised. `total` overrides the row
+    count the `count()` query answers, which is how the ceiling branch is reached
+    without building a frame bigger than the ceiling.
+    """
+    seen: dict = {'client': None, 'statements': []}
+
+    class Result:
+        def __init__(self, value):
+            self.first_row = [value]
+
+    class Client:
+        def query(self, statement):
+            seen['statements'].append(statement)
+            return Result(total if total is not None else len(frame))
+
+        def query_df(self, statement):
+            seen['statements'].append(statement)
+            # A pandas frame, which is what `query_df` returns: the whole reason
+            # the next line of the loader exists.
+            return frame.copy()
+
+    module = types.ModuleType('clickhouse_connect')
+    module.get_client = lambda **keywords: (seen.update(client=keywords), Client())[1]
+    sys.modules['clickhouse_connect'] = module
+    return seen
+
+
+def check_gated_read() -> None:
+    """The gated path, which had no coverage at all until it had shipped broken.
+
+    A dataset bound over `clickhouse-http/v1` is the only read this listing's slot
+    offers, the gate exists for exactly that read, and `_read_from_clickhouse` was
+    never executed by anything but a deployment — so when it called
+    `cudf.DataFrame.from_pandas`, which the image has no such attribute for, the
+    defect shipped in the listing's first version and was found by the first gated
+    read any deployment ever performed (SUP-900 measuring, SUP-913 fixing). It took
+    a GPU window and a published gated card to find a one-word mistake.
+
+    Everything below runs in milliseconds with no card, no cluster and no
+    ClickHouse.
+
+    The loader's own line carries two lines about this and no more, because it is
+    rendered into an attested ConfigMap and ships into every tenant's workspace.
+    The history belongs here.
+    """
+    import cudf  # the stub installed by stub_cudf(), not the real module
+
+    # The guard that makes the rest of this meaningful. The old stub defined
+    # `cudf.DataFrame.from_pandas` itself, so the broken call resolved here and
+    # failed only on a GPU; a stub may not be more capable than the image.
+    report(not hasattr(cudf.DataFrame, 'from_pandas'),
+           "the cuDF stub has no DataFrame.from_pandas, because the image has none")
+
+    with tempfile.TemporaryDirectory() as directory:
+        path = pathlib.Path(directory) / 'binding.json'
+        path.write_text(json.dumps([{
+            'dataset': 'cascade-card-transactions',
+            'interface': 'clickhouse-http/v1',
+            # What the marketplace writes for a gated dataset: the egress sidecar
+            # in this namespace, not the owner's database.
+            'connection': {
+                'host': 'tfm-egress',
+                'port': 9500,
+                'database': 'cascade_cards',
+                'username': 'reader',
+                'password': 'in-the-secret',
+                'tls': False,
+            },
+        }]))
+
+        # --- the whole read, which is the acceptance criterion in one line -----
+        cudf.CONVERSIONS.clear()
+        seen = stub_clickhouse(pandas.DataFrame(FITTING))
+        namespace = load(MAPPING)
+        namespace['BINDING_PATH'] = path
+        try:
+            frame = namespace['load_transactions']()
+        except Exception as error:  # noqa: BLE001 — the defect raised AttributeError here
+            report(False, 'a gated dataset is read end to end',
+                   f'{type(error).__name__}: {error}')
+            return
+        report(len(frame) == len(FITTING['customer_id']),
+               'a gated dataset is read end to end', f'{len(frame)} row(s)')
+        report('Merchant Name' in frame.columns and 'Time' in frame.columns,
+               'and comes back canonicalised, as the notebooks expect',
+               str(list(frame.columns)))
+        report(cudf.CONVERSIONS == [len(FITTING['customer_id'])],
+               'the pandas frame query_df returns is transferred to the device exactly once',
+               str(cudf.CONVERSIONS))
+
+        # The coverage check runs on it, which is what a notebook does next and
+        # what no deployment had ever reached.
+        coverage = namespace['check_coverage'](frame)
+        report(coverage['overall'] > 0.9, 'and the coverage check runs on the gated frame',
+               f'{coverage["overall"]:.2f}')
+
+        # --- the connection is the one the deployment holds -------------------
+        report(seen['client'] == {
+            'host': 'tfm-egress', 'port': 9500, 'database': 'cascade_cards',
+            'username': 'reader', 'password': 'in-the-secret', 'secure': False,
+        }, "the client is opened with the binding's own connection", str(seen['client']))
+
+        # --- the statements ---------------------------------------------------
+        count, select = seen['statements']
+        report(count == 'SELECT count() FROM "transactions"',
+               'the row count is asked first, with the table quoted', count)
+        report('"booked_at"' in select and '"amount_eur"' in select and '*' not in select,
+               'only the columns this deployment named are transferred', select)
+        report('ORDER BY' not in select and 'LIMIT' not in select,
+               'a table inside the ceiling is read whole, unordered — ordering is not free',
+               select)
+
+        # --- the ceiling, which is the other branch ---------------------------
+        cudf.CONVERSIONS.clear()
+        seen = stub_clickhouse(pandas.DataFrame(FITTING), total=400_000_000)
+        namespace = load({**MAPPING, 'TFM_MAX_ROWS': '2.5e+07'})
+        namespace['BINDING_PATH'] = path
+        frame = namespace['load_transactions']()
+        select = seen['statements'][1]
+        report('ORDER BY "booked_at" DESC' in select and 'LIMIT 25000000' in select,
+               'a table over the ceiling is read most-recent-first, limited by the server',
+               select)
+        report(cudf.CONVERSIONS == [len(FITTING['customer_id'])],
+               'and that frame is transferred too', str(cudf.CONVERSIONS))
+
+        # --- a connection the owner published over TLS ------------------------
+        path.write_text(json.dumps([{
+            'dataset': 'cascade-card-transactions',
+            'interface': 'clickhouse-http/v1',
+            'connection': {'host': 'tfm-egress', 'port': 9500, 'tls': True},
+        }]))
+        seen = stub_clickhouse(pandas.DataFrame(FITTING))
+        namespace = load(MAPPING)
+        namespace['BINDING_PATH'] = path
+        namespace['load_transactions']()
+        report(seen['client']['secure'] is True and seen['client']['username'] == 'default',
+               'tls on the binding opens a secure client, and the defaults fill the rest',
+               str(seen['client']))
+
+
 def check_unreadable_interface() -> None:
     """A dataset bound over an interface this workbench cannot read says so."""
     with tempfile.TemporaryDirectory() as directory:
@@ -468,6 +643,7 @@ def main() -> int:
     check_label_requirement()
     check_coverage()
     check_local_extract()
+    check_gated_read()
     check_unreadable_interface()
 
     return 1 if failures else 0
