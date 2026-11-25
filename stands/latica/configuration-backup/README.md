@@ -170,6 +170,59 @@ It applies, in this order and for this reason:
 | **Regenerated, not replayed** | a widget's filter **slots** — `addItemToDashboard` derives them from the library item's own query, so replaying them would be writing down an answer the product computes; a library item's `version`, which starts again at 1; a widget's dataset and `lastRefreshedAt`, which come back on the first refresh |
 | **Cannot be restored — do it by hand** | a filter's **`defaultLatest`**: neither `AddDashboardFilterInput` nor `UpdateDashboardFilterInput` has a field for it. The restore prints a line naming each filter that had it. A hierarchy filter's **`levels`** are not settable either, but they follow from the hierarchy the filter names, so they come back on their own. Version history, in either place |
 
+### 2a. Rehearsing it on a throwaway, which is how the procedure is proved
+
+The restore is proved by rebuilding a **throwaway** deployment and diffing its export against the
+one it was restored from. That is what found all three of the defects SUP-939 fixed, and it is what
+has to pass before either real stand is re-created. It costs a cluster space, so it is a **paid
+`terraform apply`** and needs a human go-ahead (team workflow §6) — the plan, not the run, is the
+part that belongs in a repository.
+
+```bash
+# 1. a fresh export of the real stand, FIRST and always (read-only)
+APP_BASE=https://analyst-stand.conf-apps.superprotocol.dev APP_USER=… PASS_FILE=… \
+  OUT=./before node harness/export-stand.js
+
+# 2. the throwaway, on its own hostname, same parameter set, same release cards
+#    as the real stand. The reference set is the one the digest is measured with;
+#    a different set attests a different digest and the gate then refuses the data.
+DEPLOY_NAME=analyst-rehearsal-503 node create.js      # the SUP-712 working directory
+
+# 3. the clinic approves the throwaway's digest — BEFORE the restore, not after.
+#    An ADDITIONAL entry in the receiver's grants.json; the real stand's own
+#    approval is not touched. Without it the tool server answers 403, its tools
+#    cannot be cached, and the autopilots cannot be created at all — which the
+#    restore now refuses in advance and says so.
+
+# 4. restore, then export the throwaway and compare
+APP_BASE=https://<throwaway> CONFIRM_TARGET=https://<throwaway> … \
+  IN=./before DRY_RUN=yes node harness/restore-stand.js    # read the plan first
+APP_BASE=https://<throwaway> … IN=./before node harness/restore-stand.js
+APP_BASE=https://<throwaway> … OUT=./after node harness/export-stand.js
+BEFORE=./before AFTER=./after node harness/diff-exports.js
+
+# 5. and the second pass, which is the other half of the acceptance criterion
+APP_BASE=https://<throwaway> … IN=./before DRY_RUN=yes node harness/restore-stand.js
+
+# 6. tear it down: the deployment, its DNS, and the extra grants.json entry
+DEPLOY_NAME=analyst-rehearsal-503 node delete.js
+```
+
+**The acceptance criterion is two things, and both are needed:**
+
+1. `diff-exports.js` prints **`no differences`** — 15 library items, 2 dashboards, 2 autopilots,
+   1 tool server, 4 datasets in the clinic's model, and every definition identical, not just every
+   count. It compares the same way the restore reconciles, so a changed definition under an
+   unchanged name is a difference; the first rehearsal compared counts, and a count comparison
+   cannot see that.
+2. The **second** `DRY_RUN` reports every list at `0 to create, 0 to update` and the model at
+   `0 to import`. That is the half no offline test can reach: it is the only thing that shows the
+   real API's *write* path normalises nothing. A model that arrived through
+   `adminSemanticModelImport` and re-exports differently would re-import on every run for ever, and
+   `replace` marks as invalid every library item whose query names an entity the import removed.
+
+A failure of either is a finding, not a retry.
+
 ### 3. What the restore cannot do, and you have to
 
 - **Re-point the clinic's grant at the new digest, FIRST.** The receiver's `grants.json` names

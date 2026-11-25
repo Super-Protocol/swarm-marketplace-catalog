@@ -318,6 +318,9 @@ APP_BASE=… APP_USER=… PASS_FILE=… QUESTION="$(cat scenarios/abstract.txt)"
 APP_BASE=… APP_USER=… PASS_FILE=… OUT=./configuration-backup node harness/export-stand.js
 APP_BASE=… CONFIRM_TARGET=<the same> APP_USER=… PASS_FILE=… MCP_TOKEN_FILE=./clinic.token \
   IN=./configuration-backup DRY_RUN=yes node harness/restore-stand.js   # validate and plan
+
+# Two exports compared — the verdict a rehearsal turns on. Reads two directories, changes nothing.
+BEFORE=./configuration-backup AFTER=./after node harness/diff-exports.js
 ```
 
 `restore-stand.js` reconciles by name rather than creating, registers the clinic's tool server
