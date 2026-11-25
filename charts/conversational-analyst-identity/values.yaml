@@ -48,6 +48,28 @@ bootstrap:
       memory: 256Mi
       nvidia.com/gpu: "0"
 
+# The JVM heap flags Keycloak runs with, delivered as `JAVA_OPTS_KC_HEAP` — see
+# `templates/keycloak-java-heap.yaml` for why they are a ConfigMap of this chart's own and not
+# an `extraEnvVars` entry, and `keycloak.resources` below for how this number and the container
+# limit were measured together.
+#
+# `kc.sh` sizes the heap at 70% of the container limit when this is unset, which leaves the
+# JVM's own ceiling inside the last 200 MiB of the pod's and makes an OOMKill a matter of time
+# rather than of load (SUP-925). 768 MiB is the cap: the `start-dev` augmentation completes
+# inside it — the whole pod peaked at 886 MiB, boot included — and a realm of three
+# organisations under continuous sign-in load holds a live set of ~160 MiB in it, which is the
+# same live set the uncapped JVM held.
+#
+# An absolute `-Xmx` rather than a smaller `-XX:MaxRAMPercentage`, and that is not a style
+# preference. A percentage is only a percentage of the CONTAINER while the JVM's container
+# support is working, and it switches itself off — reporting «controller memory is not enabled»
+# — on a kernel whose `/proc/cgroups` has no `memory` row, which is what that code reads. On a
+# host like that, with `UseContainerSupport` still reporting true and `memory.max` still
+# readable inside the container, this image resolved `-XX:MaxRAMPercentage=70` against the
+# host's 31 GiB and reported `MaxHeapSize = 23555211264`. An absolute number is the same number
+# either way.
+keycloakHeap: "-Xms256m -Xmx768m"
+
 keycloak:
   fullnameOverride: analyst-keycloak
   global:
@@ -67,15 +89,44 @@ keycloak:
   proxyHeaders: xforwarded
   httpRelativePath: "/auth/"
   resourcesPreset: none
-  # 2Gi, measured rather than guessed (SUP-711). `production: false` above means the
-  # container runs `kc.sh start-dev`, which re-runs the Quarkus augmentation on every boot
-  # — a javac-and-index step that is the memory peak of this pod's life and happens before
-  # it serves anything. Under a 1Gi limit it is OOMKilled mid-build, every time: the pod
-  # CrashLoopBackOffs, nothing in the deployment has an identity provider, and all five
-  # agent services sit in a restart loop behind it. Reproduced off-cluster with this exact
-  # image digest and this exact environment — 1Gi: `Killed` during
-  # "Updating the configuration and installing your custom providers"; 2Gi: the build
-  # completes with a peak of ~880 MiB resident.
+  # 2Gi, and the number it has to be read against is the 768 MiB heap cap in
+  # `keycloakHeap` above: this limit is the heap ceiling plus what lives outside the heap,
+  # with headroom, and neither half means anything without the other.
+  #
+  # SUP-711 sized this from the BOOT peak. `production: false` above means the container runs
+  # `kc.sh start-dev`, which re-runs the Quarkus augmentation on every boot — a javac-and-index
+  # step that costs ~880 MiB resident and happens before the pod serves anything; under 1Gi it
+  # is OOMKilled mid-build and the deployment has no identity provider at all. That reading was
+  # right about the floor and silent about the ceiling, because the JVM was then free to size
+  # its heap at 70% of whatever this limit said. Raising the limit raised the heap with it, so
+  # the deployment kept its OOMKill and only changed how long it took to arrive (SUP-925).
+  #
+  # Measured on kind, this image digest, these values, an external PostgreSQL and 55 minutes of
+  # continuous sign-in load against `start-dev`. The two sides differ in the heap cap and in
+  # nothing else; the measurement is the cgroup's own `memory.peak` and the JVM's own GC log.
+  #
+  #   heap cap                      peak   G1 heap   live set   not heap   creep   kills
+  #   -Xms1024m -Xmx1434m (0.7.0)   1460Mi   1024Mi     161Mi      435Mi   1.52Mi/min   0
+  #   -Xms256m  -Xmx768m  (0.8.0)    886Mi    277Mi     154Mi      609Mi   0.14Mi/min   0
+  #
+  # Three things in that table, in the order they matter.
+  #
+  # The live set is the SAME on both sides: this realm needs about 160 MiB of heap, so the
+  # 1434 MiB ceiling was never about what Keycloak uses. Capping it costs nothing.
+  #
+  # Neither side plateaus — the uncapped one CREEPS, 1.52 MiB a minute at 1459 MiB with 589 MiB
+  # of its limit left, which is about 6.5 h to the limit at this load. The stands were killed at
+  # 2.6 h and 15.6 h with a smaller load and real tenants' sessions. The capped side creeps at a
+  # tenth of that and cannot pass 768 MiB of heap however long it runs.
+  #
+  # And the ceiling, which is `-Xmx` plus what is not heap (435-609 MiB across the two runs),
+  # is 1869-2043 MiB for 0.7.0 — inside the last 200 MiB of its own limit — against
+  # 1203-1377 MiB for 0.8.0, which is 671-845 MiB clear.
+  #
+  # So 2Gi is confirmed rather than carried over. It is not raised, because without a cap the
+  # heap grows with it and only the date of the kill moves — 0.6.1 already tried that. It is not
+  # lowered to 1.5Gi either: that clears the measured peak, but it leaves as little as 159 MiB
+  # over the capped ceiling, which is the same thin margin this version exists to remove.
   #
   # requests == limits because a cluster space's LimitRange sets
   # maxLimitRequestRatio: 1 and refuses any container that asks for less than it may use.
@@ -103,8 +154,44 @@ keycloak:
     database: keycloak
   ingress:
     enabled: false
+  # Readiness decides whether this pod is in the Service, and the vendored chart's defaults are
+  # `timeoutSeconds: 1` with `failureThreshold: 3` — one second for Keycloak to answer
+  # `GET /auth/realms/master`, three times, and it is out of the endpoints. That is tight enough
+  # that a stop-the-world pause or a busy node evicts a healthy identity provider, and
+  # ingress-nginx then answers `503 Service Temporarily Unavailable` for every sign-in until it
+  # comes back. On 2026-11-25 the analyst stand served nine such failures in a 50-second window
+  # without its own Keycloak having restarted at all — the researcher stand's did (SUP-917).
+  #
+  # 5 s is the timeout and 6 the threshold, so a stall has to last a full minute before the pod
+  # is taken out, against 30 s before. The number to beat is not a G1 pause — those are
+  # milliseconds under the capped heap — but the seconds-long stall a node under memory pressure
+  # imposes on everything in it, which is the state these kills actually happened in.
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+    successThreshold: 1
+  # Liveness RESTARTS the pod, and the vendored default polls every second with a threshold of
+  # 3: three consecutive refused TCP connects — three seconds — and Keycloak is killed and every
+  # session in it with it. Same correction, applied to the probe with the larger consequence,
+  # and deliberately twice as patient as readiness above: at 10 s x 12 it takes two minutes of a
+  # port that will not accept, so readiness has already taken this pod out of the Service a
+  # minute earlier and a restart is the last answer rather than the first.
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 300
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 12
+    successThreshold: 1
   # The hostname-derived setting, out of the pod spec — see templates/keycloak-env.yaml.
   extraEnvVarsSecret: analyst-keycloak-env
+  # The heap cap, from this chart's own ConfigMap — see templates/keycloak-java-heap.yaml. It is
+  # here rather than in `extraEnvVars` below because a definition REPLACES that list, and this
+  # listing does.
+  extraEnvVarsCM: analyst-keycloak-java-opts
   # CVE-2026-114938 ("Java4Shell"): an out-of-bounds write in the HotSpot x86-64 Base64
   # intrinsic on AVX-512 VBMI processors, demonstrated as a PRE-AUTH remote code execution
   # against Keycloak in its default configuration. There is no fixed JDK build — this image

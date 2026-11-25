@@ -210,6 +210,17 @@ data:
 
     echo "== done =="
 ---
+# Source: conversational-analyst-identity/templates/keycloak-java-heap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: analyst-keycloak-java-opts
+  labels:
+    app.kubernetes.io/name: conversational-analyst-identity
+    app.kubernetes.io/instance: analyst
+data:
+  JAVA_OPTS_KC_HEAP: "-Xms256m -Xmx768m"
+---
 # Source: conversational-analyst-identity/templates/bootstrap-job.yaml
 apiVersion: batch/v1
 kind: Job
