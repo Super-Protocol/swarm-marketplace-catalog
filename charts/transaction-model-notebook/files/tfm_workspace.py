@@ -334,17 +334,8 @@ def _read_from_clickhouse(entry: dict, limit: int):
         query = f'SELECT {select} FROM {_quote(table)}'
 
     # `canonicalise` sorts, so a most-recent-first read needs no reversing here.
-    #
-    # `cudf.from_pandas`, the module-level function. There is no
-    # `cudf.DataFrame.from_pandas` in this image — and that is what this line said
-    # from the listing's first version (0.1.3, chart 0.1.2) until 0.1.4. Because
-    # the line is on the gated path and only on it, every render, every golden,
-    # every schema pass and every ungated deployment went over it: the FIRST gated
-    # read any deployment ever performed returned all 320,176 rows out of
-    # ClickHouse and then raised `AttributeError: type object 'DataFrame' has no
-    # attribute 'from_pandas'` (SUP-900 measuring, SUP-913 fixing).
-    # `charts/tests/transaction_workspace.py` now stubs cuDF without that
-    # attribute and exercises this branch, so the stub cannot hide it again.
+    # Module-level `cudf.from_pandas`: `cudf.DataFrame` has no such attribute in
+    # this image (SUP-913).
     return cudf.from_pandas(client.query_df(query))
 
 

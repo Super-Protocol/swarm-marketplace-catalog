@@ -58,11 +58,12 @@ nothing else, so `s3-parquet/v1` or `clickhouse-native/v1` alone cannot be gated
 dataset's access mode says.
 
 Listings are exempt by name, with an issue each — see `KNOWN_GAPS` and `CONFIGURATION_GAPS`.
-Both lists are meant to empty themselves: a listed definition that would otherwise PASS fails,
-naming the entry to delete. `--self-test` is where that is exercised, because it cannot be
-exercised over apps/ — both lists are empty, so the branch is never reached on real input. That
-is exactly how `CONFIGURATION_GAPS` came to claim the behaviour without having it: nothing any
-run of this check could do would have noticed (SUP-913).
+Both lists empty themselves: a listed definition that would otherwise PASS fails, naming the
+entry to delete. `--self-test` is where that is exercised, because no run over apps/ can reach
+it — `CONFIGURATION_GAPS` is empty and the one name on `KNOWN_GAPS` still has no digest, so the
+branch never fires on real input. That is exactly how `CONFIGURATION_GAPS` came to claim the
+behaviour without having it, and then how `KNOWN_GAPS` was found still missing it a review
+later: nothing any run of this check could do would have said so (SUP-913).
 """
 
 from __future__ import annotations
@@ -88,7 +89,11 @@ CONFIGURATION = re.compile(r'^\s*#\s*evidence-configuration:\s*(\S+)\s*$')
 # Listings that already had this defect when the check was written, with the issue that closes
 # each one. The exemption is by name and by hand on purpose: a digest cannot be invented here,
 # it has to be measured on a deployment, and that is a piece of work per listing rather than an
-# edit. Nothing may be added to either list without an issue, and both are meant to empty.
+# edit. Nothing may be added to either list without an issue, and both empty themselves: this
+# entry excuses an ABSENT digest and nothing else, so a listed definition that declares one and
+# otherwise passes FAILS, naming the entry to delete. Without that, the only thing standing
+# between a closed gap and a permanent exemption is somebody noticing — which is what
+# `CONFIGURATION_GAPS` below was relying on, and SUP-913 took off both lists.
 #
 #   rag-agent  declares `corpus` and `feedback` and no digest, so no deployment of it can read
 #              a gated dataset either. Found by this check on 2026-11-21; SUP-877.
@@ -172,9 +177,9 @@ def configuration(path: pathlib.Path) -> tuple[str | None, str | None]:
 def configuration_problem(path: pathlib.Path, accepts: list[str]) -> str | None:
     """The reason this definition's evidence configuration is wrong, or None.
 
-    Split out from `check()` so the exemption below can consult it rather than
-    short-circuit it: an exemption that returns before the marker is read is an exemption
-    nobody can ever be told to delete.
+    Split out from `check()` so the exemptions below can consult it rather than
+    short-circuit it: an exemption that returns before the definition is read is an
+    exemption nobody can ever be told to delete.
     """
     declared, problem = configuration(path)
     if problem:
@@ -222,26 +227,44 @@ def check(
     digest = ((document.get('evidence') or {}).get('expectedDigest')) or ''
     names = ', '.join(str(slot.get('name')) for slot in slots)
     name = name_of(document, path)
-    if not digest and name in known_gaps:
-        return None
+
+    # Rule one: a data slot needs a declared digest, or no deployment of this listing is
+    # ever admitted to the gate. KNOWN_GAPS excuses an ABSENT one and nothing else.
     if not digest:
+        if name in known_gaps:
+            return None
         return (
             f'declares the data slot(s) {names} and no evidence.expectedDigest, so the '
             'marketplace will never admit a deployment of it to the gatekeeper and every '
             'gated dataset it mounts is unreadable'
         )
     if len(digest) != 64 or not set(digest.lower()) <= HEX64:
+        # Not excused by either list: a malformed digest is not the gap either list records.
         return f'evidence.expectedDigest is not a bare 64-character sha256 hex: {digest!r}'
 
+    # Rule two, for a slot the gatekeeper can serve: the digest has to say it was measured
+    # gated. Read BEFORE either exemption is consulted, so a listed definition that would
+    # otherwise pass can be failed rather than skipped — see below.
     accepts = gateable(slots)
+    problem = configuration_problem(path, accepts) if accepts else None
+
+    # Both lists empty themselves, and this is the whole mechanism: an exemption that no
+    # longer excuses anything FAILS, naming the entry to delete. The other order — return
+    # first, read the definition never — is what both lists shipped with (SUP-913), and it
+    # makes an exemption permanent and the comments above them untrue.
+    #
+    # `KNOWN_GAPS` records a listing with no digest at all. This one has one, so whatever
+    # that entry was waiting for has happened.
+    if name in known_gaps and problem is None:
+        return (
+            f'declares evidence.expectedDigest and is still exempt in KNOWN_GAPS until '
+            f'{known_gaps[name]} closes — remove it from KNOWN_GAPS in '
+            'apps/tests/gated_digest.py, so the list stays empty'
+        )
+
     if not accepts:
         return None
 
-    # The marker is read BEFORE the exemption is consulted, so a listed definition that
-    # would otherwise pass fails and names the entry to delete. The other order — the one
-    # this check shipped with (SUP-913) — skips a listed definition entirely, which makes
-    # the list permanent and the comment above it untrue.
-    problem = configuration_problem(path, accepts)
     if name in configuration_gaps:
         if problem is None:
             return (
@@ -325,11 +348,25 @@ SELF_TEST_CASES: list[tuple[str, dict, dict, dict, str | None]] = [
      {'marker': 'gated', 'digest': 'not-a-digest'}, {}, {'fix': 'SUP-1'},
      'not a bare 64-character sha256 hex'),
 
-    # The first rule, which the second one is one step further in.
+    # The first rule, which the second one is one step further in — and the same
+    # self-emptying pair over KNOWN_GAPS, which only CONFIGURATION_GAPS had until
+    # #130's review pointed out that the defect had moved one list over.
     ('a gateable slot with no digest fails',
      {'digest': None}, {}, {}, 'no evidence.expectedDigest'),
     ('and is exempt while it is on KNOWN_GAPS',
      {'digest': None}, {'fix': 'SUP-2'}, {}, None),
+    ('a listing on KNOWN_GAPS that now declares a gated digest FAILS, '
+     'so that list empties itself too',
+     {'marker': 'gated'}, {'fix': 'SUP-2'}, {}, 'remove it from KNOWN_GAPS'),
+    ('a listing on KNOWN_GAPS with a digest and no gateable slot still has to come off it',
+     {'marker': None, 'interface': 's3-parquet/v1'}, {'fix': 'SUP-2'}, {},
+     'remove it from KNOWN_GAPS'),
+    ('but a KNOWN_GAPS listing whose digest is the ungated one is told that instead, '
+     'because it is still the real problem',
+     {'marker': 'ungated'}, {'fix': 'SUP-2'}, {}, 'declares the UNGATED digest'),
+    ('and KNOWN_GAPS does not excuse a malformed digest either',
+     {'marker': 'gated', 'digest': 'not-a-digest'}, {'fix': 'SUP-2'}, {},
+     'not a bare 64-character sha256 hex'),
     ('a slot the gatekeeper cannot serve needs no marker',
      {'interface': 's3-parquet/v1'}, {}, {}, None),
     ('a definition with no data slot at all is free of both rules',

@@ -500,6 +500,10 @@ def check_gated_read() -> None:
 
     Everything below runs in milliseconds with no card, no cluster and no
     ClickHouse.
+
+    The loader's own line carries two lines about this and no more, because it is
+    rendered into an attested ConfigMap and ships into every tenant's workspace.
+    The history belongs here.
     """
     import cudf  # the stub installed by stub_cudf(), not the real module
 
