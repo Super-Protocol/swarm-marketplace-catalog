@@ -1,0 +1,50 @@
+# The stand harness's own tests.
+#
+# `restore-stand.js` writes into a live demonstration stand, and the one thing it
+# has to be is idempotent: on 2026-11-25 it was run three times against a rebuilt
+# stand and left 37 library items where the export has 15, and 4 dashboards where
+# it has 2 (SUP-917, fixed on SUP-939). A rehearsal on a throwaway deployment is
+# what proves the whole procedure, and a rehearsal costs a cluster and an hour —
+# so the matching underneath it is pure, and is checked here on every change.
+#
+# No network, no credentials, no stand: the tests work on the export committed in
+# `stands/latica/configuration-backup/`, duplicate titles and all.
+name: Stand harness
+
+on:
+  pull_request:
+    paths:
+      - 'stands/latica/harness/**'
+      - 'stands/latica/configuration-backup/**'
+      - '.github/workflows/stand-harness.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'stands/latica/harness/**'
+      - 'stands/latica/configuration-backup/**'
+      - '.github/workflows/stand-harness.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: reconcile and guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Every harness script parses
+        run: |
+          for script in stands/latica/harness/*.js; do
+            node --check "$script"
+          done
+
+      - name: node --test
+        run: node --test 'stands/latica/harness/tests/*.test.js'
