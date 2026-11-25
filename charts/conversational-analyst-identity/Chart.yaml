@@ -42,10 +42,11 @@ type: application
 #
 #   * THE HEAP IS CAPPED. `kc.sh` sizes it at `-XX:MaxRAMPercentage=70` of the container limit
 #     when `JAVA_OPTS_KC_HEAP` is unset, and the bitnami image leaves it unset — so the JVM may
-#     grow its heap to 1434 MiB of a 2Gi limit while metaspace, the code cache, G1's bookkeeping
-#     and the direct buffers add 400-500 MiB on top of it, outside the heap and inside the
-#     cgroup. The pod's ceiling was therefore above its limit, and the kill was a question of
-#     when the heap finished expanding rather than of whether. 0.6.1 raised the limit from 1Gi
+#     grow its heap to 1434 MiB of a 2Gi limit while metaspace, the code cache, G1's bookkeeping,
+#     the direct buffers and the native arenas add a measured 435-609 MiB on top of it, outside
+#     the heap and inside the cgroup. The pod's ceiling was therefore 1869-2043 MiB of a
+#     2048 MiB limit — the last 200 MiB of it — and the kill was a question of when the heap
+#     finished expanding rather than of whether. 0.6.1 raised the limit from 1Gi
 #     to 2Gi against the BOOT peak, which was the right floor and no ceiling at all: a
 #     percentage of a bigger limit is a bigger heap. `keycloakHeap` is now `-Xms256m -Xmx768m`,
 #     delivered as a ConfigMap of this chart's own — not as an `extraEnvVars` entry, which a
