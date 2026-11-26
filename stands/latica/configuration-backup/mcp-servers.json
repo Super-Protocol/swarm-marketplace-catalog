@@ -1,0 +1,26 @@
+[
+ {
+  "id": "a581c6b9-e697-4020-a6e5-274dc817722d",
+  "name": "Cypress Bay scheduling",
+  "slug": "scheduling",
+  "url": "https://cypress-bay-scheduling.demo.superprotocol.dev/mcp",
+  "description": "Outbound traffic carries only the action the clinic authorised, for the patient it authorised, and only from code the clinic verified. Data never leaves. The token is Cypress Bay’s own and grants one tool — schedule_recall — at the practice’s six sites; there is nothing here to read a record with, and the clinic re-verifies this deployment’s signed evidence on every call.",
+  "enabled": true,
+  "global": false,
+  "enabledForTenant": true,
+  "hasAuth": true,
+  "authHeaderNames": [
+   "Authorization"
+  ],
+  "toolCount": 1,
+  "lastError": null,
+  "lastCheckedAt": "2026-11-25T07:10:02.675Z",
+  "tools": [
+   {
+    "name": "schedule_recall",
+    "boundName": "mcp_scheduling_schedule_recall",
+    "readOnly": false
+   }
+  ]
+ }
+]

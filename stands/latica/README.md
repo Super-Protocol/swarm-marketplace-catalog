@@ -265,6 +265,14 @@ is complete and attested for three channels out of four, and the fourth is attes
 *receiving* side instead: the clinic's grants file names exactly one caller, one tool and six
 sites, and refuses everything else.
 
+Being in the database rather than in the snapshot also means a **re-created deployment starts
+without it**, and both autopilots then refuse to be created at all, because
+`mcp_scheduling_schedule_recall` is not a name anything resolves. That is what happened on the
+SUP-917 rehearsal. `export-stand.js` now captures the registration (`mcp-servers.json` —
+everything but the bearer token, which has no read at all) and `restore-stand.js` replays it
+before the autopilots; `configuration-backup/README.md` says exactly where the token lives and
+what has to be approved on the clinic's side first.
+
 ### 2. A tenant can add a tool server, and no configuration forbids it
 
 `api.mcp.maxServersPerTenant` is a positive integer with no zero, so an installation cannot say
@@ -304,6 +312,24 @@ APP_BASE=… APP_USER=… PASS_FILE=… ARGS_FILE=./booker-args.json node harnes
 
 # One dialog turn, with documents attached
 APP_BASE=… APP_USER=… PASS_FILE=… QUESTION="$(cat scenarios/abstract.txt)" FILES=./note.pdf node harness/run.js
+
+# The stand's hand configuration, out and back in. The export is read-only and safe against the
+# live stand; the restore is for a REBUILT one and refuses the live host by name.
+APP_BASE=… APP_USER=… PASS_FILE=… OUT=./configuration-backup node harness/export-stand.js
+APP_BASE=… CONFIRM_TARGET=<the same> APP_USER=… PASS_FILE=… MCP_TOKEN_FILE=./clinic.token \
+  IN=./configuration-backup DRY_RUN=yes node harness/restore-stand.js   # validate and plan
+
+# Two exports compared — the verdict a rehearsal turns on. Reads two directories, changes nothing.
+BEFORE=./configuration-backup AFTER=./after node harness/diff-exports.js
+```
+
+`restore-stand.js` reconciles by name rather than creating, registers the clinic's tool server
+before the autopilots that need it, and checks every precondition before its first write — see
+`configuration-backup/README.md` for the procedure and SUP-939 for what each of those three cost
+when it was missing. The matching underneath it is pure and has tests:
+
+```bash
+node --test 'stands/latica/harness/tests/*.test.js'     # no network, no credentials, no stand
 ```
 
 `PASS_FILE` and `TOKEN_FILE` are paths, never arguments: a credential must not reach a shell

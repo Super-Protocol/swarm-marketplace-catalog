@@ -1,11 +1,22 @@
 {
- "exportedAt": "2026-11-23T16:50:55.687Z",
+ "exportedAt": "2026-11-25T18:18:09.546Z",
  "stand": "https://analyst-stand.conf-apps.superprotocol.dev",
  "scopedTo": {
   "user": "gate-rehearsal@local.test",
-  "note": "dashboards, library and autopilots are this account's tenant and visibility"
+  "note": "dashboards, library, autopilots and tool servers are this account's tenant and visibility"
  },
  "tenants": [
+  {
+   "id": "01253f79-63cf-4733-82bb-ff0cc957204c",
+   "name": "Clinical Research Network",
+   "file": "semantic-model.clinical-research-network.json",
+   "counts": {
+    "datasets": 0,
+    "dimensions": 0,
+    "metrics": 0,
+    "hierarchies": 0
+   }
+  },
   {
    "id": "fc271a44-a3a4-4323-be87-b98042d779b1",
    "name": "Cypress Bay Digestive Health",
@@ -44,6 +55,7 @@
   "dashboards": 2,
   "libraryItems": 15,
   "libraryFolders": 0,
-  "autopilots": 2
+  "autopilots": 2,
+  "mcpServers": 1
  }
 }
