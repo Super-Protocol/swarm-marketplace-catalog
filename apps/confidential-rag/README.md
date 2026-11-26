@@ -194,6 +194,15 @@ single-page console, because the manifest and the icons are fetched in a mode wh
 attaches no credentials, and ingress-nginx strips `Authorization` when it performs basic auth
 itself.
 
+**Inside the cluster space there is a second door, and it is keyed too.** The indexer's own port
+carries `POST /documents` and `DELETE /documents/<id>`, which write the collection whose answers
+are cited beside the gated corpus, so every route on it needs a bearer token the deployment
+generates and gives to the console and to the indexer in a Secret — a namespace stops being a
+trust boundary the moment a second workload is in it. The one exception is the health probe, which
+takes no credential because the kubelet carries none; from 0.1.10 it answers `{"ok": true}` and
+nothing else. Until then it answered the whole status — the gate's verdict, the attached dataset's
+name, the document and chunk counts — which was the one route through that boundary (SUP-897).
+
 The console and the indexer run from the pipeline's image with their code taken from a ConfigMap
 the cloud digests and signs. That is deliberate: a second image would mean a tenant verifying this
 deployment had to take another digest on trust, where this way the code that decides who may read
@@ -204,16 +213,25 @@ the corpus is in the snapshot in full.
 `evidence.expectedDigest` describes the **gated configuration**: a deployment with a dataset
 attached to the `corpus` slot.
 
-`1556ad836b9998cb80c118298e290dd76a00368051e97cbcb3cd98694c030233`, measured on two deployments
-of 0.1.9 on the `gpu-blueprints` cloud on 2026-11-23 — `rag-895a` and `rag-895b`, two hostnames in
-two namespaces, each with the handbook dataset attached — whose signed snapshots are
-byte-identical: the same digest and the same 186 386 bytes of resource JSON, compared field by
-field rather than by the digest alone. 37 resources in each.
+`a925140de188feb7c4f9a19dd90b79f63d0b6d15959c80332baca50cd46f638f`, measured on two deployments
+of 0.1.10 on the `gpu-blueprints` cloud on 2026-11-26 — `rag-897a` and `rag-897b`, two hostnames
+in two namespaces, each with the handbook dataset attached — whose signed snapshots carry the same
+digest and the same 184 347 bytes of resource JSON, compared field by field rather than by the
+digest alone. 37 resources in each.
 
-The same 37 as 0.1.8, which is why the count is worth stating: 0.1.9 adds a Secret *key* and an
-environment entry on two containers, not an object, so the count holds while the digest moves.
-Five more objects than 0.1.7's 32, and those five are exactly the extraction component: a
-Deployment, a Service, two ConfigMaps and a Secret.
+The same 37 as 0.1.9, which is why the count is worth stating: 0.1.10 changes the *content* of the
+ConfigMap the console's and the indexer's code is carried in, not the set of objects, so the count
+holds while the digest moves. The snapshot is 2 039 bytes shorter than 0.1.9's 186 386 because
+`/healthz` lost the branch that copied the whole status.
+
+**The gated configuration was confirmed in the snapshot rather than assumed.** All four objects the
+marketplace adds for a gateway-mode binding are in it — the gatekeeper egress ConfigMap, Deployment
+and Service, and the gatekeeper identity Secret. An ungated render has three fewer, so a
+measurement that had quietly lost the binding would have counted 34.
+
+0.1.9's number was `1556ad836b9998cb80c118298e290dd76a00368051e97cbcb3cd98694c030233`. It is
+superseded rather than wrong: it remains the gated digest of 0.1.9's render, which is what a
+reconfigure of a 0.1.9 deployment re-renders.
 
 **One at a time, and the cloud says so.** Creating the second deployment while the first was live
 is refused outright — `400 No cluster has a free GPU of an accepted type: NVIDIA H100 NVL, NVIDIA

@@ -280,7 +280,10 @@ corpus:
   # on :8085 but `/healthz` requires it: two of them WRITE the collection whose answers are
   # cited beside the gated corpus, and a ClusterIP Service is not a trust boundary once a
   # second workload is in the namespace. Generated per deployment by the listing and carried
-  # in the Secret, so it costs the attested digest nothing.
+  # in the Secret, so it costs the attested digest nothing. `/healthz` is exempt because the
+  # kubelet carries no credential, and from 0.1.10 it answers `{"ok": true}` and nothing else
+  # — it used to answer the whole status, so the one unkeyed route described the corpus
+  # (SUP-897).
   apiKey: ""
   table: documents
   idColumn: doc_id

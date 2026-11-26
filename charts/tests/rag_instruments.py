@@ -25,22 +25,30 @@ that refuses to index a picture's pixels as if they were its data. A listing
 whose copy and whose code disagreed about that would be making a promise about
 a tenant's documents that nothing keeps (SUP-890).
 
-What this does NOT cover, said plainly: the HTTP handlers, the session check and
-the calls to Milvus and to the extraction service. Those need a cluster or a
-stack, and `charts/tests/rag_console.py` holds the render-side properties of the
-door. What is here is every pure function in which a wrong answer would be a
-wrong statement to a tenant.
+What this does NOT cover, said plainly: the session check and the calls to
+Milvus and to the extraction service. Those need a cluster or a stack, and
+`charts/tests/rag_console.py` holds the render-side properties of the door. What
+is here is every pure function in which a wrong answer would be a wrong
+statement to a tenant — and, since SUP-897, the indexer's own HTTP routes, which
+are served by a `BaseHTTPRequestHandler` that needs a socket and nothing else.
+That one is not a pure function on purpose: `/healthz` published the whole
+status for two versions while the comment above it said it published liveness,
+and a check that reads the source would have read the comment.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import pathlib
 import subprocess
 import sys
 import tempfile
+import threading
 import types
+import urllib.error
+import urllib.request
 
 import yaml
 
@@ -561,6 +569,99 @@ def check_the_indexer_authenticates(sync) -> None:
     )
 
 
+def check_the_open_route_says_nothing(sync) -> None:
+    """`/healthz` takes no credential, so what it answers is public. It answers liveness.
+
+    It answered `dict(STATE)` — the gate's verdict and its message, the bound dataset names
+    and their interfaces, the document and chunk counts, both collection names and the uploads
+    configuration — while the comment above it said it returned "the probe's three fields and
+    nothing about what is indexed" (SUP-897). Everything else on :8085 needs the bearer token;
+    this was the hole left in that boundary, and it was also the one route reachable by
+    anything that can reach the port.
+
+    So this runs the real handler on a real socket rather than reading the source: the defect
+    was one line returning the wrong dict under a comment that described the right one, and a
+    shape check reads the comment. The authenticated route is asked the same question in the
+    same breath, because a `/healthz` that says nothing is only a fix if `/status` still says
+    it to the console.
+    """
+
+    class Quiet(sync.Status):
+        def log_message(self, *_args) -> None:  # this test's report is its own output
+            pass
+
+    key = "INDEXER-KEY-FOR-THE-TEST"
+    saved_key = sync.CORPUS_API_KEY
+    saved_uploads = sync.uploaded_documents
+    saved_state = dict(sync.STATE)
+    # The submitted-document listing is the one thing on these routes that needs a cluster, so
+    # it is the one thing stubbed. Everything being asked about is `STATE` and the routing.
+    sync.CORPUS_API_KEY = key
+    sync.uploaded_documents = lambda: []
+    sync.publish(
+        verdict="admitted",
+        message="64 rows read and indexed",
+        sources=[{"name": "acme-engineering-handbook", "interface": "clickhouse-http/v1"}],
+        documents=64,
+        chunks=64,
+    )
+    server = sync.Service(("127.0.0.1", 0), Quiet)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, name="status", daemon=True).start()
+
+    def get(route: str, token: str = "") -> tuple[int, dict]:
+        request = urllib.request.Request(f"http://127.0.0.1:{port}{route}")
+        if token:
+            request.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(request, timeout=10) as answer:
+                return answer.status, json.loads(answer.read() or b"{}")
+        except urllib.error.HTTPError as refusal:
+            return refusal.code, json.loads(refusal.read() or b"{}")
+
+    try:
+        status, health = get("/healthz")
+        check(status == 200, f"`/healthz` answers 200 without a credential (got {status})")
+        check(health.get("ok") is True, f"and says it is alive: {health}")
+        # Named one by one because they are what the issue is about, and then by the whole of
+        # `STATE`, so a field added to the status later cannot reach this route unnoticed.
+        for field in ("verdict", "sources", "documents"):
+            check(field not in health, f"`/healthz` carries no `{field}`")
+        leaked = sorted(set(health) & set(sync.STATE))
+        check(
+            not leaked,
+            f"and no field of the status at all (leaked {leaked})" if leaked
+            else "and no field of the status at all",
+        )
+
+        status, refused = get("/status")
+        check(status == 401, f"`/status` without the token answers 401 (got {status})")
+        check(
+            not set(refused) & set(sync.STATE),
+            f"and the refusal itself reports nothing either: {refused}",
+        )
+
+        status, reported = get("/status", key)
+        check(status == 200, f"`/status` with the token answers 200 (got {status})")
+        check(
+            reported.get("verdict") == "admitted"
+            and reported.get("documents") == 64
+            and [source["name"] for source in reported.get("sources", [])]
+            == ["acme-engineering-handbook"],
+            "and still carries the verdict, the counts and the source the console shows",
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        sync.CORPUS_API_KEY = saved_key
+        sync.uploaded_documents = saved_uploads
+        # The checks after this one share the module, and a status left saying `admitted`
+        # would be a fixture leaking into whatever reads it next.
+        with sync.STATE_LOCK:
+            sync.STATE.clear()
+            sync.STATE.update(saved_state)
+
+
 def check_identifiers(sync) -> None:
     """The identifier is interpolated into a Milvus filter, so it is checked."""
     for hostile in ('x" or upload_id != "', "../x", "a b", "x" * 65, ""):
@@ -605,6 +706,7 @@ def main() -> int:
     check_document_names(console, sync)
     check_the_replacement_is_said(console)
     check_the_indexer_authenticates(sync)
+    check_the_open_route_says_nothing(sync)
     check_identifiers(sync)
 
     # The listing's copy and this code have to agree about charts, because the

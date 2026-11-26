@@ -2,6 +2,28 @@ apiVersion: swarm.cloud/v1alpha1
 kind: AppDefinition
 
 # ---------------------------------------------------------------------------
+# 0.1.10 closes the last unauthenticated route on the indexer's port.
+#
+# `/healthz` on :8085 is the one route that takes no credential, because the
+# kubelet carries none — and it answered `dict(STATE)`: the gate's verdict and
+# its message, the bound dataset names and their interfaces, the document and
+# chunk counts, both collection names, the timestamps and the uploads
+# configuration. The comment above it said it returned "the probe's three fields
+# and nothing about what is indexed", and the comment is what reviewers read
+# (SUP-897). Not a regression — 0.1.8 served that payload unkeyed on `/status`
+# as well — but it is the hole left in the bearer boundary 0.1.9 drew, and a
+# boundary with one route through it is not one. `/healthz` answers
+# `{"ok": true}` now; everything the console shows stays on `/status`, behind
+# the key with every other route. The chart's probes read the status code and no
+# field of the body, so nothing about readiness or liveness changes.
+#
+# Chart `confidential-rag` 0.2.2 and nothing else: the code is rendered into the
+# `-app` ConfigMap, so the image is untouched and the re-measure this needs is
+# the ConfigMap's. `charts/tests/rag_instruments.py` asks the running handler
+# what it serves rather than reading the file, because the file is where the
+# comment that described the fixed behaviour already was.
+#
+# ---------------------------------------------------------------------------
 # 0.1.9 is the document NAME, which 0.1.8 destroyed, and the three items parked
 # against the next re-measure of this listing's digest. One change, one
 # re-measure, because every item in it moves `expectedDigest` and a re-measure
@@ -220,7 +242,7 @@ metadata:
     deployment publishes cryptographic proof of which embedder and which model touch your data, and
     the data owner can withdraw access the moment that changes. Based on the open-source NVIDIA RAG
     reference architecture (Apache-2.0), rebuilt on open components.
-  version: "0.1.9"
+  version: "0.1.10"
   category: ai-inference
   # Our fork — the code the image is built from — and not the upstream repository.
   sourceRepo: https://github.com/Super-Protocol/confidential-rag
@@ -940,7 +962,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: confidential-rag
-      version: "0.2.1"
+      version: "0.2.2"
     images:
       - name: ghcr.io/super-protocol/confidential-rag/rag-server
         # Built from f118cd8, the commit that corrects the retriever score:
@@ -1236,10 +1258,38 @@ evidence:
   # evidence-configuration: gated
   #
   # ---------------------------------------------------------------------------
+  # Measured for 0.1.10 on 2026-11-26, in the batched card window the epic raised
+  # the node once for (SUP-903, with SUP-891 and SUP-913). Two gated deployments
+  # on `gpu-blueprints` — `rag-897a` and `rag-897b`, two hostnames in two
+  # namespaces, each with `acme-engineering-handbook` on the `corpus` slot —
+  # published signed snapshots carrying the same digest and the same 184 347
+  # bytes of resource JSON, compared field by field rather than by the digest
+  # alone.
+  #
+  # Thirty-seven resources in each: ten Deployments, ten Services, nine
+  # ConfigMaps, seven Secrets and the Ingress — **the same thirty-seven as
+  # 0.1.9**, which is the point of counting them. 0.1.10 changes the CONTENT of
+  # the `-app` ConfigMap (`corpus_sync.py`'s `/healthz`) and not the set of
+  # objects, so the count holds while the digest moves. That is also why the
+  # snapshot is 2 039 bytes shorter than 0.1.9's 186 386: the handler lost the
+  # branch that copied `STATE`.
+  #
+  # **The gated configuration was confirmed in the snapshot, not assumed.** All
+  # four objects the marketplace adds for a gateway-mode binding are in it —
+  # `confidential-rag-gatekeeper-egress` as ConfigMap, Deployment and Service,
+  # plus the `confidential-rag-gatekeeper-identity` Secret. An ungated render of
+  # this listing has three fewer objects, so a measurement that had silently lost
+  # the binding would have read 34 and not 37. That check is cheap and it is the
+  # one thing that would have invalidated the whole window (SUP-900).
+  #
+  # ---------------------------------------------------------------------------
   # Measured, not derived, and it describes the GATED configuration. The line above
   # says so where `apps/tests/gated_digest.py` can read it, which is how the next
   # listing is stopped from declaring an ungated number the gate will refuse
   # (SUP-900).
+  #
+  # THE PREVIOUS ROUND, 0.1.9 — kept because the argument it records is what the
+  # round above rests on, and its number is named as superseded below.
   #
   # Two deployments of 0.1.9 on the gpu-blueprints cloud, 2026-11-23 —
   # `rag-895a` and `rag-895b`, two hostnames in two namespaces, each with the
@@ -1276,19 +1326,25 @@ evidence:
   # upstream. That window is the reason this is stated for a deployment that
   # was watched until it flipped rather than one that was read once.
   #
-  # It has now been measured eight times over, once per version that changed
+  # It has now been measured nine times over, once per version that changed
   # something the cloud digests: `69a1160a…` on 0.1.2 (`rag-840a`, `rag-840b`,
   # and again after a reconfigure of one of them), `6fc8b2bf…` on 0.1.3
   # (`rag-840c`, `rag-840d`), `1370c19e…` on 0.1.4 (`rag-840e`, `rag-840f`),
   # `03db53be…` on 0.1.5 (`rag-840g`, `rag-840h`), `94f3ab09…` on 0.1.6
   # (`rag-840i` — one deployment, superseded within the hour by 0.1.7 and never
   # declared), `9cf45e56…` on 0.1.7 (`rag-840j`, `rag-840k`), `d6abfe09…` on
-  # 0.1.8 (`rag-889c`, `rag-889d`) and this on 0.1.9. A probe, a ConfigMap, an
-  # image pin and an environment variable are all fields of objects in the
-  # snapshot, so that is the ordinary reason a digest moves — and the reason it
-  # is measured again rather than carried forward. Each pair was
-  # byte-identical, which is the property being claimed: the digest is a
-  # property of the version.
+  # 0.1.8 (`rag-889c`, `rag-889d`), `1556ad83…` on 0.1.9 (`rag-895a`,
+  # `rag-895b`, with `rag-895c` for the gate) and this on 0.1.10 (`rag-897a`,
+  # `rag-897b`). A probe, a ConfigMap, an image pin and an environment variable
+  # are all fields of objects in the snapshot, so that is the ordinary reason a
+  # digest moves — and the reason it is measured again rather than carried
+  # forward. Each pair was byte-identical, which is the property being claimed:
+  # the digest is a property of the version.
+  #
+  # **0.1.9's number was `1556ad83…` and is superseded, not wrong.** It is the
+  # gated digest of 0.1.9's render and still the right number for a deployment
+  # created from that version, which is what a reconfigure of one would
+  # re-render.
   #
   # Two numbers from this round are recorded because they are useful and are
   # NOT this one. `215b22c0…` is 0.1.8 with the extraction component on chart
@@ -1340,7 +1396,7 @@ evidence:
   # is which model and which embedder touched the documents, so it is inside the
   # signed bundle rather than excluded from it.
   #
-  #   hostname               rag-895a / rag-895b .conf-apps.superprotocol.dev
+  #   hostname               rag-897a / rag-897b .conf-apps.superprotocol.dev
   #                          (excluded from the snapshot — see `exclude` below)
   #   generationModel        llama-3.2-3b-instruct
   #   embeddingModel         bge-large-en-v1.5
@@ -1358,7 +1414,7 @@ evidence:
   # `ingestKey`, `indexerKey`, `sessionKey`, `vectorStorePassword` — are in
   # Secrets, which the platform lifts out before the snapshot is taken, so they
   # reach no attested object and are not part of this set.
-  expectedDigest: "1556ad836b9998cb80c118298e290dd76a00368051e97cbcb3cd98694c030233"
+  expectedDigest: "a925140de188feb7c4f9a19dd90b79f63d0b6d15959c80332baca50cd46f638f"
   # ---------------------------------------------------------------------------
   # The hostname is the one field that differs between two deployments of this
   # version, and excluding it is what makes the digest a property of the version
