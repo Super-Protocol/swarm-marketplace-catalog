@@ -32,16 +32,28 @@ on `azure-test` and reading the namespace (SUP-711, 2026-11-21):
    numbers reaching the Job's `env` and nothing the cloud collects, so a data owner could
    not read them out of the signed snapshot. All three are checked here.
 
-4. **Keycloak needs 2Gi.** `production: false` means `start-dev`, which re-runs the Quarkus
-   augmentation at every boot; under a 1Gi limit it is OOMKilled mid-build, and a deployment
-   whose identity provider never starts has no agent either. 2Gi is measured off-cluster with
-   the pinned image digest (peak ~880 MiB resident); the floor is asserted so that a later
-   tidy-up of the resource block cannot quietly take it back.
+4. **Keycloak needs 2Gi, a heap cap, and probes that are not on a one-second fuse.** The floor
+   came first: `production: false` means `start-dev`, which re-runs the Quarkus augmentation at
+   every boot, and under a 1Gi limit it is OOMKilled mid-build — a deployment whose identity
+   provider never starts has no agent either (SUP-711, peak ~880 MiB resident).
+
+   The ceiling took another kill to find. `kc.sh` sizes the heap at 70% of the container limit
+   whenever `JAVA_OPTS_KC_HEAP` is unset, and metaspace, the code cache, G1's bookkeeping and
+   the direct buffers sit outside that heap and inside the cgroup — so the pod's ceiling was
+   above its limit and the OOMKill was a matter of time, at 2.6 h and 15.6 h of uptime on the
+   two Latica stands, each kill blocking sign-in for ~50 s (SUP-917). Raising the limit raises
+   the heap with it, so what is asserted here is the RELATIONSHIP: the heap is capped by a
+   number, and the limit clears that number by enough for everything outside it (SUP-925).
+
+   The probes are the same defect seen from the Service's side. The vendored chart gives
+   readiness `timeoutSeconds: 1` and polls liveness every second, both with a threshold of 3 —
+   three seconds of a pod too busy to answer and Keycloak is out of the endpoints, or restarted.
 """
 
 from __future__ import annotations
 
 import ast
+import base64
 import json
 import pathlib
 import re
@@ -63,6 +75,26 @@ GROUNDING_CASE = "charts/tests/cases/analyst-grounding.yaml"
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 MEMORY_FLOOR_MIB = 2048
+
+# What the JVM needs that is not heap: metaspace (capped at 256m by `kc.sh`), the code cache,
+# G1's remembered sets and card table, ~60 thread stacks, Netty's direct buffers and the native
+# allocator's own arenas. Measured on the pinned image as the gap between the container's peak
+# and the heap capacity G1 reported at the time — 435 MiB with a 1434 MiB heap and 609 MiB with
+# a 768 MiB one, the smaller heap paying for it in four times the collections — and the larger
+# of the two is what has to be left outside, rounded up.
+#
+# This number is what makes the check bite. 2Gi minus the 1434 MiB `kc.sh` would pick for
+# itself leaves 614 MiB, which is BELOW this reserve: the configuration that was OOMKilled on
+# both Latica stands fails here, rather than passing because its limit happens to be large.
+NONHEAP_RESERVE_MIB = 640
+
+# A stall has to last this long before a probe acts. Not a G1 pause — those are milliseconds
+# under a capped heap — but the seconds-long stall a node under memory pressure imposes on
+# everything running in it, which is the state the stands' 503s were served in.
+PROBE_PATIENCE_S = 60
+HEAP_FLAG = "JAVA_OPTS_KC_HEAP"
+HEAP_CONFIGMAP = "analyst-keycloak-java-opts"
+XMX = re.compile(r"-Xmx(\d+)([kKmMgG]?)")
 
 
 def render(chart: str, values: str) -> list[dict]:
@@ -107,24 +139,187 @@ def check_garage_rpc_secret() -> list[str]:
     return failures
 
 
-def check_keycloak_memory() -> list[str]:
-    failures = []
-    for document in render("conversational-analyst-identity", IDENTITY_CASE):
-        if document.get("kind") != "StatefulSet":
+def env_values(document: dict) -> dict[str, str]:
+    """The plain-text environment a ConfigMap or Secret contributes through `envFrom`.
+
+    Which field holds plain text depends on the kind: a Secret's `data` is base64 and its
+    `stringData` is not, a ConfigMap's is the other way round. Reading the wrong one does not
+    raise — it yields a string no flag pattern matches — so the caller would report a heap cap
+    with no `-Xmx` instead of the value that is really there. `stringData` wins where both carry
+    a key, because that is what the API server does when it merges them.
+    """
+    secret = document.get("kind") == "Secret"
+    plain = dict((document.get("stringData") if secret else document.get("data")) or {})
+    encoded = (document.get("data") if secret else document.get("binaryData")) or {}
+    for key, value in encoded.items():
+        if key in plain:
             continue
-        for container in document["spec"]["template"]["spec"]["containers"]:
-            if container["name"] != "keycloak":
+        try:
+            plain[key] = base64.b64decode(value, validate=True).decode()
+        except (ValueError, UnicodeDecodeError):
+            continue
+    return {key: str(value) for key, value in plain.items()}
+
+
+def heap_flags(documents: list[dict], container: dict) -> tuple[list[str], list[str]]:
+    """Every value of JAVA_OPTS_KC_HEAP the Keycloak container is given, and where from.
+
+    The container's own `env` wins over `envFrom`, and a later `envFrom` entry wins over an
+    earlier one — but a second definition of this variable means the cap depends on which rule
+    a reader happens to know, so the caller requires exactly one. The lookup has to follow
+    `envFrom` because the cap is deliberately NOT an `extraEnvVars` entry: a definition's list
+    replaces the chart's, and the conversational-analyst listing supplies one.
+    """
+    sources, values = [], []
+    for entry in container.get("env", []):
+        if entry.get("name") == HEAP_FLAG:
+            sources.append("the container's own env")
+            values.append(str(entry.get("value", "")))
+    named = {
+        (reference.get("configMapRef") or reference.get("secretRef") or {}).get("name")
+        for reference in container.get("envFrom", [])
+    }
+    for document in documents:
+        if document.get("kind") not in {"ConfigMap", "Secret"}:
+            continue
+        if document["metadata"]["name"] not in named:
+            continue
+        data = env_values(document)
+        if HEAP_FLAG in data:
+            sources.append(f"{document['kind']}/{document['metadata']['name']}")
+            values.append(data[HEAP_FLAG])
+    return values, sources
+
+
+def max_heap_mib(flags: str) -> float | None:
+    match = XMX.search(flags)
+    if not match:
+        return None
+    scale = {"": 1 / 1024**2, "k": 1 / 1024, "K": 1 / 1024, "m": 1, "M": 1,
+             "g": 1024, "G": 1024}[match.group(2)]
+    return float(match.group(1)) * scale
+
+
+def check_the_listing_leaves_the_heap_configmap_alone() -> list[str]:
+    """The listing must not point `extraEnvVarsCM` somewhere else.
+
+    The cap lives in a ConfigMap because a definition REPLACES `extraEnvVars` rather than
+    appending to it — but `extraEnvVarsCM` is a scalar, and a definition that supplies one of
+    its own replaces this chart's just as completely, leaving a deployment that renders, boots,
+    serves sign-in, and sizes its heap at a share of the node again. Checked here rather than
+    left to a render, because the chart's own case files cannot see what the listing says.
+    """
+    definition = yaml.safe_load((ROOT / "apps" / "conversational-analyst" / "app.yaml").read_text())
+    for component in definition["components"]:
+        if component["name"] != "identity":
+            continue
+        declared = ((component["deployment"]["values"]["base"].get("keycloak") or {})
+                    .get("extraEnvVarsCM"))
+        if declared is None:
+            print("  ok    keycloak: the listing leaves extraEnvVarsCM to the chart")
+            return []
+        if declared != HEAP_CONFIGMAP:
+            return [
+                f"apps/conversational-analyst/app.yaml: the identity component sets "
+                f"keycloak.extraEnvVarsCM to {declared!r}, which replaces the chart's "
+                f"{HEAP_CONFIGMAP!r} and takes the heap cap with it"
+            ]
+        print(f"  ok    keycloak: the listing's extraEnvVarsCM is {declared}")
+        return []
+    return ["apps/conversational-analyst/app.yaml: no component named 'identity'"]
+
+
+def check_keycloak_sizing() -> list[str]:
+    """The limit, the heap cap that has to fit under it, and the probes' patience."""
+    failures = []
+    documents = render("conversational-analyst-identity", IDENTITY_CASE)
+    containers = [
+        container
+        for document in documents
+        if document.get("kind") == "StatefulSet"
+        for container in document["spec"]["template"]["spec"]["containers"]
+        if container["name"] == "keycloak"
+    ]
+    if not containers:
+        return ["keycloak: no Keycloak container was rendered"]
+
+    for container in containers:
+        resources = container.get("resources") or {}
+        limit = (resources.get("limits") or {}).get("memory")
+        request = (resources.get("requests") or {}).get("memory")
+        if limit is None:
+            failures.append("keycloak: no memory limit declared")
+            continue
+        limit_mib = memory_mib(limit)
+        if limit_mib < MEMORY_FLOOR_MIB:
+            failures.append(
+                f"keycloak: memory limit is {limit}; the Quarkus augmentation is OOMKilled "
+                f"below {MEMORY_FLOOR_MIB}Mi and the deployment then has no identity provider"
+            )
+        elif request is None or memory_mib(request) != limit_mib:
+            failures.append(
+                f"keycloak: memory request is {request} against a limit of {limit}; a cluster "
+                "space's LimitRange sets maxLimitRequestRatio: 1 and refuses the container"
+            )
+        else:
+            print(f"  ok    keycloak: memory limit is {limit}, requests equal to limits")
+
+        values, sources = heap_flags(documents, container)
+        if not values:
+            failures.append(
+                f"keycloak: nothing gives the container {HEAP_FLAG}, so `kc.sh` sizes the heap at "
+                f"70% of {limit} and the JVM's ceiling is above the pod's — which is an OOMKill "
+                "at whatever uptime the heap finishes expanding at (SUP-925)"
+            )
+            continue
+        if len(values) > 1:
+            failures.append(
+                f"keycloak: {HEAP_FLAG} is defined {len(values)} times ({', '.join(sources)}); "
+                "one of them wins and which is not something a reader should have to derive"
+            )
+            continue
+        heap_mib = max_heap_mib(values[0])
+        if heap_mib is None:
+            failures.append(
+                f"keycloak: {HEAP_FLAG} is {values[0]!r}, which sets no -Xmx. A percentage of the "
+                "container limit is what this version replaced: raising the limit raises the heap "
+                "with it and the kill only moves"
+            )
+        elif limit_mib - heap_mib < NONHEAP_RESERVE_MIB:
+            failures.append(
+                f"keycloak: -Xmx is {heap_mib:.0f}Mi under a {limit} limit, leaving "
+                f"{limit_mib - heap_mib:.0f}Mi for metaspace, the code cache, G1's bookkeeping, "
+                f"the thread stacks, the direct buffers and the native arenas — measured at up "
+                f"to 609Mi, so at least {NONHEAP_RESERVE_MIB}Mi has to be left outside the heap"
+            )
+        else:
+            print(
+                f"  ok    keycloak: heap capped at {heap_mib:.0f}Mi by {sources[0]}, "
+                f"{limit_mib - heap_mib:.0f}Mi left outside it"
+            )
+
+        for name in ("readinessProbe", "livenessProbe"):
+            probe = container.get(name)
+            if not probe:
+                failures.append(f"keycloak: no {name}")
                 continue
-            limit = ((container.get("resources") or {}).get("limits") or {}).get("memory")
-            if limit is None:
-                failures.append("keycloak: no memory limit declared")
-            elif memory_mib(limit) < MEMORY_FLOOR_MIB:
+            timeout = probe.get("timeoutSeconds", 1)
+            period = probe.get("periodSeconds", 10)
+            threshold = probe.get("failureThreshold", 3)
+            patience = period * threshold
+            if timeout < 5:
                 failures.append(
-                    f"keycloak: memory limit is {limit}; the Quarkus augmentation is OOMKilled "
-                    f"below {MEMORY_FLOOR_MIB}Mi and the deployment then has no identity provider"
+                    f"keycloak: {name} allows {timeout}s for an answer. One second is the "
+                    "vendored default and it evicts a healthy Keycloak off a node that is "
+                    "briefly busy (SUP-917)"
+                )
+            elif patience < PROBE_PATIENCE_S:
+                failures.append(
+                    f"keycloak: {name} acts after {patience}s ({period}s x {threshold}); a stall "
+                    f"has to outlast {PROBE_PATIENCE_S}s before sign-in is taken away"
                 )
             else:
-                print(f"  ok    keycloak: memory limit is {limit}")
+                print(f"  ok    keycloak: {name} waits {timeout}s per probe and {patience}s in all")
     return failures
 
 
@@ -309,7 +504,8 @@ def check_grounding_sends_the_enum_as_the_api_spells_it() -> list[str]:
 def main() -> int:
     failures = []
     failures += check_garage_rpc_secret()
-    failures += check_keycloak_memory()
+    failures += check_keycloak_sizing()
+    failures += check_the_listing_leaves_the_heap_configmap_alone()
     failures += check_config_init_reads_a_configmap_mount()
     failures += check_grounding_speaks_the_api_1_17_talks()
     failures += check_grounding_job_reruns_when_its_policy_moves()

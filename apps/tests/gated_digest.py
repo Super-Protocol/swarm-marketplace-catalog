@@ -3,6 +3,7 @@
 
     apps/tests/gated_digest.py                      # every definition in apps/
     apps/tests/gated_digest.py apps/foo/app.yaml    # one of them
+    apps/tests/gated_digest.py --self-test          # the rules, over fixtures
 
 `evidence.expectedDigest` reads like documentation — the value a deployment should match,
 nice to have, declared when somebody gets round to measuring it. It is not. The marketplace
@@ -57,6 +58,12 @@ nothing else, so `s3-parquet/v1` or `clickhouse-native/v1` alone cannot be gated
 dataset's access mode says.
 
 Listings are exempt by name, with an issue each — see `KNOWN_GAPS` and `CONFIGURATION_GAPS`.
+Both lists empty themselves: a listed definition that would otherwise PASS fails, naming the
+entry to delete. `--self-test` is where that is exercised, because no run over apps/ can reach
+it — `CONFIGURATION_GAPS` is empty and the one name on `KNOWN_GAPS` still has no digest, so the
+branch never fires on real input. That is exactly how `CONFIGURATION_GAPS` came to claim the
+behaviour without having it, and then how `KNOWN_GAPS` was found still missing it a review
+later: nothing any run of this check could do would have said so (SUP-913).
 """
 
 from __future__ import annotations
@@ -64,6 +71,7 @@ from __future__ import annotations
 import pathlib
 import re
 import sys
+import tempfile
 
 import yaml
 
@@ -81,7 +89,11 @@ CONFIGURATION = re.compile(r'^\s*#\s*evidence-configuration:\s*(\S+)\s*$')
 # Listings that already had this defect when the check was written, with the issue that closes
 # each one. The exemption is by name and by hand on purpose: a digest cannot be invented here,
 # it has to be measured on a deployment, and that is a piece of work per listing rather than an
-# edit. Nothing may be added to either list without an issue, and both are meant to empty.
+# edit. Nothing may be added to either list without an issue, and both empty themselves: this
+# entry excuses an ABSENT digest and nothing else, so a listed definition that declares one and
+# otherwise passes FAILS, naming the entry to delete. Without that, the only thing standing
+# between a closed gap and a permanent exemption is somebody noticing — which is what
+# `CONFIGURATION_GAPS` below was relying on, and SUP-913 took off both lists.
 #
 #   rag-agent  declares `corpus` and `feedback` and no digest, so no deployment of it can read
 #              a gated dataset either. Found by this check on 2026-11-21; SUP-877.
@@ -90,10 +102,18 @@ KNOWN_GAPS = {'rag-agent': 'SUP-877'}
 # Listings whose declared digest was measured with no dataset attached, so the gate refuses
 # every gated deployment of them.
 #
-# The list is EMPTY, and the check above fails a definition that is on it and passes, so it
-# stays empty by itself. The two notebook listings were on it for one day: SUP-900 measured
-# both gated pairs in the card window of 2026-11-24 and declared the numbers, which is the
-# only thing that ever takes a listing off this list.
+# The list is EMPTY, and `check()` reads the `# evidence-configuration:` marker BEFORE it
+# consults this list, so a listing on it that would otherwise pass fails — naming the
+# exemption to delete. That order is the whole mechanism: the list empties itself instead of
+# waiting for somebody to notice, which is the same discipline `KNOWN_INVALID` in
+# `apps/tests/run.sh` has always had. It did not hold here as written: the exemption returned
+# `None` before the marker was ever read, so a listed listing was skipped rather than held to
+# anything. The claim had been copied from `run.sh`, where it is true; the code to make it true
+# here arrived with SUP-913, with `--self-test` over both branches of it.
+#
+# The two notebook listings were on it for one day: SUP-900 measured both gated pairs in the
+# card window of 2026-11-24 and declared the numbers, which is the only thing that ever takes
+# a listing off this list.
 CONFIGURATION_GAPS: dict[str, str] = {}
 
 
@@ -154,33 +174,13 @@ def configuration(path: pathlib.Path) -> tuple[str | None, str | None]:
     return found[0], None
 
 
-def check(path: pathlib.Path) -> str | None:
-    """The reason this definition fails, or None."""
-    document = yaml.safe_load(path.read_text())
-    slots = ((document.get('data') or {}).get('slots')) or []
-    if not slots:
-        return None
+def configuration_problem(path: pathlib.Path, accepts: list[str]) -> str | None:
+    """The reason this definition's evidence configuration is wrong, or None.
 
-    digest = ((document.get('evidence') or {}).get('expectedDigest')) or ''
-    names = ', '.join(str(slot.get('name')) for slot in slots)
-    name = name_of(document, path)
-    if not digest and name in KNOWN_GAPS:
-        return None
-    if not digest:
-        return (
-            f'declares the data slot(s) {names} and no evidence.expectedDigest, so the '
-            'marketplace will never admit a deployment of it to the gatekeeper and every '
-            'gated dataset it mounts is unreadable'
-        )
-    if len(digest) != 64 or not set(digest.lower()) <= HEX64:
-        return f'evidence.expectedDigest is not a bare 64-character sha256 hex: {digest!r}'
-
-    accepts = gateable(slots)
-    if not accepts:
-        return None
-    if name in CONFIGURATION_GAPS:
-        return None
-
+    Split out from `check()` so the exemptions below can consult it rather than
+    short-circuit it: an exemption that returns before the definition is read is an
+    exemption nobody can ever be told to delete.
+    """
     declared, problem = configuration(path)
     if problem:
         return problem
@@ -206,7 +206,206 @@ def check(path: pathlib.Path) -> str | None:
     return None
 
 
+def check(
+    path: pathlib.Path,
+    known_gaps: dict[str, str] | None = None,
+    configuration_gaps: dict[str, str] | None = None,
+) -> str | None:
+    """The reason this definition fails, or None.
+
+    The two exemption lists are parameters so `--self-test` can put a name on one; the
+    defaults are the module's own, which is what `main()` uses.
+    """
+    known_gaps = KNOWN_GAPS if known_gaps is None else known_gaps
+    configuration_gaps = CONFIGURATION_GAPS if configuration_gaps is None else configuration_gaps
+
+    document = yaml.safe_load(path.read_text())
+    slots = ((document.get('data') or {}).get('slots')) or []
+    if not slots:
+        return None
+
+    digest = ((document.get('evidence') or {}).get('expectedDigest')) or ''
+    names = ', '.join(str(slot.get('name')) for slot in slots)
+    name = name_of(document, path)
+
+    # Rule one: a data slot needs a declared digest, or no deployment of this listing is
+    # ever admitted to the gate. KNOWN_GAPS excuses an ABSENT one and nothing else.
+    if not digest:
+        if name in known_gaps:
+            return None
+        return (
+            f'declares the data slot(s) {names} and no evidence.expectedDigest, so the '
+            'marketplace will never admit a deployment of it to the gatekeeper and every '
+            'gated dataset it mounts is unreadable'
+        )
+    if len(digest) != 64 or not set(digest.lower()) <= HEX64:
+        # Not excused by either list: a malformed digest is not the gap either list records.
+        return f'evidence.expectedDigest is not a bare 64-character sha256 hex: {digest!r}'
+
+    # Rule two, for a slot the gatekeeper can serve: the digest has to say it was measured
+    # gated. Read BEFORE either exemption is consulted, so a listed definition that would
+    # otherwise pass can be failed rather than skipped — see below.
+    accepts = gateable(slots)
+    problem = configuration_problem(path, accepts) if accepts else None
+
+    # Both lists empty themselves, and this is the whole mechanism: an exemption that no
+    # longer excuses anything FAILS, naming the entry to delete. The other order — return
+    # first, read the definition never — is what both lists shipped with (SUP-913), and it
+    # makes an exemption permanent and the comments above them untrue.
+    #
+    # `KNOWN_GAPS` records a listing with no digest at all. This one has one, so whatever
+    # that entry was waiting for has happened.
+    if name in known_gaps and problem is None:
+        return (
+            f'declares evidence.expectedDigest and is still exempt in KNOWN_GAPS until '
+            f'{known_gaps[name]} closes — remove it from KNOWN_GAPS in '
+            'apps/tests/gated_digest.py, so the list stays empty'
+        )
+
+    if not accepts:
+        return None
+
+    if name in configuration_gaps:
+        if problem is None:
+            return (
+                f'is exempt in CONFIGURATION_GAPS until {configuration_gaps[name]} closes and '
+                'now declares a gated digest — remove it from CONFIGURATION_GAPS in '
+                'apps/tests/gated_digest.py, so the list stays empty'
+            )
+        return None
+    return problem
+
+
+# ---------------------------------------------------------------------------
+# --self-test
+# ---------------------------------------------------------------------------
+#
+# A check with an exemption list has two behaviours, and the one nobody exercises is the one
+# that empties the list. This check's comment claimed that behaviour while `check()` returned
+# before it could happen (SUP-913), and no run of the check over apps/ could have said so: the
+# list is empty, so the branch is never taken on real input. Fixtures take it.
+
+DIGEST = 'a' * 64
+
+HEADER = """apiVersion: swarm.cloud/v1alpha1
+kind: AppDefinition
+metadata:
+  name: {name}
+"""
+
+SLOTS = """data:
+  slots:
+    - name: corpus
+      accepts:
+        - interface: {interface}
+"""
+
+EVIDENCE = """evidence:
+{marker}  expectedDigest: "{digest}"
+"""
+
+
+def fixture(directory: pathlib.Path, name: str, *, interface: str = 'clickhouse-http/v1',
+            digest: str | None = DIGEST, marker: str | list[str] | None = None,
+            slots: bool = True) -> pathlib.Path:
+    markers = [marker] if isinstance(marker, str) else (marker or [])
+    evidence = '' if digest is None else EVIDENCE.format(
+        digest=digest,
+        marker=''.join(f'  # evidence-configuration: {value}\n' for value in markers),
+    )
+    body = HEADER.format(name=name)
+    if slots:
+        body += SLOTS.format(interface=interface)
+    body += evidence
+    path = directory / f'{name}.yaml'
+    path.write_text(body)
+    return path
+
+
+# (label, fixture keywords, exemption lists, the substring the verdict must contain or None)
+SELF_TEST_CASES: list[tuple[str, dict, dict, dict, str | None]] = [
+    ('a gated digest on a gateable slot passes',
+     {'marker': 'gated'}, {}, {}, None),
+    ('an ungated digest on a gateable slot fails',
+     {'marker': 'ungated'}, {}, {}, 'declares the UNGATED digest'),
+    ('a digest with no marker fails',
+     {}, {}, {}, 'does not say which configuration'),
+    ('a marker that is neither word fails',
+     {'marker': 'measured'}, {}, {}, 'neither `gated` nor `ungated`'),
+    ('two markers fail',
+     {'marker': ['gated', 'ungated']}, {}, {}, 'one digest describes one configuration'),
+
+    # The exemption, both ways round. This is the pair the claim above
+    # CONFIGURATION_GAPS rests on.
+    ('an ungated digest is exempt while it is on CONFIGURATION_GAPS',
+     {'marker': 'ungated'}, {}, {'fix': 'SUP-1'}, None),
+    ('no marker at all is exempt while it is on CONFIGURATION_GAPS',
+     {}, {}, {'fix': 'SUP-1'}, None),
+    ('a listing on CONFIGURATION_GAPS that now declares a gated digest FAILS, '
+     'so the list empties itself',
+     {'marker': 'gated'}, {}, {'fix': 'SUP-1'}, 'remove it from CONFIGURATION_GAPS'),
+    ('and the exemption does not excuse a malformed digest',
+     {'marker': 'gated', 'digest': 'not-a-digest'}, {}, {'fix': 'SUP-1'},
+     'not a bare 64-character sha256 hex'),
+
+    # The first rule, which the second one is one step further in — and the same
+    # self-emptying pair over KNOWN_GAPS, which only CONFIGURATION_GAPS had until
+    # #130's review pointed out that the defect had moved one list over.
+    ('a gateable slot with no digest fails',
+     {'digest': None}, {}, {}, 'no evidence.expectedDigest'),
+    ('and is exempt while it is on KNOWN_GAPS',
+     {'digest': None}, {'fix': 'SUP-2'}, {}, None),
+    ('a listing on KNOWN_GAPS that now declares a gated digest FAILS, '
+     'so that list empties itself too',
+     {'marker': 'gated'}, {'fix': 'SUP-2'}, {}, 'remove it from KNOWN_GAPS'),
+    ('a listing on KNOWN_GAPS with a digest and no gateable slot still has to come off it',
+     {'marker': None, 'interface': 's3-parquet/v1'}, {'fix': 'SUP-2'}, {},
+     'remove it from KNOWN_GAPS'),
+    ('but a KNOWN_GAPS listing whose digest is the ungated one is told that instead, '
+     'because it is still the real problem',
+     {'marker': 'ungated'}, {'fix': 'SUP-2'}, {}, 'declares the UNGATED digest'),
+    ('and KNOWN_GAPS does not excuse a malformed digest either',
+     {'marker': 'gated', 'digest': 'not-a-digest'}, {'fix': 'SUP-2'}, {},
+     'not a bare 64-character sha256 hex'),
+    ('a slot the gatekeeper cannot serve needs no marker',
+     {'interface': 's3-parquet/v1'}, {}, {}, None),
+    ('a definition with no data slot at all is free of both rules',
+     {'digest': None, 'slots': False}, {}, {}, None),
+]
+
+
+def self_test() -> int:
+    failures = 0
+    with tempfile.TemporaryDirectory() as directory:
+        for label, keywords, known, gaps, expected in SELF_TEST_CASES:
+            # The fixtures are named `fix` so one entry in either list hits them.
+            path = fixture(pathlib.Path(directory), 'fix', **keywords)
+            verdict = check(path, known_gaps=known, configuration_gaps=gaps)
+            if expected is None and verdict is None:
+                print(f'  ok    {label}')
+            elif expected is None:
+                print(f'  FAIL  {label}: it failed with {verdict!r}')
+                failures += 1
+            elif verdict is None:
+                print(f'  FAIL  {label}: it passed, expecting {expected!r}')
+                failures += 1
+            elif expected in verdict:
+                print(f'  ok    {label}')
+            else:
+                print(f'  FAIL  {label}: failed on {verdict!r}, expecting {expected!r}')
+                failures += 1
+
+    if failures:
+        print(f'  {failures} self-test case(s) failed')
+        return 1
+    print(f'  {len(SELF_TEST_CASES)} self-test case(s) behave as the header says')
+    return 0
+
+
 def main(arguments: list[str]) -> int:
+    if arguments and arguments[0] == '--self-test':
+        return self_test()
+
     failures = 0
     for path in definitions(arguments):
         reason = check(path)
