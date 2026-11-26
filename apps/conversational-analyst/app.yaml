@@ -12,7 +12,7 @@ metadata:
     endpoint, including one in your own perimeter — and the embeddings that index your schema
     and documents are served from inside the deployment, so neither your data nor its
     description reaches a third party.
-  version: "5.0.2"
+  version: "5.0.3"
   category: ai-agents
   license: Proprietary
   tags:
@@ -23,6 +23,41 @@ metadata:
     - confidential
 
 # ---------------------------------------------------------------------------
+# 5.0.3 is identity chart 0.7.0 -> 0.8.0 and nothing else of its own: no
+# parameter moves, no image moves, the question put to the operator is the same
+# one. It is here because Keycloak was being OOMKilled at steady state on both
+# Latica stands — exit 137 after 2.6 h on `researcher-stand` and 15.6 h on
+# `analyst-stand`, each kill blocking sign-in for ~50 s behind a 502 and then a
+# run of 503s on `/auth/realms/...` (SUP-917 fault 2, fixed on SUP-925).
+#
+# The limit was never the cause, which is why 0.6.1's 1Gi -> 2Gi did not fix it.
+# `kc.sh` sizes the JVM heap from the container whenever `JAVA_OPTS_KC_HEAP` is
+# unset, and the bitnami image leaves it unset, so 2Gi bought a heap maximum of
+# 1434 MiB — while metaspace, the code cache, G1's remembered sets, the thread
+# stacks, the direct buffers and the native arenas measure 435-609 MiB outside
+# that heap and inside the same cgroup. The JVM's own ceiling therefore sat in
+# the last 200 MiB of the pod's, and the pod got there by creeping: measured on
+# kind under sign-in load, 1.52 MiB a minute with 589 MiB of the limit left,
+# which is about 6.5 h at a load heavier than either stand's. Chart 0.8.0 caps
+# the heap at 768 MiB — the same realm holds the same ~160 MiB live set either
+# way, so the cap costs nothing — and relaxes two probes that were on a
+# one-second fuse. The limit stays 2Gi, confirmed against the capped ceiling.
+#
+# THE DIGEST MOVES, and that is the point of the version rather than a side
+# effect. 0.8.0 renders a ConfigMap 0.7.0 did not (`analyst-keycloak-java-opts`,
+# carrying the heap flags) and two changed probe blocks on the Keycloak
+# StatefulSet. Probes are attested and so is every object a render produces, so
+# `expectedDigest` below is 5.0.3's own number, measured on `azure-test` rather
+# than carried over from 5.0.2 — option 2 of the trade SUP-711 recorded: the
+# declared number is the reference configuration's, and a version that changes
+# what runs changes it. A deployment of 5.0.2 keeps attesting 5.0.2's number;
+# nothing retrofits, because a reconfigure re-renders the version the deployment
+# was created from.
+#
+# Republishing the two stands is not this version — it is the
+# export-stand.js -> unpublish -> reconfigure -> publish procedure, and the
+# stands' own digests move when they are rebuilt on this version.
+#
 # 5.0.2 stops this listing INVENTING the model's access key. One parameter flag,
 # no manifest change and the same digest as 5.0.1 (SUP-905).
 #
@@ -659,7 +694,11 @@ resources:
   #
   # which is 7.75 CPU and 22.6Gi; one surge pod of the heaviest Deployment is another 1/4Gi.
   # (Keycloak is 2Gi from identity 0.6.1: at 1Gi it was OOMKilled in the Quarkus augmentation
-  # before it served anything, which left the whole deployment without an identity provider.)
+  # before it served anything, which left the whole deployment without an identity provider.
+  # That number does not move in 0.8.0 and the reason it is 2Gi has changed: the heap is now
+  # capped at 768 MiB explicitly, and 2Gi is that cap plus the 435-609 MiB measured outside the
+  # heap plus headroom. Until 0.8.0 the JVM sized its own heap at 70% of this limit, so the
+  # quota was feeding a ceiling that all but reached it — see SUP-925.)
   #
   # Storage is the five volumes — PostgreSQL 20Gi, Garage 20Gi, NATS 10Gi, Redis 8Gi, the
   # embedding weights 4Gi — and the margin is not politeness: a storage quota equal to the sum
@@ -847,7 +886,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-identity
-      version: "0.7.0"
+      version: "0.8.0"
     images:
       - name: docker.io/bitnamilegacy/keycloak
         digest: sha256:5a480d090639bbb09b25dbdb70819dab3302118fd824c2bad03d12a93f46c82b
@@ -1412,6 +1451,45 @@ evidence:
   # listing page should say so (option 2, decided on SUP-711; the presentation change is
   # SUP-871).
   #
+  # 5.0.3 RE-MEASURED it too, and here it actually MOVED: the identity chart renders an object
+  # 0.7.0 did not and two of Keycloak's probe fields are different, and probes and objects are
+  # both attested. Two deployments on `azure-test`, 2026-11-25 (SUP-925), one after the other
+  # so the shared cloud never carried four analyst spaces at once: different namespaces
+  # (`user-bf1fff9c…` / `user-48524c03…`), different hostnames (`sup925a` / `sup925b`), two
+  # separately generated internal credentials each, and two DIFFERENT model access keys. Both
+  # attested 64 resources — 14 ConfigMaps, 10 Deployments, 1 Ingress, 15 Secrets, 19 Services,
+  # 5 StatefulSets — and their canonical snapshots were BYTE-IDENTICAL: one SHA-256 over the
+  # document (`a8a1431b…`) and zero differing fields as JSON Pointers.
+  #
+  # The model key was deliberately NOT the funded router key this time, and the two deployments
+  # carried different keys so that the fact below is re-established rather than assumed: a
+  # Secret's DATA does not enter a snapshot, so the key is invisible to the digest whoever
+  # supplies it. Two keys, one digest. It also keeps a funded credential out of a measurement
+  # that never needs the model to answer — a digest is a property of a render.
+  #
+  # WHAT MOVED, diffed against 5.0.2's own snapshot field by field, is exactly what 0.8.0 says
+  # it changes and nothing else: one object added, `ConfigMap/analyst-keycloak-java-opts`
+  # carrying `JAVA_OPTS_KC_HEAP: -Xms256m -Xmx768m`, which takes the resource count from 63 to
+  # 64; and seven fields on `StatefulSet/analyst-keycloak` —
+  #
+  #   /spec/template/spec/containers/0/readinessProbe/timeoutSeconds     1 -> 5
+  #   /spec/template/spec/containers/0/readinessProbe/failureThreshold   3 -> 6
+  #   /spec/template/spec/containers/0/livenessProbe/periodSeconds       1 -> 10
+  #   /spec/template/spec/containers/0/livenessProbe/failureThreshold    3 -> 12
+  #   /spec/template/spec/containers/0/envFrom/1                         the new ConfigMap,
+  #     which shifts `analyst-keycloak-env` from index 1 to index 2 (three pointers)
+  #
+  # Nothing else in the namespace differs — not an image, not a command, not a resource block:
+  # the 2Gi limit and the 500m CPU are byte-identical to 5.0.2's. A verifier holding both
+  # snapshots can establish for themselves that this version changed what it says it changed.
+  #
+  # The exclusion set below is unchanged and was RE-RESOLVED against one of the two snapshots
+  # rather than taken on trust, in both directions. Nothing is missing: the two deployments
+  # differ in no field at all, so no per-deployment value is left attested. Nothing is
+  # obsolete: all twelve pointers were resolved against the 64 collected objects, each `match`
+  # names an object that is among them, and each pointer is absent from that object — which is
+  # what an exclusion that fired looks like.
+  #
   # 5.0.2 RE-MEASURED this number rather than carrying it over, because the version changes a
   # parameter and a parameter is attested. Two deployments of 5.0.2 on `azure-test`,
   # 2026-11-23 (SUP-905): different namespaces, different hostnames, two separately generated
@@ -1502,18 +1580,21 @@ evidence:
   # a Secret and in a Job's name, and a Job is not collected. Both measurement deployments were
   # destroyed and their DNS withdrawn once the number was read.
   #
-  # One thing the snapshot now says that 4.0.6's did not, and it is worth knowing it is there:
-  # the Keycloak StatefulSet's attested env carries `_JAVA_OPTIONS: -XX:-UseBASE64Intrinsics`.
-  # The CVE-2026-114938 mitigation is a constant, so it is attested rather than excluded, and a
+  # Two things the snapshot says that 4.0.6's did not, and both are worth knowing are there.
+  # The Keycloak StatefulSet's attested env carries `_JAVA_OPTIONS: -XX:-UseBASE64Intrinsics`:
+  # the CVE-2026-114938 mitigation is a constant, so it is attested rather than excluded, and a
   # data owner reading the signed bundle can see for themselves that the intrinsic is off
-  # rather than taking it on trust.
+  # rather than taking it on trust. From 5.0.3 the heap that identity provider may grow to is
+  # in there beside it, as `ConfigMap/analyst-keycloak-java-opts`, for the same reason and with
+  # the same benefit: the setting that decides whether sign-in survives the day is a constant
+  # of this version, so it is readable out of the signed bundle rather than asserted in a PR.
   #
   # Declaring it is not optional for this listing: the marketplace admits a deployment to the
   # gatekeeper only when its version declares a digest (`clientsFor` skips one with none —
   # "nothing to hold it to, or nowhere to check"), so an absent value leaves every deployment
   # of a listing with a data slot unable to receive gated data at all. `apps/tests/run.sh`
   # fails a definition that has a slot and no digest, so this cannot go missing again.
-  expectedDigest: "d391cb85d8224797ce69fe747c11d0851505eb519d5e1e2df4d2fad36cc0bf3a"
+  expectedDigest: "ec93ccb2a441487cdb195b21234bd5465636ff95ada750952db2d7e595e22e66"
   exclude:
     # Every deployment lives in a namespace of its own. The platform strips this itself; it is
     # declared because the listing page shows the exclusions from the definition only, and a

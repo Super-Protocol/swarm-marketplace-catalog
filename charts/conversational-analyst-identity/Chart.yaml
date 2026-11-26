@@ -37,7 +37,40 @@ type: application
 # (`local.derivedGroups`, on by default upstream) — it lives under the `local`
 # identity provider and this deployment runs `keycloak`, so it is not reachable
 # here and the bootstrap needs nothing for it.
-version: 0.7.0
+# 0.8.0 stops Keycloak being OOMKilled at steady state. Two settings, neither of them the
+# memory limit:
+#
+#   * THE HEAP IS CAPPED. `kc.sh` sizes it at `-XX:MaxRAMPercentage=70` of the container limit
+#     when `JAVA_OPTS_KC_HEAP` is unset, and the bitnami image leaves it unset — so the JVM may
+#     grow its heap to 1434 MiB of a 2Gi limit while metaspace, the code cache, G1's bookkeeping,
+#     the direct buffers and the native arenas add a measured 435-609 MiB on top of it, outside
+#     the heap and inside the cgroup. The pod's ceiling was therefore 1869-2043 MiB of a
+#     2048 MiB limit — the last 200 MiB of it — and the kill was a question of when the heap
+#     finished expanding rather than of whether. 0.6.1 raised the limit from 1Gi
+#     to 2Gi against the BOOT peak, which was the right floor and no ceiling at all: a
+#     percentage of a bigger limit is a bigger heap. `keycloakHeap` is now `-Xms256m -Xmx768m`,
+#     delivered as a ConfigMap of this chart's own — not as an `extraEnvVars` entry, which a
+#     definition's own list would replace.
+#   * READINESS AND LIVENESS ARE NO LONGER ON A ONE-SECOND FUSE. The vendored defaults give
+#     Keycloak 1 s to answer the readiness request and 3 consecutive failures before it leaves
+#     the Service, and poll liveness every second with the same threshold — so three seconds of
+#     a busy pod restarts the identity provider. 5 s timeouts, 10 s periods and a threshold of 6
+#     each, which is a minute rather than three seconds.
+#
+# Measured on kind with the pinned image digest and these values, 55 minutes of sign-in load,
+# the two heaps the only difference. 0.7.0's side peaks at 1460 MiB and does not level off — it
+# creeps 1.52 MiB a minute with 589 MiB of its limit left, which is about 6.5 h to the limit at
+# a load heavier than either stand's; the stands were killed at 2.6 h and 15.6 h. 0.8.0's peaks
+# at 886 MiB, creeps at 0.14, and cannot pass 768 MiB of heap however long it runs. Both hold
+# the same ~160 MiB live set, so the cap costs nothing. The limit stays 2Gi, confirmed against
+# the capped ceiling rather than carried over. `charts/tests/analyst_boot.py` holds the cap, the
+# headroom between it and the limit, and both probes (SUP-925, from the SUP-917 diagnosis).
+#
+# A deployment of this chart version renders a new ConfigMap and two changed probe blocks, so
+# its attested digest is not 0.7.0's. That is expected and is the trade SUP-711 chose as its
+# option 2: the number is the reference configuration's, and a version that changes what runs
+# changes it.
+version: 0.8.0
 appVersion: "1.22.1"
 dependencies:
   - name: keycloak

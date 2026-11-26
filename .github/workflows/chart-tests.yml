@@ -49,13 +49,24 @@ jobs:
       # path in a *later* framework than the one measured against. Without it the
       # check skips with a note, which is a check nobody runs.
       #
+      # httpx and python-multipart for cva_console.py, which loads Confidential
+      # Vulnerability Analysis's console out of the ConfigMap the chart renders
+      # and drives it as an ASGI app. Those two are what the console imports
+      # beside fastapi — httpx for its two relays to the analysis API, and
+      # python-multipart because FastAPI requires it of any route taking a
+      # `Form`, which the sign-in route does, so the module does not load
+      # without it. What this catches is the console accepting something it
+      # cannot answer for: a report path part that is `..`, a `Content-Length`
+      # that is not a number, a GHSA identifier nothing here can research.
+      # Without them that half skips with a note.
+      #
       # pandas for transaction_workspace.py, which stubs cuDF with it: the
       # transaction workbench's column mapping and its vocabulary-coverage check
       # are the whole of that listing's port, they live in a Python module the
       # chart mounts, and nothing in a render can see either. pandas implements
       # every operation that module uses, so the logic is exercised here without
       # a GPU and without the 9 GB image.
-      - run: pip install --quiet pyyaml fastapi pandas
+      - run: pip install --quiet pyyaml fastapi httpx python-multipart pandas
 
       - name: Lint, render, diff
         run: charts/tests/run.sh

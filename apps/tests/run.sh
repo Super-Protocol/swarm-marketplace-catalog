@@ -187,6 +187,19 @@ done
 # compares the declared number against exactly those deployments. Two notebook
 # listings shipped that way (SUP-900), so the check also reads the
 # `# evidence-configuration:` line the evidence block has to carry.
+# Both of that check's exemption lists are empty, which is the point of them and
+# also means every run over apps/ exercises only the passing path. The branch
+# that empties a list — a listed definition that would otherwise pass fails,
+# naming the entry to delete — is reachable on fixtures only, which is how it
+# came to be claimed in a comment and absent from the code (SUP-913).
+note "the gated-digest rules themselves"
+if output=$(python3 "$here/gated_digest.py" --self-test); then
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$output"
+  fail "apps/tests/gated_digest.py --self-test"
+fi
+
 note "a listing that mounts gated data declares a gated digest"
 if output=$(python3 "$here/gated_digest.py"); then
   printf '%s\n' "$output"
