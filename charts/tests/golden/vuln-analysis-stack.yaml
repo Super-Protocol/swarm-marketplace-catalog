@@ -103,7 +103,15 @@ data:
     KEEP_ROOTFS = int(os.environ.get("UPLOAD_KEEP", "6"))
     
     NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
-    VULN_PATTERN = re.compile(r"^(CVE-[0-9]{4}-[0-9]{4,}|GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4})$", re.I)
+    # A CVE identifier and nothing else. Upstream's `PipelineInput` accepts a GHSA identifier too,
+    # and this console used to, but `osv_lookup` is the only research tool this deployment has and it
+    # refuses anything that is not a CVE id (`_CVE_ID_PATTERN` in `src/vuln_analysis/tools/osv_tools.py`
+    # in our fork) — upstream's path from a GHSA to its CVE alias is a web search that is not
+    # configured here. Accepting one produced a research report with no source behind it, which is the
+    # failure 0.1.1 and 0.1.2 were about. GHSA is matched separately so the refusal can say which of
+    # the two things went wrong; see `submit` below.
+    CVE_PATTERN = re.compile(r"^CVE-[0-9]{4}-[0-9]{4,}$", re.I)
+    GHSA_PATTERN = re.compile(r"^GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}$", re.I)
     # A container reference the pipeline will echo into its reports. Validated because it reaches a
     # filename and a report heading, not because it is resolved — nothing here pulls an image.
     IMAGE_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,190}$")
@@ -394,15 +402,34 @@ data:
                 status_code=400,
             )
     
+        # A declared length is a courtesy: it lets an oversized upload be refused before a byte of
+        # it is written. It is also a client's claim about its own request, so it is parsed rather
+        # than trusted — `int(declared)` on its own raises ValueError out of the handler, which is a
+        # 500 and a traceback in the log for what is a malformed request. Measured on the server this
+        # runs under, that 500 is not reachable over HTTP: uvicorn's own parser refuses
+        # `Content-Length: banana` with `400 Invalid HTTP request received` before the application is
+        # called, with h11 and with httptools alike. This is here so the handler does not depend on
+        # that — the same argument as the segment check further down. The streaming limit below is
+        # what actually bounds the write, and it never read this header at all.
         declared = request.headers.get("content-length")
-        if declared and int(declared) > MAX_UPLOAD_BYTES:
-            return JSONResponse(
-                {
-                    "error": f"that archive is larger than this deployment accepts "
-                    f"({MAX_UPLOAD_BYTES // 1024**3} GiB)"
-                },
-                status_code=413,
-            )
+        if declared is not None:
+            try:
+                announced = int(declared)
+            except ValueError:
+                announced = -1
+            if announced < 0:
+                return JSONResponse(
+                    {"error": f"Content-Length is not a byte count: {declared[:80]!r}"},
+                    status_code=400,
+                )
+            if announced > MAX_UPLOAD_BYTES:
+                return JSONResponse(
+                    {
+                        "error": f"that archive is larger than this deployment accepts "
+                        f"({MAX_UPLOAD_BYTES // 1024**3} GiB)"
+                    },
+                    status_code=413,
+                )
     
         ROOTFS_ROOT.mkdir(parents=True, exist_ok=True)
         target = ROOTFS_ROOT / name
@@ -477,6 +504,31 @@ data:
     
     
     # ---------------------------------------------------------------------------
+    # What a path segment this console relays may be
+    # ---------------------------------------------------------------------------
+    # Every value the console interpolates into a path on the analysis API goes through this. A
+    # segment is a NAME, not a path: the character classes hold no separator, and `.` and `..` are
+    # refused by name because they satisfy the class and are what a traversal is made of. Both halves
+    # are checked rather than one — if a class ever gains a character, `..` is still refused, and if
+    # the two names ever got through, there would be no separator to walk with.
+    #
+    # This is the console's own check and it is deliberately not the only one: `_resolve_report_file`
+    # in the analysis API resolves the path and refuses anything outside the reports root, which is
+    # what stops a traversal today. That is precisely why this is here — the point of validating in
+    # the console is to not depend on what the API behind it does.
+    REPORT_PART_PATTERN = re.compile(r"^[A-Za-z0-9._@:+-]{1,200}$")
+    JOB_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+    
+    
+    def safe_segment(value: str, pattern: re.Pattern[str]) -> bool:
+        if value in (".", ".."):
+            return False
+        if "/" in value or "\\" in value:
+            return False
+        return pattern.match(value) is not None
+    
+    
+    # ---------------------------------------------------------------------------
     # Analysis jobs
     # ---------------------------------------------------------------------------
     @app.post("/api/jobs")
@@ -504,9 +556,23 @@ data:
         vulns = []
         for entry in body.get("vulns") or []:
             identifier = str(entry.get("id") or "").strip().upper()
-            if not VULN_PATTERN.match(identifier):
+            if GHSA_PATTERN.match(identifier):
+                # Refused here, where it can be explained, rather than accepted into a report with
+                # nothing behind it. A GHSA is a perfectly good identifier; it is this deployment
+                # that cannot research one, and saying so is the whole of the fix.
                 return JSONResponse(
-                    {"error": f"{identifier or '(empty)'} is not a CVE or GHSA identifier"},
+                    {
+                        "error": f"{identifier}: this deployment researches CVE identifiers. The one "
+                        "research tool it has looks a vulnerability up in OSV by its CVE id and "
+                        "refuses anything else, and the path from a GHSA to its CVE alias is a web "
+                        "search that is not configured here — so a GHSA would be reported on with no "
+                        "source behind it. Submit the CVE alias your scanner reported beside the GHSA."
+                    },
+                    status_code=400,
+                )
+            if not CVE_PATTERN.match(identifier):
+                return JSONResponse(
+                    {"error": f"{identifier or '(empty)'} is not a CVE identifier"},
                     status_code=400,
                 )
             item: dict[str, str] = {"vuln_id": identifier}
@@ -516,7 +582,7 @@ data:
                 item["version_hint"] = str(entry["version"])[:100]
             vulns.append(item)
         if not vulns:
-            return JSONResponse({"error": "at least one CVE or GHSA identifier"}, status_code=400)
+            return JSONResponse({"error": "at least one CVE identifier"}, status_code=400)
         if len(vulns) > 20:
             return JSONResponse(
                 {"error": "twenty identifiers at a time; each one is its own research branch"},
@@ -559,7 +625,7 @@ data:
     async def job(job_id: str, request: Request) -> JSONResponse:
         if not signed_in(request):
             return denied()
-        if not re.match(r"^[A-Za-z0-9._:-]{1,128}$", job_id):
+        if not safe_segment(job_id, JOB_ID_PATTERN):
             return JSONResponse({"error": "no such job"}, status_code=404)
         async with httpx.AsyncClient(timeout=30.0) as client:
             try:
@@ -592,7 +658,7 @@ data:
         if not signed_in(request):
             return denied()
         for part in (group, report_type, filename):
-            if not re.match(r"^[A-Za-z0-9._@:+-]{1,200}$", part):
+            if not safe_segment(part, REPORT_PART_PATTERN):
                 return JSONResponse({"error": "no such report"}, status_code=404)
         async with httpx.AsyncClient(timeout=60.0) as client:
             try:
@@ -693,7 +759,7 @@ data:
       </section>
     
       <section>
-        <h2>New analysis <span>one research branch, one exploitability assessment and one VEX decision per identifier</span></h2>
+        <h2>New analysis <span>one research branch, one exploitability assessment and one VEX decision per CVE identifier</span></h2>
         <div class="row" style="grid-template-columns:2fr 1fr 1fr">
           <div><label for="jobRootfs">Root filesystem</label><select id="jobRootfs"></select></div>
           <div><label for="imageName">Image name</label><input id="imageName" placeholder="nvcr.io/nvidia/morpheus/morpheus"></div>
@@ -832,7 +898,7 @@ data:
       const wrap = document.createElement("div");
       wrap.className = "row";
       wrap.innerHTML =
-        '<div><label>CVE or GHSA</label><input class="vid" placeholder="CVE-2024-5187"></div>' +
+        '<div><label>CVE</label><input class="vid" placeholder="CVE-2024-5187"></div>' +
         '<div><label>Package (optional hint)</label><input class="vpkg" placeholder="tqdm"></div>' +
         '<div><label>Version (optional hint)</label><input class="vver" placeholder="4.66.2"></div>' +
         '<div><button class="ghost drop">Remove</button></div>';

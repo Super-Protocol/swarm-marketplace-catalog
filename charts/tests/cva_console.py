@@ -27,12 +27,41 @@ What a render cannot check is whether the session logic is right. That was exerc
 built image before this listing was published: `/healthz` answers 200 without a session,
 `/api/status` answers 401, a wrong password answers 401, a forged cookie answers 401, and a
 correct password sets `HttpOnly; Secure; SameSite=lax`.
+
+The second half of this file does what a render cannot, for the three checks the console performs
+on what a signed-in caller sends it (SUP-891). `console.py` is loaded **out of the rendered
+`…-app` ConfigMap** rather than out of `files/`, because the ConfigMap is what a deployment runs
+and what the cloud signs, and it is driven as an ASGI application with no test client and no
+network — the analysis API it relays to is a closed port, so a request that reaches the relay
+answers `502` and one the validator refuses answers `404`, which is how the two are told apart:
+
+1. **A report path part is a name, not a path.** `..` satisfies the character class the parts are
+   matched against, and what refuses a traversal today is `_resolve_report_file` in the analysis
+   API behind the relay — so the console's own check was defence-in-depth that was not there.
+2. **A malformed `Content-Length` is a 400.** `int(declared)` raised out of the handler, which is
+   a 500 and a traceback for what is a client's malformed request. uvicorn refuses such a header
+   with a 400 of its own before the application is called — measured, under h11 and httptools
+   both — which is why this is driven as ASGI rather than through a server: what is under test is
+   the handler not depending on the layer in front of it.
+3. **A GHSA identifier is refused with the reason.** `osv_lookup` is the only research tool this
+   deployment has and it takes a CVE id, so a GHSA would be reported on with no source behind it.
+   The refusal has to name why, and it has to happen before the pipeline is called at all.
+
+Needs `fastapi` and `httpx`, which are what the console imports; without them this half prints a
+note and the render half still runs.
 """
 
 from __future__ import annotations
 
+import asyncio
+import importlib.util
+import json
+import os
+import socket
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 import yaml
 
@@ -58,6 +87,206 @@ def render() -> list[dict]:
 def containers(doc: dict):
     spec = doc.get("spec", {}).get("template", {}).get("spec", {})
     return list(spec.get("initContainers", [])) + list(spec.get("containers", []))
+
+
+# ---------------------------------------------------------------------------
+# The console, out of the ConfigMap, driven as an ASGI application
+# ---------------------------------------------------------------------------
+APP_CONFIGMAP = "confidential-vuln-analysis-app"
+PASSWORD = "FOR-THE-GOLDEN-console-password"
+SESSION_KEY = "FOR-THE-GOLDEN-session-key"
+
+
+def closed_port() -> int:
+    """A port nothing listens on, so a request that reaches the relay fails to connect."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def load_console(docs: list[dict], data_root: Path):
+    """Import the console as the pod runs it: the ConfigMap's code, its own environment."""
+    sources = [
+        doc["data"] for doc in docs
+        if doc["kind"] == "ConfigMap" and doc["metadata"]["name"] == APP_CONFIGMAP
+    ]
+    if len(sources) != 1 or "console.py" not in sources[0]:
+        raise AssertionError(f"no console.py in ConfigMap/{APP_CONFIGMAP}")
+
+    module_path = data_root / "console.py"
+    module_path.write_text(sources[0]["console.py"], encoding="utf-8")
+    os.environ.update({
+        "CONSOLE_PASSWORD": PASSWORD,
+        "CONSOLE_SESSION_KEY": SESSION_KEY,
+        "ANALYSIS_API_URL": f"http://127.0.0.1:{closed_port()}",
+        "EGRESS_GUARD_URL": "",
+        "DATA_ROOT": str(data_root),
+        "UI_DIR": str(data_root),
+        "LOG_LEVEL": "CRITICAL",
+    })
+    spec = importlib.util.spec_from_file_location("cva_console_under_test", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+async def request(app, method: str, path: str, headers: dict[str, str], body: bytes = b""):
+    """One HTTP request, as ASGI. No test client: the headers are the thing under test."""
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": method,
+        "scheme": "https",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
+        "client": ("127.0.0.1", 40000),
+        "server": ("console", 8080),
+    }
+    pending = [{"type": "http.request", "body": body, "more_body": False}]
+    answered: list[dict] = []
+
+    async def receive() -> dict:
+        return pending.pop(0) if pending else {"type": "http.disconnect"}
+
+    async def send(message: dict) -> None:
+        answered.append(message)
+
+    try:
+        await app(scope, receive, send)
+    except Exception as error:  # noqa: BLE001 — a handler that raises is a 500, as uvicorn does
+        if not any(m["type"] == "http.response.start" for m in answered):
+            return 500, f"unhandled {type(error).__name__}: {error}"
+    status = next(m["status"] for m in answered if m["type"] == "http.response.start")
+    payload = b"".join(m.get("body", b"") for m in answered if m["type"] == "http.response.body")
+    return status, payload.decode("utf-8", "replace")
+
+
+def behaviour(docs: list[dict]) -> list[str]:
+    """The three checks the console performs on what a signed-in caller sends it."""
+    problems: list[str] = []
+    with tempfile.TemporaryDirectory() as workdir:
+        data_root = Path(workdir)
+        console = load_console(docs, data_root)
+        signed_in = {"cookie": f"cva_session={console.issue()}"}
+        drive = lambda *a, **k: asyncio.run(request(console.app, *a, **k))  # noqa: E731
+
+        # An uploaded root filesystem for the job form to name, as the console writes one.
+        rootfs = data_root / "rootfs" / "demo"
+        rootfs.mkdir(parents=True)
+        (rootfs / ".upload.json").write_text(json.dumps(
+            {"uploadedAt": "", "bytes": 1, "entries": 1,
+             "filesystemPath": str(rootfs), "imageConfigPath": ""}))
+
+        # -- 1. the report relay ------------------------------------------------------------
+        # The baseline: a well-formed path is relayed, and the relay cannot connect, so 502 is
+        # what "the validator let this through" looks like. Any 404 below is the validator.
+        status, _ = drive("GET", "/api/reports/vulnerability/md/CVE-2024-3094.md", signed_in)
+        if status != 502:
+            problems.append(
+                f"a well-formed report path answered {status}, not the 502 of a relay with "
+                "nowhere to relay to — the rest of this check cannot tell a refusal from a pass"
+            )
+        for traversal in ("..", "."):
+            for path in (
+                f"/api/reports/{traversal}/md/report.md",
+                f"/api/reports/vulnerability/{traversal}/report.md",
+                f"/api/reports/vulnerability/md/{traversal}",
+            ):
+                status, _ = drive("GET", path, signed_in)
+                if status != 404:
+                    problems.append(
+                        f"GET {path} answered {status}: `{traversal}` satisfies the character "
+                        "class the parts are matched against, and the console refuses a part "
+                        "that is a traversal rather than depending on the API behind it"
+                    )
+        # The separator half of the check, which no route can deliver — Starlette's `str`
+        # convertor does not match a `/` — and which is therefore read off the function itself.
+        safe_segment = getattr(console, "safe_segment", None)
+        if safe_segment is None:
+            problems.append(
+                "the console has no `safe_segment`: every value it interpolates into a path on "
+                "the analysis API goes through one check, or there is no check"
+            )
+        else:
+            if safe_segment("etc/passwd", console.REPORT_PART_PATTERN):
+                problems.append("a report part carrying a separator is accepted")
+            if safe_segment("etc\\passwd", console.REPORT_PART_PATTERN):
+                problems.append("a report part carrying a backslash is accepted")
+            if not safe_segment("CVE-2024-3094.md", console.REPORT_PART_PATTERN):
+                problems.append("an ordinary report file name is refused")
+            if safe_segment("..", console.JOB_ID_PATTERN):
+                problems.append(
+                    "a job id of `..` is accepted: it is relayed into the API's own path the "
+                    "same way a report part is"
+                )
+        status, _ = drive("GET", "/api/reports/vulnerability/md/report.md", {})
+        if status != 401:
+            problems.append(f"the report relay answered {status} with no session, not 401")
+
+        # -- 2. the declared length ---------------------------------------------------------
+        for declared, expected in (("banana", 400), ("", 400), ("-1", 400), ("1 2", 400),
+                                   (str(console.MAX_UPLOAD_BYTES + 1), 413)):
+            status, payload = drive(
+                "PUT", "/api/rootfs/upload", {**signed_in, "content-length": declared}, b"",
+            )
+            if status != expected:
+                problems.append(
+                    f"PUT with Content-Length {declared!r} answered {status}, not {expected} — "
+                    "a client's claim about its own request is parsed, not trusted, and a "
+                    "malformed one is its own 400 rather than a traceback and a 500"
+                )
+            if expected == 400 and "byte count" not in payload:
+                problems.append(
+                    f"the refusal of Content-Length {declared!r} does not say what is wrong "
+                    f"with the header: {payload[:120]}"
+                )
+        if (data_root / "rootfs" / "upload").exists():
+            problems.append("a refused upload left a directory behind")
+        # Absent is not malformed: the body decides, and an empty one is refused on its own.
+        status, payload = drive("PUT", "/api/rootfs/noheader", signed_in, b"")
+        if status != 400 or "empty" not in payload:
+            problems.append(
+                f"a PUT with no Content-Length answered {status} / {payload[:120]} — the header "
+                "is a courtesy, and the stream is what bounds the write"
+            )
+
+        # -- 3. the identifiers the pipeline can research ------------------------------------
+        def submit(identifier: str):
+            return drive(
+                "POST", "/api/jobs", {**signed_in, "content-type": "application/json"},
+                json.dumps({
+                    "rootfs": "demo", "imageName": "ubuntu", "imageTag": "22.04",
+                    "vulns": [{"id": identifier}],
+                }).encode(),
+            )
+
+        status, payload = submit("CVE-2024-3094")
+        if status != 502:
+            problems.append(
+                f"a CVE identifier answered {status}, not the 502 of a pipeline that is not "
+                f"listening: {payload[:160]}"
+            )
+        status, payload = submit("GHSA-jfh8-c2jp-5v3q")
+        if status != 400:
+            problems.append(
+                f"a GHSA identifier answered {status}: `osv_lookup` is the only research tool "
+                "this deployment has and it takes a CVE id, so an accepted GHSA is a report "
+                "with no source behind it"
+            )
+        elif "CVE" not in payload or "GHSA" not in payload:
+            problems.append(
+                f"the GHSA refusal does not name why this deployment cannot research one: "
+                f"{payload[:200]}"
+            )
+        status, payload = submit("not-an-identifier")
+        if status != 400 or "CVE identifier" not in payload:
+            problems.append(f"a malformed identifier answered {status} / {payload[:120]}")
+
+    return problems
 
 
 def main() -> int:
@@ -165,6 +394,28 @@ def main() -> int:
 
     print("  ok    one Ingress to the console, one Service, the api and the guard on loopback "
           f"with exec probes, and {len(CREDENTIALS)} credentials by reference only")
+
+    # What the console itself imports: fastapi (which brings Starlette), httpx for the two
+    # relays, and python-multipart, which FastAPI requires of any route taking a `Form` — the
+    # sign-in route does, so the module does not load without it. Both module names are looked
+    # for because the package has been importable under each.
+    missing = [name for name in ("fastapi", "httpx") if importlib.util.find_spec(name) is None]
+    if all(importlib.util.find_spec(name) is None for name in ("python_multipart", "multipart")):
+        missing.append("python-multipart")
+    if missing:
+        print(f"  note  {', '.join(missing)} is not installed, so what the console does with a "
+              "report path, a declared length and a GHSA identifier is unchecked")
+        return 0
+
+    problems = behaviour(docs)
+    if problems:
+        print("  FAIL  the console accepts something it cannot answer for")
+        for problem in problems:
+            print(f"          {problem}")
+        return 1
+
+    print("  ok    a report part that is `.` or `..` is refused by the console itself, a "
+          "malformed Content-Length is a 400, and a GHSA identifier is refused with the reason")
     return 0
 
 
