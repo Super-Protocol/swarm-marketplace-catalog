@@ -45,7 +45,7 @@ metadata:
     down to the sha256 of every Python wheel, and the data owner can withdraw access the moment
     that changes. Based on NVIDIA's open-source transaction-foundation-model developer example
     (Apache-2.0), rebuilt as our own image.
-  version: "0.1.3"
+  version: "0.1.4"
   # What an auditor should read: the notebooks, the tokenizer and their licence
   # are upstream's; what we changed is in the chart's
   # files/notebooks/PROVENANCE.md (copied into every deployment's workspace) and
@@ -399,7 +399,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: transaction-model-notebook
-      version: "0.1.2"
+      version: "0.1.3"
     # Our own image, built by
     # Super-Protocol/confidential-transaction-model from upstream's Apache-2.0
     # source on an anonymously pullable RAPIDS base, with every wheel pinned by
@@ -593,20 +593,21 @@ evidence:
   # ---------------------------------------------------------------------------
   # Measured, not derived, and it describes the GATED configuration.
   #
-  # Two deployments of this render on the gpu-blueprints cloud, 2026-11-24 —
-  # `tfm-900a` and `tfm-900b`, two hostnames in two namespaces with two separately
-  # generated sign-in tokens, each with `cascade-card-transactions` attached —
-  # published signed snapshots that are byte-identical: the same digest AND the
-  # same 221,684 bytes of resource JSON, compared field by field as JSON Pointers
-  # rather than by the digest alone. 309 pointers each, zero differing values, no
-  # object present on one side only.
+  # Two deployments of this render on the gpu-blueprints cloud, 2026-11-26 —
+  # `tfm-913a` and `tfm-913b`, two hostnames in two namespaces with two
+  # separately generated sign-in tokens, each with `cascade-card-transactions`
+  # attached — published signed snapshots that are byte-identical: the same
+  # digest, the same sha256 over the canonical snapshot
+  # (`a2143b9cb62c7fb42929d29fa8863ec5c26664ff434dd80943e2dca8a8c1bb2c`), the
+  # same 222,667 bytes of resource JSON, 308 JSON Pointers each, zero differing
+  # values, and no object present on one side only. Both read
+  # `matchesExpected: true`.
   #
-  # TEN resources in each, where the ungated measurement had six: 3 ConfigMaps,
-  # 2 Deployments, the Ingress, 2 Secrets, 2 Services. The PVC is still not
-  # collected. The four the marketplace adds for a gated deployment are the egress
-  # sidecar's ConfigMap, Deployment and Service **and the Secret holding its client
-  # certificate** — four objects, not the three an earlier version of this comment
-  # claimed.
+  # TEN resources in each, as every gated deployment of a listing like this one
+  # has: 3 ConfigMaps, 2 Deployments, the Ingress, 2 Secrets, 2 Services. The PVC
+  # is not collected. The four the marketplace adds for a gated deployment are the
+  # egress sidecar's ConfigMap, Deployment and Service **and the Secret holding
+  # its client certificate** (`…-gatekeeper-identity`).
   #
   # **It is the gated configuration on purpose, and for this listing there is no
   # other choice to make.** `clickhouse-http/v1` is the only interface its slot
@@ -617,40 +618,41 @@ evidence:
   # What that costs: a deployment with NOTHING attached — reading a .csv or
   # .parquet extract uploaded into the workspace, which is a supported and useful
   # configuration — does not match the number on its own listing page. Nothing
-  # refuses it, because there is no gate in front of it. **The ungated digest, for
-  # the record, is
-  # `8ea5156096c9e17f78fed6c45ec2e22f17180e5472f0e859e40bc8b44bd1cd3e`** — six
-  # resources, measured on `tfm-870e` / `tfm-870f` on 2026-11-23 (SUP-870), and not
-  # declared.
+  # refuses it, because there is no gate in front of it.
   #
-  # Checked against the gate and not only against itself: both measurement
-  # deployments read `matchesExpected: false` while the listing still declared the
-  # ungated number, and `tfm-900b` — created after this number was the declared one
-  # — read `matchesExpected: true`, the gate admitted it, and a read inside the
-  # deployment through the sidecar returned the whole table: 320,176 rows, 1,200
-  # cardholders, 2023-2025, 672 fraud rows, and `check_coverage` 99.52% against the
-  # 50% floor. Admission is not instant — for a few minutes after the number is
-  # declared the read fails with a `502` from this deployment's own egress sidecar,
-  # because the gate has not yet been told about the client.
+  # SUPERSEDED, recorded so the numbers are never confused. Listing 0.1.3 on chart
+  # 0.1.2 declared
+  # `517224a645c3c08b60844b9b52bfc37dc970283ac48e8bd74695750083ce277a` — a correct
+  # gated digest, measured on `tfm-900a` / `tfm-900b` on 2026-11-24 (221,684 bytes,
+  # 309 Pointers), of the build whose gated read could not finish. The ungated
+  # digest of that same build, measured on `tfm-870e` / `tfm-870f` on 2026-11-23
+  # (SUP-870) and never declared, was
+  # `8ea5156096c9e17f78fed6c45ec2e22f17180e5472f0e859e40bc8b44bd1cd3e`. This
+  # number moved because chart 0.1.3 edits `tfm_workspace.py`, which is rendered
+  # into an attested ConfigMap — the one in the snapshot above carries
+  # `return cudf.from_pandas(client.query_df(query))`, and the pod's
+  # `checksum/workspace` annotation moved with it.
   #
-  # ONE DEFECT THAT MEASUREMENT FOUND, and it is not in this number. The gated read
-  # reaches ClickHouse and returns every row, and then the workbench crashes on its
-  # own next line: `tfm_workspace._read_from_clickhouse` calls
-  # `cudf.DataFrame.from_pandas`, which does not exist in this image —
-  # `cudf.from_pandas` is the call. That line is on the gated path and only on it,
-  # which is why no deployment had executed it before: SUP-870 measured ungated and
-  # ran the notebooks on an uploaded extract, which goes through `cudf.read_csv`.
-  # Fixing it edits the loader in an attested ConfigMap, so it moves this digest and
-  # the fixed build has to be re-measured; it is therefore a separate change with a
-  # separate version, not something to fold in here. Until it ships, a gated
-  # deployment of this listing is admitted by the gate and fails in the notebook.
+  # THE GATED READ, which is the thing this version exists for and the thing no
+  # deployment of 0.1.3 could do. Inside both deployments, through each one's own
+  # egress sidecar: `load_transactions()` returned a `cudf.core.dataframe.DataFrame`
+  # of **320,176 rows and 14 columns** — 1,200 cardholders, 4 cards, 2023-2025, 672
+  # fraud rows, 55 states, 71 MCCs — and `check_coverage` then ran clean at
+  # **99.52%** against the 0.5 floor. The image is cuDF 26.10.02, where
+  # `hasattr(cudf.DataFrame, 'from_pandas')` is `False` and `cudf.from_pandas` is
+  # callable, which is the whole of SUP-913.
+  #
+  # Admission is not instant: for a few minutes after a number is declared a gated
+  # read can answer `502` from the deployment's own egress sidecar, because the
+  # gate has not yet been told about the client. `tfm-913b` was created *after*
+  # this number was declared — the ordinary flow — and read it through.
   #
   # ---------------------------------------------------------------------------
-  # THE REFERENCE PARAMETER SET it was measured with. The digest holds for this
-  # one, and a deployment that answers differently attests its own — expected,
-  # not tampering.
+  # THE REFERENCE PARAMETER SET it was measured with, every value this listing's
+  # own default except the hostname. The digest holds for this set, and a
+  # deployment that answers differently attests its own — expected, not tampering.
   #
-  #   hostname     tfm-900a / tfm-900b .conf-apps.superprotocol.dev
+  #   hostname     tfm-913a / tfm-913b .conf-apps.superprotocol.dev
   #                (excluded from the snapshot — see `exclude` below)
   #   token        generated, separately in each. It is in a Secret, whose DATA is
   #                not in the snapshot, so it cannot move the digest
@@ -663,7 +665,7 @@ evidence:
   # `cascade-card-transactions` carries TabFormer's column spelling on purpose, so
   # all eleven column parameters stay at their defaults and the gated and ungated
   # renders differ by the sidecar and by nothing else.
-  expectedDigest: "517224a645c3c08b60844b9b52bfc37dc970283ac48e8bd74695750083ce277a"
+  expectedDigest: "c4a361043b85fd6a2fad1d127ef78414c95dbdcc5260be5153b33dcbf5b767bc"
   # ---------------------------------------------------------------------------
   # The hostname is the one field that differs between two deployments of this
   # version, and excluding it is what makes the digest a property of the version
