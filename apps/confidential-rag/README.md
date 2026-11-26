@@ -213,23 +213,25 @@ the corpus is in the snapshot in full.
 `evidence.expectedDigest` describes the **gated configuration**: a deployment with a dataset
 attached to the `corpus` slot.
 
-**0.1.10 is not measured yet, and the declared number is 0.1.9's.** 0.1.10 moves the ConfigMap the
-console's and the indexer's code is carried in, and that ConfigMap is in the snapshot, so the
-digest has moved with it: a gated deployment of 0.1.10 reads `matchesExpected: false` and its
-corpus stays refused until the measured number is declared. It takes two gated deployments on the
-epic's single card, which is deallocated and raised once for all three listings that need a
-re-measure (SUP-903). Do not seed 0.1.10 anywhere before that number is in the definition.
+`a925140de188feb7c4f9a19dd90b79f63d0b6d15959c80332baca50cd46f638f`, measured on two deployments
+of 0.1.10 on the `gpu-blueprints` cloud on 2026-11-26 — `rag-897a` and `rag-897b`, two hostnames
+in two namespaces, each with the handbook dataset attached — whose signed snapshots carry the same
+digest and the same 184 347 bytes of resource JSON, compared field by field rather than by the
+digest alone. 37 resources in each.
 
-`1556ad836b9998cb80c118298e290dd76a00368051e97cbcb3cd98694c030233`, measured on two deployments
-of 0.1.9 on the `gpu-blueprints` cloud on 2026-11-23 — `rag-895a` and `rag-895b`, two hostnames in
-two namespaces, each with the handbook dataset attached — whose signed snapshots are
-byte-identical: the same digest and the same 186 386 bytes of resource JSON, compared field by
-field rather than by the digest alone. 37 resources in each.
+The same 37 as 0.1.9, which is why the count is worth stating: 0.1.10 changes the *content* of the
+ConfigMap the console's and the indexer's code is carried in, not the set of objects, so the count
+holds while the digest moves. The snapshot is 2 039 bytes shorter than 0.1.9's 186 386 because
+`/healthz` lost the branch that copied the whole status.
 
-The same 37 as 0.1.8, which is why the count is worth stating: 0.1.9 adds a Secret *key* and an
-environment entry on two containers, not an object, so the count holds while the digest moves.
-Five more objects than 0.1.7's 32, and those five are exactly the extraction component: a
-Deployment, a Service, two ConfigMaps and a Secret.
+**The gated configuration was confirmed in the snapshot rather than assumed.** All four objects the
+marketplace adds for a gateway-mode binding are in it — the gatekeeper egress ConfigMap, Deployment
+and Service, and the gatekeeper identity Secret. An ungated render has three fewer, so a
+measurement that had quietly lost the binding would have counted 34.
+
+0.1.9's number was `1556ad836b9998cb80c118298e290dd76a00368051e97cbcb3cd98694c030233`. It is
+superseded rather than wrong: it remains the gated digest of 0.1.9's render, which is what a
+reconfigure of a 0.1.9 deployment re-renders.
 
 **One at a time, and the cloud says so.** Creating the second deployment while the first was live
 is refused outright — `400 No cluster has a free GPU of an accepted type: NVIDIA H100 NVL, NVIDIA
