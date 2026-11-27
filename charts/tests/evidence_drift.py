@@ -221,6 +221,28 @@ def main(chart: str, values: str, app: str, overrides: list[str]) -> int:
                 print(f"  FAIL  {kind}/{name} excludes {pointer}, which apps/{app}/app.yaml does not declare")
                 failures += 1
 
+        # And the same resolution question for the entries the LISTING declares, which until now
+        # nothing asked. A chart's annotation is checked above; a definition entry naming an
+        # object a vendored chart renders was checked nowhere, and those are the ones most likely
+        # to rot — a bitnami upgrade renaming a checksum annotation leaves the entry declared,
+        # unapplied and silent, and the field it meant to exclude starts moving the digest again.
+        # That is how `analyst-config` went unnoticed through 4.0.1, in the one form this check
+        # could not see.
+        #
+        # Only entries that name a SPECIFIC object, and only where this render has it. A
+        # wildcard entry — no `match`, or no `name` — is a claim about a field that may or may
+        # not exist on each object, not about one object: `/metadata/namespace` is declared that
+        # way and 4 of the identity chart's 12 rendered objects do not carry it, because whether
+        # a template writes it is the template's business. Checking those would be four
+        # failures about nothing.
+        for kind_, name_, pointer in sorted(from_listing or ()):
+            if not kind_ or not name_ or (kind_, name_) != (kind, name):
+                continue
+            if not resolves(here, pointer):
+                print(f"  FAIL  apps/{app}/app.yaml excludes {kind}/{name}{pointer}, "
+                      f"which the rendered object has no field at")
+                failures += 1
+
         stripped = PLATFORM_STRIPPED + (SECRET_STRIPPED if kind == "Secret" else ())
         for pointer in differing_pointers(here, there):
             if any(covers(prefix, pointer) for prefix in stripped):
