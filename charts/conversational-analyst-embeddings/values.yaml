@@ -24,6 +24,29 @@ image:
 
 # The fetcher is stdlib Python and the serving image carries no interpreter, so the init
 # container runs a plain Python base. Two images, both pinned by digest in the listing.
+#
+# 2Gi, up from 512Mi, as HEADROOM for a limit that is demonstrably marginal rather than wrong.
+#
+# SUP-830 measured this init container OOMKilled (137) on every attempt, the pod never leaving
+# `Init:CrashLoopBackOff`, on a three-node RKE2 stand of its own. On `azure-test`, where this
+# listing is deployed, the same chart at 512Mi completes: `fetch-weights` reaches `Completed`
+# with zero restarts and `analyst-embeddings` is Ready, both on the live stand and on a
+# deployment raised for the measurement on 2026-11-27.
+#
+# Both observations are real, which is what makes the limit the problem. The script holds no file
+# in memory — it streams 8 MiB at a time — and the destination is a real PVC rather than a
+# memory-backed emptyDir, so what the cgroup is charged for is the page cache of writing 1.25 GiB
+# faster than the kernel writes it back: a property of the machine the pod lands on, not of the
+# download. A limit that survives on one kernel and not another has no margin, and this one is
+# the only thing between a deployment and an embedding model that is not optional in this
+# product.
+#
+# 2Gi is not a guess: it is the figure `swarm-model-server`'s byte-identical fetcher has been
+# pulling tens of GiB on, rather than the smallest value that happened to pass somewhere.
+#
+# It costs the deployment nothing: a pod's demand is its containers' limits summed OR its heaviest
+# init container, whichever is larger (`charts/tests/max_pod.py`), and the serving container's 4Gi
+# is larger either way. The pod is 2 CPU / 4Gi before and after.
 fetcher:
   image:
     registry: docker.io
@@ -34,11 +57,11 @@ fetcher:
   resources:
     requests:
       cpu: "1"
-      memory: 512Mi
+      memory: 2Gi
       nvidia.com/gpu: "0"
     limits:
       cpu: "1"
-      memory: 512Mi
+      memory: 2Gi
       nvidia.com/gpu: "0"
 
 model:
