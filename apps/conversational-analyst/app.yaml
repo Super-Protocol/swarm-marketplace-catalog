@@ -12,7 +12,7 @@ metadata:
     endpoint, including one in your own perimeter — and the embeddings that index your schema
     and documents are served from inside the deployment, so neither your data nor its
     description reaches a third party.
-  version: "5.0.3"
+  version: "5.0.4"
   category: ai-agents
   license: Proprietary
   tags:
@@ -22,6 +22,57 @@ metadata:
     - text-to-sql
     - confidential
 
+# ---------------------------------------------------------------------------
+# 5.0.4 gives the object store's RPC key a parameter of its own, and that is the
+# whole version. No chart moves, no image moves, and the operator is asked
+# nothing new.
+#
+# Garage specifies `rpc_secret` as 32 bytes of hexadecimal and exits at boot on
+# anything else — «Invalid RPC secret key: expected 32 bytes of random hex» —
+# and this listing patched it from `internalSecret`, which is the credential a
+# person is shown and signs in with: 32 printable characters, not hex. That cost
+# every 4.0.x deployment its object storage (SUP-830, found under 4.0.1).
+#
+# It is NOT broken today, and this version is not the repair. SUP-711 repaired
+# it in the vendored garage subchart (platform 0.4.1), which hashes anything
+# that is not already 64 hex characters with `sha256sum`, because — as the
+# deviation's own note says — the definition language had no way to express the
+# format. `analyst-garage` has been Running on both Latica stands since.
+#
+# What this version changes is WHERE the contract lives. `generatedFormat` now
+# exists in the specification (swarm-marketplace-spec `cb3f68b`, implemented in
+# swarm-cloud `e7d222b7`), so the listing can ask for 32 bytes of hex and be
+# given it: `storageRpcSecret`, generated, 64 hex characters, held to its own
+# `pattern` by the platform. Three things follow, and they are the reason to do
+# it rather than leave the hash in place:
+#
+#   * The key the object store authenticates its nodes with stops being a
+#     derivative of the password a person types into the sign-in box. Nothing
+#     reachable turns one into the other, but they were one secret in two roles.
+#   * A LOCAL DEVIATION in a vendored chart is a thing the next re-vendoring has
+#     to notice and carry. This listing no longer depends on it — the helper
+#     passes a 64-hex value through unchanged — so when the vendor's own chart is
+#     re-pulled, the deviation can go without taking this listing's object
+#     storage with it.
+#   * `maxPod`, the egress allowlist, the result policy: everything else this
+#     listing hands a chart is declared. This was the one value whose real
+#     requirement was written down in a Helm comment.
+#
+# THE DIGEST DOES NOT MOVE, and that is checked rather than assumed.
+# `garage.toml` is rendered into a Secret, and a Secret's DATA does not enter a
+# snapshot; the StatefulSet's `checksum/config` annotation, which does move with
+# it, is already in `evidence.exclude` below and was already excluded when
+# 5.0.3's number was measured. So `expectedDigest` stays `ec93ccb2…`, and the
+# deployment that verified it is recorded on the block below.
+#
+# The weights fetcher's 512Mi is NOT in this version. SUP-830 measured it
+# OOMKilled (137) on every start while pulling 1.25 GiB on a three-node RKE2
+# stand of its own, and on `azure-test` — where this listing is deployed — the
+# same chart at the same limit completes: `analyst-embeddings` on the live
+# analyst stand is Ready with `fetch-weights` Completed and zero restarts. The
+# limit is therefore marginal rather than wrong, raising it is headroom rather
+# than a fix, and it needs a chart publish and a re-measured digest of its own.
+# It is a chart change proposed separately, not folded in here.
 # ---------------------------------------------------------------------------
 # 5.0.3 is identity chart 0.7.0 -> 0.8.0 and nothing else of its own: no
 # parameter moves, no image moves, the question put to the operator is the same
@@ -429,6 +480,31 @@ parameters:
     validation:
       minLength: 16
 
+  # Not `internalSecret`, and not a field anybody fills in. Garage specifies its RPC key as 32
+  # bytes of hexadecimal and refuses to start on anything else — `Invalid RPC secret key:
+  # expected 32 bytes of random hex` — while `internalSecret` is a credential a person is shown
+  # and types, so no value it can hold is acceptable here unless it happens to be 64 hex
+  # characters. Sharing the two cost this listing its object storage in every deployment
+  # (SUP-830). It is in no `ui` section: nothing asks for it, the platform always generates it,
+  # and `generatedFormat: hex` over `minLength: 64` is how the 32 bytes are asked for. The
+  # `pattern` is not decoration either — the platform holds its own generated value to it, so a
+  # marketplace that ever drew the wrong alphabet would fail at configure time rather than at
+  # Garage's first boot.
+  - id: storageRpcSecret
+    type: string
+    title: Object store cluster key
+    description: >-
+      Authenticates the object store's nodes to each other. Internal to the deployment and
+      generated for it; it is not a sign-in and is never shown.
+    required: true
+    sensitive: true
+    generated: true
+    generatedFormat: hex
+    validation:
+      pattern: "^[0-9a-f]{64}$"
+      minLength: 64
+      maxLength: 64
+
   - id: modelLabel
     type: string
     title: Model name
@@ -832,7 +908,7 @@ components:
             value: "{{ params.internalSecret }}"
           - op: replace
             path: garage.rpcSecret
-            value: "{{ params.internalSecret }}"
+            value: "{{ params.storageRpcSecret }}"
           - op: replace
             path: garage.adminToken
             value: "{{ params.internalSecret }}"
@@ -1594,6 +1670,27 @@ evidence:
   # "nothing to hold it to, or nowhere to check"), so an absent value leaves every deployment
   # of a listing with a data slot unable to receive gated data at all. `apps/tests/run.sh`
   # fails a definition that has a slot and no digest, so this cannot go missing again.
+  #
+  # 5.0.4 KEEPS this number rather than re-measuring it, and that is a claim about what the
+  # version changes rather than a carry-over of the kind that broke 3.0.9. The only thing
+  # `storageRpcSecret` moves is the value of `rpc_secret` inside `garage.toml`, which is rendered
+  # into a Secret — a Secret enters a snapshot as its metadata, type and name, never its data —
+  # and the one attested field that does move with it, `StatefulSet/analyst-garage`'s
+  # `checksum/config`, is excluded below and was already excluded when this number was measured.
+  #
+  # Verified on a deployment rather than argued. `sup830a` on `azure-test`, 2026-11-27, of THIS
+  # definition — reference parameter set, `cypressbay-digestive-health` bound, so the egress
+  # sidecar's objects are in the count — published, then
+  # `GET …/deployments/<id>/evidence`: 64 resources (14 ConfigMaps, 10 Deployments, 1 Ingress,
+  # 15 Secrets, 19 Services, 5 StatefulSets, the same census 5.0.3 attested) and
+  # `digest: ec93ccb2…` with `matchesExpected: true`. An identical SHA-256 over the canonical
+  # document is a stronger statement than a field-by-field diff: there is no field to differ.
+  #
+  # The same deployment is where the parameter was proved end to end. `analyst-garage-0` reached
+  # Running with zero restarts on the key the LISTING declared — the subchart's helper passes a
+  # value that already matches `^[0-9a-fA-F]{64}$` through unchanged, so what Garage accepted was
+  # `storageRpcSecret` itself and not a hash of anything. The deployment was deleted after its
+  # evidence was read.
   expectedDigest: "ec93ccb2a441487cdb195b21234bd5465636ff95ada750952db2d7e595e22e66"
   exclude:
     # Every deployment lives in a namespace of its own. The platform strips this itself; it is
