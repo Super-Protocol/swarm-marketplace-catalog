@@ -12,7 +12,7 @@ metadata:
     endpoint, including one in your own perimeter — and the embeddings that index your schema
     and documents are served from inside the deployment, so neither your data nor its
     description reaches a third party.
-  version: "5.0.4"
+  version: "5.0.5"
   category: ai-agents
   license: Proprietary
   tags:
@@ -22,6 +22,36 @@ metadata:
     - text-to-sql
     - confidential
 
+# ---------------------------------------------------------------------------
+# 5.0.5 is embeddings chart 0.1.0 -> 0.2.0 and nothing else of its own: no
+# parameter moves, no image moves, the question put to the operator is the same
+# one. The chart gives the weights fetcher 2Gi where 0.1.0 declared 512Mi.
+#
+# 512Mi is not wrong on every cluster, which is exactly the problem. SUP-830
+# measured that init container OOMKilled (137) on every start while pulling
+# 1.25 GiB of `BAAI/bge-large-en-v1.5`, on a three-node RKE2 cloud built from
+# swarm-cloud `develop` — which is the product a customer gets — and on
+# `azure-test` the same chart at the same limit completes with zero restarts.
+# A limit that survives on one kernel and not another has no margin, and this
+# one is the only thing between a deployment and an embedding model that is not
+# optional in this product: the fetcher streams 8 MiB at a time and writes to a
+# real PVC, so what the cgroup is charged for is the page cache of writing
+# faster than the kernel writes it back — a property of the machine the pod
+# lands on. 2Gi is `swarm-model-server`'s figure for the byte-identical
+# fetcher, which has been pulling tens of GiB on it.
+#
+# It costs the deployment nothing. A pod's demand is its containers' limits
+# summed OR its heaviest init container, whichever is larger, and the serving
+# container's 4Gi is the larger half either way: `charts/tests/max_pod.py`
+# weighs this pod at 2000m / 4096Mi before and after, inside the declared
+# `maxPod`, and `resources.min` does not move for the same reason.
+#
+# THE DIGEST MOVES, and that is the point of the version rather than a side
+# effect: an init container's resource block is an attested field. So
+# `expectedDigest` below is 5.0.5's own number, measured on `azure-test` the way
+# 5.0.3's and 5.0.4's were, and a deployment of 5.0.4 keeps attesting 5.0.4's —
+# nothing retrofits, because a reconfigure re-renders the version the deployment
+# was created from.
 # ---------------------------------------------------------------------------
 # 5.0.4 gives the object store's RPC key a parameter of its own, and that is the
 # whole version. No chart moves, no image moves, and the operator is asked
@@ -927,7 +957,7 @@ components:
       type: helm
       repoUrl: https://super-protocol.github.io/swarm-marketplace-catalog/charts
       chart: conversational-analyst-embeddings
-      version: "0.1.0"
+      version: "0.2.0"
     # The names are exactly the strings the rendered manifests carry, registry prefix and
     # all: the render path matches on them, and `library/python` and `docker.io/library/python`
     # are not the same allow-list entry. `charts/tests/declared_images.py` is what keeps the
@@ -1671,27 +1701,50 @@ evidence:
   # of a listing with a data slot unable to receive gated data at all. `apps/tests/run.sh`
   # fails a definition that has a slot and no digest, so this cannot go missing again.
   #
-  # 5.0.4 KEEPS this number rather than re-measuring it, and that is a claim about what the
-  # version changes rather than a carry-over of the kind that broke 3.0.9. The only thing
-  # `storageRpcSecret` moves is the value of `rpc_secret` inside `garage.toml`, which is rendered
-  # into a Secret — a Secret enters a snapshot as its metadata, type and name, never its data —
-  # and the one attested field that does move with it, `StatefulSet/analyst-garage`'s
-  # `checksum/config`, is excluded below and was already excluded when this number was measured.
+  # 5.0.5 RE-MEASURED this number, and here it MOVED: chart 0.2.0 declares 2Gi where 0.1.0
+  # declared 512Mi for the weights fetcher, and an init container's resource block is attested.
   #
-  # Verified on a deployment rather than argued. `sup830a` on `azure-test`, 2026-11-27, of THIS
-  # definition — reference parameter set, `cypressbay-digestive-health` bound, so the egress
-  # sidecar's objects are in the count — published, then
-  # `GET …/deployments/<id>/evidence`: 64 resources (14 ConfigMaps, 10 Deployments, 1 Ingress,
-  # 15 Secrets, 19 Services, 5 StatefulSets, the same census 5.0.3 attested) and
-  # `digest: ec93ccb2…` with `matchesExpected: true`. An identical SHA-256 over the canonical
-  # document is a stronger statement than a field-by-field diff: there is no field to differ.
+  # Measured, not derived. Two deployments on `azure-test` (`build-477-release`), 2026-11-27,
+  # one after the other so the shared cloud never held four analyst spaces at once:
+  # `sup830c` / `sup830e`, different namespaces, different hostnames, separately generated
+  # internal credentials and object-store keys each, two DIFFERENT model access keys, and
+  # `cypressbay-digestive-health` bound — the card is `access.mode: gateway`, so this is the
+  # GATED number and the egress sidecar's objects are inside it. Both published, both attested
+  # 64 resources — 14 ConfigMaps, 10 Deployments, 1 Ingress, 15 Secrets, 19 Services,
+  # 5 StatefulSets — and their canonical snapshots were BYTE-IDENTICAL: one SHA-256 over the
+  # document and zero differing fields as JSON Pointers. The model key was deliberately not the
+  # funded router key, and the two keys differed, which re-establishes the same fact 5.0.3
+  # recorded: a Secret's data does not enter a snapshot, so the key is invisible to the digest
+  # whoever supplies it.
   #
-  # The same deployment is where the parameter was proved end to end. `analyst-garage-0` reached
-  # Running with zero restarts on the key the LISTING declared — the subchart's helper passes a
-  # value that already matches `^[0-9a-fA-F]{64}$` through unchanged, so what Garage accepted was
-  # `storageRpcSecret` itself and not a hash of anything. The deployment was deleted after its
-  # evidence was read.
-  expectedDigest: "ec93ccb2a441487cdb195b21234bd5465636ff95ada750952db2d7e595e22e66"
+  # WHAT MOVED, diffed against a deployment of 5.0.4 raised on the same cloud the same day
+  # (`sup830b`, which re-attested `ec93ccb2…` with `matchesExpected: true`), is exactly what
+  # chart 0.2.0 says it changes and nothing else — 64 resources on both sides, no object present
+  # on one side only, and two fields:
+  #
+  #   Deployment/analyst-embeddings
+  #     /spec/template/spec/initContainers/0/resources/limits/memory     512Mi -> 2Gi
+  #     /spec/template/spec/initContainers/0/resources/requests/memory   512Mi -> 2Gi
+  #
+  # A verifier holding both snapshots can establish for themselves that this version changed
+  # what it says it changed. The exclusion set below is unchanged and was re-resolved against
+  # one of the two snapshots: every `match` names an object among the 64, and every pointer is
+  # absent from that object — which is what an exclusion that fired looks like.
+  #
+  # The namespace is where the fetcher was checked rather than the render: `analyst-embeddings`
+  # Ready on both, `fetch-weights` Completed with zero restarts at the new limit, and
+  # `analyst-garage-0` Running on the key the listing declares. Both deployments were deleted
+  # after their evidence was read and their DNS is withdrawn.
+  #
+  # 5.0.4 KEPT 5.0.3's number — `ec93ccb2a441487cdb195b21234bd5465636ff95ada750952db2d7e595e22e66`
+  # — rather than re-measuring it, and that was a claim about what the version changes rather
+  # than a carry-over of the kind that broke 3.0.9. The only thing `storageRpcSecret` moves is
+  # the value of `rpc_secret` inside `garage.toml`, which is rendered into a Secret — a Secret
+  # enters a snapshot as its metadata, type and name, never its data — and the one attested
+  # field that does move with it, `StatefulSet/analyst-garage`'s `checksum/config`, is excluded
+  # below and was already excluded when 5.0.3's number was measured. Verified on `sup830a` on
+  # `azure-test`, 2026-11-27: 64 resources and exactly that digest, `matchesExpected: true`.
+  expectedDigest: "8add484207bebc6a82b8a9fc4fc4c26e91f9db95732a4f4ab36a421e6446ad4d"
   exclude:
     # Every deployment lives in a namespace of its own. The platform strips this itself; it is
     # declared because the listing page shows the exclusions from the definition only, and a
