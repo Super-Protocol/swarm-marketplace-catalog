@@ -4,7 +4,11 @@ description: >-
   The analyst's embedding model, served inside the deployment's own namespace over an
   OpenAI-compatible endpoint, from weights pinned by sha256. CPU only.
 type: application
-version: 0.1.0
+# 0.2.0 gives the weights fetcher 2Gi, as headroom: at the 512Mi 0.1.0 declares
+# the init container was OOMKilled on every start on one cluster and completes
+# on another, which is a limit with no margin rather than a limit that is wrong
+# (SUP-830).
+version: 0.2.0
 # Text Embeddings Inference. Bumping it is a chart change: the backend selection,
 # the flags and the pooling behaviour move with it.
 appVersion: "1.8"
